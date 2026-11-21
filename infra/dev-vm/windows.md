@@ -57,7 +57,7 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
    - tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `LaunchedBy=<the UserId from GetCallerIdentity>`, `ExpiresAt=<now + lane length, at most 48 h, %Y-%m-%dT%H:%M:%SZ>` on both the instance and the volume. The policy lets this user stop, delete or run commands only on instances whose `LaunchedBy` is its own `UserId`, and refuses a launch without it.
    - Default tenancy (leave `Placement.Tenancy` unset): the policy refuses dedicated tenancy.
    - Record the instance ID locally only.
-3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline.
+3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline. Then take the root volume's id for teardown (step 7): from `DescribeInstances`, the `BlockDeviceMappings` entry whose `DeviceName` is the instance's `RootDeviceName` (`/dev/sda1` for this launch), `Ebs.VolumeId`. Keep it in the session only: never write it to a file, a report, a PR or a message (the runner's rule for test lanes: no instance or volume ids in records).
 4. **Bootstrap with Run Command** (`executionTimeout` up to 7200 s per step):
    - Git for Windows, the Visual Studio 2022 Build Tools (`Microsoft.VisualStudio.Workload.VCTools`, `--quiet --wait`), rustup with stable MSVC, and Node 22;
    - a clone of `https://github.com/dvortsis/lodestar-v2` to `C:\src\lodestar-v2`.
@@ -78,12 +78,12 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
      - building Lodestar's tests on `c6a.xlarge` (8 GiB) can run out of memory: two `rustc` processes of about 5.6 GiB each with the default 1.9 GiB pagefile hung Windows and dropped SSM (2026-11-20Z). Set a 16 GiB pagefile and reboot first, build with `cargo test -j1`, and time nothing while it builds (stops took 18–40 s instead of 0.4 s).
 6. **Report each finding to the runner before writing any fix.**
 7. **Teardown:**
-   - **Take the root volume's id first.** Before `TerminateInstances` (the mappings empty once it's gone), read it from `DescribeInstances`: the `BlockDeviceMappings` entry whose `DeviceName` is the instance's `RootDeviceName` (`/dev/sda1` for this launch), `Ebs.VolumeId`. Keep it in the session only: never write it to a file, a report, a PR or a message (the runner's rule for test lanes: no instance or volume ids in records).
-   - `TerminateInstances`, then wait for `terminated`.
+   - **Have the root volume's id** from step 3. If the session doesn't (it resumed after its sign-in expired), read it now, before `TerminateInstances`, as step 3 says. If the instance is already gone (the expiration guard ended it), its mappings are empty: skip the check by id, rely on the tag check below, and tell the runner the check by id couldn't run.
+   - `TerminateInstances`, then wait for `terminated`, with a 10 min deadline. If it isn't `terminated` by then, tell the runner.
    - **Check that volume by its id:** `DescribeVolumes` with `VolumeIds=[<that id>]`.
      - It fails with `InvalidVolume.NotFound` (in `run_script`, a raised `ClientError`: catch it and read `e.response['Error']['Code']`), or returns the volume as `deleted`: it's gone.
      - It returns it as `deleting`: check again in later calls until it's gone, with a 10 min deadline.
-     - `available` or `in-use` means the volume survived, and still `deleting` at the deadline means its deletion didn't finish. Either way, the test user's policy has no `ec2:DeleteVolume`, so don't try: tell the runner, without the id, and the owner deletes it.
+     - `available`, `in-use` or any other state (`error`, say) means the volume survived, and still `deleting` at the deadline means its deletion didn't finish. Either way, the test user's policy has no `ec2:DeleteVolume`, so don't try: tell the runner, without the id, and the owner deletes it.
    - **The tag check is a backstop, not the test:** `DescribeVolumes` with `tag:Purpose=X-test-vm` lists every lane's test volumes (Linux lanes' too, all with the same `LaunchedBy`), and it finds nothing if the volume never got its tags. An `available` one there is a leftover, not necessarily this lane's: tell the runner, without its id. Never filter by `Project`: the owner's fleet volumes share it.
    - Check `ce:GetCostAndUsage` for the day's EC2 cost.
    - Tell the runner and the owner.

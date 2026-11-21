@@ -6,20 +6,22 @@ Slice session, 2026-11-21. It follows #994's review. The teardown step in both t
 
 ## The teardown now
 
-1. **Before `TerminateInstances`,** the session takes the root volume's id from `DescribeInstances`: the `BlockDeviceMappings` entry for `/dev/sda1`, `Ebs.VolumeId`.
+1. **Once the instance is `Online` (step 3),** the session takes the root volume's id from `DescribeInstances`: the `BlockDeviceMappings` entry for `/dev/sda1`, `Ebs.VolumeId`, and keeps it for teardown (runner).
+   - A session that resumed without it reads it before `TerminateInstances`. If the instance is already gone (the expiration guard ended it), its mappings are empty, so the check by id is skipped, the tag check is relied on, and the runner is told.
+   - `TerminateInstances` waits for `terminated` with a 10 min deadline, and tells the runner if it isn't reached.
    - The id is kept in the session only. It never goes into a file, a report, a PR or a message, under the repository's rule of no instance or volume ids in records.
    - The test user may call it: its policy allows `ec2:Describe*`, and the only Describe call it denies is `ec2:DescribeInstanceAttribute` (beside its deny of all of `ec2:*` outside us-east-1).
    - The entry is the one whose `DeviceName` is the instance's `RootDeviceName`, as the expiration guard picks it; that's `/dev/sda1` for both launches. The mappings empty once the instance is terminated, so the id has to be taken first.
 2. **After `terminated`,** the session calls `DescribeVolumes` with `VolumeIds=[that id]`:
    - `InvalidVolume.NotFound` (a raised `ClientError` in `run_script`, so the runbooks say to catch it and read its code), or the volume as `deleted`: it's gone;
    - `deleting`: check again in later calls until it's gone, with a 10 min deadline (no fixed sleep);
-   - `available` or `in-use`: the volume survived. Still `deleting` at the deadline: its deletion didn't finish. Both are reported the same way.
+   - `available`, `in-use` or any other state (`error`, say): the volume survived. Still `deleting` at the deadline: its deletion didn't finish. Both are reported the same way.
 3. **A surviving volume is reported to the runner** without its id, and the owner deletes it.
    - The brief said to delete it "if the policy allows it". It doesn't: the test user's policy in `infra/dev-vm/aws-claude-testvm.json` has no `ec2:DeleteVolume`, so the runbooks say not to try.
    - Whether to grant `DeleteVolume` on test-tagged volumes is an IAM change for the owner. No owner queue item covers it yet (item 31 is the `Purpose` tag on volumes), so the runner may add one. This slice doesn't change the policy.
 4. **The tag check stays, worded as a backstop.**
    - It lists every lane's test volumes, and every lane tags them with the same `LaunchedBy`: one IAM user, so the same `UserId`.
-   - Any `available` test volume there is a leftover to tell the runner about, without its id, in both runbooks. On Linux, one with this lane's `Name` is this lane's; the Windows launch sets no `Name` tag, so there it may be any lane's.
+   - Any `available` test volume there is a leftover to tell the runner about, without its id, in both runbooks. On Linux, one with this lane's `Name` is probably this lane's (two lanes with the same role on the same day share a `Name`); the Windows launch sets no `Name` tag, so there it may be any lane's.
    - It finds nothing if the volume never got its tags.
    - "Never filter by `Project`" stays: the owner's fleet volumes share that tag.
 
