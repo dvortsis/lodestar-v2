@@ -377,19 +377,19 @@ fn relative_path_setting(
 
 /// A path (or a setting's value) as the temp log shows it: in plain
 /// quotes, as Windows users read and paste it (`"C:\ProgramData\Lodestar"`,
-/// not `Debug`'s doubled backslashes). A control or invisible character
-/// (`acl`'s list: bidirectional controls, zero-width characters, tags) and
-/// a `"` stay escaped (`\n`, `\u{202e}`, `\"`), never raw, so a value from a config file can't forge a line or hide
-/// text. The Event Log shows the same path without quotes, flattened by
-/// [`one_line`] instead, as `eventcreate`'s line needs.
+/// not `Debug`'s doubled backslashes). A value can come from a config file,
+/// so a control or invisible character (`acl`'s list: bidirectional
+/// controls, zero-width characters, separators) and a `"` are never written
+/// raw: each is `\u{…}`. Not `Debug`'s `\t` or `\n`, which, among single
+/// backslashes, would read as path text: a TOML `"D:\temp"` holds a TAB,
+/// and must not show as the full path `D:\temp`. The Event Log shows the
+/// same path without quotes, flattened by [`one_line`] instead, as
+/// `eventcreate`'s line needs.
 fn quoted(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
     for c in text.chars() {
-        if c.is_control() || c == '"' {
-            out.extend(c.escape_debug());
-        } else if super::acl::invisible(c) {
-            // Always `\u{…}`, whether or not `Debug` counts it printable.
+        if c.is_control() || c == '"' || super::acl::invisible(c) {
             out.extend(c.escape_unicode());
         } else {
             out.push(c);
@@ -570,7 +570,10 @@ fn unusable(dir: &Path, create: bool) -> Option<(Problem, String)> {
                 match meta(up) {
                     Ok(m) if is_link(&m) => return None,
                     Ok(m) if !m.is_dir() => {
-                        return Some((Problem::Uncreatable, format!("{} is a file", up.display())));
+                        return Some((
+                            Problem::Uncreatable,
+                            format!("{} is a file", quoted(&up.display().to_string())),
+                        ));
                     }
                     Ok(_) if !create || dir.ancestors().skip(i + 1).any(link) => return None,
                     Ok(_) => {
@@ -581,7 +584,10 @@ fn unusable(dir: &Path, create: bool) -> Option<(Problem, String)> {
                     }
                     Err(e) if matches!(e.kind(), NotFound | NotADirectory) => {}
                     Err(e) => {
-                        return Some((Problem::Uncreatable, format!("{}: {e}", up.display())));
+                        return Some((
+                            Problem::Uncreatable,
+                            format!("{}: {e}", quoted(&up.display().to_string())),
+                        ));
                     }
                 }
             }
@@ -1896,15 +1902,17 @@ mod tests {
     #[test]
     fn the_temp_log_escapes_what_a_path_cannot_show() {
         for (path, shown) in [
-            ("D:\\a\nb", r#""D:\a\nb""#),
-            ("D:\\a\rb\tc", r#""D:\a\rb\tc""#),
+            ("D:\\a\nb", r#""D:\a\u{a}b""#),
+            ("D:\\a\rb\tc", r#""D:\a\u{d}b\u{9}c""#),
             ("D:\\a\u{1b}[31mb", r#""D:\a\u{1b}[31mb""#),
-            ("D:\\a\u{0}b", r#""D:\a\0b""#),
+            ("D:\\a\u{0}b", r#""D:\a\u{0}b""#),
+            ("D:\\a\u{85}b", r#""D:\a\u{85}b""#),
             ("D:\\a\u{202e}b", r#""D:\a\u{202e}b""#),
             ("D:\\a\u{200b}b", r#""D:\a\u{200b}b""#),
+            ("D:\\a\u{2028}b", r#""D:\a\u{2028}b""#),
             ("D:\\a\u{2061}b", r#""D:\a\u{2061}b""#),
             ("D:\\a\u{feff}b", r#""D:\a\u{feff}b""#),
-            ("D:\\a\"b", r#""D:\a\"b""#),
+            ("D:\\a\"b", r#""D:\a\u{22}b""#),
         ] {
             let q = quoted(path);
             assert_eq!(q, shown, "{path:?}");
@@ -1914,6 +1922,44 @@ mod tests {
                 "{q}"
             );
         }
+    }
+
+    /// A real TAB never reads as `\t` among single backslashes: TOML's
+    /// `"D:\temp"` holds one, and the temp log must show that it isn't the
+    /// full path `D:\temp`.
+    #[test]
+    fn an_escape_never_reads_as_path_text() {
+        assert_ne!(quoted("D:\temp"), quoted(r"D:\temp"));
+        assert_eq!(quoted("D:\temp"), r#""D:\u{9}emp""#);
+        assert_eq!(quoted("D:\new"), r#""D:\u{a}ew""#);
+        let root = tempfile::tempdir().unwrap();
+        let svc = root.path().join("ProgramData").join("Lodestar");
+        std::fs::create_dir_all(&svc).unwrap();
+        let file = root.path().join("service.toml");
+        // A TOML basic string: `\t` is a TAB, so the folder is relative.
+        std::fs::write(&file, "data_dir = \"D:\\temp\"\n").unwrap();
+        match load_guarded(&svc, Some(file), |_| None, || Ok(())) {
+            Err((Refusal::NotFullPath, why)) => {
+                assert!(why.contains(r#""D:\u{9}emp""#), "{why}");
+                assert!(!why.contains(r#""D:\temp""#), "{why}");
+            }
+            other => panic!("not refused: {other:?}"),
+        }
+    }
+
+    /// The file in the way of a data folder is named quoted and escaped
+    /// too, as the user guide sends users to it.
+    #[test]
+    fn the_file_in_the_way_is_quoted() {
+        let root = tempfile::tempdir().unwrap();
+        let in_way = root.path().join("in \u{202e}way");
+        std::fs::write(&in_way, "").unwrap();
+        let (problem, detail) = unusable(&in_way.join("data"), false).unwrap();
+        assert_eq!(problem, Problem::Uncreatable);
+        let shown = quoted(&in_way.display().to_string());
+        assert_eq!(detail, format!("{shown} is a file"));
+        assert!(detail.contains(r"in \u{202e}way"), "{detail}");
+        assert!(!detail.contains('\u{202e}'), "{detail}");
     }
 
     /// Every refusal that names a path shows it quoted, backslashes as
@@ -2011,6 +2057,12 @@ mod tests {
             assert!(!temp.contains(r"ProgramData\\"), "{temp}");
             assert!(!temp.contains(r"\\\\"), "{temp}");
         }
+        // The relative %ProgramData% default names the same folder too.
+        let dir = Path::new(r"ProgramData\Lodestar");
+        let (refusal, temp) = load_guarded(dir, None, |_| None, || Ok(())).unwrap_err();
+        let event = event_log_text(refusal, dir);
+        assert!(temp.contains(r#""ProgramData\Lodestar""#), "{temp}");
+        assert!(event.contains(r"ProgramData\Lodestar"), "{event}");
     }
 
     /// The `--config` path of a serve command line.
