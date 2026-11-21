@@ -60,7 +60,9 @@ services:
       - block
     # The arm comes from start-block and arm-switch (block-lib.sh). A bare name
     # passes the caller's value through, and leaves the variable unset when the
-    # caller has none, so every other switch stays at its shipped default.
+    # caller has none, so every other switch stays at its shipped default. Every
+    # crawler switch has one: the collector's SWITCH_ENV, block-lib's
+    # CRAWLER_SWITCHES and this list are the same (infra/fleet/tests).
     # LODESTAR_EXIT_ON_NETWORK_LOSS: when gluetun's container restarts outside
     # Compose, Lodestar is left with only lo; it exits after 30 s instead of
     # looking alive. restart: "no" keeps it down, and the watcher's link_outage
@@ -70,8 +72,15 @@ services:
       - LODESTAR_EXIT_ON_NETWORK_LOSS=true
       - LODESTAR_DHT_SAFE_RESTART
       - LODESTAR_DHT_COORDINATED_ADMISSION
+      - LODESTAR_DHT_RESPONDER_HINTS
+      - LODESTAR_DHT_STREAMING_PEERS
+      - LODESTAR_DHT_TARGET_PREFIXES
       - LODESTAR_DHT_UTP
       - LODESTAR_DHT_ROUTE_BACKOFF
+      - LODESTAR_DHT_LOOKUP_END
+      - LODESTAR_DHT_PRESET_SLOTS
+      - LODESTAR_DHT_HINT_FIRST
+      - LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT
     # The restart witness on the host, outside the data folder (CR-SPEC 2.3,
     # plan 0e), so a recreated container (every arm switch) is a resumed start.
     volumes:

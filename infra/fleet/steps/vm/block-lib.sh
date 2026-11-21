@@ -314,9 +314,17 @@ wait_api() {  # at least one try, then up to API_WAIT seconds (tests shorten it)
 }
 # Lodestar's arm for segment $1 of the ABBA block: control, treatment, treatment, control.
 arm_of() { case $1 in 2 | 3) echo treatment ;; *) echo control ;; esac; }
+# Every crawler switch, as the collector's SWITCH_ENV names them; compose.yaml
+# passes each through by bare name (infra/fleet/tests checks the three agree).
+CRAWLER_SWITCHES=(
+  LODESTAR_DHT_SAFE_RESTART LODESTAR_DHT_COORDINATED_ADMISSION LODESTAR_DHT_RESPONDER_HINTS
+  LODESTAR_DHT_STREAMING_PEERS LODESTAR_DHT_TARGET_PREFIXES LODESTAR_DHT_UTP LODESTAR_DHT_ROUTE_BACKOFF
+  LODESTAR_DHT_LOOKUP_END LODESTAR_DHT_PRESET_SLOTS LODESTAR_DHT_HINT_FIRST LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT
+)
 # Start Lodestar (alone: gluetun isn't recreated) with segment $1's arm. Every
-# switch but the treatment's stays at its shipped default; safe restart is on
-# for the whole block, so each later start is a resumed one.
+# switch but the treatment's stays at its shipped default, whatever the caller's
+# environment holds; safe restart is on for the whole block, so each later start
+# is a resumed one.
 # The image Lodestar runs: the registry's, pinned by digest (the default), or,
 # for a test run, a locally built image pinned by its image ID (LOCAL_IMAGE_ID, the
 # 64 hex of `docker image inspect -f {{.Id}}`). Either way it's content-pinned.
@@ -367,7 +375,7 @@ start_lodestar() {  # $1 segment, $2 "fresh" to recreate whatever compose thinks
   [[ $(arm_of "$1") == treatment ]] && value=true
   image=$(lodestar_image)
   (
-    unset LODESTAR_DHT_COORDINATED_ADMISSION LODESTAR_DHT_UTP LODESTAR_DHT_ROUTE_BACKOFF
+    unset "${CRAWLER_SWITCHES[@]}"
     export LODESTAR_IMAGE="$image" LODESTAR_DHT_SAFE_RESTART=true \
       "$TREATMENT_ENV=$value" DOCKER_GID=unused
     timeout 240 docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
