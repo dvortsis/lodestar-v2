@@ -115,8 +115,11 @@ fn confusable(c: char) -> char {
 /// tags and plane 14's unassigned code points); and fillers that show as
 /// nothing (Hangul fillers, Khmer inherent vowels, variation selectors,
 /// the combining grapheme joiner).
+///
+/// Public so the Windows service's path display escapes the same set
+/// (`windows::acl::invisible`, X-win-path-ignorables).
 #[inline]
-fn invisible(c: char) -> bool {
+pub fn invisible(c: char) -> bool {
     // Nothing below the soft hyphen is invisible.
     if c < '\u{00AD}' {
         return false;

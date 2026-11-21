@@ -369,34 +369,66 @@ fn plain(text: &str) -> String {
         .collect()
 }
 
-/// Unicode's Cf, Zl and Zp characters (Unicode 15): format and separator
-/// characters that render as nothing or reorder text. Shared with the
-/// service's Event Log note (`service::event_log_text`).
+/// Characters that render as nothing or reorder text: Unicode's Cf, Zl
+/// and Zp characters (Unicode 15), and every Default_Ignorable_Code_Point
+/// besides, the filter's own set ([`lodestar_filter::normalize::invisible`]:
+/// variation selectors, the combining grapheme joiner, Hangul fillers,
+/// Khmer inherent vowels, tags) plus the Mongolian free variation
+/// selectors U+180B–U+180F, which that set leaves to Cf (X-win-path-ignorables).
+/// Shared with the service's Event Log note (`service::event_log_text`) and
+/// the temp log's [`quoted`] paths.
 pub(super) fn invisible(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00ad}'
-            | '\u{0600}'..='\u{0605}'
-            | '\u{061c}'
-            | '\u{06dd}'
-            | '\u{070f}'
-            | '\u{0890}'..='\u{0891}'
-            | '\u{08e2}'
-            | '\u{180e}'
-            | '\u{200b}'..='\u{200f}'
-            | '\u{2028}'..='\u{202e}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{206f}'
-            | '\u{feff}'
-            | '\u{fff9}'..='\u{fffb}'
-            | '\u{110bd}'
-            | '\u{110cd}'
-            | '\u{13430}'..='\u{1343f}'
-            | '\u{1bca0}'..='\u{1bca3}'
-            | '\u{1d173}'..='\u{1d17a}'
-            | '\u{e0001}'
-            | '\u{e0020}'..='\u{e007f}'
-    )
+    lodestar_filter::normalize::invisible(c)
+        || matches!(c, '\u{180b}'..='\u{180f}')
+        || matches!(
+            c,
+            '\u{00ad}'
+                | '\u{0600}'..='\u{0605}'
+                | '\u{061c}'
+                | '\u{06dd}'
+                | '\u{070f}'
+                | '\u{0890}'..='\u{0891}'
+                | '\u{08e2}'
+                | '\u{180e}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{206f}'
+                | '\u{feff}'
+                | '\u{fff9}'..='\u{fffb}'
+                | '\u{110bd}'
+                | '\u{110cd}'
+                | '\u{13430}'..='\u{1343f}'
+                | '\u{1bca0}'..='\u{1bca3}'
+                | '\u{1d173}'..='\u{1d17a}'
+                | '\u{e0001}'
+                | '\u{e0020}'..='\u{e007f}'
+        )
+}
+
+/// A path (or a setting's value) as the temp log shows it: in plain
+/// quotes, as Windows users read and paste it (`"C:\ProgramData\Lodestar"`,
+/// not `Debug`'s doubled backslashes). A value can come from a config file,
+/// so a control or [`invisible`] character (bidirectional controls,
+/// zero-width characters, separators, variation selectors) and a `"`
+/// are never written raw: each is `\u{…}`. Not `Debug`'s `\t` or `\n`, which, among single
+/// backslashes, would read as path text: a TOML `"D:\temp"` holds a TAB,
+/// and must not show as the full path `D:\temp`. The Event Log shows the
+/// same path without quotes, flattened by `service::one_line` instead, as
+/// `eventcreate`'s line needs. Used by the service's refusals and by
+/// [`secure_dir`]'s own errors.
+pub(super) fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        if c.is_control() || c == '"' || invisible(c) {
+            out.extend(c.escape_unicode());
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// A SID [`full_sid`] spells out, if it's one `icacls` can take as `*SID`.
@@ -482,7 +514,8 @@ pub fn refusal(
 /// it if needed. It never changes an existing folder. An error says why
 /// the service won't use it.
 pub fn secure_dir(dir: &Path, own_sid: Option<&str>, ops: &impl Ops) -> Result<(), String> {
-    let shown = dir.display();
+    // As the temp log shows every path: quoted, nothing unprintable raw.
+    let shown = quoted(&dir.display().to_string());
     let inspect = || {
         ops.inspect(dir)
             .map_err(|e| format!("reading {shown}'s permissions: {e}"))
@@ -952,6 +985,83 @@ mod tests {
         assert!(parse_inspection("E\tArchive\tO:BAD:\tx\n").is_err());
         assert!(parse_inspection("F\ta\tb\n").is_err());
         assert!(parse_inspection("F\ta\tb\tc\nF\ta\tb\tc\n").is_err());
+    }
+
+    /// `quoted` escapes every default-ignorable the filter's set names,
+    /// the line and paragraph separators and the Mongolian free variation
+    /// selectors, over all of `char`; ordinary text, combining marks
+    /// included, is left as it is (X-win-path-ignorables).
+    #[test]
+    fn quoted_escapes_every_default_ignorable() {
+        let escaped = |c: char| format!("\"{}\"", c.escape_unicode());
+        for c in (0..=0x10FFFF).filter_map(char::from_u32) {
+            let must = lodestar_filter::normalize::invisible(c)
+                || matches!(c, '\u{2028}' | '\u{2029}' | '\u{180b}'..='\u{180f}');
+            if must {
+                assert!(invisible(c), "U+{:04X}", c as u32);
+                assert_eq!(quoted(&c.to_string()), escaped(c), "U+{:04X}", c as u32);
+            }
+        }
+        // The brief's examples, each on its own.
+        for c in [
+            '\u{fe0f}',
+            '\u{e0100}',
+            '\u{034f}',
+            '\u{115f}',
+            '\u{1160}',
+            '\u{3164}',
+            '\u{ffa0}',
+            '\u{17b4}',
+            '\u{17b5}',
+            '\u{180b}',
+            '\u{180f}',
+        ] {
+            assert_eq!(quoted(&c.to_string()), escaped(c), "U+{:04X}", c as u32);
+        }
+        for c in [
+            'a', 'Z', '0', 'é', 'ß', '中', '\u{0301}', '\u{05b0}', '😀', ' ', '\\',
+        ] {
+            assert_eq!(
+                quoted(&c.to_string()),
+                format!("\"{c}\""),
+                "U+{:04X}",
+                c as u32
+            );
+        }
+    }
+
+    /// [`secure_dir`]'s own errors name the folder as the temp log shows
+    /// every path: quoted, backslashes as written, nothing unprintable raw.
+    #[test]
+    fn secure_dir_errors_quote_the_folder() {
+        struct Failing(bool);
+        impl Ops for Failing {
+            fn inspect(&self, _: &Path) -> io::Result<Option<Inspection>> {
+                match self.0 {
+                    true => Err(io::Error::other("denied")),
+                    false => Ok(None),
+                }
+            }
+            fn create(&self, _: &Path) -> io::Result<()> {
+                Err(io::Error::other("full"))
+            }
+        }
+        let dir = Path::new("D:\\Lode\u{202e}star\\data");
+        let shown = r#""D:\Lode\u{202e}star\data""#;
+        assert_eq!(
+            secure_dir(dir, Some(OWN), &Failing(true)).unwrap_err(),
+            format!("reading {shown}'s permissions: denied")
+        );
+        assert_eq!(
+            secure_dir(dir, Some(OWN), &Failing(false)).unwrap_err(),
+            format!("creating {shown}: full")
+        );
+        // Created, then gone.
+        let fake = Fake::new(vec![None, None]);
+        assert_eq!(
+            secure_dir(dir, Some(OWN), &fake).unwrap_err(),
+            format!("{shown} vanished after it was created")
+        );
     }
 
     /// Fake [`Ops`]: a folder whose inspections are scripted in order.

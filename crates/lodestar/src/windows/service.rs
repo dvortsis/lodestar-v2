@@ -32,7 +32,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::acl;
+use super::acl::{self, quoted};
 use crate::config::Config;
 
 /// The service's name, for the installer and `sc.exe`.
@@ -373,30 +373,6 @@ fn relative_path_setting(
                 "give every blocklist file a full path, such as D:/lists/hashes.txt",
             )
         })
-}
-
-/// A path (or a setting's value) as the temp log shows it: in plain
-/// quotes, as Windows users read and paste it (`"C:\ProgramData\Lodestar"`,
-/// not `Debug`'s doubled backslashes). A value can come from a config file,
-/// so a control or invisible character (`acl`'s list: bidirectional
-/// controls, zero-width characters, separators) and a `"` are never written
-/// raw: each is `\u{…}`. Not `Debug`'s `\t` or `\n`, which, among single
-/// backslashes, would read as path text: a TOML `"D:\temp"` holds a TAB,
-/// and must not show as the full path `D:\temp`. The Event Log shows the
-/// same path without quotes, flattened by [`one_line`] instead, as
-/// `eventcreate`'s line needs.
-fn quoted(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('"');
-    for c in text.chars() {
-        if c.is_control() || c == '"' || super::acl::invisible(c) {
-            out.extend(c.escape_unicode());
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('"');
-    out
 }
 
 /// A refusal of a setting that isn't a full path: what's wrong, why, and
@@ -1952,13 +1928,16 @@ mod tests {
     #[test]
     fn the_file_in_the_way_is_quoted() {
         let root = tempfile::tempdir().unwrap();
-        let in_way = root.path().join("in \u{202e}way");
+        // A backslash too, which `{:?}` would double off Windows as well.
+        let in_way = root.path().join("in\\the \u{202e}way");
+        // On Windows the backslash is a separator: `in` is then a folder.
+        std::fs::create_dir_all(in_way.parent().unwrap()).unwrap();
         std::fs::write(&in_way, "").unwrap();
         let (problem, detail) = unusable(&in_way.join("data"), false).unwrap();
         assert_eq!(problem, Problem::Uncreatable);
         let shown = quoted(&in_way.display().to_string());
         assert_eq!(detail, format!("{shown} is a file"));
-        assert!(detail.contains(r"in \u{202e}way"), "{detail}");
+        assert!(detail.contains(r"in\the \u{202e}way"), "{detail}");
         assert!(!detail.contains('\u{202e}'), "{detail}");
     }
 
@@ -1970,7 +1949,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let svc = root.path().join("ProgramData").join("Lodestar");
         std::fs::create_dir_all(&svc).unwrap();
-        let file = root.path().join("service.toml");
+        // A backslash in the file's own name (legal off Windows too), so a
+        // revert to `{:?}` doubles it here as well.
+        let file = root.path().join(r"ser\vice.toml");
+        // On Windows the backslash is a separator: `ser` is then a folder.
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         let shown_file = quoted(&file.display().to_string());
         let why = |r: Result<(Result<Config, String>, PathBuf), (Refusal, String)>| match r {
             Err((Refusal::NotFullPath, why)) => why,

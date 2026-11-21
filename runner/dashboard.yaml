@@ -439,6 +439,7 @@ placement:
   - X-win-service-relative-paths-2
   - X-win-data-dir-unusable-log
   - X-win-log-path-display
+  - X-win-path-ignorables
   - X-msi-upgrade-env-value
   - X-leak-test-capture-kill
   - X-leaktest-wg0-flake
