@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T00:38Z",
+    "updated": "2026-11-21T01:34Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-session-draft-keep",
+        "slice": "X-auth-early-401",
         "role": "build",
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
-        "since": "2026-11-20T21:04Z",
-        "doing": "keep an unsaved Settings draft across sign-in (no secrets kept)",
+        "since": "2026-11-21T01:34Z",
+        "doing": "briefed; #999 X-session-draft-keep merged 072e945c",
         "status": "running"
       },
       {
@@ -10682,7 +10682,7 @@
         "agent": "session_01MMjhnBpjPfQ45Zap7mZNyi",
         "model": "opus",
         "since": "2026-11-20T21:50Z",
-        "doing": "Track U step 3: drawer beside results from 1366 px; rows adapt to their container",
+        "doing": "unblocked by #999; merging main, CSS 19.73 raise, opening PR",
         "status": "running"
       },
       {
