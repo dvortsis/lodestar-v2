@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T13:06Z",
+    "updated": "2026-11-21T13:32Z",
     "items": [
       {
         "slot": 1,
@@ -10684,12 +10684,12 @@
       },
       {
         "slot": 4,
-        "slice": "CR-1c",
+        "slice": "X-sampler-frontier-starve",
         "role": "build",
         "agent": "session_01MMjhnBLWWDc2xQCuaJPWjK",
         "model": "opus",
-        "since": "2026-11-21T09:44Z",
-        "doing": "briefed: briefs/CR-1c.md"
+        "since": "2026-11-21T13:32Z",
+        "doing": "brief sent; sim reproduction of the empty frontier, written cause, fix behind the split switch only if the sampler is the cause"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
