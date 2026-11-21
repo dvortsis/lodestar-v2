@@ -31,3 +31,16 @@ Send me the exact file list before you edit anything outside `features/filters/`
 
 ## Bars
 `runner/standards.md`, CLAUDE.md's web checks (`npm run check`, `npx vitest run`, `npm run build`, `npx size-limit`, `npx playwright test --trace off` for the changed specs, `PW_CHROMIUM_PATH=/opt/pw-browsers/chromium`; clear `node_modules/.vitest-cache` if a glob-based test count looks short). Design tokens only, no hex, no arbitrary values. No fixed sleeps. Push once per round, and send "ready <pr> <sha>" when CI is green. Follow `.claude/skills/steward/SKILL.md`; the runner merges.
+
+## Rescope, 2026-11-21Z (runner, option A in this slice)
+The session found that Undo's assess (`crates/api/src/filters.rs`, `Change::Undo`) returns an all-zero preview with `estimate: true`, so no preview field can tell a child-safety loosening apart. The runner chose option A, built in this same slice and PR.
+
+1. **Server: Undo gets a real preview.** In `crates/api/src/filters.rs`, Undo's assess computes the preview the way the other rule-layer changes do, comparing the current rule set with the kept previous one (`previous_data`, `rejudged`, `for_rules`): `quarantine`, `tombstones`, `stored`, `caught_30d`, `core_caught_30d`, `per_day` and `removed_from_floor` describe what the Undo would actually do.
+   - If the previous set can't be read or compared, keep today's all-zero `estimate: true` preview. Never fail the Undo because of the preview.
+   - Use existing fields only, with no new `Assessment` field. If you find you can't express "loosens child safety" without one, tell me before adding it (it changes `openapi.json` and `schema.d.ts`).
+   - `weakening` and `confirm` stay true for every Undo, the warning text stays, and apply is unchanged. This is the preview only (§2.39).
+   - Respect the existing progress tracking and deadlines in `assess_tracked`; the Undo preview costs no more than any other rule-layer change's.
+   - Server tests: an Undo that puts back a weaker CS rule reports `core_caught_30d` > 0, one that removes a floor entry reports `removed_from_floor` > 0, one that only strengthens reports zeros, and an unreadable previous set falls back to the estimate. Mutation-check them.
+2. **Client:** as briefed in "What" 2 to 5, now reading the real fields.
+3. **Owns** add `crates/api/src/filters.rs` and its tests (name the test file if it's separate), plus `web/src/lib/api/openapi.json` and `schema.d.ts` only if a regeneration shows drift (there should be none). Update this slice's `owns` in `runner/slices.yaml` to match.
+4. **Review:** a fresh Opus review plus `/security-review`; this is filter logic on the child-safety path.
