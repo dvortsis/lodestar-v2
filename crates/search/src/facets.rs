@@ -1506,7 +1506,7 @@ fn sample_docs(
             if want >= end {
                 break;
             }
-            if rank % (crate::cancel::CHECK_EVERY as u64) == 0 {
+            if rank.is_multiple_of(u64::from(crate::cancel::CHECK_EVERY)) {
                 cancel.check()?;
             }
             if rank >= want && alive(d) {
