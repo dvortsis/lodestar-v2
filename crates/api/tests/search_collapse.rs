@@ -414,7 +414,6 @@ async fn a_repeated_parameter_is_named() {
     let c = session(&f).await;
     for (name, value) in [
         ("q", "movie"),
-        ("ast", "x"),
         ("sort", "size"),
         ("limit", "5"),
         ("offset", "0"),
@@ -436,6 +435,13 @@ async fn a_repeated_parameter_is_named() {
             format!("{name} was sent more than once: send it once."),
             "{uri}"
         );
+    }
+    // O1: any `ast` on GET, repeated or not, is ast_needs_post, as on /facets.
+    for uri in ["/api/v1/search?ast=x&ast=y", "/api/v1/search?ast=x", "/api/v1/search?q=a&ast"] {
+        let (status, _, body) = call(&f.app, get(uri, &c)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert_eq!(body["error"]["code"], "ast_needs_post", "{uri}: {body}");
+        assert_eq!(body["error"]["field"], "ast", "{uri}: {body}");
     }
     // Signed out, it's still a 401 first: the parameters aren't read.
     let anon = Request::get("/api/v1/search?sort=a&sort=b")

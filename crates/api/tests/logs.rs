@@ -723,6 +723,54 @@ async fn a_stream_ends_with_its_session_and_on_close() {
     );
 }
 
+/// X-api-repeated-params: each logs route that reads its query names a
+/// repeated parameter as every route does, on GET and on HEAD (the same
+/// status and length); once is read as before, and an unknown repeated one
+/// is ignored.
+#[tokio::test]
+async fn every_logs_route_names_a_repeated_parameter() {
+    let fake = Fake::new(config(), 100);
+    let f = fixture(Some(fake.clone()));
+    let c = session(&f.auth);
+    let head = |uri: &str| {
+        Request::head(uri)
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap()
+    };
+    for path in [
+        "/api/v1/logs",
+        "/api/v1/logs/stream",
+        "/api/v1/logs/files/lodestar.log",
+        "/api/v1/logs/archive.zip",
+    ] {
+        let twice = format!("{path}?level=warn&level=warn");
+        let (status, headers, body) = call(&f.app, get(&twice, &c)).await;
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{twice}: {body}");
+        assert_eq!(body["error"]["code"], "repeated_parameter", "{twice}: {body}");
+        assert_eq!(body["error"]["field"], "level", "{twice}: {body}");
+        assert_eq!(
+            body["error"]["message"],
+            "level was sent more than once: send it once."
+        );
+        let (h, h_headers, _) = call(&f.app, head(&twice)).await;
+        assert_eq!(h, StatusCode::BAD_REQUEST, "HEAD {twice}");
+        assert_eq!(
+            h_headers.get(header::CONTENT_LENGTH),
+            headers.get(header::CONTENT_LENGTH),
+            "HEAD {twice}"
+        );
+        for q in ["level=warn", "level=warn&zz=1&zz=2"] {
+            let uri = format!("{path}?{q}");
+            let (_, _, body) = call(&f.app, get(&uri, &c)).await;
+            let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            assert_ne!(body["error"]["code"], "repeated_parameter", "{uri}: {body}");
+            assert_ne!(body["error"]["code"], "bad_parameter", "{uri}: {body}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn parameters_are_checked_once_each() {
     let fake = Fake::new(config(), 100);
@@ -732,7 +780,7 @@ async fn parameters_are_checked_once_each() {
     let cursor = "A".repeat(513);
     for (q, want, field) in [
         ("level=loud", "bad_parameter", "level"),
-        ("level=warn&level=info", "bad_parameter", "level"),
+        ("level=warn&level=info", "repeated_parameter", "level"),
         ("components=dht,nope", "unknown_component", "components"),
         (&*format!("text={long}"), "bad_parameter", "text"),
         ("limit=0", "bad_parameter", "limit"),

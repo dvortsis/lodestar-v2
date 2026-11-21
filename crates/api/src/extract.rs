@@ -103,7 +103,69 @@ fn json_content_type(headers: &HeaderMap) -> bool {
             .is_some_and(|sub| sub.ends_with("+json"))
 }
 
-/// Query parameters; bad ones are an [`ApiError`] naming the parameter.
+/// The first parameter `is_param` accepts that `query` sends more than
+/// once, read with the same decoder the query extractor uses (so a
+/// percent-encoded name or `+` for a space counts as it would there).
+pub(crate) fn repeated_param(query: &str, is_param: impl Fn(&str) -> bool) -> Option<String> {
+    let mut seen = std::collections::HashSet::new();
+    form_urlencoded::parse(query.as_bytes())
+        .map(|(key, _)| key)
+        .filter(|key| is_param(key))
+        .find(|key| !seen.insert(key.clone()))
+        .map(|key| key.into_owned())
+}
+
+/// The one answer to a known query parameter sent more than once, on every
+/// route that reads its query: `400 repeated_parameter`, naming it (capped
+/// and escaped, as any echoed request value is).
+pub(crate) fn repeated_parameter(name: &str) -> ApiError {
+    let name = crate::search::shown(name);
+    ApiError::bad_request(
+        "repeated_parameter",
+        format!("{name} was sent more than once: send it once."),
+    )
+    .field(name)
+}
+
+/// The names a query struct's derived `Deserialize` reads, renames
+/// included, as serde itself lists them: so every field is checked for
+/// repeats and a new one can't be missed. A type that isn't a plain struct
+/// (a map, or a hand-written impl that never asks for a struct) has none,
+/// and its route keeps its own handling.
+pub(crate) fn field_names<T: DeserializeOwned>() -> &'static [&'static str] {
+    use serde::de::{self, Visitor};
+    use std::cell::Cell;
+
+    struct Fields<'a>(&'a Cell<&'static [&'static str]>);
+    impl<'de> de::Deserializer<'de> for Fields<'_> {
+        type Error = de::value::Error;
+        fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+            Err(de::Error::custom("not a struct"))
+        }
+        fn deserialize_struct<V: Visitor<'de>>(
+            self,
+            _: &'static str,
+            fields: &'static [&'static str],
+            _: V,
+        ) -> Result<V::Value, Self::Error> {
+            self.0.set(fields);
+            Err(de::Error::custom("only the field names are read"))
+        }
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf
+            option unit unit_struct newtype_struct seq tuple tuple_struct map enum identifier
+            ignored_any
+        }
+    }
+    let names = Cell::new(&[][..]);
+    let _ = T::deserialize(Fields(&names));
+    names.get()
+}
+
+/// Query parameters; bad ones are an [`ApiError`] naming the parameter. A
+/// known parameter sent more than once is [`repeated_parameter`], before
+/// any value is read (the struct's fields are the known names); unknown
+/// ones are ignored, repeated or not.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Query<T>(pub T);
 
@@ -112,6 +174,10 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequestParts<S> for Query<T> {
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, ApiError> {
         let query = parts.uri.query().unwrap_or("");
+        let known = field_names::<T>();
+        if let Some(name) = repeated_param(query, |key| known.contains(&key)) {
+            return Err(repeated_parameter(&name));
+        }
         let de = serde_urlencoded::Deserializer::new(form_urlencoded::parse(query.as_bytes()));
         serde_path_to_error::deserialize(de)
             .map(Query)

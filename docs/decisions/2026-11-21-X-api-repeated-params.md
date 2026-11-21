@@ -1,0 +1,62 @@
+# X-api-repeated-params decisions
+
+Slice session, 2026-11-21. Every API route that reads its query now answers a known parameter sent more than once the same way: `400 repeated_parameter`, `field: <name>`, "<name> was sent more than once: send it once.", on GET and HEAD alike. It follows X-search-param-errors (`/search` named a repeat first) and X-param-echo-cap (`/facets` named one, as `bad_parameter`, and every echo is capped).
+
+- **Who decided:** choices marked "runner" are the runner's calls. The rest are the slice session's, for the runner to confirm.
+
+## The routes
+
+Every route under `crates/api` that reads its query, and what a known parameter sent twice got before this slice. "Now" is `repeated_parameter` with the field unless the row says otherwise.
+
+| Route(s) | How it reads the query | Before | Now |
+|---|---|---|---|
+| `GET /search` | `Query<SearchRequest>` plus its own repeat layer | `repeated_parameter`, the field uncapped | `repeated_parameter`, the field capped and escaped; any `ast` is `ast_needs_post` (below) |
+| `GET /facets` | a map behind its own layer, `limit.<facet>` a prefix family | `bad_parameter` with the field (X-param-echo-cap) | `repeated_parameter` (runner); any `ast` is still `ast_needs_post` |
+| `GET /parse`, `/digest/preview`, `/torrents/{hash}/files`, `/collections`, `/collections/{id}`, `/saved-searches/{id}/alerts`, `/user-items`, `/user-items/labels`, `/export`, `/filters/queue`, `/filters/tombstones`, `/discover`, `/settings/export`, `/suggest`, `/insights/overview`, `/insights/events`, `/insights/discover` and the stage panels, `/insights/export.csv` | `Query<T>` (`extract.rs`) | serde's "duplicate field", reported as the generic `bad_parameter` with no field | `repeated_parameter` |
+| `POST /settings/import` | `Query<ImportQuery>` (`dry_run`) beside its body | as above | `repeated_parameter`: the check is the extractor's, so the one POST route that reads a query is covered too. Its body is untouched. |
+| `GET /logs`, `/logs/stream`, `/logs/files/{name}`, `/logs/archive.zip` | `logs::params::parse` | `bad_parameter`, "Give `x` once." | `repeated_parameter` |
+| `GET /events` | `RawQuery`, `topics` | `bad_parameter` with the field | `repeated_parameter` |
+| Torznab (`/torznab/api`) | its own parser (`torznab/query.rs`) | Torznab error 201, "a parameter is repeated" | **unchanged**: Torznab clients read Torznab's XML error codes, not the JSON envelope |
+| The auth guard's `apikey` and `token` | `auth/guard.rs` | two different values are refused as a bad credential; the same one twice is accepted | **unchanged**: deliberate credential logic, and outside this slice's owns |
+
+No route deliberately depends on a repeated known parameter: none reads a list from repeats (`/export`'s `hashes` and `fields` are comma lists).
+
+## The shared check
+
+- **Where:** in the `Query<T>` extractor itself (`extract.rs`), before serde reads the query. Every route that takes `Query<T>` is covered, with no per-route line to forget.
+- **The names come from the struct.** `field_names::<T>()` hands derived `Deserialize` a tiny deserializer that records the `fields` list it passes to `deserialize_struct`: the struct's own wire names, renames included (`DiscoverQuery`'s `type`). A field added later is checked without anyone remembering to list it. `SearchRequest`'s hand-kept `SEARCH_PARAMS` list goes; its test now compares the serialized fields with `field_names::<SearchRequest>()`.
+- **`repeated_param(query, is_param)`** decodes with `form_urlencoded::parse`, the extractor's own decoder, so `%73ort` and `sort` are the same name, and returns the first known name seen twice. **`repeated_parameter(name)`** builds the error, the name passed through `search::shown()` (at most 64 characters, escaped) for both the field and the message.
+- **Unknown parameters stay ignored,** repeated or not: only names the route reads are checked.
+- **The other readers use the same two helpers:** `/facets`' layer (its names are `q`, `sort`, `lease`, `tz`, `hidden` and each `limit.<facet>`, so the prefix family keeps working), `logs::params::parse` and `/events`' `topics`.
+- **HEAD** is served by each route's `get()`, so it gets GET's answer without the body: the same status and `content-length` (tested on every route).
+- **Order:** the auth guard runs first, so a signed-out request with a repeat is still a `401` (tested on every route in the table).
+
+## `/facets`' code (runner)
+
+`/facets`' repeat was `bad_parameter` (X-param-echo-cap kept the code); it is now `repeated_parameter`, as on every other route. The web client handles neither code by name: `grep -rn "bad_parameter\|repeated_parameter" web/src` finds only the generated OpenAPI descriptions, which no code reads. It shows the server's message.
+
+## Any `ast` on GET or HEAD (O1)
+
+- `/search` used to answer a repeated `ast` on GET with `repeated_parameter`, and a single one with `ast_needs_post`, as `bad_parameter`. Now a layer answers any `ast` on a non-POST request with `400 ast_needs_post`, `field: "ast"`, "Send an AST with POST.", repeated or not, before the extractor runs. `/facets` already did this.
+- **`GET /export` differs, as before:** its handler refuses a single `ast` (`ast_needs_post`) or `hashes` (`hashes_need_post`), but a repeated one now meets the extractor's check first and gets `repeated_parameter`. O1 names `/search` and `/facets` only; giving `/export` the same layer is a possible follow-up.
+- The golden `tests/golden/search_ast_needs_post.txt` changes from `bad_parameter` to `ast_needs_post`. `ast_needs_post` is an existing code (`/facets`, `/export`), so this adds none.
+
+## Tests
+
+- **`tests/repeated_params.rs`,** for every route in the table but logs and events:
+  - a repeated known parameter gives `repeated_parameter`, its field and the message, on GET and on HEAD with equal `content-length`;
+  - sent once it's read as before (neither `repeated_parameter` nor `bad_parameter`);
+  - an unknown parameter repeated is ignored;
+  - signed out, it's still a `401`;
+  - a 100-character `limit.<name>` and a bidi override come back capped (`limit.` and 58 `z`s and `…`) and escaped (`limit.\u{202e}`), with no raw U+202E in the body;
+  - any `ast` on `/search` and `/facets`, repeated, single or bare, is `ast_needs_post`.
+- **`tests/logs.rs`** does the same on the four logs routes; **`tests/events.rs`** checks `/events`' message and HEAD's length.
+- Existing assertions for `/facets`, logs, events and `/search` move to the new code.
+
+## Mutation checks during the slice
+
+MUTATIONS
+
+## Unchanged
+
+POST bodies, unknown parameters, every other error code, Torznab, the auth guard, and the OpenAPI descriptions. No new error code, dependency or `unsafe`.

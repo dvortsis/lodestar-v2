@@ -196,7 +196,7 @@ pub fn routes() -> Router<ApiState> {
                 "/search",
                 get(search_route)
                     .post(search_post)
-                    .layer(axum::middleware::from_fn(single_valued)),
+                    .layer(axum::middleware::from_fn(ast_needs_post)),
             )
             .route("/search/state", get(index_state)),
     )
@@ -276,32 +276,10 @@ pub(crate) async fn parse_query(
     }))
 }
 
-/// The query parameters `/search` takes, each at most once. The same
-/// names as [`SearchRequest`]'s fields (a test checks them).
-const SEARCH_PARAMS: [&str; 11] = [
-    "q", "ast", "sort", "limit", "offset", "hidden", "tz", "cursor", "collapse", "exact", "explain",
-];
-
-/// The first parameter `is_param` accepts that `query` sends more than
-/// once, read with the same decoder the query extractor uses (so a
-/// percent-encoded name or `+` for a space counts as it would there).
-pub(crate) fn repeated_param(query: &str, is_param: impl Fn(&str) -> bool) -> Option<String> {
-    let mut seen = std::collections::HashSet::new();
-    form_urlencoded::parse(query.as_bytes())
-        .map(|(key, _)| key)
-        .filter(|key| is_param(key))
-        .find(|key| !seen.insert(key.clone()))
-        .map(|key| key.into_owned())
-}
-
-/// The first of [`SEARCH_PARAMS`] that `query` sends more than once.
-fn repeated(query: &str) -> Option<String> {
-    repeated_param(query, |key| SEARCH_PARAMS.contains(&key))
-}
-
-/// Refuses a `/search` query that repeats a parameter, naming it, before
-/// the extractor would refuse it as a generic "wrong type or value".
-async fn single_valued(
+/// O1 (runner, 2026-11-21): any `ast` on GET or HEAD is `ast_needs_post`,
+/// sent once or more, as on `/facets`. It runs before the query extractor,
+/// whose repeat check would otherwise answer a repeated one first.
+async fn ast_needs_post(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
@@ -309,15 +287,24 @@ async fn single_valued(
     // POST reads its body, never the URL's query; GET and HEAD (which
     // `get()` also serves) read the query.
     let reads_query = req.method() != axum::http::Method::POST;
-    if let Some(name) = req.uri().query().filter(|_| reads_query).and_then(repeated) {
-        return ApiError::bad_request(
-            "repeated_parameter",
-            format!("{name} was sent more than once: send it once."),
-        )
-        .field(name)
-        .into_response();
+    let ast = req
+        .uri()
+        .query()
+        .filter(|_| reads_query)
+        .is_some_and(|q| has_param(q, "ast"));
+    if ast {
+        return ast_on_get().into_response();
     }
     next.run(req).await
+}
+
+/// `name` among `query`'s parameters, read as the extractor reads them.
+fn has_param(query: &str, name: &str) -> bool {
+    form_urlencoded::parse(query.as_bytes()).any(|(key, _)| key == name)
+}
+
+fn ast_on_get() -> ApiError {
+    ApiError::bad_request("ast_needs_post", "Send an AST with POST.").field("ast")
 }
 
 /// The longest a value is echoed back in an error, in characters.
@@ -439,7 +426,7 @@ async fn get_search(
     p: SearchRequest,
 ) -> ApiResult<axum::Json<SearchResponse>> {
     if p.ast.is_some() {
-        return Err(ApiError::bad_request("ast_needs_post", "Send an AST with POST.").field("ast"));
+        return Err(ast_on_get());
     }
     run_search(s, viewer, &headers, p).await
 }
@@ -1409,9 +1396,13 @@ pub(crate) fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::{field_names, repeated_param};
 
     #[test]
     fn search_params_are_the_request_fields() {
+        // The names the query extractor checks for repeats are serde's own
+        // list for the struct: the same as the fields it serializes, `ast`
+        // included (the ast_needs_post layer answers `ast` on GET first).
         let fields = serde_json::to_value(SearchRequest::default()).unwrap();
         let mut fields: Vec<&str> = fields
             .as_object()
@@ -1420,14 +1411,16 @@ mod tests {
             .map(|k| k.as_str())
             .collect();
         fields.sort_unstable();
-        let mut params = SEARCH_PARAMS.to_vec();
+        let mut params = field_names::<SearchRequest>().to_vec();
         params.sort_unstable();
         assert_eq!(fields, params);
+        assert!(params.contains(&"ast"));
     }
 
     #[test]
     fn repeated_names_the_first_parameter_sent_twice() {
-        let r = |q: &str| repeated(q);
+        let known = field_names::<SearchRequest>();
+        let r = |q: &str| repeated_param(q, |key| known.contains(&key));
         assert_eq!(r("q=a&sort=size"), None);
         assert_eq!(r("q=a&sort=size&sort=-size").as_deref(), Some("sort"));
         assert_eq!(r("tz=1&q=a&tz=2&q=b").as_deref(), Some("tz"));
