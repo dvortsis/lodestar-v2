@@ -10653,17 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T06:47Z",
+    "updated": "2026-11-21T07:46Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-auth-early-401",
+        "slice": "X-filter-budget-main",
         "role": "build",
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
-        "since": "2026-11-21T01:34Z",
-        "doing": "unblocked by #1002; merging main, re-measuring sizes",
-        "status": "running"
+        "since": "2026-11-21T07:46Z",
+        "doing": "briefed: briefs/X-filter-budget-main.md"
       },
       {
         "slot": 2,
