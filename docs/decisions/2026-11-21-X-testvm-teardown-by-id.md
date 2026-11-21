@@ -1,4 +1,4 @@
-# X-testvm-teardown-by-id decisions (#PR)
+# X-testvm-teardown-by-id decisions (#1017)
 
 Slice session, 2026-11-21. It follows #994's review. The teardown step in both test-VM runbooks (`infra/dev-vm/linux-aws.md` and `infra/dev-vm/windows.md`, step 7) used to check that `DescribeVolumes` with `tag:Purpose=X-test-vm` no longer listed "your volume". That works only if the volume got its tags, and another lane's volume is listed too, so "not listed" was hard to read. Both runbooks now check the lane's own volume by its id. Docs only: no cloud call, no template or Terraform change.
 
