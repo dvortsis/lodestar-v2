@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-21T16:32Z",
+  "updated_at": "2026-11-21T17:08Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T16:32Z",
+    "updated": "2026-11-21T17:08Z",
     "items": [
       {
         "slot": 1,
@@ -10675,12 +10675,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-api-openapi-repeated",
+        "slice": "X-page-frame",
         "role": "build",
-        "agent": "session_01MMjhnBpjPfQ45Zap7mZNyi",
-        "model": "opus",
-        "since": "2026-11-21T13:06Z",
-        "doing": "PR #1021 review MERGE; one docs round (patchCrawler wording, route_layer, owns)"
+        "agent": "session_01MMjhnD5iaW7CGjAAtXeVfE",
+        "model": "sonnet",
+        "since": "2026-11-21T17:08Z",
+        "doing": "brief sent; one page frame and header primitive, shared h1 edge, h1 on Companions and Outputs"
       },
       {
         "slot": 4,
