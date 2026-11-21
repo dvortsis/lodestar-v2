@@ -707,6 +707,106 @@ proptest! {
     }
 }
 
+/// A held case over budget, measured again on its own at the end of the
+/// run (X-filter-budget-remeasure).
+#[derive(Debug)]
+struct Remeasured {
+    /// Reference-runner µs per torrent: the third-fastest pass ÷ `speed`.
+    per: f64,
+    /// The divisor, from `scale_us`.
+    speed: f64,
+    /// The calibration that scales it, in µs per torrent.
+    scale_us: f64,
+}
+
+/// `again` read as the gate reads a case. `near` is the fastest calibration
+/// pass either side of it; `scale_us` the calibration that scaled the
+/// attempt; `speed` the divisor a calibration gives ([`scaling`]). It's
+/// scaled by the faster of the two calibrations, so never more leniently
+/// than the first measurement: noise can't make a calibration faster, and
+/// it only adds time to the case. A run of cases slowed alike reads its
+/// own time the second time; a slower engine reads over both times.
+fn remeasured(again: &Timing, near: f64, scale_us: f64, speed: impl Fn(f64) -> f64) -> Remeasured {
+    let scale_us = scale_us.min(near);
+    let speed = speed(scale_us);
+    Remeasured {
+        per: again.at / speed,
+        speed,
+        scale_us,
+    }
+}
+
+/// The 9V74 job on #1007's first head: every case from the mixed set at
+/// commit to the pending versions' 1% at commit ran about 1.6× slower,
+/// alike in each pass, between calibrations of 9.04 µs that didn't see it.
+const SLOWED_9V74: (&str, f64, f64) = ("AMD EPYC 9V74 80-Core Processor", 9.04, 34.2);
+
+#[test]
+fn a_slowed_block_passes_on_re_measure() {
+    let (cpu, calib, mixed) = SLOWED_9V74;
+    let speed = |s: f64| scaling(cpu, s, mixed).speed;
+    // As first measured: 52.3 µs here, over budget.
+    let first = timing(vec![49.8, 51.2, 52.3, 54.8, 54.9, 54.7, 54.4]);
+    assert!(first.at / speed(calib) > 50.0);
+    // Again, at the speed the same case ran on #957's green 9V74 job.
+    let again = timing(vec![34.9, 34.7, 34.8, 34.7, 34.8, 34.5, 34.8]);
+    let r = remeasured(&again, 9.1, calib, speed);
+    assert!(r.per < 50.0, "{r:?}");
+    assert_eq!(r.scale_us, calib, "a slower calibration doesn't loosen it");
+}
+
+#[test]
+fn a_steady_slowdown_fails_on_re_measure() {
+    let (cpu, calib, mixed) = SLOWED_9V74;
+    let speed = |s: f64| scaling(cpu, s, mixed).speed;
+    // The engine itself 1.5× slower: every measurement reads it.
+    let slower: Vec<f64> = [34.9, 34.7, 34.8, 34.7, 34.8, 34.5, 34.8]
+        .iter()
+        .map(|p| p * 1.5)
+        .collect();
+    let first = timing(slower.clone());
+    assert!(first.at / speed(calib) > 50.0);
+    for near in [calib, 9.5, 12.0, 20.0] {
+        let r = remeasured(&timing(slower.clone()), near, calib, speed);
+        assert!(r.per > 50.0, "near {near}: {r:?}");
+    }
+}
+
+#[test]
+fn a_faster_calibration_beside_the_re_measure_scales_it_stricter() {
+    let (cpu, calib, mixed) = SLOWED_9V74;
+    let speed = |s: f64| scaling(cpu, s, mixed).speed;
+    // Under budget by the attempt's calibration, over by the faster one.
+    let again = timing(vec![38.0; 7]);
+    assert!(remeasured(&again, calib, calib, speed).per < 50.0);
+    let r = remeasured(&again, 7.5, calib, speed);
+    assert_eq!(r.scale_us, 7.5);
+    assert!(r.per > 50.0, "{r:?}");
+}
+
+proptest! {
+    /// Whatever the calibrations beside it and whatever noise its passes
+    /// pick up, a re-measured case never reads faster than its clean
+    /// passes scaled as the attempt was: re-measuring can't loosen the
+    /// gate, only spare a case the host slowed.
+    #[test]
+    fn re_measuring_never_reads_more_leniently(
+        passes in prop::collection::vec(10.0f64..100.0, 7),
+        noise in prop::collection::vec(0.0f64..100.0, 7),
+        calib in 5.0f64..20.0,
+        near in 5.0f64..40.0,
+        model in 0usize..3,
+    ) {
+        let cpu = ["AMD EPYC 7763 64-Core Processor", SLOWED_9V74.0, "Some Other CPU"][model];
+        let speed = |s: f64| scaling(cpu, s, 40.0).speed;
+        let clean = timing(passes.clone()).at / speed(calib);
+        let noisy = timing(passes.iter().zip(&noise).map(|(p, n)| p + n).collect());
+        let r = remeasured(&noisy, near, calib, speed);
+        prop_assert!(r.per >= clean * (1.0 - 1e-12), "{clean} → {r:?}");
+        prop_assert!(r.scale_us <= calib);
+    }
+}
+
 /// How a job's times become reference-runner microseconds: each case's
 /// raw time ÷ `speed`.
 struct Scaling {
@@ -1074,7 +1174,12 @@ fn sigs_at_cap(items: &[Item]) -> std::sync::Arc<lodestar_filter::spam_sigs::Spa
 /// seven, which noise can't make faster
 /// (`docs/decisions/2026-11-05-X-filter-budget-noise.md`). An attempt
 /// where every held case over budget had a pass more than 15% over its own
-/// fastest measures again; one with a steady case over budget fails. From
+/// fastest measures again. A held case still over budget is measured once
+/// more at the end of the run, on its own and with a fresh calibration
+/// either side, and fails only if it's over again ([`remeasured`]): a
+/// shared host can slow a run of whole cases alike, which neither their
+/// spread nor the calibrations around the attempt show
+/// (`docs/decisions/2026-11-21-X-filter-budget-remeasure.md`). From
 /// then on, a scaled model is scaled by the fastest calibration of any
 /// attempt, the strictest, so a fresh draw can't loosen it. Raw passes, the
 /// divisor and where it came from are printed too.
@@ -1191,8 +1296,8 @@ fn budget() {
     // trusted attempt whose every held case over budget shows the host
     // was busy (a pass more than DRIFT over its fastest) measures again
     // too: noise only adds time to a case, so a later attempt passes only
-    // if the engine reads under budget. A steady case over budget fails
-    // at once.
+    // if the engine reads under budget. A steady case over budget is
+    // measured once more, on its own, and fails if it's over again.
     // SP-4's set at its cap (RP-G), and how many torrents are clones of
     // an original in it: each of those inherits its hide at commit.
     let sigs = sigs_at_cap(&items);
@@ -1257,21 +1362,18 @@ fn budget() {
             "SP-4 decides a tenth of the set at commit: {inherited}"
         );
     }
-    let mut drifted = Vec::new();
-    // The fastest calibration of any attempt so far, and whether a busy
-    // attempt over budget has measured again: from then on that fastest
-    // calibration scales, so a failing scaled run can't pass on a slower
-    // calibration draw. Noise can't make a calibration faster.
-    let mut fastest_calib = f64::INFINITY;
-    let mut busy_retried = false;
-    for attempt in 1..=ATTEMPTS {
-        println!("attempt {attempt} of {ATTEMPTS}");
-        let before = calibration("before");
+    // Every case in order (`only`: None), or only the case named, set up
+    // as in the full run: a held case over budget, measured again at the
+    // end of the run (X-filter-budget-remeasure). Nothing else is timed then.
+    let measure = |only: Option<&str>| -> Vec<(String, Timing, bool)> {
+        let time =
+            |what: &str, f: &dyn Fn(usize)| only.is_none_or(|o| o == what).then(|| time(what, f));
         let core = shipped();
         let t = time("core", &|i| {
             std::hint::black_box(core.verdict(std::hint::black_box(&items[i])));
         });
-        let mut cases = vec![("core".to_owned(), t, true)];
+        let mut cases = Vec::new();
+        cases.extend(t.map(|t| ("core".to_owned(), t, true)));
 
         drop(core);
         // The whole engine (RP-G): the core, every pack at the versions a
@@ -1332,11 +1434,13 @@ fn budget() {
         };
         for (what, rules, held) in &sets {
             engine.rules = rules.clone().into();
-            counts(&engine, what);
-            cases.push((what.clone(), prepare(&engine, what, true), *held));
+            if only.is_none() {
+                counts(&engine, what);
+            }
+            cases.extend(prepare(&engine, what, true).map(|t| (what.clone(), t, *held)));
             if *held {
                 let what = format!("{what}, at commit");
-                cases.push((what.clone(), commit(&engine, &what, true), true));
+                cases.extend(commit(&engine, &what, true).map(|t| (what.clone(), t, true)));
             }
         }
         // The cases below are all on the mixed set, as on `main` before
@@ -1353,7 +1457,7 @@ fn budget() {
             std::hint::black_box(v);
             std::hint::black_box(at_commit_reusing(&engine, &trail, item, facts, false));
         });
-        cases.push((what.to_owned(), t, true));
+        cases.extend(t.map(|t| (what.to_owned(), t, true)));
         // An always-adult source's find at commit, flooded or cloned: the
         // writer judges it again from the trail prepare's judgment kept
         // with both readings, as found and as Adult (none of the budget's
@@ -1379,7 +1483,7 @@ fn budget() {
                 true,
             ));
         });
-        cases.push((what.to_owned(), t, true));
+        cases.extend(t.map(|t| (what.to_owned(), t, true)));
         drop(trails);
         // The judgment that reads the find as found and again as Adult:
         // prepare's, and the commit's where no trail holds (a torrent
@@ -1395,7 +1499,7 @@ fn budget() {
                 true,
             ));
         });
-        cases.push((what.to_owned(), t, false));
+        cases.extend(t.map(|t| (what.to_owned(), t, false)));
         // That find flooded or cloned, both judgments: prepare reads it
         // both ways and keeps the trail, and the writer's second judgment
         // reads both from it. Reported, not held, as the judgment above.
@@ -1406,7 +1510,7 @@ fn budget() {
             std::hint::black_box(v);
             std::hint::black_box(at_commit_reusing(&engine, &trail, item, facts, true));
         });
-        cases.push((what.to_owned(), t, false));
+        cases.extend(t.map(|t| (what.to_owned(), t, false)));
         // The mixed set with pack-rule overrides (RP-2): a lighter
         // action, a heavier one, one with an `unless`, and one on a rule
         // that flags.
@@ -1441,9 +1545,9 @@ fn budget() {
             "every override bound to the version that applies"
         );
         let what = "engine, packs on, 10,000 rules, mixed, 4 pack overrides (1 with unless)";
-        cases.push((what.to_owned(), prepare(&engine, what, false), true));
+        cases.extend(prepare(&engine, what, false).map(|t| (what.to_owned(), t, true)));
         let what = format!("{what}, at commit");
-        cases.push((what.clone(), commit(&engine, &what, false), true));
+        cases.extend(commit(&engine, &what, false).map(|t| (what.clone(), t, true)));
         engine.pack_overrides = Default::default();
         // The mixed set again with common words neutralized (CSX-5
         // *Neutralize term*): every keyword entry reads the name and
@@ -1461,9 +1565,9 @@ fn budget() {
             })
             .collect();
         let what = "engine, packs on, 10,000 rules, mixed, 5 common words neutralized";
-        cases.push((what.to_owned(), prepare(&engine, what, false), true));
+        cases.extend(prepare(&engine, what, false).map(|t| (what.to_owned(), t, true)));
         let what = format!("{what}, at commit");
-        cases.push((what.clone(), commit(&engine, &what, false), true));
+        cases.extend(commit(&engine, &what, false).map(|t| (what.clone(), t, true)));
         drop(engine);
         // An install an earlier build set up (RP-G): the versions this
         // build changed or added (MW-2@2, FK-2@2, SP-4) pending, judged in
@@ -1472,11 +1576,24 @@ fn budget() {
         for (what, rules, held) in sets.iter().filter(|(_, _, held)| *held) {
             pending.rules = rules.clone().into();
             let what = what.replacen("packs on", "packs on, versions pending in shadow", 1);
-            cases.push((what.clone(), prepare(&pending, &what, true), *held));
+            cases.extend(prepare(&pending, &what, true).map(|t| (what.clone(), t, *held)));
             let what = format!("{what}, at commit");
-            cases.push((what.clone(), commit(&pending, &what, true), true));
+            cases.extend(commit(&pending, &what, true).map(|t| (what.clone(), t, true)));
         }
         drop(pending);
+        cases
+    };
+    let mut drifted = Vec::new();
+    // The fastest calibration of any attempt so far, and whether a busy
+    // attempt over budget has measured again: from then on that fastest
+    // calibration scales, so a failing scaled run can't pass on a slower
+    // calibration draw. Noise can't make a calibration faster.
+    let mut fastest_calib = f64::INFINITY;
+    let mut busy_retried = false;
+    for attempt in 1..=ATTEMPTS {
+        println!("attempt {attempt} of {ATTEMPTS}");
+        let before = calibration("before");
+        let cases = measure(None);
         let after = calibration("after");
 
         let calib_us = before.min(after);
@@ -1544,7 +1661,7 @@ fn budget() {
         let mut over = Vec::new();
         // Whether every held case over budget had a pass more than DRIFT
         // over its own fastest: noise in another case doesn't count, so a
-        // steady case over budget always fails at once.
+        // steady case over budget goes straight to its re-measure.
         let mut all_busy = true;
         for (what, t, held) in cases {
             let raw = t.at;
@@ -1556,18 +1673,23 @@ fn budget() {
             if per >= BUDGET_US {
                 if held {
                     all_busy &= t.jitter > DRIFT;
-                    over.push(format!(
+                    let line = format!(
                         "{what}: {per:.1} µs ({raw:.1} µs here, slowest pass {:.0}% over the \
                          fastest)",
                         t.jitter * 100.0
-                    ));
+                    );
+                    over.push((what, per, line));
                 } else {
                     println!("{what}: over {BUDGET_US} µs (reported, not held)");
                 }
             }
         }
-        if !over.is_empty() && all_busy && attempt < ATTEMPTS {
-            let note = format!("attempt {attempt}: over budget while busy: {over:?}");
+        if over.is_empty() {
+            return;
+        }
+        let lines: Vec<&String> = over.iter().map(|(.., line)| line).collect();
+        if all_busy && attempt < ATTEMPTS {
+            let note = format!("attempt {attempt}: over budget while busy: {lines:?}");
             println!(
                 "{note}: the host was busy during each case over budget, so measuring again \
                  (only an attempt under budget passes)"
@@ -1576,10 +1698,44 @@ fn budget() {
             busy_retried = true;
             continue;
         }
-        assert!(
-            over.is_empty(),
+        // A held case over budget is measured once more, on its own, with a
+        // fresh calibration either side, and fails only if it's over again
+        // (X-filter-budget-remeasure): a shared host can slow a run of whole
+        // cases alike, which neither their spread nor the calibrations
+        // around the attempt show. The second measurement is scaled no
+        // more leniently than the first ([`remeasured`]).
+        println!(
             "over the {BUDGET_US} µs budget on the reference runner, with this runner at \
-             {speed:.2}× its time: {over:?}"
+             {speed:.2}× its time, so measuring each such case again: {lines:?}"
+        );
+        let mut still = Vec::new();
+        for (what, per, line) in &over {
+            let near_before = calibration(&format!("before re-measuring {what}"));
+            let again = measure(Some(what));
+            let near_after = calibration(&format!("after re-measuring {what}"));
+            let [(_, again, _)] = again.as_slice() else {
+                panic!("{what}: measured {} cases again, not one", again.len());
+            };
+            let r = remeasured(again, near_before.min(near_after), scale_us, |s| {
+                scaling(&cpu, s, mixed).speed
+            });
+            let both = format!(
+                "{what}: {per:.1} µs, calibration {scale_us:.2} µs; re-measured {:.1} µs \
+                 ({:.1} µs here, ÷ {:.3}), calibration {near_before:.2} µs before and \
+                 {near_after:.2} µs after, scaled by {:.2} µs",
+                r.per, again.at, r.speed, r.scale_us
+            );
+            if r.per < BUDGET_US {
+                println!("::warning::passed on re-measure: {both}");
+            } else {
+                println!("over on re-measure: {both}");
+                still.push(format!("{line}; {both}"));
+            }
+        }
+        assert!(
+            still.is_empty(),
+            "over the {BUDGET_US} µs budget on the reference runner, measured twice, with this \
+             runner at {speed:.2}× its time: {still:?}"
         );
         return;
     }
