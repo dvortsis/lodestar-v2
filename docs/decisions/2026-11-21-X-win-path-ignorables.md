@@ -1,19 +1,22 @@
 # X-win-path-ignorables decisions
 
-Follow-up to #1004 (X-win-log-path-display), from its fresh review's optional findings. Windows service logs only; the Event Log's rules are unchanged (`one_line`, the 260-character cut, no quotes).
+Follow-up to #1004 (X-win-log-path-display), from its fresh review's optional findings. Only the temp log changes. The Event Log line (`one_line`, the 260-character cut, no quotes) and `acl`'s `icacls` command are as they were.
 
 - **One set of invisible characters.** `acl::invisible` was Unicode's Cf, Zl and Zp alone, so `quoted()` let some characters that draw nothing through raw. It now also covers every Default_Ignorable_Code_Point, by calling the filter crate's own set, `lodestar_filter::normalize::invisible`. That function is now `pub`; nothing else changes and its tests are unchanged. The newly covered characters:
   - variation selectors (U+FE00–FE0F, U+E0100–E01EF);
   - the combining grapheme joiner, U+034F;
   - the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0);
   - the Khmer inherent vowels, U+17B4–17B5;
-  - the rest of plane 14.
+  - U+2065 and U+FFF0–FFF8;
+  - the rest of plane 14 (U+E0000–E0FFF).
 
   It also covers the Mongolian free variation selectors U+180B–U+180F directly. They're default-ignorable, but the filter's set has only U+180E (as a format character), and changing the filter's matching is outside this slice. What `acl::invisible` covered before (every Cf, including the visible format marks, and Zl and Zp) stays.
-  - The same set reaches the Event Log's `one_line` and `acl`'s own `plain`, which drop these characters rather than escape them. Their rules are unchanged; they now drop the new characters too.
+  - **Only the temp log uses the wider set.** The old list is now `acl::format_or_separator` (Cf, Zl, Zp), and `plain()` and the Event Log's `one_line` keep using it. So both drop exactly what they did before (tested).
+    - `plain()` builds the pasteable `icacls "<folder>"` command in `acl::refusal`. Dropping a variation selector there would have named a folder that doesn't exist, such as `D:\Music ❤` for `D:\Music ❤️`. The self-review caught this.
+    - Keeping `one_line` unchanged also keeps the brief's "no change to the Event Log line". So for a folder holding one of the new characters, the two logs differ: the temp log escapes it, the Event Log shows it as it is.
   - `settings/preferences.rs` has its own `invisible`, which is outside this slice. It could share this set; the PR says so, for the runner to brief.
-- **The set is pinned.** A test walks all of `char`. Every character the filter's set names, plus U+2028, U+2029 and U+180B–U+180F, is `invisible` and comes out of `quoted()` as `\u{…}`. Ordinary text comes out as it is: Latin, accented, digits, CJK, emoji, a space, a backslash, and combining marks (U+0301, U+05B0).
-- **`quoted()` moves to `acl.rs`,** so `acl::secure_dir`'s own errors use it too: "reading …'s permissions", "creating …" and "… vanished after it was created". They showed the folder with plain `Display`, unquoted and unescaped, and reach the temp log as they are. `acl::refusal`'s text keeps its own rules: `plain()` drops what it can't show, so its `icacls "<folder>"` command stays pasteable.
+- **The set is pinned.** A test walks all of `char`. Every Cf character (`lodestar_metainfo::format_char`, visible format marks included), every character the filter's set names, and U+2028, U+2029 and U+180B–U+180F is `invisible` and comes out of `quoted()` as `\u{…}`. Ordinary text comes out as it is: Latin, accented, digits, CJK, emoji, a space, a backslash, and combining marks (U+0301, U+05B0).
+- **`quoted()` moves to `acl.rs`,** with its comment reworded so `acl.rs` names no Event Log writer: `tests/legal_facts.rs` scans for those words, and only the helper and the service may write there (Legal Notice section 5). The move lets `acl::secure_dir`'s own errors use it too: "reading …'s permissions", "creating …" and "… vanished after it was created". They showed the folder with plain `Display`, unquoted and unescaped, and reach the temp log as they are. `acl::refusal`'s text keeps its own rules: `plain()` drops only Cf, Zl and Zp, so its `icacls "<folder>"` command still names the folder as it is.
 - **The Linux tests catch every call site.** Three reverts to `{:?}` used to fail only on windows-latest, because the tests' paths held no backslash off Windows. They were the config file in the `data_dir` refusal, the config file in the witness and blocklist refusals, and "is a file". Those tests now name the config file `ser\vice.toml` and the file in the way `in\the <U+202E>way`. A backslash is legal in a Linux file name; on Windows it's a separator, so each test creates the parent folder first.
 - **The `"{}: {e}"` detail stays untested, because it can't be triggered portably.** It needs the data folder's own lookup to answer NotFound while a parent's `symlink_metadata` fails another way, such as access denied or a loop.
   - Looking up the folder walks through that same parent, so both fail the same way.
@@ -32,3 +35,6 @@ Follow-up to #1004 (X-win-log-path-display), from its fresh review's optional fi
   | the `data_dir` refusal's file back to `{:?}` | `every_refusal_shows_its_path_as_written` |
   | the witness and blocklist refusals' file back to `{:?}` | `every_refusal_shows_its_path_as_written` |
   | "is a file" back to `{:?}` | `the_file_in_the_way_is_quoted` |
+  | a visible Cf mark (U+0600–0605) dropped from the old list | `quoted_escapes_every_default_ignorable` |
+  | `plain()` on the wider set | `plain_keeps_what_only_the_temp_log_escapes` |
+  | `one_line` on the wider set | `the_event_log_line_keeps_its_own_set` |

@@ -365,45 +365,53 @@ fn printable(text: &str) -> String {
 /// a refusal are whoever could write the folder's choice).
 fn plain(text: &str) -> String {
     text.chars()
-        .filter(|c| !c.is_control() && !invisible(*c))
+        .filter(|c| !c.is_control() && !format_or_separator(*c))
         .collect()
 }
 
-/// Characters that render as nothing or reorder text: Unicode's Cf, Zl
-/// and Zp characters (Unicode 15), and every Default_Ignorable_Code_Point
+/// Characters that render as nothing or reorder text: the
+/// [`format_or_separator`] ones, and every Default_Ignorable_Code_Point
 /// besides, the filter's own set ([`lodestar_filter::normalize::invisible`]:
 /// variation selectors, the combining grapheme joiner, Hangul fillers,
-/// Khmer inherent vowels, tags) plus the Mongolian free variation
-/// selectors U+180B–U+180F, which that set leaves to Cf (X-win-path-ignorables).
-/// Shared with the service's Event Log note (`service::event_log_text`) and
-/// the temp log's [`quoted`] paths.
+/// Khmer inherent vowels, tags) plus the Mongolian free variation selectors
+/// U+180B–U+180F, which that set leaves to Cf. What the temp log's
+/// [`quoted`] paths escape (X-win-path-ignorables).
 pub(super) fn invisible(c: char) -> bool {
-    lodestar_filter::normalize::invisible(c)
+    format_or_separator(c)
+        || lodestar_filter::normalize::invisible(c)
         || matches!(c, '\u{180b}'..='\u{180f}')
-        || matches!(
-            c,
-            '\u{00ad}'
-                | '\u{0600}'..='\u{0605}'
-                | '\u{061c}'
-                | '\u{06dd}'
-                | '\u{070f}'
-                | '\u{0890}'..='\u{0891}'
-                | '\u{08e2}'
-                | '\u{180e}'
-                | '\u{200b}'..='\u{200f}'
-                | '\u{2028}'..='\u{202e}'
-                | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{206f}'
-                | '\u{feff}'
-                | '\u{fff9}'..='\u{fffb}'
-                | '\u{110bd}'
-                | '\u{110cd}'
-                | '\u{13430}'..='\u{1343f}'
-                | '\u{1bca0}'..='\u{1bca3}'
-                | '\u{1d173}'..='\u{1d17a}'
-                | '\u{e0001}'
-                | '\u{e0020}'..='\u{e007f}'
-        )
+}
+
+/// Unicode's Cf, Zl and Zp characters (Unicode 15): format and separator
+/// characters that render as nothing or reorder text. What [`plain`] and
+/// the service's Event Log note (`service::one_line`) drop. Narrower than
+/// [`invisible`] on purpose: [`plain`] builds a pasteable `icacls` command,
+/// which must name the folder as it is, so it drops no more than these.
+pub(super) fn format_or_separator(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061c}'
+            | '\u{06dd}'
+            | '\u{070f}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08e2}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{110bd}'
+            | '\u{110cd}'
+            | '\u{13430}'..='\u{1343f}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
+    )
 }
 
 /// A path (or a setting's value) as the temp log shows it: in plain
@@ -415,7 +423,7 @@ pub(super) fn invisible(c: char) -> bool {
 /// backslashes, would read as path text: a TOML `"D:\temp"` holds a TAB,
 /// and must not show as the full path `D:\temp`. The Event Log shows the
 /// same path without quotes, flattened by `service::one_line` instead, as
-/// `eventcreate`'s line needs. Used by the service's refusals and by
+/// its one-line message needs. Used by the service's refusals and by
 /// [`secure_dir`]'s own errors.
 pub(super) fn quoted(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
@@ -995,7 +1003,10 @@ mod tests {
     fn quoted_escapes_every_default_ignorable() {
         let escaped = |c: char| format!("\"{}\"", c.escape_unicode());
         for c in (0..=0x10FFFF).filter_map(char::from_u32) {
-            let must = lodestar_filter::normalize::invisible(c)
+            // Every Cf (visible format marks included), the separators,
+            // and every default-ignorable.
+            let must = lodestar_metainfo::format_char(c)
+                || lodestar_filter::normalize::invisible(c)
                 || matches!(c, '\u{2028}' | '\u{2029}' | '\u{180b}'..='\u{180f}');
             if must {
                 assert!(invisible(c), "U+{:04X}", c as u32);
@@ -1028,6 +1039,21 @@ mod tests {
                 c as u32
             );
         }
+    }
+
+    /// [`plain`] drops only Cf, Zl and Zp, not the wider set: the `icacls`
+    /// command it builds must name a folder such as `D:\Music ❤️` (U+FE0F)
+    /// or one holding a Hangul filler as it is.
+    #[test]
+    fn plain_keeps_what_only_the_temp_log_escapes() {
+        for name in [
+            "D:\\Music \u{2764}\u{fe0f}",
+            "D:\\a\u{3164}b",
+            "D:\\a\u{034f}b",
+        ] {
+            assert_eq!(plain(name), name, "{name:?}");
+        }
+        assert_eq!(plain("D:\\a\u{202e}b\u{2028}c"), "D:\\abc");
     }
 
     /// [`secure_dir`]'s own errors name the folder as the temp log shows

@@ -728,11 +728,12 @@ pub fn event_log_text(refusal: Refusal, dir: &Path) -> String {
 /// `text` on one line: control characters become spaces, and Unicode's
 /// format and separator characters (bidirectional controls, zero-width and
 /// soft-hyphen characters, tags), which could make a name read as other
-/// text, are dropped (`acl`'s list).
+/// text, are dropped ([`acl::format_or_separator`]; not the temp log's
+/// wider [`acl::invisible`], so this line is as it was).
 pub fn one_line(text: &str) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
-        .filter(|c| !super::acl::invisible(*c))
+        .filter(|c| !super::acl::format_or_separator(*c))
         .collect()
 }
 
@@ -3416,6 +3417,15 @@ mod tests {
         assert!(text.contains("é…,"), "{text}");
         let short = event_log_text(Refusal::RollingBack, Path::new(r"D:\data"));
         assert!(!short.contains('…'));
+    }
+
+    /// The Event Log line drops what it did before, no more: a variation
+    /// selector or Hangul filler the temp log escapes stays (X-win-path-ignorables).
+    #[test]
+    fn the_event_log_line_keeps_its_own_set() {
+        for name in ["D:\\Music \u{2764}\u{fe0f}", "D:\\a\u{3164}b"] {
+            assert_eq!(one_line(name), name, "{name:?}");
+        }
     }
 
     /// A folder name can't forge a second line or hide text.
