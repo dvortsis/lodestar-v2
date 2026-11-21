@@ -1,4 +1,4 @@
-# runner-records-r8 decisions (#PR)
+# runner-records-r8 decisions (#1025)
 
 The runner's records PR after r7 (#1020). It records the runner's calls from the afternoon of 2026-11-21. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
