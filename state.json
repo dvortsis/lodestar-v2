@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T21:38Z",
+    "updated": "2026-11-21T21:47Z",
     "items": [
       {
         "slot": 1,
@@ -10666,12 +10666,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-undo-danger-tests",
+        "slice": "X-web-build-determinism",
         "role": "build",
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
-        "since": "2026-11-21T19:46Z",
-        "doing": "PR #1030 review MERGE plus one assertion added (d2dd7fd2); CI running"
+        "since": "2026-11-21T21:47Z",
+        "doing": "#1030 merged; brief sent; find why identical web builds differ by 5-20 B"
       },
       {
         "slot": 3,
