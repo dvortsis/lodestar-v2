@@ -179,7 +179,11 @@ async fn every_route_names_a_repeated_parameter() {
         // An unknown parameter is ignored, repeated or not.
         let unknown = uri(path, &format!("{rest}&{name}={value}&zz=1&zz=2"));
         let (_, _, body) = call(&f.app, request(method, &unknown, &c)).await;
-        assert_ne!(error(&body)["code"], "repeated_parameter", "{method} {unknown}: {body}");
+        assert_ne!(
+            error(&body)["code"],
+            "repeated_parameter",
+            "{method} {unknown}: {body}"
+        );
     }
 }
 
@@ -192,7 +196,10 @@ async fn a_repeated_name_is_capped_and_escaped() {
     let long = format!("limit.{}", "z".repeat(100));
     let bidi = "limit.%E2%80%AE";
     for (query, shown) in [
-        (format!("{long}=1&{long}=2"), format!("limit.{}…", "z".repeat(58))),
+        (
+            format!("{long}=1&{long}=2"),
+            format!("limit.{}…", "z".repeat(58)),
+        ),
         (format!("{bidi}=1&{bidi}=2"), r"limit.\u{202e}".to_owned()),
     ] {
         let (status, _, body) = call(&f.app, request("GET", &uri("/facets", &query), &c)).await;
@@ -224,7 +231,11 @@ async fn signed_out_is_still_a_401_first() {
     let f = fixture();
     for &(method, path, name, value, _) in ROUTES {
         let twice = uri(path, &format!("{name}={value}&{name}={value}"));
-        let mut req = Request::builder().method(method).uri(&twice).body(Body::empty()).unwrap();
+        let mut req = Request::builder()
+            .method(method)
+            .uri(&twice)
+            .body(Body::empty())
+            .unwrap();
         req.extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 1))));
         let status = f.app.clone().oneshot(req).await.unwrap().status();

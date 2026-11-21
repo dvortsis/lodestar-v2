@@ -55,7 +55,12 @@ No route deliberately depends on a repeated known parameter: none reads a list f
 
 ## Mutation checks during the slice
 
-MUTATIONS
+Each mutant was run against `tests/repeated_params.rs`, `facets.rs`, `search_collapse.rs`, `logs.rs` and `events.rs`:
+
+- **No check** (`repeated_param` never finds a repeat): 4 tests fail. They are `repeated_params`' `every_route_names_a_repeated_parameter` and `a_repeated_name_is_capped_and_escaped`, `facets`' `a_repeated_parameter_is_named`, and `search_collapse`'s `a_repeated_parameter_is_named`.
+- **GET only** (the extractor skips the check on HEAD and POST): 2 fail, `every_route_names_a_repeated_parameter` (on HEAD and on `POST /settings/import`) and `search_collapse`'s `a_repeated_parameter_is_named`.
+- **First name, not the repeated one** (a repeat is reported under the first known name in the query): 2 fail, `every_route_names_a_repeated_parameter` (`/insights/events`' `to=1&from=0&from=0`) and `facets`' `a_repeated_parameter_is_named`.
+- **Logs and `/events` detect a repeat in their own loops** and share only the error, so these mutants leave their tests passing. Their own tests pin the code, field, message and HEAD's length.
 
 ## Unchanged
 

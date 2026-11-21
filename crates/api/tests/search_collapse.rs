@@ -437,7 +437,11 @@ async fn a_repeated_parameter_is_named() {
         );
     }
     // O1: any `ast` on GET, repeated or not, is ast_needs_post, as on /facets.
-    for uri in ["/api/v1/search?ast=x&ast=y", "/api/v1/search?ast=x", "/api/v1/search?q=a&ast"] {
+    for uri in [
+        "/api/v1/search?ast=x&ast=y",
+        "/api/v1/search?ast=x",
+        "/api/v1/search?q=a&ast",
+    ] {
         let (status, _, body) = call(&f.app, get(uri, &c)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
         assert_eq!(body["error"]["code"], "ast_needs_post", "{uri}: {body}");

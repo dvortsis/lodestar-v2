@@ -748,7 +748,10 @@ async fn every_logs_route_names_a_repeated_parameter() {
         let (status, headers, body) = call(&f.app, get(&twice, &c)).await;
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(status, StatusCode::BAD_REQUEST, "{twice}: {body}");
-        assert_eq!(body["error"]["code"], "repeated_parameter", "{twice}: {body}");
+        assert_eq!(
+            body["error"]["code"], "repeated_parameter",
+            "{twice}: {body}"
+        );
         assert_eq!(body["error"]["field"], "level", "{twice}: {body}");
         assert_eq!(
             body["error"]["message"],
