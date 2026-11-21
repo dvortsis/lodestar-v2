@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-21T17:08Z",
+  "updated_at": "2026-11-21T17:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T17:08Z",
+    "updated": "2026-11-21T17:24Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-importer-schema-limit",
+        "slice": "X-metrics-prefix-doc",
         "role": "build",
-        "agent": "session_01MMjhnC26GEmJTmeotVuggT",
-        "model": "opus",
-        "since": "2026-11-21T14:19Z",
-        "doing": "PR #1024 open; fresh review plus security review running"
+        "agent": "session_01MMjhnB3mvwiYNgyqkQWJbK",
+        "model": "sonnet",
+        "since": "2026-11-21T17:24Z",
+        "doing": "brief sent; docs/metrics.md states the lodestar_ prefix; tables use unprefixed names"
       },
       {
         "slot": 2,
