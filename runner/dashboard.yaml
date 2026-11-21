@@ -281,6 +281,7 @@ placement:
   - X-wizard-labels-signout
   - X-session-draft-keep
   - X-auth-early-401
+  - X-settings-leave-guard-split
   - X-settings-find
   - X-setup-token-boot
   - X-first-run
@@ -458,6 +459,15 @@ placement:
   - X-flake-relevance-lock
   - X-flake-utp-lossy
   - X-flake-utp-lossy-win
+  - X-snapshot-claims-nits
+  - X-network-lost-msg
+  - X-enr-lane-nits
+  - X-win-data-dir-followups
+  - X-fleet-switch-passthrough
+  - X-metrics-prefix-doc
+  - X-testvm-teardown-by-id
+  - X-prefs-invisible-share
+  - X-api-openapi-repeated
   - X-flake-export-wal
   - X-flake-filter-trails
   - X-soak-screen-calibrate
@@ -571,6 +581,8 @@ placement:
   - X-crawler-sim-calibrate
   - CR-COL-5
   - CR-COL-6
+  - X-sampler-frontier-starve
+  - CR-UTP-FIRST-WINDOW
 - ws: ws-cr-live
   match:
   - CR-AB-*
