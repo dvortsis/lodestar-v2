@@ -1960,6 +1960,19 @@ mod tests {
         }
     }
 
+    /// The doc's tables name series without the `lodestar_` prefix that
+    /// `Out` adds; a prefixed table row would be scraped as
+    /// `lodestar_lodestar_...`, so it fails here.
+    #[test]
+    fn doc_table_rows_use_unprefixed_names() {
+        let doc = include_str!("../../../docs/metrics.md");
+        let bad: Vec<&str> = doc
+            .lines()
+            .filter(|l| l.starts_with("| `lodestar_"))
+            .collect();
+        assert!(bad.is_empty(), "prefixed series in tables: {bad:?}");
+    }
+
     /// The pool's held- and reserved-bytes families (X-fetch-pool-bytes,
     /// X-fetch-meta-reserve) have their rows in docs/metrics.md.
     #[test]
