@@ -257,7 +257,7 @@ pub struct Found {
     pub interest: bool,
     /// CR-HINT-FIRST (`dht.hint_first`): the DHT holds a fresh responder
     /// hint for it, so the pool may ask for it in its T1 tier. The pool
-    /// honours it only from a peer finder's source with the switch on
+    /// honours it only from the DHT plugin's source with the switch on
     /// (`PoolConfig::hint_sources`); from any other source it's ignored.
     pub hint: bool,
     /// What the source asserted about the key. The [`Emitter`] clamps it

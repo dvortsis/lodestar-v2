@@ -821,7 +821,7 @@ impl Pipeline {
         // Plugins, with peer-request channels for the peer finders.
         let mut finders = Vec::new();
         // CR-HINT-FIRST: the sources whose hint marks the pool trusts.
-        let mut finder_sources = Vec::new();
+        let mut hint_sources = Vec::new();
         let mut weights = HashMap::new();
         let mut sources = Vec::new();
         let mut tasks = Vec::new();
@@ -909,10 +909,12 @@ impl Pipeline {
                 ),
                 None => lodestar_sources::Kit::default(),
             };
+            if trusted_for_hints(m.id) {
+                hint_sources.push(id);
+            }
             let peer_requests = m.is(Kind::PeerFinder).then(|| {
                 let (tx, rx) = mpsc::channel(1024);
                 finders.push(tx);
-                finder_sources.push(id);
                 rx
             });
             let peer_replies = m
@@ -981,7 +983,7 @@ impl Pipeline {
         let mut pool_config = config.pool.clone();
         pool_config.paused |= setup_hold::held(config.setup_done.as_ref());
         if pool_config.hint_first {
-            pool_config.hint_sources = finder_sources;
+            pool_config.hint_sources = hint_sources;
         }
         // The pool, the prepare stage and the worker's funnel, built as a
         // remote worker builds them (WK-7), on today's queues.
@@ -1771,9 +1773,24 @@ pub fn save_hot(store: &mut Store, hot: &HotColumns, dir: &Path) -> Result<(), E
     Ok(())
 }
 
+/// CR-HINT-FIRST: whether plugin `id`'s hint marks earn T1 priority in
+/// the pool: the DHT plugin's alone, matched by its id. Trusting another
+/// plugin is a deliberate edit here, with its own review.
+fn trusted_for_hints(id: &str) -> bool {
+    id == dht::MANIFEST.id
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_dht_plugin_is_trusted_for_hints() {
+        assert!(trusted_for_hints(dht::MANIFEST.id));
+        for other in ["tracker-scrape", "arr", "stashdb", "local", "DHT", ""] {
+            assert!(!trusted_for_hints(other), "{other}");
+        }
+    }
     use lodestar_metainfo::InfoHash;
 
     #[test]

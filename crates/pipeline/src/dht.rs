@@ -110,8 +110,8 @@ fn found(h: Harvest) -> Found {
         Source::Lookup => strategy::LOOKUP,
     };
     let mut found = Found::key(h.info_hash, strategy).with_peers(h.peers);
-    // CR-HINT-FIRST: the pool trusts it only from a peer finder, and only
-    // with `dht.hint_first` on.
+    // CR-HINT-FIRST: the pool trusts it only from this plugin's source,
+    // and only with `dht.hint_first` on.
     found.hint = h.hint;
     found
 }

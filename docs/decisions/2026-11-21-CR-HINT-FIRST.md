@@ -39,14 +39,14 @@ Hint-first reuses CR-1a-H's capture, its endpoint checks (at capture and again a
 - **The flag's path:** `Harvest.hint` (`crates/dht`), then `Found.hint` (`crates/sources/src/plugin.rs`, false from `Found::key`), mapped in `crates/pipeline/src/dht.rs`.
 - **Trust (the runner's addition).**
   - The pool honours `Found.hint` only with `PoolConfig::hint_first` on, and only from a source in `PoolConfig::hint_sources`.
-  - The pipeline fills `hint_sources` with the peer finders' source ids, only with the switch on (`crates/pipeline/src/lib.rs`).
-  - Today the DHT is the only peer finder. A future peer finder would be trusted too, and its own slice should revisit this.
+  - The pipeline fills `hint_sources` with the DHT plugin's own source id, matched by its plugin id (`trusted_for_hints` in `crates/pipeline/src/lib.rs`, test `only_the_dht_plugin_is_trusted_for_hints`), only with the switch on.
+  - **The runner's call:** no other plugin is trusted, not even a later peer finder. Trusting one is a deliberate edit to `trusted_for_hints`, with its own review.
   - Any other mark is ignored and counted. So is a mark on a private or interactive key: a private key never goes to public peer finding, and an interactive one is T0 already.
 - **The T1 tier at the pool** (`crates/sources/src/pool.rs`, `pool/admission.rs`).
   - A hinted key waits for its first lookup in T1, between interactive and background.
     - Under coordinated admission, T1 is a third queue in `Admission`. Its grants take the same permits as any class, counted as `class="hinted"`.
     - Without coordinated admission, T1 is a backlog beside `lookup_backlog`.
-  - **Newest first (this slice's refinement, flagged to the runner).** A hint is only worth its first minute, so T1 serves its newest key first. When T1 is full (`T1_WAITING`), its oldest key leaves for its ordinary queue, and the newcomer takes T1.
+  - **Newest first (this slice's refinement, approved by the runner).** A hint is only worth its first minute, so T1 serves its newest key first. When T1 is full (`T1_WAITING`), its oldest key leaves for its ordinary queue, and the newcomer takes T1.
     - The first screen ran first-in, first-out. Marking runs at about 24 hashes a second against about 1.5 admitted lookups a second, so a full FIFO T1 served keys that had waited about 170 s, long past `HINT_TTL`: about 15k of 17k marked hints still expired unused.
   - **One place per key (the runner's addition).** A key waits in T1 or in its ordinary queue, never both. A key that leaves T1, full or aged, moves to its ordinary queue (`a_full_t1_sends_hinted_keys_to_their_ordinary_queue`).
     - **The one exception is CR-ADM's own.** A waiting key a user takes an interest in gets an interactive copy, and whichever copy is granted first makes the other stale. That's today's rule for background keys. A T1 key follows it, and the interest also ends its hint.
@@ -99,29 +99,44 @@ These carry the `hint` flag, or wire and export the switch:
 - **Measures.** "Stored" is the post-warmup rate per minute. "Spread" is the off arm's range across the eight seeds, the noise floor. Per slot-second is stored per second ÷ `L`, and per query is stored ÷ DHT queries.
 - **Hint counts** are per-seed means for the on arm.
 
+**Newest-first (as built):**
+
 | Variant | Stored off → on | Change | Off spread | Sign test | Per slot-s off → on (rose) | Per query off → on (rose) | `W` s | `q` | `y` |
 |---|---|---|---|---|---|---|---|---|---|
 | as is | 13.31 → 13.76 | +3.4% | 25.9% | Inconclusive (5+/3−) | 0.00719 → 0.00744 (5/8) | 0.002862 → 0.002969 (5/8) | 23.17 → 23.42 | 24.5 → 24.7 | 0.167 → 0.174 |
-| CR-ADM in both | 16.03 → 16.82 | +4.9% | 20.1% | Inconclusive (7+/1−) | 0.00866 → 0.00909 (7/8) | 0.003417 → 0.003563 (7/8) | 22.74 → 22.72 | 24.2 → 24.5 | 0.197 → 0.206 |
+| CR-ADM in both | 16.03 → 16.82 | +4.9% | 20.2% | Inconclusive (7+/1−) | 0.00865 → 0.00909 (7/8) | 0.003417 → 0.003563 (7/8) | 22.74 → 22.72 | 24.2 → 24.5 | 0.197 → 0.206 |
 | CR-ADM and lookup_end in both | 24.83 → 26.26 | +5.8% | 21.9% | Inconclusive (5+/2−/1 tie) | 0.01337 → 0.01416 (6/8) | 0.004899 → 0.005162 (5/8) | 14.83 → 14.55 | 18.6 → 18.3 | 0.198 → 0.206 |
 
-| Variant (on arm) | Marked | Expired unused | Hinted queries | Useful |
+**First-in, first-out (the first run, before the refinement):**
+
+| Variant | Stored off → on | Change | Off spread | Sign test | Per slot-s off → on (rose) | Per query off → on (rose) | Hinted queries (on) |
+|---|---|---|---|---|---|---|---|
+| as is | 13.31 → 13.76 | +3.4% | 25.9% | Inconclusive (5+/3−) | 0.00719 → 0.00744 (5/8) | 0.002862 → 0.002969 (5/8) | 355 |
+| CR-ADM in both | 16.03 → 17.07 | +6.5% | 20.2% | Inconclusive (7+/1−) | 0.00865 → 0.00922 (7/8) | 0.003417 → 0.003634 (6/8) | 460 |
+| CR-ADM and lookup_end in both | 24.83 → 27.08 | +9.1% | 21.9% | Inconclusive (6+/2−) | 0.01337 → 0.01460 (6/8) | 0.004899 → 0.005329 (6/8) | 1,218 |
+
+The two orders' "as is" rows are identical: without CR-ADM, T1 never holds a key (see below). The off arms are the same runs in both.
+
+**Hint counts for newest-first's on arm:**
+
+| Variant | Marked | Expired unused | Hinted queries | Useful |
 |---|---|---|---|---|
 | as is | 17,406 | 15,730 | 355 | 248 |
 | CR-ADM in both | 17,352 | 15,312 | 764 | 531 |
 | CR-ADM and lookup_end in both | 17,549 | 15,110 | 1,210 | 792 |
 
-- **No variant beats the noise floor.** Every change is inside the off arm's spread, and no sign test agrees on all eight seeds.
-  - The keep rule, per slot-second and per query both rising, holds on the means in all three variants.
-  - Per seed, it holds most strongly with CR-ADM in both arms (7 of 8 each).
-  - The screen doesn't decide; the live A/B does (stage 3, stacked on the winners so far).
-- **CR-ADM matters to the mechanism.**
-  - Without coordinated admission, the pool hands each request straight to the actor, so keys wait in the actor's own FIFO queue, not the pool's, and T1 orders almost nothing.
+- **No variant beats the noise floor in either order.** Every change is inside the off arm's spread, and every verdict is the sign test's: Inconclusive.
+  - The keep rule stands as briefed: output per slot-second and per query must both rise.
+  - On the means it holds in every variant. Per seed it holds most strongly with CR-ADM in both arms.
+  - A screen never replaces the live run (stage 3, stacked on the winners so far).
+- **Without CR-ADM, T1 does little.**
+  - With coordinated admission off, the pool hands each request straight to the actor, so keys wait in the actor's own FIFO queue, not the pool's. T1 orders almost nothing.
   - With CR-ADM, keys wait for a permit in the pool, where T1 acts. Hinted queries roughly double, and with CR-LOOKUP-END too they more than triple.
-- **The first run (T1 first-in, first-out)** gave +3.4%, +6.5% and +9.1% in the three variants, also all inconclusive. Hinted queries averaged about 355, 460 and 1,220.
-  - With CR-ADM alone, newest-first sends about two-thirds more hinted queries (764 against 460). With CR-LOOKUP-END too, the two orders send about the same number. Their stored rates are within each other's noise.
-  - Newest-first is kept as the sounder rule: a hint is only worth its first minute.
-- **Most marks still expire.** Discovery outruns lookup admission by more than 10×, so no ordering can serve every mark inside `HINT_TTL`. Dispatch at once and the one-hash-per-responder rule raise the hinted queries the pool can use; they can't remove the gap.
+  - This matters for the live A/B's design: hint-first's arm needs CR-ADM in its control.
+- **Why newest-first.** In the FIFO run, about 15k of the 17k hashes marked per seed expired unused. Marking ran at about 24 a second against about 1.5 admitted lookups a second, so a full FIFO T1 served keys that had waited about 170 s, past `HINT_TTL`.
+  - With CR-ADM alone, newest-first sends about two-thirds more hinted queries (764 against 460). With CR-LOOKUP-END too, the two orders send about the same number.
+  - The two orders' stored rates are within each other's noise. Newest-first is kept as the sounder rule (approved by the runner).
+- **Most marks still expire.** Discovery outruns lookup admission by more than 10×, so no ordering serves every mark inside `HINT_TTL`.
 - **The sim's limits apply** (CR-SIM README): IPv4 only, approximated routing, and stored means "reached the writer". `samplers_hold` is an optimistic model of a responder. A screen never replaces a live run.
 
 ## Tests

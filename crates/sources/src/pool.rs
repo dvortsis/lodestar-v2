@@ -188,8 +188,8 @@ pub struct PoolConfig {
     /// (`admission::T1_WAITING`, `T1_BURST`, `T1_MAX_WAIT`). Off, the
     /// pool behaves exactly as before the switch existed.
     pub hint_first: bool,
-    /// The sources whose hint marks are honoured: the peer finders', which
-    /// the pipeline fills in with the switch on. Empty trusts none.
+    /// The sources whose hint marks are honoured: the DHT plugin's alone,
+    /// which the pipeline fills in with the switch on. Empty trusts none.
     pub hint_sources: Vec<SourceId>,
 }
 
