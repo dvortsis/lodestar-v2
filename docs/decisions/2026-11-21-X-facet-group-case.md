@@ -69,6 +69,16 @@ Runner brief, 2026-11-21Z, from the "Release-group case" follow-up in `docs/deci
   - The p50 of "broad word" is 2.17 ms on main and 2.02 ms on the branch.
   - The differences are within run-to-run noise: the same binary's p95 for "browse everything" ranged 30.9–35.5 ms on main. The largest rise, "browse" at group limit 100 (+1.3 ms), is under the runner's 5 ms line.
   - The first version, which sampled by doc id, measured the same within noise (largest rise +3.5 ms, the same class).
+- **At 1M torrents, skewed (the runner's review).** The rank walk visits a listed group's postings across the whole index, so its cost grows with the index, not the matches. Measured at 1,000,010 synthetic torrents with a local, uncommitted skew in the generator: RARBG 45%, NTb 20% and FLUX 10% of movie and TV releases, the rest uniform. Those three groups lead every query's top 8. `--queries 800`, three interleaved runs each of main (26b64174) and this branch (eaedc167). The median of the three runs' p95, in ms:
+
+| Class | main, limit 8 | branch, limit 8 | main, group limit 100 | branch, group limit 100 |
+|---|---|---|---|---|
+| broad word (83,064 hits) | 14.41 | 14.47 | 14.96 | 14.83 |
+| word + selections (29,592 hits) | 18.12 | 18.28 | 17.71 | 18.22 |
+| browse everything (sampled) | 5.54 | 6.03 | 5.23 | 5.95 |
+| browse + selections | 29.89 | 30.42 | — | — |
+
+  - The largest rise is +0.72 ms ("browse" at group limit 100), well under the 5 ms line, so the walk stays uncapped and there's no cache.
   - The group-limit-100 rows came from a local, uncommitted copy of `facets_path` that also runs `limit.group=100`; the committed bench is unchanged.
   - The name reads land in the searcher's document-store block cache; a rank walk visits at most the group's own postings, cheap beside a facet pass.
 - **Web size (gzip; main 6d117c17 → branch):**
