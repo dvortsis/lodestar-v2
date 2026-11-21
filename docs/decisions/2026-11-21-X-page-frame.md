@@ -1,4 +1,4 @@
-# X-page-frame decisions (#TBD)
+# X-page-frame decisions (#1028)
 
 Slice session, 2026-11-21Z. It answers UI review I11 and P15 (`docs/review/2026-11-13-ui-ux/`, placed by `docs/decisions/2026-11-14-runner-ui-review-placement.md`): every destination framed its page differently, page edges missed each other by a pixel, and Companions and Outputs had no `h1`. The runner approved the wider file list (the `h1` and outer-wrapper lines of the feature components, and one line of `QueryBar.svelte`) in this session.
 
