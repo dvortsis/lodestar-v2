@@ -230,9 +230,9 @@ fn load_paths(
     if !default_dir.is_absolute() {
         return Err(not_full(
             &format!(
-                "the service's default data folder is {:?}, from %ProgramData%, which isn't a \
+                "the service's default data folder is {}, from %ProgramData%, which isn't a \
                  full path",
-                default_dir.display().to_string()
+                quoted(&default_dir.display().to_string())
             ),
             "set the system's ProgramData variable back to a full path, such as C:\\ProgramData",
         ));
@@ -247,7 +247,10 @@ fn load_paths(
         }
         Some(d) if !Path::new(d).is_absolute() => {
             return Err(not_full(
-                &format!("LODESTAR_DATA_DIR for the service is {d:?}, which isn't a full path"),
+                &format!(
+                    "LODESTAR_DATA_DIR for the service is {}, which isn't a full path",
+                    quoted(d)
+                ),
                 "set it to a full path, such as D:\\Lodestar",
             ));
         }
@@ -256,8 +259,8 @@ fn load_paths(
     if let Some(p) = explicit.as_deref().filter(|p| !p.is_absolute()) {
         return Err(not_full(
             &format!(
-                "--config in the service's command line is {:?}, which isn't a full path",
-                p.display().to_string()
+                "--config in the service's command line is {}, which isn't a full path",
+                quoted(&p.display().to_string())
             ),
             "give --config a full path, such as D:\\Lodestar\\config.toml",
         ));
@@ -303,8 +306,9 @@ fn load_paths(
             .map_or_else(String::new, |p| p.display().to_string());
         return Err(not_full(
             &format!(
-                "data_dir in the service's config file {file:?} is {:?}, which isn't a full path",
-                data_dir.display().to_string()
+                "data_dir in the service's config file {} is {}, which isn't a full path",
+                quoted(&file),
+                quoted(&data_dir.display().to_string())
             ),
             "set data_dir to a full path, such as D:/Lodestar",
         ));
@@ -329,8 +333,8 @@ fn relative_path_setting(
     file: Option<&Path>,
     env: &impl Fn(&str) -> Option<String>,
 ) -> Option<(Refusal, String)> {
-    let file = file.map_or_else(String::new, |p| p.display().to_string());
-    let shown = |p: &Path| p.display().to_string();
+    let file = quoted(&file.map_or_else(String::new, |p| p.display().to_string()));
+    let shown = |p: &Path| quoted(&p.display().to_string());
     // Config::load: the variable over the file. Chosen neither way, the
     // service never uses the loader's native default: with the restart
     // proof on, [`apply_witness_default`] replaces it.
@@ -338,7 +342,7 @@ fn relative_path_setting(
         Some("LODESTAR_DHT_WITNESS_DIR for the service is".to_owned())
     } else if c.layers.in_file("dht.restart_witness_dir") {
         Some(format!(
-            "dht.restart_witness_dir in the service's config file {file:?} is"
+            "dht.restart_witness_dir in the service's config file {file} is"
         ))
     } else {
         None
@@ -350,7 +354,7 @@ fn relative_path_setting(
         .filter(|w| !w.is_absolute());
     if let (Some(what), Some(w)) = (chosen, relative) {
         return Some(not_full(
-            &format!("{what} {:?}, which isn't a full path", shown(w)),
+            &format!("{what} {}, which isn't a full path", shown(w)),
             "set it to a full path, such as D:/Lodestar-witness, or remove it",
         ));
     }
@@ -361,7 +365,7 @@ fn relative_path_setting(
         .map(|i| {
             not_full(
                 &format!(
-                    "blocklist.files entry {} in the service's config file {file:?} is {:?}, \
+                    "blocklist.files entry {} in the service's config file {file} is {}, \
                      which isn't a full path",
                     i + 1,
                     shown(&c.blocklist.files[i])
@@ -369,6 +373,30 @@ fn relative_path_setting(
                 "give every blocklist file a full path, such as D:/lists/hashes.txt",
             )
         })
+}
+
+/// A path (or a setting's value) as the temp log shows it: in plain
+/// quotes, as Windows users read and paste it (`"C:\ProgramData\Lodestar"`,
+/// not `Debug`'s doubled backslashes). A control or invisible character
+/// (`acl`'s list: bidirectional controls, zero-width characters, tags) and
+/// a `"` stay escaped (`\n`, `\u{202e}`, `\"`), never raw, so a value from a config file can't forge a line or hide
+/// text. The Event Log shows the same path without quotes, flattened by
+/// [`one_line`] instead, as `eventcreate`'s line needs.
+fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        if c.is_control() || c == '"' {
+            out.extend(c.escape_debug());
+        } else if super::acl::invisible(c) {
+            // Always `\u{…}`, whether or not `Debug` counts it printable.
+            out.extend(c.escape_unicode());
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// A refusal of a setting that isn't a full path: what's wrong, why, and
@@ -489,7 +517,7 @@ fn unusable_refusal(
     file: Option<&Path>,
 ) -> (Refusal, String, PathBuf) {
     let file = match (setting, file) {
-        (Setting::File, Some(f)) => format!(" {:?}", f.display().to_string()),
+        (Setting::File, Some(f)) => format!(" {}", quoted(&f.display().to_string())),
         _ => String::new(),
     };
     let detail = match detail {
@@ -499,9 +527,9 @@ fn unusable_refusal(
     (
         Refusal::Unusable(setting, problem),
         format!(
-            "the service's data folder {:?}, {}{file}, {}{detail}, so the service didn't start. \
+            "the service's data folder {}, {}{file}, {}{detail}, so the service didn't start. \
              To fix it, an administrator should {}.",
-            dir.display().to_string(),
+            quoted(&dir.display().to_string()),
             setting.source(),
             problem.text(),
             unusable_fix(setting, problem),
@@ -1843,6 +1871,148 @@ mod scm {
 mod tests {
     use super::*;
 
+    /// A path in the temp log reads as Windows users read and paste it:
+    /// plain quotes, single backslashes (X-win-log-path-display).
+    #[test]
+    fn the_temp_log_quotes_paths_as_windows_shows_them() {
+        for (path, shown) in [
+            (r"C:\ProgramData\Lodestar", r#""C:\ProgramData\Lodestar""#),
+            (r"\\server\share\x", r#""\\server\share\x""#),
+            (r"D:\My Lodestar\data", r#""D:\My Lodestar\data""#),
+            (r"D:\Données", r#""D:\Données""#),
+            ("", r#""""#),
+        ] {
+            assert_eq!(quoted(path), shown, "{path}");
+        }
+        // Debug's form is what this replaces.
+        assert_ne!(
+            quoted(r"C:\ProgramData"),
+            format!("{:?}", r"C:\ProgramData")
+        );
+    }
+
+    /// A control or invisible character, or a `"`, from a config file
+    /// stays escaped, never raw: it can't forge a line or hide text.
+    #[test]
+    fn the_temp_log_escapes_what_a_path_cannot_show() {
+        for (path, shown) in [
+            ("D:\\a\nb", r#""D:\a\nb""#),
+            ("D:\\a\rb\tc", r#""D:\a\rb\tc""#),
+            ("D:\\a\u{1b}[31mb", r#""D:\a\u{1b}[31mb""#),
+            ("D:\\a\u{0}b", r#""D:\a\0b""#),
+            ("D:\\a\u{202e}b", r#""D:\a\u{202e}b""#),
+            ("D:\\a\u{200b}b", r#""D:\a\u{200b}b""#),
+            ("D:\\a\u{2061}b", r#""D:\a\u{2061}b""#),
+            ("D:\\a\u{feff}b", r#""D:\a\u{feff}b""#),
+            ("D:\\a\"b", r#""D:\a\"b""#),
+        ] {
+            let q = quoted(path);
+            assert_eq!(q, shown, "{path:?}");
+            assert!(
+                !q.chars()
+                    .any(|c| c.is_control() || super::super::acl::invisible(c)),
+                "{q}"
+            );
+        }
+    }
+
+    /// Every refusal that names a path shows it quoted, backslashes as
+    /// written: a backslash value goes through each one (relative on any
+    /// system, so this runs off Windows too).
+    #[test]
+    fn every_refusal_shows_its_path_as_written() {
+        let root = tempfile::tempdir().unwrap();
+        let svc = root.path().join("ProgramData").join("Lodestar");
+        std::fs::create_dir_all(&svc).unwrap();
+        let file = root.path().join("service.toml");
+        let shown_file = quoted(&file.display().to_string());
+        let why = |r: Result<(Result<Config, String>, PathBuf), (Refusal, String)>| match r {
+            Err((Refusal::NotFullPath, why)) => why,
+            other => panic!("not refused: {other:?}"),
+        };
+        let has = |why: &str, part: &str| {
+            assert!(why.contains(part), "{part} missing from {why}");
+            assert!(!why.contains(r"rel\\"), "doubled backslash in {why}");
+        };
+        // The default folder, from %ProgramData%.
+        let w = why(load_guarded(
+            Path::new(r"rel\pd"),
+            None,
+            |_| None,
+            || Ok(()),
+        ));
+        has(&w, r#""rel\pd""#);
+        // LODESTAR_DATA_DIR.
+        let env = |k: &str| (k == "LODESTAR_DATA_DIR").then(|| r"rel\d".to_owned());
+        has(&why(load_guarded(&svc, None, env, || Ok(()))), r#""rel\d""#);
+        // --config.
+        let w = why(load_guarded(
+            &svc,
+            Some(PathBuf::from(r"rel\c.toml")),
+            |_| None,
+            || Ok(()),
+        ));
+        has(&w, r#""rel\c.toml""#);
+        // data_dir, the restart witness folder and a blocklist file, each
+        // in the file (a TOML literal string keeps the backslash), with the
+        // file's own path.
+        let data = format!("data_dir = '{}'\n", root.path().join("data").display());
+        for (body, value) in [
+            ("data_dir = 'rel\\d'\n".to_owned(), r#""rel\d""#),
+            (
+                format!("{data}[dht]\nrestart_witness_dir = 'rel\\w'\n"),
+                r#""rel\w""#,
+            ),
+            (
+                format!("{data}[blocklist]\nfiles = ['rel\\b.txt']\n"),
+                r#""rel\b.txt""#,
+            ),
+        ] {
+            std::fs::write(&file, &body).unwrap();
+            let w = why(load_guarded(&svc, Some(file.clone()), |_| None, || Ok(())));
+            has(&w, value);
+            has(&w, &shown_file);
+        }
+        // The witness folder from its variable.
+        std::fs::write(&file, &data).unwrap();
+        let env = |k: &str| (k == "LODESTAR_DHT_WITNESS_DIR").then(|| r"rel\w".to_owned());
+        has(
+            &why(load_guarded(&svc, Some(file.clone()), env, || Ok(()))),
+            r#""rel\w""#,
+        );
+        // An unusable folder chosen by the file names the file too.
+        let (_, temp, _) = unusable_refusal(
+            Setting::File,
+            Path::new(r"D:\x"),
+            Problem::File,
+            "",
+            Some(Path::new(r"D:\x\service.toml")),
+        );
+        assert!(temp.contains(r#""D:\x""#), "{temp}");
+        assert!(temp.contains(r#""D:\x\service.toml""#), "{temp}");
+    }
+
+    /// The temp log's refusal and the Event Log's message show the same
+    /// folder text, the temp log's in quotes.
+    #[test]
+    fn both_logs_show_the_same_folder() {
+        for dir in [
+            r"C:\ProgramData\Lodestar",
+            r"\\server\share\x",
+            r"D:\My Lodestar\data",
+        ] {
+            let dir = Path::new(dir);
+            let (refusal, temp, _) = unusable_refusal(Setting::Env, dir, Problem::File, "", None);
+            let event = event_log_text(refusal, dir);
+            let shown = dir.display().to_string();
+            assert!(temp.contains(&format!("\"{shown}\"")), "{temp}");
+            assert!(event.contains(&shown), "{event}");
+            // No doubled backslash, which only a UNC path's start has.
+            assert!(!temp.contains(r"ProgramData\\"), "{temp}");
+            assert!(!temp.contains(r"\\\\"), "{temp}");
+        }
+    }
+
     /// The `--config` path of a serve command line.
     fn command(s: &str) -> Option<Option<PathBuf>> {
         let c = role_of(s)?;
@@ -2066,6 +2236,7 @@ mod tests {
             relative.extend([r"\w", "C:w"]);
         }
         for v in relative {
+            // Escaped for TOML only: the refusal shows `v` itself, quoted.
             let q = v.replace('\\', "\\\\");
             // In the file.
             std::fs::write(
@@ -2076,7 +2247,7 @@ mod tests {
             refused(
                 load_guarded(&svc, Some(file.clone()), |_| None, || Ok(())),
                 "dht.restart_witness_dir",
-                &q,
+                &format!("\"{v}\""),
             );
             // From the environment, over a full path in the file.
             std::fs::write(
@@ -2088,7 +2259,7 @@ mod tests {
             refused(
                 load_guarded(&svc, Some(file.clone()), env, || Ok(())),
                 "LODESTAR_DHT_WITNESS_DIR",
-                &q,
+                &format!("\"{v}\""),
             );
             // A blocklist file, after a full one: named by its place.
             std::fs::write(
@@ -2099,7 +2270,7 @@ mod tests {
             refused(
                 load_guarded(&svc, Some(file.clone()), |_| None, || Ok(())),
                 "blocklist.files entry 2",
-                &q,
+                &format!("\"{v}\""),
             );
         }
 
