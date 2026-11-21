@@ -120,7 +120,7 @@ let loginPending = false;
  * a signed-out visitor's first request can fail first). Replayed once on install, unless a
  * request worked meanwhile; one entry, the first wins (X-auth-early-401).
  */
-let early: { path: string; opts: Parameters<LoginHandler>[1] } | undefined;
+let early: (() => void) | undefined;
 
 /**
  * The shell registers where a 401 goes. `next` is the current path and query; `setupRequired`
@@ -129,18 +129,18 @@ let early: { path: string; opts: Parameters<LoginHandler>[1] } | undefined;
 export function onLoginRequired(handler: LoginHandler | undefined): void {
 	loginHandler = handler;
 	loginPending = false;
-	if (!handler || !early) return;
-	const e = early;
+	if (!handler) return;
+	const f = early;
 	early = undefined;
 	// The filters below run again now, against the page the browser is on at install.
-	loginRequired(e.path, e.opts);
+	f?.();
 }
 
 function loginRequired(path: string, opts: Parameters<LoginHandler>[1]): void {
 	const loc = globalThis.location;
 	if (AUTH_PATHS.has(path)) return;
 	if (!loginHandler) {
-		early ??= { path, opts };
+		early ??= () => loginRequired(path, opts);
 		return;
 	}
 	if (loginPending) return;
