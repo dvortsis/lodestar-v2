@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-21T16:22Z",
+  "updated_at": "2026-11-21T16:32Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T16:22Z",
+    "updated": "2026-11-21T16:32Z",
     "items": [
       {
         "slot": 1,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
         "since": "2026-11-21T16:22Z",
-        "doing": "brief sent; Undo confirm takes the danger style when its preview loosens child safety"
+        "doing": "rescoped to option A: real Undo preview plus loosens_child_safety; openapi regen waits for #1021"
       },
       {
         "slot": 3,
@@ -10684,12 +10684,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-sampler-frontier-starve",
+        "slice": "CR-SAMPLE-BACKOFF-ESCALATE",
         "role": "build",
-        "agent": "session_01MMjhnBLWWDc2xQCuaJPWjK",
+        "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
-        "since": "2026-11-21T13:32Z",
-        "doing": "PR #1022 review MERGE; one docs round (false-positive rate, nits)"
+        "since": "2026-11-21T16:32Z",
+        "doing": "brief sent; per-node sample backoff escalation behind dht.sample_backoff_escalate (default off)"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
