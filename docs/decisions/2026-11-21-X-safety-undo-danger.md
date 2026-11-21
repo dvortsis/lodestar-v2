@@ -15,12 +15,18 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
   - `release` and `false_positive` on a hold by a rule whose code starts `CS-`, quarantine or tombstone, as the screen reads it (`child_safety`);
   - any change whose preview has `removed_from_floor` > 0: a floor removal, and an unsubscribe or pause of a floor list;
   - `undo`, from the comparison below.
+- **Known over- and under-approximations, none read by the client today:**
+  - `remove_cs1` sets the flag for any non-empty list of hashes, whether or not they're on the list. Nothing cheap in the store says which are.
+  - `release` reads a tombstone's rule from the preview's snapshot, which holds the newest `PREVIEW_ROWS`. An older CS tombstone gives false there, as its `tombstones` count already does.
+  - An override put back by Undo sets the flag even while it's in shadow. It goes live without another change, and `add_override` with `shadow_days` sets it the same way.
 - **Two cases go beyond #1019's buttons:** `add_exception` to a CS rule and `add_override`. They weaken CS rules too. The client doesn't read the flag for them (below), so nothing on screen changes for them.
 - **Sent only when true** (`skip_serializing_if`), so it's optional in `openapi.json` and `schema.d.ts`, and absent reads as false. The golden files change only where it's true: the override, `core_switch` off, false positive on a CS hold and `remove_cs1` goldens gain `"loosens_child_safety":true` and nothing else (11 files, re-blessed with `LODESTAR_BLESS=1`); `apply_undo` is unchanged, as that Undo only strengthens. This is a call in this slice: it keeps the change to the wire and the goldens small, and a missing flag only means the ordinary style, which is never a security decision (`confirm` still decides the password).
 - **It's style only.** `weakening`, `confirm` and the warning are as before for every change.
 
 ## Undo's preview and flag
-- **The comparison** (`FiltersApi::undo_preview`, `loosened`, `crates/api/src/filters.rs`): the kept rule set (`Previous::parse`, which `undo()` now uses too, so apply restores exactly what it did before), with the current pack versions copied in (Undo never restores them), against the current engine and set.
+- **The comparison** (`FiltersApi::undo_preview`, `loosened`, `crates/api/src/filters.rs`): the kept rule set (`Previous::parse`, which `undo()` now uses too, so apply restores exactly what it did before), with the current pack versions copied in (Undo never restores them), against the current set.
+  - **Both sides are read as stored,** core switches included, as the rest of `assess_tracked` reads them. The engine can lag the store after an apply that failed part-way, and Undo restores against the store, so the current side is the engine reloaded from the stored set and switches.
+  - **`Previous::parse` decodes hex by bytes,** so a corrupt (non-ASCII) stored value no longer panics. It used to run only in apply, and now runs in every Undo preview. An ASCII value decodes exactly as before.
 - **The flag is true when Undo** switches a core rule off, puts an exception back on a `CS-` rule, or puts back an override that hasn't expired. Hits don't matter.
 - **The counts:**
   - `quarantine` and `tombstones` come from `rejudged(current engine, engine with the kept set)`: what Undo would release now, from sealed names (`estimate: true`, as before).
@@ -28,7 +34,7 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
     - a core or pack rule it switches off;
     - your rule it removes, disables or edits;
     - a rule it puts an exception back on;
-    - a pack rule whose override it changes.
+    - a pack rule whose override it puts back, changes or takes away (taking away a heavier one weakens it).
     - An override it puts back counts every unlocked rule, as `add_override` does. An allow entry it puts back counts your rules, the packs and the lists, as `add_allow` does.
   - What Undo only strengthens adds nothing. Like the override's preview, it's an upper bound.
 - **`removed_from_floor` stays 0.** Undo restores only the rule set and the unlocked core switches (`undo()`): locked rules are never restored, subscriptions aren't in the kept set, and `released_by_hash` never releases a floor rule. So an Undo can't remove floor entries, and the brief's "an Undo that removes a floor entry" test can't exist. The tests check that every Undo reports 0.
@@ -49,6 +55,9 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
   - one that switches a pack back off counts `caught_30d` 2 and `core_caught_30d` 0, with no flag;
   - one that only strengthens reports zeros and no flag;
   - nothing kept, or an unreadable kept set, gives the old estimate with no flag, and apply still refuses;
+  - an Undo that takes away or disables your rule, takes away a heavier pack override, or puts back an allow entry counts those rules, never the core, and sets no flag;
+  - with the engine lagging the store, an Undo that switches a CS rule off still sets the flag;
+  - a kept set with non-ASCII where hex belongs parses without panicking, and the preview answers;
   - every Undo keeps `weakening`, `confirm`, the warning, `estimate` and `removed_from_floor` 0;
   - the flag for the other changes: a CS rule off, an exception to a CS rule, an override, `remove_cs1`, and release and false positive on a CS hold set it; a CS rule already on, a pack off, an exception to a pack rule, an allow entry, and release and false positive on a pack hold don't.
 - **Client** (`screens/screen.test.ts`, "Undo takes the danger style from its assessment"):
