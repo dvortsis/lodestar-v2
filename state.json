@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-21T12:38Z",
+  "updated_at": "2026-11-21T15:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-21T12:38Z",
+  "last_heartbeat": "2026-11-21T15:38Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T14:19Z",
+    "updated": "2026-11-21T15:38Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
         "since": "2026-11-21T14:19Z",
-        "doing": "brief sent; harden() caps SQLITE_LIMIT_SCHEMA for hostile Magnetico files"
+        "doing": "PR #1024 open; fresh review plus security review running"
       },
       {
         "slot": 2,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
         "model": "opus",
         "since": "2026-11-21T14:05Z",
-        "doing": "brief sent; one label formatter per field, Builder field labels, dates in the chosen time zone"
+        "doing": "PR #1023 review CHANGES; fixing facet find, vocab test, decisions CSV claim, nits"
       },
       {
         "slot": 3,
@@ -10680,7 +10680,7 @@
         "agent": "session_01MMjhnBpjPfQ45Zap7mZNyi",
         "model": "opus",
         "since": "2026-11-21T13:06Z",
-        "doing": "brief sent; 400 texts name repeated_parameter, /export ast and hashes named, intensity summary after CR-1c"
+        "doing": "PR #1021 review MERGE; one docs round (patchCrawler wording, route_layer, owns)"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhnBLWWDc2xQCuaJPWjK",
         "model": "opus",
         "since": "2026-11-21T13:32Z",
-        "doing": "brief sent; sim reproduction of the empty frontier, written cause, fix behind the split switch only if the sampler is the cause"
+        "doing": "PR #1022 review MERGE; one docs round (false-positive rate, nits)"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -10780,7 +10780,7 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-21T12:38Z",
+  "heartbeat": "2026-11-21T15:38Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
