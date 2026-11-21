@@ -1323,3 +1323,451 @@ mod rebuild {
         assert!(!got.term(Facet::Source).unwrap().partial);
     }
 }
+
+/// A torrent named `name` in release group `group` (as the index holds
+/// it: lower case), and nothing else.
+fn grouped(id: u64, name: &str, group: &str) -> TorrentDoc {
+    let mut d = doc(id);
+    d.id = id + 1;
+    d.name = name.to_owned();
+    d.enriched.tags = vec![
+        "type:movie".to_owned(),
+        format!("group:{}", group.to_lowercase()),
+    ];
+    d
+}
+
+fn group_value<'a>(f: &'a Facets, v: &str) -> &'a ValueCount {
+    f.term(Facet::Group)
+        .unwrap()
+        .values
+        .iter()
+        .find(|x| x.value == v)
+        .unwrap_or_else(|| panic!("{v} listed"))
+}
+
+#[test]
+fn a_group_shows_its_most_common_spelling() {
+    let mut docs = Vec::new();
+    let names = [
+        "Movie.One.2020.1080p.BluRay.x264-RARBG",
+        "Movie.Two.2021.2160p.WEB-DL-RARBG",
+        "Rarbg.Collection.Movie.Three-RARBG",
+        "Movie.Four.720p-Rarbg",
+        "movie.five.480p-rarbg",
+    ];
+    for (i, n) in names.iter().enumerate() {
+        docs.push(grouped(i as u64, n, "rarbg"));
+    }
+    // A tie: two each; byte order puts "ABC" before "AbC".
+    for (i, n) in ["X-AbC", "Y-ABC", "Z-AbC", "W-ABC"].iter().enumerate() {
+        docs.push(grouped(10 + i as u64, n, "abc"));
+    }
+    // Already lower case in the names: no label.
+    docs.push(grouped(20, "Some.Show-ntb", "ntb"));
+    // The group came from a file name, not the torrent's: no label.
+    docs.push(grouped(21, "Ambiguous Name", "flux"));
+    let index = build(&docs, 3);
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    assert_eq!(group_value(&f, "rarbg").label.as_deref(), Some("RARBG"));
+    assert_eq!(group_value(&f, "abc").label.as_deref(), Some("ABC"));
+    assert_eq!(group_value(&f, "ntb").label, None);
+    assert_eq!(group_value(&f, "flux").label, None);
+    // Other facets never get one.
+    for (g, t) in &f.terms {
+        if *g != Facet::Group {
+            assert!(t.values.iter().all(|v| v.label.is_none()), "{g:?}");
+        }
+    }
+
+    // Matching is unchanged: either case finds the same torrents, and the
+    // value stays the code a click sends, selected under either spelling.
+    let lower = ids_of(&index, &crate::parse("group:rarbg").unwrap());
+    let upper = ids_of(&index, &crate::parse("group:RARBG").unwrap());
+    assert_eq!(lower.len(), 5);
+    assert_eq!(lower, upper);
+    for q in ["group:rarbg", "group:RARBG", "group:Rarbg"] {
+        let (_, _, f) = run(&index, q, &FacetParams::default());
+        let v = group_value(&f, "rarbg");
+        assert!(v.selected, "{q}");
+        assert_eq!(v.count, 5, "{q}");
+        assert_eq!(v.label.as_deref(), Some("RARBG"), "{q}");
+    }
+    // A selected group nothing has is listed at 0, without a label.
+    let (_, _, f) = run(&index, "group:NoSuch", &FacetParams::default());
+    let v = group_value(&f, "nosuch");
+    assert!(v.selected && v.count == 0 && v.label.is_none());
+}
+
+#[test]
+fn one_odd_record_cant_take_a_group_over() {
+    // The latest-written torrent spells it oddly; the rest agree.
+    let mut docs: Vec<TorrentDoc> = (0..40)
+        .map(|i| grouped(i, &format!("Film.{i}.1080p-RARBG"), "rarbg"))
+        .collect();
+    docs.push(grouped(40, "Film.40.1080p-rArBg", "rarbg"));
+    let index = build(&docs, 2);
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    assert_eq!(group_value(&f, "rarbg").label.as_deref(), Some("RARBG"));
+    // Nor a burst of them in one stretch of the index: the samples
+    // spread over the whole posting list, so a spelling needs most of
+    // the group's torrents.
+    for i in 41..51 {
+        docs.push(grouped(i, &format!("Film.{i}-rArBg"), "rarbg"));
+    }
+    let index = build(&docs, 3);
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    assert_eq!(group_value(&f, "rarbg").label.as_deref(), Some("RARBG"));
+}
+
+#[test]
+fn samples_spread_over_the_posting_list_and_skip_deleted_documents() {
+    let docs: Vec<TorrentDoc> = (0..100)
+        .map(|i| grouped(i, &format!("F.{i}-GRP"), "grp"))
+        .collect();
+    let index = build(&docs, 4);
+    let term = tantivy::Term::from_field_text(index.fields().tag, "group:grp");
+    let searcher = index.raw().1.searcher();
+    let got = sample_docs(&searcher, &term, 8, &CancelToken::new()).unwrap();
+    assert_eq!(got.len(), 8);
+    // Two per segment of 25, distinct.
+    for seg in 0..4u32 {
+        assert_eq!(got.iter().filter(|a| a.segment_ord == seg).count(), 2);
+    }
+    let mut dedup = got.clone();
+    dedup.dedup();
+    assert_eq!(dedup, got);
+    // Fewer documents than samples: each once.
+    let few: Vec<TorrentDoc> = (0..3).map(|i| grouped(i, "A-G", "g")).collect();
+    let small = build(&few, 2);
+    let t = tantivy::Term::from_field_text(small.fields().tag, "group:g");
+    assert_eq!(
+        sample_docs(&small.raw().1.searcher(), &t, 8, &CancelToken::new())
+            .unwrap()
+            .len(),
+        3
+    );
+    // No such term: nothing.
+    let none = tantivy::Term::from_field_text(small.fields().tag, "group:zzz");
+    assert!(
+        sample_docs(&small.raw().1.searcher(), &none, 8, &CancelToken::new())
+            .unwrap()
+            .is_empty()
+    );
+
+    // Delete every "GRP" spelling: the label follows the live ones.
+    let mut docs: Vec<TorrentDoc> = (0..30)
+        .map(|i| grouped(i, &format!("F.{i}-GRP"), "grp"))
+        .collect();
+    docs.extend((30..40).map(|i| grouped(i, &format!("F.{i}-Grp"), "grp")));
+    let index = build(&docs, 2);
+    {
+        let (raw, reader) = index.raw();
+        let mut w: tantivy::IndexWriter = raw.writer_with_num_threads(1, 50 << 20).unwrap();
+        w.set_merge_policy(Box::new(NoMergePolicy));
+        for i in 0..30u64 {
+            w.delete_term(tantivy::Term::from_field_u64(index.fields().id, i + 1));
+        }
+        w.commit().unwrap();
+        reader.reload().unwrap();
+    }
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    assert_eq!(group_value(&f, "grp").count, 10);
+    assert_eq!(group_value(&f, "grp").label.as_deref(), Some("Grp"));
+}
+
+#[test]
+fn a_long_list_reads_fewer_names_per_group() {
+    // 100 groups listed: MIN_LABEL_SAMPLES names each, until LABEL_READS
+    // runs out.
+    let docs: Vec<TorrentDoc> = (0..300)
+        .map(|i| {
+            let g = format!("Grp{}", i % 100);
+            grouped(i, &format!("F.{i}-{g}"), &g)
+        })
+        .collect();
+    let index = build(&docs, 2);
+    let mut limits = BTreeMap::new();
+    limits.insert(Facet::Group, MAX_LIMIT);
+    let params = FacetParams::new(limits, None, false);
+    let (_, _, f) = run(&index, "", &params);
+    let values = &f.term(Facet::Group).unwrap().values;
+    assert_eq!(values.len(), 100);
+    // 256 reads at 3 each: the top 85 get their spelling, the rest show
+    // as sent.
+    let labelled = 85;
+    assert_eq!(LABEL_READS / MIN_LABEL_SAMPLES, labelled);
+    for (i, v) in values.iter().enumerate() {
+        let want = format!("Grp{}", v.value.trim_start_matches("grp"));
+        if i < labelled {
+            assert_eq!(v.label.as_deref(), Some(want.as_str()), "{i}");
+        } else {
+            assert_eq!(v.label, None, "{i}");
+        }
+    }
+    // The default limit: every value gets one.
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    let values = &f.term(Facet::Group).unwrap().values;
+    assert_eq!(values.len(), DEFAULT_LIMIT);
+    assert!(values.iter().all(|v| v.label.is_some()));
+}
+
+#[test]
+fn spellings_are_found_as_words() {
+    let cases: [(&str, &str, Option<&str>); 19] = [
+        ("Movie.2020.1080p-RARBG", "rarbg", Some("RARBG")),
+        // The last word of its own wins over an earlier one.
+        ("Rarbg.Pack.Movie-RARBG", "rarbg", Some("RARBG")),
+        // A word beats a later match inside another word.
+        ("Movie-RARBG.rarbgx", "rarbg", Some("RARBG")),
+        // Inside other words only: no vote (`flux` in "INFLUX").
+        ("xRarbgx yRARBGy", "rarbg", None),
+        ("INFLUX.2020", "flux", None),
+        (
+            "[FitGirl Repack] Game",
+            "fitgirl repack",
+            Some("FitGirl Repack"),
+        ),
+        ("Nothing here", "rarbg", None),
+        ("", "rarbg", None),
+        ("RARBG", "", None),
+        // Only ASCII letters are re-cased (S1-20): a non-ASCII letter keeps
+        // the value's form.
+        ("Ünïcode-GRÜPPE", "grüppe", None),
+        ("Ünïcode-GRüPPE", "grüppe", Some("GRüPPE")),
+        // Capitals of other scripts never show (S1-20): the lower-case в
+        // and ν stay, or there's no label.
+        ("Movie.2024.1080p-RARВG", "rarвg", None),
+        ("Movie.2024.1080p-RARвG", "rarвg", Some("RARвG")),
+        ("Movie-ΝTB", "νtb", None),
+        ("Movie-νTB", "νtb", Some("νTB")),
+        // Lower-casing that changes the char count (İ is "i̇"): not char
+        // for char, so no label.
+        ("Show-İSTANBUL", "i̇stanbul", None),
+        // Compatibility chars lower-case to the value but aren't
+        // NFKC-stable: the Kelvin sign (U+212A) and the Angstrom sign
+        // (U+212B).
+        ("Show-\u{212A}ING", "king", None),
+        ("Show-\u{212B}NGSTROM", "ångstrom", None),
+        // A fit spelling elsewhere in the name still wins.
+        ("KING-\u{212A}ING", "king", Some("KING")),
+    ];
+    for (name, value, want) in cases {
+        assert_eq!(spelling_in(name, value), want, "{name:?} {value:?}");
+    }
+}
+
+#[test]
+fn the_most_votes_win_ties_by_byte_order() {
+    assert_eq!(choose_spelling([]), None);
+    assert_eq!(choose_spelling(["Rarbg"]), Some("Rarbg"));
+    assert_eq!(
+        choose_spelling(["Rarbg", "RARBG", "RARBG", "rarbg"]),
+        Some("RARBG")
+    );
+    assert_eq!(choose_spelling(["Rarbg", "RARBG"]), Some("RARBG"));
+    assert_eq!(choose_spelling(["b", "a", "b", "a"]), Some("a"));
+}
+
+mod label_props {
+    use proptest::prelude::*;
+
+    use unicode_normalization::UnicodeNormalization;
+
+    use super::super::{choose_spelling, fit_label, sample_ranks, spelling_in};
+
+    /// The runner's rules (§2.26, S1-20), stated directly: the value with
+    /// some ASCII letters in upper case, and NFKC-stable.
+    fn fit(label: &str, value: &str) -> bool {
+        label.chars().count() == value.chars().count()
+            && label
+                .chars()
+                .zip(value.chars())
+                .all(|(l, v)| l == v || (v.is_ascii_lowercase() && l == v.to_ascii_uppercase()))
+            && label.nfkc().collect::<String>() == label
+    }
+
+    /// `value` with the ASCII letters `mask` picks in upper case.
+    fn recased(value: &str, mask: &[bool]) -> String {
+        value
+            .chars()
+            .zip(mask.iter().cycle())
+            .map(|(c, up)| if *up { c.to_ascii_uppercase() } else { c })
+            .collect()
+    }
+
+    proptest! {
+        #[test]
+        fn a_spelling_found_lowers_to_the_value_and_is_in_the_name(
+            name in "\\PC{0,40}",
+            value in "[a-zäöüßσ0-9 ]{1,12}",
+        ) {
+            if let Some(s) = spelling_in(&name, &value) {
+                prop_assert_eq!(s.to_ascii_lowercase(), value.clone());
+                prop_assert!(name.contains(s));
+                prop_assert!(fit(s, &value));
+                // No char outside the value's, but a capital ASCII letter.
+                prop_assert!(s.chars().all(|c| value.contains(c) || c.is_ascii_uppercase()));
+            }
+        }
+
+        #[test]
+        fn a_label_is_the_value_re_cased_and_nfkc_stable(
+            label in "[a-zA-Z0-9\u{212A}\u{212B}\u{130}\u{FB01}\u{FF21}ÅåKkσΣςВвΝν ]{0,10}",
+            value in "[a-z0-9åkσςвν ]{0,10}",
+        ) {
+            prop_assert_eq!(fit_label(&label, &value), fit(&label, &value));
+            // And against the label's own lower case.
+            let own = label.to_lowercase();
+            prop_assert_eq!(fit_label(&label, &own), fit(&label, &own));
+            if fit_label(&label, &value) {
+                prop_assert_eq!(label.chars().count(), value.chars().count());
+                let banned = ['\u{212A}', '\u{212B}', '\u{FB01}', '\u{FF21}', '\u{130}', 'Å', 'Σ', 'В', 'Ν'];
+                prop_assert!(!label.contains(banned), "{:?}", label);
+            }
+        }
+
+        #[test]
+        fn a_recased_word_is_found(
+            before in "[a-zA-Z0-9.]{0,20}",
+            after in "[a-zA-Z0-9.]{0,20}",
+            value in "[a-zäöü0-9]{1,12}",
+            mask in proptest::collection::vec(any::<bool>(), 1..12),
+        ) {
+            let word = recased(&value, &mask);
+            prop_assume!(super::super::fit_label(&word, &value));
+            // Mid-name or at the end.
+            let name = if after.is_empty() {
+                format!("{before}-{word}")
+            } else {
+                format!("{before}-{word}.{after}")
+            };
+            let got = spelling_in(&name, &value);
+            prop_assert!(got.is_some(), "{:?} {:?}", name, value);
+            prop_assert_eq!(got.unwrap(), word.as_str());
+        }
+
+        #[test]
+        fn samples_are_nested_and_spread_by_rank(total in 0u64..100_000, k in 1usize..=8) {
+            let few = sample_ranks(total, k);
+            let many = sample_ranks(total, 8);
+            // A short list's samples are among the long list's.
+            prop_assert!(few.iter().all(|r| many.contains(r)));
+            prop_assert!(few.windows(2).all(|w| w[0] < w[1]));
+            prop_assert!(few.iter().all(|r| *r < total.max(1)));
+            prop_assert_eq!(few.len() as u64, (k as u64).min(total));
+            // Spread: the middle document always, and from three on,
+            // documents in both halves and no two within total/16.
+            if total >= 64 {
+                prop_assert!(few.contains(&(total / 2)));
+                if k >= 3 {
+                    prop_assert!(few[0] < total / 2 && *few.last().unwrap() > total / 2);
+                    prop_assert!(few.windows(2).all(|w| w[1] - w[0] >= total / 16 - 1), "{:?}", few);
+                }
+            }
+        }
+
+        #[test]
+        fn the_choice_ignores_vote_order(
+            votes in proptest::collection::vec("[aAbB]{1,3}", 0..20),
+            seed in any::<u64>(),
+        ) {
+            let mut shuffled = votes.clone();
+            // A deterministic shuffle from the seed.
+            let mut s = seed | 1;
+            for i in (1..shuffled.len()).rev() {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                shuffled.swap(i, (s % (i as u64 + 1)) as usize);
+            }
+            let a = choose_spelling(votes.iter().map(String::as_str));
+            let b = choose_spelling(shuffled.iter().map(String::as_str));
+            prop_assert_eq!(a, b);
+            if let Some(w) = a {
+                let n = |x: &str| votes.iter().filter(|v| *v == x).count();
+                // Nothing has more votes, and nothing as many sorts before it.
+                for v in &votes {
+                    prop_assert!(n(v) < n(w) || (n(v) == n(w) && w <= v.as_str()));
+                }
+            } else {
+                prop_assert!(votes.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn only_a_re_cased_nfkc_stable_spelling_may_show() {
+    assert!(fit_label("RARBG", "rarbg"));
+    assert!(fit_label("rarbg", "rarbg"));
+    // Only ASCII letters re-case (S1-20): other scripts' capitals, which
+    // can read as Latin ones, never show.
+    assert!(!fit_label("GRÜPPE", "grüppe"));
+    assert!(fit_label("GRüPPE", "grüppe"));
+    assert!(!fit_label("ΑΒΓ", "αβγ"));
+    assert!(!fit_label("RARВG", "rarвg"));
+    assert!(fit_label("RARвG", "rarвg"));
+    assert!(!fit_label("ΝTB", "νtb"));
+    assert!(fit_label("νTB", "νtb"));
+    // The Kelvin sign lower-cases to `k`, the Angstrom sign to `å`; NFKC
+    // makes them K and Å, so they never show.
+    assert!(!fit_label("\u{212A}ING", "king"));
+    assert!(!fit_label("\u{212B}NGSTROM", "ångstrom"));
+    // Two chars from one (İ), or another char count.
+    assert!(!fit_label("İ", "i\u{307}"));
+    assert!(!fit_label("İ", "i"));
+    assert!(!fit_label("RARB", "rarbg"));
+    assert!(!fit_label("RARBGX", "rarbg"));
+    // Compatibility forms: a ligature, a full-width letter.
+    assert!(!fit_label("\u{FB01}", "\u{FB01}"));
+    assert!(!fit_label("\u{FF21}", "\u{FF41}"));
+    assert!(!fit_label("", "a"));
+    assert!(fit_label("", ""));
+}
+
+#[test]
+fn a_cluster_then_a_gap_cant_hand_a_group_to_one_record() {
+    // One segment: the group's 40 torrents first, 960 of another group,
+    // then one odd spelling (the review's case: doc-id spreading sampled
+    // only the record after the gap).
+    let mut docs: Vec<TorrentDoc> = (0..40)
+        .map(|i| grouped(i, &format!("Old.{i}-RARBG"), "rarbg"))
+        .collect();
+    docs.extend((40..1000).map(|i| grouped(i, &format!("Filler.{i}-NTB"), "ntb")));
+    docs.push(grouped(1000, "New.1000-rArBg", "rarbg"));
+    let index = build(&docs, 1);
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    assert_eq!(group_value(&f, "rarbg").label.as_deref(), Some("RARBG"));
+    let term = tantivy::Term::from_field_text(index.fields().tag, "group:rarbg");
+    let got = sample_docs(&index.raw().1.searcher(), &term, 8, &CancelToken::new()).unwrap();
+    assert_eq!(got.len(), 8);
+    // Several odd ones after the gap: still a minority of the ranks.
+    for i in 1001..1006 {
+        docs.push(grouped(i, &format!("New.{i}-rArBg"), "rarbg"));
+    }
+    let index = build(&docs, 1);
+    let (_, _, f) = run(&index, "", &FacetParams::default());
+    assert_eq!(group_value(&f, "rarbg").label.as_deref(), Some("RARBG"));
+}
+
+#[test]
+fn long_names_and_values_are_bounded() {
+    // A value past the query language's 64 bytes gets no label.
+    let long = "A".repeat(80);
+    let docs = vec![grouped(0, &format!("X-{long}"), &long)];
+    let index = build(&docs, 1);
+    let mut limits = BTreeMap::new();
+    limits.insert(Facet::Group, MAX_LIMIT);
+    let (_, _, f) = run(&index, "", &FacetParams::new(limits, None, false));
+    assert_eq!(group_value(&f, &long.to_lowercase()).label, None);
+    // A 16 KB name of near-misses, then the word: found, in one pass.
+    let value = "a".repeat(63) + "b";
+    let name = format!("{}-{}", "A".repeat(16_000), value.to_uppercase());
+    assert_eq!(
+        spelling_in(&name, &value),
+        Some(value.to_uppercase().as_str())
+    );
+    let near = "A".repeat(16_000);
+    assert_eq!(spelling_in(&near, &value), None);
+}

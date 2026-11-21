@@ -1,5 +1,5 @@
 // Safety invariants of the Filters & Safety screen (S-filters). The wire is a scripted fetch.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configure, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import FiltersScreen from './FiltersScreen.svelte';
 import { adultOn } from './model.svelte';
@@ -74,6 +74,17 @@ function setup(adult = false, over: Record<string, unknown> = {}) {
 const job = (a: ReturnType<typeof weakening>) =>
 	net.on('GET /filters/preview/jobs/{id}', { body: finished(a) });
 afterEach(() => vi.unstubAllGlobals());
+// The screen loads its dialogs and panels on demand. Transform them once here, not inside whichever
+// test first opens one: a cold first import under a loaded CI runner took the dialog-title test past
+// 5 s (X-filters-dialog-test-timeout). 15 s is the repo's >=10 s rule for one-off waits.
+beforeAll(async () => {
+	await Promise.all([
+		import('../flows-door').then((door) => door.load()),
+		import('./Queue.svelte'),
+		import('./Packs.svelte'),
+		import('./packs/PacksScreen.svelte')
+	]);
+}, 15_000);
 beforeEach(() => vi.useRealTimers());
 
 describe('locked floor', () => {
