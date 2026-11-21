@@ -811,7 +811,7 @@ These series measure lookup cost directly, instead of deriving it from other cou
 | `dht_hint_outcomes_total{outcome}` | counter | `outcome`: `values`, `no_values`, `unanswered`, `guard_skipped` | What each responder hint (CR-1a-H) came to. `values` and `no_values` mean the hinted `get_peers` was answered (an error reply counts as `no_values`). `unanswered` means it timed out, or its request ended first. `guard_skipped` means it wasn't sent because the per-IP guard refused it; that's also in `dht_hint_fallbacks_total` as `throttled` or `guard_full`. Stays 0 with `dht.responder_hints` off. |
 | `dht_lookup_slots_occupied` | gauge | — | Occupied lookup slots: peer requests running now, each holding one slot. Never counts requests waiting in the queue (those are `dht_lookup_queued`). Set on each maintenance tick; equals `dht_peer_active`. |
 | `dht_lookup_queued` | gauge | — | Admitted peer requests waiting in the queue to start, as of the last maintenance tick. Equals `dht_peer_queued`. Running plus queued stays at most 32. |
-| `dht_lookup_slots_capacity` | gauge | — | The slots: 32, set at start. |
+| `dht_lookup_slots_capacity` | gauge | — | The slots, set at start: 32, or with `dht.preset_slots` on the start intensity's count (32, 80 or 256 for Low, Balanced, Aggressive), fixed until a restart ([CR-1c](decisions/2026-11-21-CR-1c.md)). |
 
 **Identities.** Over any window:
 - the sum of `dht_lookup_ended_total` = `dht_lookup_first_values_seconds_count` + `dht_lookup_without_values_total` = `dht_lookup_values_count`;
