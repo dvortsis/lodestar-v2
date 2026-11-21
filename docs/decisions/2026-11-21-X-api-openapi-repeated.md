@@ -50,9 +50,16 @@ Each list holds the codes that the route's own code paths can return as a 400, r
   - signed out, a 401 on GET and HEAD;
   - a POST with both in its URL is still served from its body.
 
+## The intensity summary (brief item 3)
+
+After CR-1c (#1014) merged, the summary of `PATCH /crawler` in `crates/api/src/ops.rs` says what a live intensity change does with `dht.preset_slots` on, following `docs/decisions/2026-11-21-CR-1c.md`:
+- the lookup slots are sized once, from the intensity the node starts with, so the slot count follows a new preset only after a restart;
+- running lookups, the query rate and the outstanding cap follow the new preset at once, never with more lookups running than the slots allow.
+
+The brief names it "the `POST /ops/intensity` summary"; it's the `patchCrawler` operation, the summary the brief quotes. `main` was brought in for it (runner).
+
 ## Not in this PR
 
-- **The `POST /ops/intensity` summary** (brief item 3) waits for CR-1c (#1014), which hadn't merged. The runner says when to bring `main` in.
 - **The other `Query<T>` routes' 400 text doesn't name `repeated_parameter` or `bad_parameter`** (runner: a follow-up slice of its own). Most declare no 400 at all; `/saved-searches/{id}/alerts` and `/user-items` list only `bad_cursor`. That's `/parse`, `/digest/preview`, `/torrents/{hash}/files`, `/collections`, `/collections/{id}`, `/saved-searches/{id}/alerts`, `/user-items`, `/user-items/labels`, `/filters/queue`, `/filters/tombstones`, `/discover`, `/settings/export`, `POST /settings/import` (its `dry_run`), `/suggest`, and `/insights/overview`, `/insights/events`, `/insights/discover`, the stage panels and `/insights/export.csv`. Each can answer `repeated_parameter` and `bad_parameter`.
 - **Precedence on `GET /facets` differs, as before:** its `single_valued` layer answers a repeated parameter before `from_params` sees an `ast`, so `ast=x&q=a&q=b` is `repeated_parameter` there, where `/search` and `/export` name the `ast`. That predates this slice and is outside its brief; making `/facets` use `post_only_param` first is a possible follow-up.
 - **Other status codes:** only the 400 lists changed. Routes that don't list their 410 (`cursor_expired`) or 503 answers, `/search` and `/facets` among them, are as they were.
