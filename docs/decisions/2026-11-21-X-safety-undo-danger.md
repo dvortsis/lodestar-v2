@@ -1,4 +1,4 @@
-# X-safety-undo-danger decisions (#PR)
+# X-safety-undo-danger decisions (#1027)
 
 Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo gets a real preview (option A, in this slice), and an explicit `Assessment.loosens_child_safety` flag. It follows X-safety-toggles (#1019): a change that loosens child safety gets the danger style. Undo was the gap. Styling only, plus what the style reads: what Undo does, its requests, the password and the warning are unchanged (owner §2.39).
 
