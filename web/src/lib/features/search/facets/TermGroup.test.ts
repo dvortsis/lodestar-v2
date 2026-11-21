@@ -65,11 +65,14 @@ describe('Find in a long facet list', () => {
 // the torrents' names use as `label`. It's shown, and found by "Find"; a click still sends the value.
 describe('A release group shows the spelling the server sends', () => {
 	const groups = () => {
-		const facet = term([
+		const base = term([
 			['rarbg', 5],
 			['ntb', 3]
 		]);
-		facet.values[0].label = 'RARBG';
+		const facet = {
+			...base,
+			values: base.values.map((v) => (v.value === 'rarbg' ? { ...v, label: 'RARBG' } : v))
+		};
 		const onvalue = vi.fn();
 		render(TermGroup, {
 			name: 'group',
