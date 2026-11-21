@@ -2055,9 +2055,16 @@ impl Actor {
         let Some(ip) = self.external.vote(reporter, reported) else {
             return;
         };
+        // A shard's ids also take one slot each, as at start
+        // ([`sharded_ids`]): ids kept from before the vote could repeat
+        // one. Without a shard, ids share slots by design.
+        let mut used = 0u8;
         let fits = |id: &NodeId| {
+            let slot = secure_id::slot(id);
+            let fresh = used & (1 << slot) == 0;
+            used |= 1 << slot;
             secure_id::is_valid(id, &ip)
-                && self.shard.is_none_or(|s| s.has_slot(secure_id::slot(id)))
+                && self.shard.is_none_or(|s| fresh && s.has_slot(slot))
         };
         if secure_id::is_exempt(&ip) || self.ids.iter().all(fits) {
             return;
