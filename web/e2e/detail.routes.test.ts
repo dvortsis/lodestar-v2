@@ -57,6 +57,8 @@ for (const [themeId, colorMode] of [
 				// the page is the shared frame (X-page-frame): left-aligned at the gutter, up to 80 rem;
 				// its summary keeps the manuscript width
 				const box = await page.locator('main [data-page-frame] > div').boundingBox();
+				const head = await page.locator('main [data-page-frame] header').boundingBox();
+				expect(head!.width).toBeLessThanOrEqual(720 + 1);
 				const summary = await page.locator('[data-section="summary"]').boundingBox();
 				expect(summary!.width).toBeLessThanOrEqual(720 + 1);
 				const gutter = page.viewportSize()!.width >= 640 ? 24 : 16;

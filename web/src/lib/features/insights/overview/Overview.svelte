@@ -172,7 +172,8 @@
 			data-testid="insights-page"
 			style:--ins-context-height="{contextHeight}px"
 		>
-			<h1 class={PAGE_H1} tabindex="-1">{m.insights_overview_title()}</h1>
+			<!-- The print report has its own title (PrintReport). -->
+			<h1 class="{PAGE_H1} print:hidden" tabindex="-1">{m.insights_overview_title()}</h1>
 			{#if Print && overview}
 				<Print {rangeText} compare={query.compare} tz={displayTimeZone()} />
 			{/if}

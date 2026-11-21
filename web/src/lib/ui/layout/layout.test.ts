@@ -20,7 +20,9 @@ const tokens = (s: string) => s.split(/\s+/);
 
 describe('page frame classes', () => {
 	it('has the shared gutters, 16 px and 24 px from large, and is never centred', () => {
-		expect(tokens(PAGE_FRAME)).toEqual(expect.arrayContaining(['px-4', 'large:px-6']));
+		expect(tokens(PAGE_FRAME)).toEqual(
+			expect.arrayContaining(['px-4', 'large:px-6', 'py-4', 'large:py-6', 'print:p-0'])
+		);
 		for (const value of Object.values(all)) expect(tokens(value)).not.toContain('mx-auto');
 	});
 

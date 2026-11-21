@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { PAGE_BODY_WIDE, PAGE_FRAME, PAGE_H1, PAGE_HEADER } from '$lib/ui/layout/classes';
+	import { PAGE_BODY_WIDE, PAGE_FRAME, PAGE_H1 } from '$lib/ui/layout/classes';
 	// /t/{hash} as a full page (a direct link, or "Open full page"). From Search it is a drawer
-	// instead (features/detail/DetailHost). The page is up to 2 × --results-min-width wide; its header and summary keep --manuscript-width.
+	// instead (features/detail/DetailHost). The page is the shared frame (ui/layout), up to 80 rem; its header and summary keep --manuscript-width.
 	import { onMount, untrack } from 'svelte';
 	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
@@ -37,7 +37,9 @@
 <div class={PAGE_FRAME} data-page-frame="">
 	<div class={PAGE_BODY_WIDE}>
 		<div class="contents ls-detail-page">
-			<header class={PAGE_HEADER}>
+			<header
+				class="flex max-w-(--manuscript-width) flex-wrap items-start justify-between gap-x-4 gap-y-2"
+			>
 				<h1 class={PAGE_H1} tabindex="-1">{showBidi(model.title) || m.torrent()}</h1>
 				<div class="ls-detail-row">
 					<DetailActions detail={model.detail} />

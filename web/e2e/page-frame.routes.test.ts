@@ -13,6 +13,7 @@ import {
 import { discoverFixture } from '../src/lib/features/insights/stages/fixtures';
 import type { components } from '../src/lib/api/schema';
 import type { OpenApiMock } from './mock/openapi-mock';
+import { liveLogs, logLine } from './logs.stream';
 import { freezeClock } from './snapshot';
 import { ROUTES } from './support/routes';
 import { expect as baseExpect, test } from './support/test';
@@ -25,6 +26,8 @@ interface Destination {
 	path: string;
 	settings?: true;
 	mock?: (mock: OpenApiMock) => void;
+	/** Started before the page loads (a live stream). */
+	before?: (page: Page) => Promise<unknown>;
 }
 
 const settingsMock =
@@ -50,6 +53,48 @@ const DESTINATIONS: Destination[] = [
 		name: 'insights-stage',
 		path: '/insights/discover?range=30d',
 		mock: (m) => m.on('getInsightsDiscover', discoverFixture())
+	},
+	{
+		name: 'logs',
+		path: '/logs',
+		before: liveLogs,
+		mock: (m) => {
+			m.on('getLogHistory', {
+				lines: [logLine(2), logLine(1)],
+				more: false,
+				next_cursor: null,
+				unreadable: 0
+			});
+			m.on('getLogCatalog', { status: 403, body: { error: { code: 'forbidden', message: 'no' } } });
+		}
+	},
+	{
+		name: 'settings-keyboard',
+		path: '/settings/keyboard',
+		settings: true,
+		mock: settingsMock((on) =>
+			on('getSettings', {
+				section: 'preferences',
+				revision: 3,
+				restart_required: [],
+				fields: {
+					shortcuts: {
+						value: true,
+						env: null,
+						read_only: false,
+						restart_required: false,
+						source: 'db'
+					},
+					shortcut_keys: {
+						value: {},
+						env: null,
+						read_only: false,
+						restart_required: false,
+						source: 'db'
+					}
+				}
+			})
+		)
 	},
 	{
 		name: 'settings-overview',
@@ -110,6 +155,7 @@ for (const width of WIDTHS) {
 			test(`${d.name}: one h1, on the shared edge`, async ({ page, go, mock }) => {
 				await freezeClock(page);
 				d.mock?.(mock);
+				await d.before?.(page);
 				await go(d.path);
 				await expect(page.locator('main h1').first()).toBeAttached();
 				// The heading can arrive with a lazy chunk: wait for the settled edge, not for time.
@@ -126,7 +172,7 @@ for (const width of WIDTHS) {
 
 				// The gutter: 16 px below `large` (640), 24 px from it.
 				const gutter = width >= 640 ? 24 : 16;
-				if (d.settings && width >= 1024) expect(got.h1).toBeGreaterThan(gutter);
+				if (d.settings && width >= 1024) expect(got.h1).toBe(312);
 				else expect(got.h1).toBe(gutter);
 			});
 		}

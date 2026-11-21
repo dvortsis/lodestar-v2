@@ -14,11 +14,13 @@ Slice session, 2026-11-21Z. It answers UI review I11 and P15 (`docs/review/2026-
 ## UX calls (runner calls under `docs/owner-decisions.md` §2.26)
 
 1. **Left-aligned pages at wide widths** (above). Alerts, Detail and Insights lose their centred column (Insights was capped at 96 rem and still is); the content stays left, as the Search page already was.
-2. **One heading size, 28 px.** Settings screens, Detail and Insights stage pages were 20 px (`text-title`), the others 28. Settings screens now match the rest (I11).
+2. **One heading size, 28 px.** Settings screens, Detail and Insights stage pages were 20 px (`text-title`), the others 28. Settings screens now match the rest (I11). Files beyond the brief's list, all approved by the runner or recorded in `runner/slices.yaml` `owns`: the feature components' `h1` and wrapper lines, `QueryBar.svelte` (one class line), `app.html` (the static Search heading and query bar), `detail.routes.test.ts`, `.size-limit.mjs`.
 3. **Insights shows its `h1`.** The overview's was `sr-only`; I11 names "not visible on Insights" as the defect, so it is visible. The About screen's `h1` stays `sr-only`: its logo and name header is its visible heading, and no review finding asks otherwise.
 4. **Companions and Outputs gain their `h1`**, reusing the nav titles (`settings_companions_title`, `settings_outputs_title`). No new message, so no en or zh file changes.
 5. **Settings at 1024 px and up keeps the section list left of the content,** so its `h1` sits at 312 px (24 px gutter + the 16 rem list + the 32 px gap), the same on every Settings screen, while every other destination is at 24 px. At 390 px all are at 16 px. A literal one-edge rule at 1024 px would put the `h1` above the section list, and each Settings screen renders its own `h1`, so it needs a Settings layout slice; it is not done here. (The old edge was 304 px.)
-6. **Spacing differences removed:** Discover's larger gap at `large` (24 px between regions) is now the frame's 16 px; Detail widens from 1,120 to 1,280 px (its summary keeps `--manuscript-width`); Search's heading row has the frame's 16 px gap to the query bar (it was 8 px).
+6. **Detail keeps its header cap.** The page header stays at `--manuscript-width` and top-aligned, as before; the heading row for the other pages is centred.
+7. **Logs' gutter is now the frame's** (24 px from `large`; it was 16 px at every width). **Insights' `h1` is hidden in print** (`print:hidden`): the report prints its own title. **Alert detail's `h1` uses `PAGE_H1`** like every other page.
+8. **Spacing differences removed:** Discover's larger gap at `large` (24 px between regions) is now the frame's 16 px; Detail widens from 1,120 to 1,280 px (its summary keeps `--manuscript-width`); Search's heading row has the frame's 16 px gap to the query bar (it was 8 px).
 
 ## Measurements (CSS px; the `h1` is the text's left edge; "content" is the page's inner box)
 
@@ -27,6 +29,8 @@ Measured with `e2e/page-frame.routes.test.ts` (`PAGE_FRAME_TABLE=1`) on `main` a
 | Destination | Width | Before: h1 | content L | content R | After: h1 | content L | content R |
 |---|---|---|---|---|---|---|---|
 | Search | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Logs | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Settings, Keyboard | 390 | 32 | 16 | 374 | 16 | 16 | 374 |
 | Discover | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
 | Alerts | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
 | Alert detail | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
@@ -34,8 +38,10 @@ Measured with `e2e/page-frame.routes.test.ts` (`PAGE_FRAME_TABLE=1`) on `main` a
 | Insights stage | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
 | Compare | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
 | Detail (`/t/…`) | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
-| Settings (all screens) | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Settings (the other screens) | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
 | Settings, Companions and Outputs | 390 | none | 16 | 374 | 16 | 16 | 374 |
+| Logs | 1024 | 16 | 16 | 1008 | 24 | 24 | 1000 |
+| Settings, Keyboard | 1024 | 320 | 16 | 1008 | 312 | 24 | 1000 |
 | Search | 1024 | 16 | 16 | 1008 | 24 | 24 | 1000 |
 | Discover | 1024 | 24 | 24 | 1000 | 24 | 24 | 1000 |
 | Alerts | 1024 | 24 | 24 | 1000 | 24 | 24 | 1000 |
@@ -44,8 +50,10 @@ Measured with `e2e/page-frame.routes.test.ts` (`PAGE_FRAME_TABLE=1`) on `main` a
 | Insights stage | 1024 | 24 | 24 | 1000 | 24 | 24 | 1000 |
 | Compare | 1024 | 16 | 16 | 1008 | 24 | 24 | 1000 |
 | Detail | 1024 | 16 | 16 | 1008 | 24 | 24 | 1000 |
-| Settings (all screens) | 1024 | 304 | 16 | 1008 | 312 | 24 | 1000 |
+| Settings (the other screens) | 1024 | 304 | 16 | 1008 | 312 | 24 | 1000 |
 | Settings, Companions and Outputs | 1024 | none | 16 | 1008 | 312 | 24 | 1000 |
+| Logs | 1440 | 16 | 16 | 1424 | 24 | 24 | 1416 |
+| Settings, Keyboard | 1440 | 320 | 16 | 1424 | 312 | 24 | 1416 |
 | Search | 1440 | 16 | 16 | 1424 | 24 | 24 | 1416 |
 | Discover | 1440 | 24 | 24 | 1416 | 24 | 24 | 1416 |
 | Alerts | 1440 | 84 | 84 | 1356 | 24 | 24 | 1304 |
@@ -54,7 +62,7 @@ Measured with `e2e/page-frame.routes.test.ts` (`PAGE_FRAME_TABLE=1`) on `main` a
 | Insights stage | 1440 | 24 | 24 | 1416 | 24 | 24 | 1416 |
 | Compare | 1440 | 16 | 16 | 1424 | 24 | 24 | 1304 |
 | Detail | 1440 | 176 | 176 | 1264 | 24 | 24 | 1304 |
-| Settings (all screens) | 1440 | 304 | 16 | 1424 | 312 | 24 | 1416 |
+| Settings (the other screens) | 1440 | 304 | 16 | 1424 | 312 | 24 | 1416 |
 | Settings, Companions and Outputs | 1440 | none | 16 | 1424 | 312 | 24 | 1416 |
 
 After the change every destination's `h1` is at 16 px at 390 px and at 24 px at 1024 and 1440 px, except the Settings screens at 1024 px and up (call 5), which share 312 px. The old spread was 16, 24, 84, 176 and 304 px, with 15 / 23 px for Insights's clipped heading and no heading on Companions and Outputs. No two edges differ by 1 px.
@@ -62,7 +70,7 @@ After the change every destination's `h1` is at 16 px at 390 px and at 24 px at 
 ## Tests
 
 - `web/src/lib/ui/layout/layout.test.ts`: the class constants carry the gutters, the caps and the `h1` style, never centre, and use no hex or arbitrary value.
-- `web/e2e/page-frame.routes.test.ts` (the `core` project): every destination at 390, 1024 and 1440 px has exactly one `h1` inside the page frame, at 16 px (24 px from `large`), and every Settings screen shares one edge. It waits on conditions with the 10 s deadline and has no fixed sleeps.
+- `web/e2e/page-frame.routes.test.ts` (the `core` project): every destination (including Logs, Keyboard, Companions and Outputs) at 390, 1024 and 1440 px has exactly one `h1` inside the page frame, at 16 px (24 px from `large`), and every Settings screen shares one edge. It waits on conditions with the 10 s deadline and has no fixed sleeps.
 - Existing specs updated: `detail.routes.test.ts` (the page is the shared frame, not a 1,120 px centred box) and the static boot shell in `app.html` (the Search heading and query bar now use the frame's classes, so `boot-shell.routes.test.ts` still finds no shift).
 - Snapshots: none regenerated here, because a local PNG is not valid (`web/e2e/README.md`); CI generates them. Changed: `search-results-adaptive.routes.test.ts` (`search-rows-768`, `search-rows-1024`, `search-drawer-1440`) and the matrix smoke baselines for the key routes Search, Settings and Detail at every breakpoint and theme.
 

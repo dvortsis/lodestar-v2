@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { PAGE_BODY_WIDE, PAGE_FRAME } from '$lib/ui/layout/classes';
+	import { PAGE_BODY_WIDE, PAGE_FRAME, PAGE_H1 } from '$lib/ui/layout/classes';
 	// One alert (§10.8): the saved search's header and its alerts, newest first, with a "New
 	// since …" mark where the server's `read` flags change. New alerts never move the list under
 	// the reader: an event only raises the "N new · Show" banner (§10.4's Live rule).
@@ -165,7 +165,9 @@
 		<section class="contents" aria-busy={d.loading || undefined}>
 			{#if d.error && !d.search}
 				<div class="al-missing">
-					<h1 class="al-h1">{notFound ? m.alerts_not_found_title() : m.alerts_title()}</h1>
+					<h1 class={PAGE_H1} tabindex="-1">
+						{notFound ? m.alerts_not_found_title() : m.alerts_title()}
+					</h1>
 					{#if notFound}
 						<p class="al-muted">{m.alerts_not_found_text()}</p>
 						<!-- eslint-disable svelte/no-navigation-without-resolve -- alertsPath() resolves -->
@@ -187,7 +189,7 @@
 			{:else}
 				<header class="al-header">
 					<div class="al-title-row">
-						<h1 class="al-h1" data-testid="alert-name">
+						<h1 class={PAGE_H1} tabindex="-1" data-testid="alert-name">
 							{d.search ? d.search.name : m.alerts_title()}
 						</h1>
 						{#if d.search?.paused}
@@ -358,14 +360,6 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: calc(var(--spacing) * 3);
-	}
-	.al-h1 {
-		margin: 0;
-		overflow-wrap: anywhere;
-		font-size: var(--text-display);
-		line-height: var(--text-display--line-height);
-		letter-spacing: var(--text-display--letter-spacing);
-		font-weight: var(--font-weight-semibold);
 	}
 	.al-query,
 	.al-meta {
