@@ -344,6 +344,10 @@ placement:
 - ws: ws-web
   match:
   - X-ui-guards
+  - X-facet-exclude-fill
+  - X-grid-two-col-large
+  - X-snapshot-stale-outputs
+  - X-safety-undo-danger
   - X-ui-plan-r5
   - X-page-frame
   - X-ctl-geometry
@@ -466,6 +470,9 @@ placement:
   - X-fleet-switch-passthrough
   - X-metrics-prefix-doc
   - X-testvm-teardown-by-id
+  - X-api-openapi-400s
+  - X-testvm-delete-on-termination
+  - X-fleet-stacked-arms
   - X-prefs-invisible-share
   - X-api-openapi-repeated
   - X-flake-export-wal
@@ -582,6 +589,8 @@ placement:
   - CR-COL-5
   - CR-COL-6
   - X-sampler-frontier-starve
+  - CR-SAMPLE-BACKOFF-ESCALATE
+  - X-sample-cooling-metric
   - CR-UTP-FIRST-WINDOW
 - ws: ws-cr-live
   match:
@@ -834,6 +843,7 @@ placement:
   - X-ci-advisories
   - X-fixed-sleep-asserts
   - X-rusqlite-041
+  - X-importer-schema-limit
   - X-filter01-fix
   - X-filter01-rejudge
   - X-filter03-fix
@@ -1854,6 +1864,11 @@ owner_queue:
   action: 'CR-1c (lookup slots sized to the preset) failed one of its two screen conditions on 8 seeds: stored per minute +110% and stored per DHT query +26%, but stored per slot-second -16%, because each extra lookup reaches lower-value hashes. Should a change whose purpose is more slots need per slot-second to rise, or are per query (politeness) and the memory bound the right conditions? Until you answer, CR-1c merges with its switch off and stays out of CR-AB-LC (docs/decisions/2026-11-21-runner-records-r6.md)'
   unblocks: Whether CR-1c is tested with CR-LOOKUP-END in CR-AB-LC, as you asked on 2026-11-20
   when: Before CR-AB-LC starts on the experiment host
+- n: 33
+  type: decision
+  action: 'Grant the test-VM user ec2:DeleteVolume on its own test volumes (infra/dev-vm/aws-claude-testvm.json)? Today it has none, so a test volume that survives teardown waits for you to delete it, and a 100 GiB volume costs about $0.011/h (about $8 a month) until then. The runner recommends yes, scoped like the existing terminate permission (ManageOnlyOwnLodestarTestInstances): Project=Lodestar, Environment=Test, Purpose=X-test-vm and LaunchedBy=its own UserId'
+  unblocks: Test lanes that clean up their own leftover volume
+  when: Any time; IAM changes are yours
 
 gates:
 - id: G-v05
