@@ -121,7 +121,8 @@ LABELLED = {
     "fetch_route_down": _FAMILY,
     "fetch_admission_waits_total": (("kind", _KIND),),
     "fetch_admission_wait_cancelled_total": (("reason", frozenset(("evicted", "peers"))),),
-    "fetch_admission_grants_total": (("kind", _KIND), ("class", frozenset(("interactive", "background")))),
+    # CR-COL-6: CR-HINT-FIRST adds class="hinted" (grants from T1 under coordinated admission).
+    "fetch_admission_grants_total": (("kind", _KIND), ("class", frozenset(("interactive", "background", "hinted")))),
     "fetch_admission_refusals_total": (("reason", frozenset(("refused", "unacknowledged"))),),
     "fetch_admission_permit_returns_total": (("boundary", frozenset(("finder_full", "finder_closed", "unused"))),),
     "dht_peer_permit_returns_total": (("boundary", frozenset((
@@ -187,7 +188,36 @@ PLAIN = PLAIN | frozenset((
     # Kept as they are (CR-1a-H's series): another reading of W, admission to answer.
     "dht_peer_lookup_seconds_total", "dht_peer_lookups_answered_total",
 ))
-MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 280
+# CR-COL-6: stage 3's series (r5.1's stages, item 3). CR-HINT-FIRST's, names approved by
+# the runner (docs/metrics.md, "Hint-first (CR-HINT-FIRST, 2026-11-21)"), and
+# X-sampler-cooldown-split's (docs/metrics.md; its decisions file). All always exported.
+HINT = {
+    "marked": "dht_hint_first_marked_total",      # sample hashes marked for the T1 tier
+    "skipped": "dht_hint_first_skipped_total",    # {reason}: replies' first new hashes not marked
+    "keys": "fetch_hint_keys_total",              # new keys the pool took as hinted
+    "ignored": "fetch_hint_ignored_total",        # hint marks the pool ignored
+    "waits": "fetch_hint_t1_waits_total",         # hinted keys that waited in T1
+    "left": "fetch_hint_t1_left_total",           # {reason}: hinted keys that left T1
+    "lookups": "fetch_hint_lookups_total",        # hinted keys' first lookups sent
+    "waiting": "fetch_hint_t1_waiting",           # gauge: T1 queue entries now
+}
+HINT_SKIPPED_REASONS = frozenset(("responder", "full", "rejected"))
+HINT_LEFT_REASONS = frozenset(("full", "aged"))
+HINT_GRANT_CLASS = "hinted"
+SPLIT = {
+    "full_seconds": "dht_sample_full_seconds_total",  # sampler-full time (rule 6.4), either arm
+    "spill": "dht_sample_spill_slots",                 # gauge: spill filter slots in use (0 when off)
+}
+# The sampler's table: dht_sample_cooling + dht_sample_inflight stays at most this
+# (restart::MAX_ENTRIES), so reaching it means the table is full.
+SAMPLER_TABLE = 200_000
+LABELLED.update({
+    HINT["skipped"]: (("reason", HINT_SKIPPED_REASONS),),
+    HINT["left"]: (("reason", HINT_LEFT_REASONS),),
+})
+PLAIN = PLAIN | frozenset((HINT["marked"], HINT["keys"], HINT["ignored"], HINT["waits"], HINT["lookups"],
+                           HINT["waiting"], SPLIT["full_seconds"], SPLIT["spill"]))
+MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 300
 KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE) | frozenset(LABELLED) | PLAIN
 NUMBER = r"[0-9]+(?:\.[0-9]+)?"
 SERIES = re.compile(r"^lodestar_([a-z_0-9]+)(\{[^{}\r\n]*\})? (" + NUMBER + r")\r?$")
@@ -1109,8 +1139,10 @@ TREATMENTS = {"adm": "coordinated_admission", "utp": "utp", "route": "route_back
 # CR-COL-5 (r5.1, docs/decisions/2026-11-20-path-to-100-cr-spec.md): every treatment's
 # switches, and those run from stage 2 against a stacked control (A2). The lookup-cost pair
 # is one treatment with both switches on in B (A1).
-TREATMENT_SWITCHES = {**{t: (s,) for t, s in TREATMENTS.items()}, "lc": ("lookup_end", "preset_slots")}
-STACKED = frozenset(("lc",))
+TREATMENT_SWITCHES = {**{t: (s,) for t, s in TREATMENTS.items()}, "lc": ("lookup_end", "preset_slots"),
+                      # CR-COL-6: stage 3, each stacked on the winners so far (r5.1's stages, item 3).
+                      "hint": ("hint_first",), "split": ("sampler_cooldown_split",)}
+STACKED = frozenset(("lc", "hint", "split"))
 # The switches every CR-COL-3 collector records; a stage-1 run.json may hold only these.
 STAGE1_SWITCHES = ("safe_restart", "coordinated_admission", "responder_hints", "streaming_peers",
                    "target_prefixes", "utp", "route_backoff")
@@ -1933,7 +1965,7 @@ class Collector:
                         self.write(self.root / "baseline-start.prom", snapshot)
                         self.note(f"baseline started; collecting {a.baseline_hours:g} hours")
                     over = (values["dht_peer_active"] + values["dht_peer_queued"] > 32
-                            or values["dht_sample_cooling"] + values["dht_sample_inflight"] > 200000
+                            or values["dht_sample_cooling"] + values["dht_sample_inflight"] > SAMPLER_TABLE
                             or values["dht_sample_frontier"] > 20000 or values["dht_outstanding"] > 1024
                             or values["fetch_lookups"] > 256)
                     bad_bounds = bad_bounds + 1 if over else 0

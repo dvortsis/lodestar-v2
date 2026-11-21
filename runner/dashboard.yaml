@@ -567,6 +567,7 @@ placement:
   - X-sampler-cooldown-split
   - X-crawler-sim-calibrate
   - CR-COL-5
+  - CR-COL-6
 - ws: ws-cr-live
   match:
   - CR-AB-*
