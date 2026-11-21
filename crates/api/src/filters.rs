@@ -664,13 +664,20 @@ fn loosened(
         cs |= child_safety(&e.rule);
         ids.push(e.rule.clone());
     }
-    for (rule, value) in &previous.pack_overrides {
-        let now_value = current
-            .pack_overrides
+    // Any pack override Undo puts back, changes or takes away: a lighter
+    // one weakens its rule, and so does removing a heavier one.
+    let value = |set: &'_ RuleSet, rule: &str| {
+        set.pack_overrides
             .iter()
             .find(|(r, _)| r == rule)
-            .map(|(_, v)| v);
-        if now_value != Some(value) {
+            .map(|(_, v)| v.clone())
+    };
+    for (rule, _) in previous
+        .pack_overrides
+        .iter()
+        .chain(&current.pack_overrides)
+    {
+        if value(previous, rule) != value(current, rule) {
             ids.push(rule.clone());
         }
     }
@@ -744,8 +751,10 @@ impl Previous {
         let v: Value = serde_json::from_slice(data)?;
         let unhex = |s: &Value| -> Vec<u8> {
             let s = s.as_str().unwrap_or_default();
-            (0..s.len() / 2)
-                .filter_map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok())
+            // By bytes, so a corrupt (non-ASCII) value can't panic.
+            s.as_bytes()
+                .chunks_exact(2)
+                .filter_map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
                 .collect()
         };
         let arr = |k: &str| v[k].as_array().cloned().unwrap_or_default();
@@ -1363,20 +1372,30 @@ impl FiltersApi {
                 .flatten()
                 .and_then(|data| Previous::parse(&data).ok())
                 .zip(store.rule_set().ok())
+                .zip(store.filter_state().ok())
         };
-        let Some((previous, current)) = read else {
+        let Some(((previous, current), state)) = read else {
             return Ok((fallback, false));
         };
+        // Both sides as stored: the engine can lag the store after an
+        // apply that failed part-way, and Undo restores against the store.
+        let mut before = Engine::clone(engine);
+        let _ = before.load_rules(&current);
+        for (rule, on) in &state.switches {
+            if let Some(r) = CoreRule::from_id(rule) {
+                let _ = before.core.switches.set(r, *on);
+            }
+        }
         let mut set = previous.set;
         // Undo leaves the applied pack versions as they are.
         set.pack_versions = current.pack_versions.clone();
-        let mut after = Engine::clone(engine);
+        let mut after = Engine::clone(&before);
         let _ = after.load_rules(&set);
         for (r, on) in previous.core {
             let _ = after.core.switches.set(r, on);
         }
-        let mut p = snap.rejudged(engine, &after, sealer, now, progress)?;
-        let weaker = loosened(engine, &after, &current, &set, snap, now);
+        let mut p = snap.rejudged(&before, &after, sealer, now, progress)?;
+        let weaker = loosened(&before, &after, &current, &set, snap, now);
         let bound = snap.for_rules(&weaker.rules);
         p.stored = bound.stored;
         p.caught_30d = bound.caught_30d;
@@ -5333,6 +5352,131 @@ mod tests {
                 assert_eq!(a.loosens_child_safety, cs, "{rule}: {change:?}");
             }
         }
+    }
+
+    /// An Undo that takes away or disables your rule counts its catches,
+    /// but not as child safety.
+    #[test]
+    fn undo_that_takes_away_your_rule_counts_its_catches() {
+        let api = memory_api();
+        apply_change(
+            &api,
+            Change::AddRule {
+                query: "ext:scr".into(),
+                action: "hide".into(),
+                unless: None,
+                shadow_days: None,
+            },
+        );
+        let id = api.store().rule_set().unwrap().rules[0].id;
+        hits(&api, &format!("U-{id}"), 2);
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (0, 2), "{p:?}");
+        assert!(!loosens(&api));
+
+        // Disabled again by Undo (the kept set has it off).
+        apply_change(
+            &api,
+            Change::UpdateRule {
+                id,
+                query: None,
+                action: None,
+                enabled: Some(false),
+                unless: None,
+                shadow_days: None,
+            },
+        );
+        apply_change(
+            &api,
+            Change::UpdateRule {
+                id,
+                query: None,
+                action: None,
+                enabled: Some(true),
+                unless: None,
+                shadow_days: None,
+            },
+        );
+        assert_eq!(undo_preview_of(&api).caught_30d, 2);
+    }
+
+    /// An Undo that takes away a heavier pack override weakens that rule,
+    /// and one that puts it back doesn't.
+    #[test]
+    fn undo_that_takes_away_a_pack_override_counts_its_rule() {
+        let api = memory_api();
+        hits(&api, "MW-1", 2);
+        apply_change(
+            &api,
+            Change::SetPackOverride {
+                rule: "MW-1".into(),
+                action: "drop".into(),
+                unless: None,
+                base: None,
+            },
+        );
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (0, 2), "{p:?}");
+        assert!(!loosens(&api));
+    }
+
+    /// An Undo that puts back an allow entry counts your rules, the packs
+    /// and the lists, never the core.
+    #[test]
+    fn undo_that_puts_back_an_allow_entry_skips_the_core() {
+        let api = memory_api();
+        hits(&api, "MW-1", 2);
+        hits(&api, "CS-4a", 3);
+        let id = applied(
+            &api,
+            Change::AddAllow {
+                query: "type:movie".into(),
+            },
+        )
+        .id
+        .expect("an allow id");
+        apply_change(&api, Change::RemoveAllow { id });
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (0, 2), "{p:?}");
+        assert!(!loosens(&api));
+    }
+
+    /// Both sides are read as stored: with the engine lagging the store
+    /// (an apply that failed part-way), an Undo that switches a CS rule
+    /// off still loosens child safety.
+    #[test]
+    fn undo_reads_the_switches_as_stored_when_the_engine_lags() {
+        let api = memory_api();
+        hits(&api, "CS-3a", 2);
+        apply_change(&api, core("CS-3a", false));
+        {
+            let mut store = api.store();
+            // Kept: CS-3a off. Stored now: on. The engine still has it off.
+            let kept = api.previous_data(&store).unwrap();
+            store.save_previous(&kept).unwrap();
+            store.set_core_switch("CS-3a", true).unwrap();
+        }
+        assert!(
+            !api.engine.current().core.switches.is_on(CoreRule::Cs3a),
+            "the engine lags"
+        );
+        let a = undo_of(&api);
+        assert!(a.loosens_child_safety);
+        assert_eq!(a.preview.core_caught_30d, 2);
+    }
+
+    /// A corrupt kept set (non-ASCII where hex belongs) reads without
+    /// panicking, and the preview still answers.
+    #[test]
+    fn a_corrupt_kept_value_does_not_panic() {
+        let data = r#"{"exceptions": [{"id": 1, "rule": "CS-4a", "kind": 0, "value": "é1ab"}],
+            "pack_overrides": [{"rule": "MW-1", "hex": "aé"}]}"#;
+        let p = Previous::parse(data.as_bytes()).unwrap();
+        // "é" is two bytes, so the pairs that follow are "1a" and a lone "b".
+        assert_eq!(p.set.exceptions[0].value, vec![0x1a]);
+        let api = memory_api();
+        api.store().save_previous(data.as_bytes()).unwrap();
+        assert!(api.assess(&Change::Undo, 1_000).is_ok());
     }
 
     /// The kept set parses as Undo restores it: unnamed core rules are on,
