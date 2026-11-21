@@ -106,7 +106,7 @@
 			</div>
 		{/if}
 		<div class="rr-facts">
-			<!-- A feature's own fact first: the line clips at its end on a narrow screen. -->
+			<!-- A feature's own fact first. One that doesn't fit drops whole (row.css), never mid-word. -->
 			{#if extra}<span class="rr-fact rr-extra">{@render extra()}</span>{/if}
 			{#if comfortable && badges.length}
 				<span class="rr-badges" data-testid="{id}-badges">
@@ -133,7 +133,7 @@
 			{/if}
 			<span class="rr-fact rr-size" data-testid="{id}-size">{formatBytes(hit.size, locale)}</span>
 			{#if comfortable}
-				<span class="rr-fact" data-testid="{id}-files"
+				<span class="rr-fact rr-files" data-testid="{id}-files"
 					>{(hit.files === 1 ? m.search_results_files_one : m.search_results_files_other)({
 						count: formatCount(hit.files, locale)
 					})}</span
@@ -179,6 +179,17 @@
 					</span>
 				{/if}
 			</span>
+			<span class="rr-fact rr-discovered">
+				<span class="sr-only">{m.discovered()}: </span>
+				<span data-testid="{id}-discovered"><RelativeTime seconds={hit.discovered_at} /></span>
+				{#if backfill}
+					<span class="rr-fact" title={m.backfill()} data-testid="{id}-backfill">
+						<History class="rr-icon" aria-hidden="true" />
+						<span class={comfortable ? '' : 'sr-only'}>{m.backfill()}</span>
+					</span>
+				{/if}
+			</span>
+			<!-- Technical (§10.4): last, so the first to drop on a narrow row. -->
 			{#if comfortable}
 				<span class="rr-fact" data-testid="{id}-trackers">
 					<span class="sr-only">{m.trackers_reporting()}: </span>
@@ -203,16 +214,6 @@
 					{/if}
 				</span>
 			{/if}
-			<span class="rr-fact">
-				<span class="sr-only">{m.discovered()}: </span>
-				<span data-testid="{id}-discovered"><RelativeTime seconds={hit.discovered_at} /></span>
-				{#if backfill}
-					<span class="rr-fact" title={m.backfill()} data-testid="{id}-backfill">
-						<History class="rr-icon" aria-hidden="true" />
-						<span class={comfortable ? '' : 'sr-only'}>{m.backfill()}</span>
-					</span>
-				{/if}
-			</span>
 		</div>
 		{#if comfortable && matched}
 			<div class="rr-matched" data-testid="{id}-matched">

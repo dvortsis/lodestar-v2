@@ -13,7 +13,8 @@ for (const stored of [560, 640]) {
 		server(mock, () => body(hits(3)));
 		await go('/search?q=lantern');
 		await row(page, 1).click();
-		await expect(page.locator('.ls-detail-host')).toHaveAttribute('data-mode', 'overlay');
+		// Owner §2.66 item 1: from 1366 px the drawer sits beside the results, narrowed to fit.
+		await expect(page.locator('.ls-detail-host')).toHaveAttribute('data-mode', 'inline');
 		await expect
 			.poll(async () => {
 				const box = await page.getByTestId('drawer').boundingBox();

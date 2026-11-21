@@ -1302,7 +1302,8 @@ export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
 	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice's box and its token (measured 19.67 KB on
 	// the tree with main merged, residue 16 B, rounded up to 64 B). Still under the §10.1 20 KB.
-	entry('CSS', search.css, '19.72 KB'),
+	// X-results-drawer-adaptive (runner §2.26): +2 B for --results-min-width-drawer (19,722 B).
+	entry('CSS', search.css, '19.73 KB'),
 	...(appEntry
 		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
 		: []),
@@ -1588,7 +1589,9 @@ export default [
 	// Search results: don't import `$lib/keys` (the registry), `$lib/shell/nav`, settings code or
 	// detail/ code into it. Load them after mount (ResultsPanel's onMount) or through a door; the
 	// keys are gated by "Search results key commands (on demand)".
-	entry('Search results (lazy)', resultsFirst, '40.61 KB'),
+	// X-results-drawer-adaptive (runner §2.26): +7 B for the row's 720 and 600 px container tiers
+	// (40,617 B), rounded up to 0.1 kB.
+	entry('Search results (lazy)', resultsFirst, '40.62 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.

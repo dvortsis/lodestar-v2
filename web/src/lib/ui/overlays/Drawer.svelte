@@ -83,7 +83,8 @@
 
 	function setWidth(w: number) {
 		const next = clampWidth(w);
-		if (next !== width) onWidthChange?.(next);
+		// Against the width shown: a press that the cap clamps changes nothing and stores nothing.
+		if (next !== shown) onWidthChange?.(next);
 	}
 
 	function onHandleKey(event: KeyboardEvent) {
