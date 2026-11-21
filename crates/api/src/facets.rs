@@ -50,7 +50,7 @@ pub fn routes() -> Router<ApiState> {
             "/facets",
             get(facets_get)
                 .post(facets_post)
-                .layer(axum::middleware::from_fn(single_valued)),
+                .route_layer(axum::middleware::from_fn(single_valued)),
         ),
     )
 }
@@ -69,7 +69,10 @@ pub fn routes() -> Router<ApiState> {
         ("lease" = Option<String>, Query, description = "A search's `next_cursor`: count its index snapshot. Send the same `q`, `sort` and `hidden`."),
         ("limit.{facet}" = Option<usize>, Query, description = "Values listed for one facet (`limit.ext=20`): 1–100, 8 by default."),
     ),
-    responses((status = 200, body = FacetsResponse))
+    responses(
+        (status = 200, body = FacetsResponse),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`tz`, `hidden` or a `limit.<facet>` that isn't a number), `ast_needs_post` (any `ast`; POST it), `query_syntax`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz` or `bad_cursor` (`lease`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
+    )
 )]
 pub(crate) async fn facets_get(
     State(s): State<ApiState>,
@@ -88,7 +91,10 @@ pub(crate) async fn facets_get(
     path = "/facets",
     tag = "search",
     request_body = FacetsRequest,
-    responses((status = 200, body = FacetsResponse))
+    responses(
+        (status = 200, body = FacetsResponse),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz` or `bad_cursor` (`lease`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
+    )
 )]
 pub(crate) async fn facets_post(
     State(s): State<ApiState>,

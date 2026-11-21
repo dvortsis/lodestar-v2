@@ -196,7 +196,7 @@ pub fn routes() -> Router<ApiState> {
                 "/search",
                 get(search_route)
                     .post(search_post)
-                    .layer(axum::middleware::from_fn(ast_needs_post)),
+                    .route_layer(axum::middleware::from_fn(ast_needs_post)),
             )
             .route("/search/state", get(index_state)),
     )
@@ -284,18 +284,27 @@ async fn ast_needs_post(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    // POST reads its body, never the URL's query; GET and HEAD (which
-    // `get()` also serves) read the query.
-    let reads_query = req.method() != axum::http::Method::POST;
-    let ast = req
-        .uri()
-        .query()
-        .filter(|_| reads_query)
-        .is_some_and(|q| has_param(q, "ast"));
-    if ast {
+    if post_only_param(&req, &["ast"]).is_some() {
         return ast_on_get().into_response();
     }
     next.run(req).await
+}
+
+/// The first of `names` among a non-POST request's query parameters, in
+/// `names`' order, read as the query extractor reads them. POST reads its
+/// body, never the URL's query; GET and HEAD (which `get()` also serves)
+/// read the query. For a layer that refuses, before the extractor, what
+/// only a POST body may carry (`/search`'s and `/export`'s `ast`,
+/// `/export`'s `hashes`).
+pub(crate) fn post_only_param(
+    req: &axum::extract::Request,
+    names: &[&'static str],
+) -> Option<&'static str> {
+    if req.method() == axum::http::Method::POST {
+        return None;
+    }
+    let query = req.uri().query()?;
+    names.iter().copied().find(|name| has_param(query, name))
 }
 
 /// `name` among `query`'s parameters, read as the extractor reads them.
@@ -303,7 +312,7 @@ fn has_param(query: &str, name: &str) -> bool {
     form_urlencoded::parse(query.as_bytes()).any(|(key, _)| key == name)
 }
 
-fn ast_on_get() -> ApiError {
+pub(crate) fn ast_on_get() -> ApiError {
     ApiError::bad_request("ast_needs_post", "Send an AST with POST.").field("ast")
 }
 
@@ -396,7 +405,10 @@ pub(crate) fn sort_param(s: Option<&str>) -> ApiResult<Sort> {
         ("exact" = Option<bool>, Query, description = "`1` or `true`: count every match exactly, within a time budget."),
         ("explain" = Option<bool>, Query, description = "`1` or `true`: explain each hit's score (`explain` in the response). First page only, at most 100 hits."),
     ),
-    responses((status = 200, body = SearchResponse))
+    responses(
+        (status = 200, body = SearchResponse),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type), `ast_needs_post` (any `ast`; POST it), `query_syntax`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep` or `bad_cursor`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
+    )
 )]
 pub(crate) async fn search_route(
     State(s): State<ApiState>,
@@ -439,7 +451,10 @@ async fn get_search(
     path = "/search",
     tag = "search",
     request_body = SearchRequest,
-    responses((status = 200, body = SearchResponse))
+    responses(
+        (status = 200, body = SearchResponse),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep` or `bad_cursor`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
+    )
 )]
 pub(crate) async fn search_post(
     State(s): State<ApiState>,
