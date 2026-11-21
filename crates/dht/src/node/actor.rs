@@ -5139,3 +5139,7 @@ mod ledger_tests;
 #[cfg(test)]
 #[path = "lookup_end_tests.rs"]
 mod lookup_end_tests;
+
+#[cfg(test)]
+#[path = "preset_slots_tests.rs"]
+mod preset_slots_tests;
