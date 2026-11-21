@@ -41,7 +41,7 @@ use crate::funnel::{Funnel, Loss, Stage};
 use crate::plugin::{BoxFuture, Discovery, LookupSession, PeerRequest, Shutdown, Terminal};
 
 mod admission;
-use admission::{Admission, Class, Grant, WaitKind, Waiter};
+use admission::{Admission, Class, Grant, T1_BURST, T1_MAX_WAIT, T1_WAITING, WaitKind, Waiter};
 
 /// The owned-request map, the one map whose iteration order reaches
 /// scheduling (`poll_replies`). Production keeps the randomly keyed std hash
@@ -182,6 +182,15 @@ pub struct PoolConfig {
     /// fetches in flight bring. See
     /// `docs/decisions/2026-11-06-X-fetch-meta-reserve.md`.
     pub max_held_bytes: usize,
+    /// CR-HINT-FIRST (`dht.hint_first`): a new key a trusted source marks
+    /// [`Found::hint`](crate::plugin::Found::hint) waits for its first
+    /// lookup in CR-2's T1 tier, between interactive and background
+    /// (`admission::T1_WAITING`, `T1_BURST`, `T1_MAX_WAIT`). Off, the
+    /// pool behaves exactly as before the switch existed.
+    pub hint_first: bool,
+    /// The sources whose hint marks are honoured: the peer finders', which
+    /// the pipeline fills in with the switch on. Empty trusts none.
+    pub hint_sources: Vec<SourceId>,
 }
 
 /// The largest info dict a pool with a budget of `max_held_bytes` fetches:
@@ -1029,6 +1038,8 @@ impl Default for PoolConfig {
             finder_capacity: 32,
             streaming_peers: false,
             max_held_bytes: MAX_HELD_BYTES,
+            hint_first: false,
+            hint_sources: Vec::new(),
         }
     }
 }
@@ -1079,8 +1090,8 @@ pub struct PoolStats {
     pub admission_wait_cancelled: [AtomicU64; 2],
     pub admission_wakeups: AtomicU64,
     /// Requests granted permits, by kind, then class (interactive,
-    /// background).
-    pub admission_grants: [[AtomicU64; 2]; 3],
+    /// background, and CR-HINT-FIRST's hinted).
+    pub admission_grants: [[AtomicU64; 3]; 3],
     /// Permitted requests not accepted: refused, unacknowledged.
     pub admission_refusals: [AtomicU64; 2],
     pub admission_holds: AtomicU64,
@@ -1116,6 +1127,19 @@ pub struct PoolStats {
     /// Timeouts after a growth's room came late, not charged to the peer
     /// ([`LATE_WAITS_FREE`]).
     pub late_waits: AtomicU64,
+    /// CR-HINT-FIRST; all zero with the switch off. New keys taken as
+    /// hinted, hint marks ignored (an untrusted source, the switch off, or
+    /// a private key), hinted keys that waited in T1, and those that left
+    /// it for their ordinary queue: T1 full, or [`admission::T1_MAX_WAIT`]
+    /// reached.
+    pub hint_keys: AtomicU64,
+    pub hint_ignored: AtomicU64,
+    pub hint_t1_waits: AtomicU64,
+    pub hint_t1_left: [AtomicU64; 2],
+    /// Hinted keys' first lookups sent (from T1, or at once).
+    pub hint_lookups: AtomicU64,
+    /// Gauge: T1 copies queued, live or stale.
+    pub hint_t1_waiting: AtomicU64,
 }
 
 impl PoolStats {
@@ -1308,6 +1332,8 @@ pub fn spawn(
         generations: 0,
         admitted: VecDeque::new(),
         lookup_backlog: VecDeque::new(),
+        t1_backlog: VecDeque::new(),
+        t1_burst: 0,
         admission,
         waiting: 0,
         lookups: 0,
@@ -1956,6 +1982,9 @@ struct Entry {
     late_waits: u8,
     /// Its next fetch's growth goes ahead of growths without credit.
     credit: bool,
+    /// CR-HINT-FIRST: a new key with a trusted hint, until its first
+    /// lookup is sent or it leaves T1 for its ordinary queue.
+    hint: bool,
     state: State,
     /// Set from the pool's counter on every state change, to invalidate
     /// old timers and requests. Pool-wide, so a key evicted and found again
@@ -2062,6 +2091,12 @@ struct Pool {
     /// Admission order, for eviction (lazily cleaned).
     admitted: VecDeque<InfoHash>,
     lookup_backlog: VecDeque<InfoHash>,
+    /// CR-HINT-FIRST's T1 beside `lookup_backlog`, with when each was
+    /// queued: at most [`T1_WAITING`], live or stale.
+    t1_backlog: VecDeque<(InfoHash, Instant)>,
+    /// T1 lookups started in a row from `t1_backlog` while the backlog
+    /// waited ([`T1_BURST`]).
+    t1_burst: u32,
     /// Coordinated admission's permits and waiters, with the switch on;
     /// they replace `lookup_backlog` then.
     admission: Option<Admission>,
@@ -2442,11 +2477,13 @@ impl Pool {
                 reserve_waits: 0,
                 late_waits: 0,
                 credit: false,
+                hint: false,
                 state: State::Backoff,
                 generation: 0,
             },
         );
         self.admitted.push_back(key);
+        self.take_hint(&d);
         if self.admitted.len() > 2 * self.entries.len() + 1024 {
             let entries = &self.entries;
             self.admitted.retain(|k| entries.contains_key(k));
@@ -2462,6 +2499,26 @@ impl Pool {
             {
                 self.request_peers(key, WaitKind::Arrival);
             }
+        }
+    }
+
+    /// CR-HINT-FIRST: a new key's hint mark counts only from a trusted
+    /// source with the switch on, and never for a private or interactive
+    /// key (those don't wait in T1); anything else is ignored.
+    fn take_hint(&mut self, d: &Discovery) {
+        if !d.found.hint {
+            return;
+        }
+        let e = self.entries.get_mut(&d.found.key).expect("just inserted");
+        if self.cfg.hint_first
+            && self.cfg.hint_sources.contains(&d.source)
+            && !e.private
+            && !e.interest
+        {
+            e.hint = true;
+            self.stats.hint_keys.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.stats.hint_ignored.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -2496,6 +2553,7 @@ impl Pool {
                 reserve_waits: 0,
                 late_waits: 0,
                 credit: false,
+                hint: false,
                 state: State::Backoff,
                 generation: 0,
             },
@@ -2708,6 +2766,10 @@ impl Pool {
             return;
         }
         e.interest = true;
+        // CR-HINT-FIRST: interest outranks T1. Its T1 copy goes stale (the
+        // backlog's at once, admission's when either copy is granted, as
+        // CR-ADM's copies do).
+        e.hint = false;
         self.vouched.waits.ask(&key);
         let spent = e.attempts >= self.cfg.max_attempts;
         match e.state {
@@ -2790,6 +2852,8 @@ impl Pool {
             self.waiting += 1;
             if e.interest {
                 self.lookup_backlog.push_front(key);
+            } else if e.hint {
+                self.push_t1_backlog(key);
             } else {
                 self.lookup_backlog.push_back(key);
             }
@@ -2814,6 +2878,8 @@ impl Pool {
                 };
                 let class = if entries[&key].interest {
                     Class::Interactive
+                } else if entries[&key].hint {
+                    Class::Hinted
                 } else {
                     Class::Background
                 };
@@ -2824,6 +2890,14 @@ impl Pool {
         let e = self.entries.get_mut(&key).expect("present");
         if e.lookup_requested && e.attempts == 0 {
             self.stats.retry_unaccepted.fetch_add(1, Ordering::Relaxed);
+        }
+        // CR-HINT-FIRST: a hinted key's first lookup, unless it was granted
+        // from another class (it aged out of T1).
+        if e.hint {
+            e.hint = false;
+            if grant.as_ref().is_none_or(|g| g.class == Class::Hinted) {
+                self.stats.hint_lookups.fetch_add(1, Ordering::Relaxed);
+            }
         }
         e.lookup_requested = true;
         e.state = State::Lookup;
@@ -2921,6 +2995,7 @@ impl Pool {
         } else {
             Class::Background
         };
+        let hinted = e.hint;
         let waiter = Waiter {
             key,
             generation: e.generation,
@@ -2929,13 +3004,33 @@ impl Pool {
         self.stats.admission_waits[kind as usize].fetch_add(1, Ordering::Relaxed);
         let entries = &self.entries;
         let a = self.admission.as_mut().expect("coordinated");
-        a.push(class, waiter, front);
+        // CR-HINT-FIRST: T1, or the ordinary queue; never both, so a key
+        // holds one place. A full T1 sends its oldest to background.
+        let left = if hinted {
+            a.push_t1(waiter, Instant::now(), |w| is_waiting(entries, w))
+        } else {
+            a.push(class, waiter, front);
+            None
+        };
         a.compact(self.waiting, |w| is_waiting(entries, w));
+        if hinted {
+            self.stats.hint_t1_waits.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(w) = left {
+            if let Some(e) = self.entries.get_mut(&w.key) {
+                e.hint = false;
+            }
+            self.stats.hint_t1_left[0].fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Grants waiting keys the permits available now, oldest first, and
     /// gives back a woken permit nobody is left to use.
     fn drain_admission(&mut self) {
+        if let Some(a) = &mut self.admission {
+            let aged = a.age_t1(Instant::now());
+            self.stats.hint_t1_left[1].fetch_add(aged, Ordering::Relaxed);
+        }
         loop {
             if self.lookups >= self.cfg.max_lookups {
                 return;
@@ -3572,8 +3667,9 @@ impl Pool {
     }
 
     fn drain_lookup_backlog(&mut self) {
+        self.age_t1_backlog(Instant::now());
         while self.lookups < self.cfg.max_lookups {
-            let Some(key) = self.lookup_backlog.pop_front() else {
+            let Some(key) = self.next_backlogged() else {
                 break;
             };
             if self
@@ -3582,6 +3678,80 @@ impl Pool {
                 .is_some_and(|e| e.state == State::LookupQueued)
             {
                 self.request_peers(key, WaitKind::Retry);
+            }
+        }
+    }
+
+    /// CR-HINT-FIRST: queues `key` in the backlog's T1. When T1 holds
+    /// [`T1_WAITING`] live keys, the oldest leaves it for the back of the
+    /// backlog, keeping its one place.
+    fn push_t1_backlog(&mut self, key: InfoHash) {
+        let entries = &self.entries;
+        let live = |k: &InfoHash| {
+            entries
+                .get(k)
+                .is_some_and(|e| e.state == State::LookupQueued && e.hint)
+        };
+        while self.t1_backlog.front().is_some_and(|(k, _)| !live(k)) {
+            self.t1_backlog.pop_front();
+        }
+        if self.t1_backlog.len() >= T1_WAITING {
+            self.t1_backlog.retain(|(k, _)| live(k));
+        }
+        if self.t1_backlog.len() >= T1_WAITING {
+            let (oldest, _) = self.t1_backlog.pop_front().expect("full");
+            self.entries.get_mut(&oldest).expect("live").hint = false;
+            self.lookup_backlog.push_back(oldest);
+            self.stats.hint_t1_left[0].fetch_add(1, Ordering::Relaxed);
+        }
+        self.t1_backlog.push_back((key, Instant::now()));
+        self.stats.hint_t1_waits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The next key the backlog serves: an interest key at its head first,
+    /// then CR-HINT-FIRST's T1, newest first, never more than [`T1_BURST`]
+    /// in a row while the backlog waits, then the backlog.
+    fn next_backlogged(&mut self) -> Option<InfoHash> {
+        let entries = &self.entries;
+        let t1_live = |k: &InfoHash| {
+            entries
+                .get(k)
+                .is_some_and(|e| e.state == State::LookupQueued && e.hint)
+        };
+        while self.t1_backlog.back().is_some_and(|(k, _)| !t1_live(k)) {
+            self.t1_backlog.pop_back();
+        }
+        let interest_first = self.lookup_backlog.front().is_some_and(|k| {
+            entries
+                .get(k)
+                .is_some_and(|e| e.interest && e.state == State::LookupQueued)
+        });
+        let backlog = !self.lookup_backlog.is_empty();
+        if !interest_first && !self.t1_backlog.is_empty() && (!backlog || self.t1_burst < T1_BURST)
+        {
+            self.t1_burst = if backlog { self.t1_burst + 1 } else { 0 };
+            return self.t1_backlog.pop_back().map(|(k, _)| k);
+        }
+        self.t1_burst = 0;
+        self.lookup_backlog.pop_front()
+    }
+
+    /// CR-HINT-FIRST: T1 keys queued [`T1_MAX_WAIT`] ago or more go to the
+    /// back of the backlog, oldest first.
+    fn age_t1_backlog(&mut self, now: Instant) {
+        while let Some(&(key, since)) = self.t1_backlog.front() {
+            if now.duration_since(since) < T1_MAX_WAIT {
+                break;
+            }
+            self.t1_backlog.pop_front();
+            if let Some(e) = self
+                .entries
+                .get_mut(&key)
+                .filter(|e| e.state == State::LookupQueued && e.hint)
+            {
+                e.hint = false;
+                self.lookup_backlog.push_back(key);
+                self.stats.hint_t1_left[1].fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -4026,6 +4196,8 @@ impl Pool {
         s.lookups.store(self.lookups as u64, Ordering::Relaxed);
         s.lookup_backlog
             .store(self.lookup_backlog.len() as u64, Ordering::Relaxed);
+        let t1 = self.t1_backlog.len() + self.admission.as_ref().map_or(0, Admission::t1_len);
+        s.hint_t1_waiting.store(t1 as u64, Ordering::Relaxed);
         if let Some(a) = &self.admission {
             s.admission_waiters
                 .store(self.waiting as u64, Ordering::Relaxed);

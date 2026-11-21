@@ -933,6 +933,147 @@ fn lookup_end_runs_deterministically() {
     assert!(a.ledger.ended_share[lodestar_dht::node::LedgerEnd::EnoughValues as usize] > 0.0);
 }
 
+/// CR-HINT-FIRST's switch on the calibrated scenario whose samplers hold
+/// what they list: hashes are marked one per responder, hinted queries go
+/// out, and the same seed is still byte-identical.
+#[test]
+fn hint_first_marks_and_sends_deterministically() {
+    let mut off = scenario::live_lookup();
+    off.minutes = 4;
+    off.net.samplers_hold = true;
+    let on = Scenario {
+        switches: Switches {
+            hint_first: true,
+            ..Switches::default()
+        },
+        ..off.clone()
+    };
+    let (a, b) = (simulate(&off), simulate(&on));
+    assert_eq!(
+        a.dht.hint_first_marked + a.dht.hint_queries,
+        0,
+        "{}",
+        a.text
+    );
+    assert!(b.text.contains("hint_first=true"));
+    assert!(b.dht.hint_first_marked > 0, "{}", b.text);
+    assert!(b.dht.hint_queries > 0, "{}", b.text);
+    // One hash per reply at most, so no more hints than marks.
+    assert!(
+        b.dht.hints_captured <= b.dht.hint_first_marked,
+        "{}",
+        b.text
+    );
+    assert!(b.dht.peer_active + b.dht.peer_queued <= 32, "{}", b.text);
+    assert_eq!(simulate(&on).text, b.text);
+}
+
+/// The CR-HINT-FIRST screen: the calibrated `live-lookup` scenario with
+/// samplers that hold what they list, off against on over
+/// `SCREEN_SEEDS`: as is; with CR-ADM on in both arms (so keys wait for a
+/// lookup in the pool, where T1 orders them, not in the actor's queue);
+/// and with CR-ADM and CR-LOOKUP-END on in both arms (a hinted request
+/// finishes on values only through its end rule).
+/// Reports `W`, `q`, `y` and stored per minute, the two figures the change
+/// is kept on (stored per slot-second, stored per query), and the hint
+/// counts; the off arm's spread is the noise floor.
+/// `cargo test -p lodestar-crawler-sim --test sim hint_first_screen -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: a few minutes of wall time"]
+fn hint_first_screen() {
+    use lodestar_dht::node::LedgerEnd;
+    for (coordinated, lookup_end) in [(false, false), (true, false), (true, true)] {
+        let mut off = scenario::live_lookup();
+        off.net.samplers_hold = true;
+        off.switches.coordinated_admission = coordinated;
+        off.switches.lookup_end = lookup_end;
+        let on = Scenario {
+            switches: Switches {
+                hint_first: true,
+                ..off.switches
+            },
+            ..off.clone()
+        };
+        println!("\n## coordinated_admission={coordinated}, lookup_end={lookup_end} in both arms");
+        println!(
+            "seed | arm | L | W s | q | y | stored/min | stored/slot-s | stored/query | enough_values | marked | expired unused | hint queries | useful | fallbacks expired/throttled | steady/min"
+        );
+        let per_slot_s = |l: &run::Ledger| l.stored_per_min / 60.0 / l.slots.max(1e-9);
+        let per_query = |l: &run::Ledger| l.stored_per_min / 60.0 / l.queries_per_s.max(1e-9);
+        let mut rows: Vec<[run::Report; 2]> = Vec::new();
+        for seed in SCREEN_SEEDS {
+            let pair = [&off, &on].map(|s| {
+                let mut s = s.clone();
+                s.seed = seed;
+                simulate(&s)
+            });
+            for (arm, r) in pair.iter().enumerate() {
+                let (l, d) = (&r.ledger, &r.dht);
+                let f = d.hint_fallbacks;
+                println!(
+                    "{seed} | {} | {:.2} | {:.2} | {:.1} | {:.3} | {:.2} | {:.5} | {:.6} | {:.3} | {} | {} | {} | {} | {}/{} | {:.2}",
+                    ["off", "on"][arm],
+                    l.slots,
+                    l.w,
+                    l.q,
+                    l.y,
+                    l.stored_per_min,
+                    per_slot_s(l),
+                    per_query(l),
+                    l.ended_share[LedgerEnd::EnoughValues as usize],
+                    d.hint_first_marked,
+                    d.hints_expired,
+                    d.hint_queries,
+                    d.hint_useful,
+                    f[0],
+                    f[4],
+                    r.steady_stored,
+                );
+            }
+            rows.push(pair);
+        }
+        let n = rows.len() as f64;
+        let mean = |arm: usize, f: &dyn Fn(&run::Report) -> f64| {
+            rows.iter().map(|p| f(&p[arm])).sum::<f64>() / n
+        };
+        for arm in 0..2 {
+            println!(
+                "mean | {} | W {:.2} | q {:.1} | y {:.3} | stored/min {:.2} | stored/slot-s {:.5} | stored/query {:.6} | steady/min {:.2}",
+                ["off", "on"][arm],
+                mean(arm, &|r| r.ledger.w),
+                mean(arm, &|r| r.ledger.q),
+                mean(arm, &|r| r.ledger.y),
+                mean(arm, &|r| r.ledger.stored_per_min),
+                mean(arm, &|r| per_slot_s(&r.ledger)),
+                mean(arm, &|r| per_query(&r.ledger)),
+                mean(arm, &|r| r.steady_stored),
+            );
+        }
+        let off_steady: Vec<f64> = rows.iter().map(|p| p[0].steady_stored).collect();
+        let (lo, hi) = off_steady
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                (a.min(*x), b.max(*x))
+            });
+        let diffs: Vec<f64> = rows
+            .iter()
+            .map(|p| p[1].steady_stored - p[0].steady_stored)
+            .collect();
+        let rises = |f: &dyn Fn(&run::Ledger) -> f64| {
+            rows.iter()
+                .filter(|p| f(&p[1].ledger) > f(&p[0].ledger))
+                .count()
+        };
+        println!(
+            "off spread {:.1}% of the mean; steady diffs {diffs:.2?}: {:?}; stored/slot-s rose on {}/8 seeds, stored/query on {}/8",
+            100.0 * (hi - lo) / mean(0, &|r| r.steady_stored).max(1e-9),
+            sign_test(&diffs),
+            rises(&per_slot_s),
+            rises(&per_query),
+        );
+    }
+}
+
 /// The CR-LOOKUP-END screen: the calibrated `live-lookup` scenario, the
 /// switch off against on, over `SCREEN_SEEDS`. Reports `W`, `q` and `y`
 /// beside stored per minute, and the two figures the change is kept on:

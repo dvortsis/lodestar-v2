@@ -4,6 +4,8 @@
 
 use super::*;
 use crate::krpc::Samples;
+use crate::node::LedgerEnd;
+use proptest::prelude::*;
 use rand::SeedableRng;
 
 fn actor(hints: bool) -> (Actor, Vec<SendSocket>, mpsc::Receiver<Harvest>) {
@@ -290,6 +292,7 @@ async fn private_key_work_gets_no_public_dispatch_or_provenance() {
             info_hash: hash(1),
             source: Source::Sample,
             peers: vec![],
+            hint: false,
         }
     );
     // A private key's lookup is never asked of the public DHT (the pool
@@ -416,4 +419,272 @@ async fn a_failed_hinted_send_falls_back_and_counts_send_failed() {
         .map(|w| fallbacks(&a, *w))
         .sum();
     assert_eq!(others, 0);
+}
+
+// CR-HINT-FIRST (`dht.hint_first`, docs/decisions/2026-11-21-CR-HINT-FIRST.md).
+
+fn actor_with(
+    responder_hints: bool,
+    hint_first: bool,
+    lookup_end: bool,
+) -> (Actor, Vec<SendSocket>, mpsc::Receiver<Harvest>) {
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let addr = socket.local_addr().unwrap();
+    let cfg = Config {
+        bind: vec![addr],
+        bootstrap: vec![],
+        allow_private: true,
+        sample_start_delay: Some(Duration::ZERO),
+        responder_hints,
+        hint_first,
+        lookup_end,
+        ..Default::default()
+    };
+    let (tx, rx) = mpsc::channel(256);
+    let a = Actor::new(
+        cfg,
+        Arc::new(Stats::default()),
+        vec![addr],
+        None,
+        vec![],
+        Some(tx),
+        Instant::now(),
+        StdRng::seed_from_u64(3),
+    );
+    (a, vec![SendSocket::Udp(socket)], rx)
+}
+
+/// A responder at its own loopback IP, `127.0.0.<host>`.
+fn host(n: u8, port: u16) -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, n], port))
+}
+
+fn harvests(rx: &mut mpsc::Receiver<Harvest>) -> Vec<(InfoHash, bool)> {
+    std::iter::from_fn(|| rx.try_recv().ok())
+        .map(|h| (h.info_hash, h.hint))
+        .collect()
+}
+
+fn skipped(a: &Actor, why: HintFirstSkip) -> u64 {
+    get(&a.stats.hint_first_skipped[why as usize])
+}
+
+/// With `dht.hint_first` off, harvests carry no mark whatever
+/// `responder_hints` says, and with both off no hint state exists.
+#[tokio::test(start_paused = true)]
+async fn hint_first_off_marks_nothing() {
+    for responder_hints in [false, true] {
+        let (mut a, sockets, mut rx) = actor_with(responder_hints, false, false);
+        sample_reply(&mut a, &sockets, host(1, 1001), &[hash(1), hash(2)]);
+        assert_eq!(harvests(&mut rx), [(hash(1), false), (hash(2), false)]);
+        assert_eq!(a.hints.is_some(), responder_hints);
+        assert_eq!(get(&a.stats.hint_first_marked), 0);
+        assert!(a.stats.hint_first_skipped.iter().all(|n| get(n) == 0));
+    }
+}
+
+/// One hash per responder: a reply marks only its first new hash; the
+/// same IP (any port, or its mapped form) marks nothing more while that
+/// hint is outstanding; another IP marks its own. With `responder_hints`
+/// off, only the marked hash's hint is kept.
+#[tokio::test(start_paused = true)]
+async fn one_marked_hash_per_responder() {
+    let (mut a, sockets, mut rx) = actor_with(false, true, false);
+    sample_reply(
+        &mut a,
+        &sockets,
+        host(1, 1001),
+        &[hash(1), hash(2), hash(3)],
+    );
+    assert_eq!(
+        harvests(&mut rx),
+        [(hash(1), true), (hash(2), false), (hash(3), false)]
+    );
+    assert_eq!(a.hints.as_ref().unwrap().held(), 1, "only the T1 hint");
+    let mapped = SocketAddr::new(
+        IpAddr::V6(std::net::Ipv4Addr::new(127, 0, 0, 1).to_ipv6_mapped()),
+        1003,
+    );
+    sample_reply(&mut a, &sockets, host(1, 1002), &[hash(4)]);
+    sample_reply(&mut a, &sockets, mapped, &[hash(5)]);
+    sample_reply(&mut a, &sockets, host(2, 1001), &[hash(6)]);
+    assert_eq!(
+        harvests(&mut rx),
+        [(hash(4), false), (hash(5), false), (hash(6), true)]
+    );
+    assert_eq!(skipped(&a, HintFirstSkip::Responder), 2);
+    assert_eq!(get(&a.stats.hint_first_marked), 2);
+    // A seen hash is never a candidate, and counts nothing.
+    sample_reply(&mut a, &sockets, host(3, 1001), &[hash(1)]);
+    assert!(harvests(&mut rx).is_empty());
+    assert_eq!(skipped(&a, HintFirstSkip::Responder), 2);
+    // The marked hash's request takes its hint: the mark ends, and the
+    // guard then holds the IP, so its next reply still marks nothing.
+    let _r = request(&mut a, &sockets, hash(1));
+    assert_eq!(get(&a.stats.hint_queries), 1);
+    sample_reply(&mut a, &sockets, host(1, 1004), &[hash(7)]);
+    assert_eq!(harvests(&mut rx), [(hash(7), false)]);
+    // After the TTL and the guard's interval, it marks again.
+    tokio::time::advance(hints::HINT_TTL.max(hints::HINT_NOT_BEFORE)).await;
+    a.maintain(&sockets);
+    let tid = hinted(&a).first().map(|(t, _)| *t);
+    if let Some(tid) = tid {
+        answer_hint(&mut a, &sockets, tid, vec![]);
+    }
+    sample_reply(&mut a, &sockets, host(1, 1005), &[hash(8)]);
+    assert_eq!(harvests(&mut rx), [(hash(8), true)]);
+}
+
+/// With both switches on, CR-1a-H keeps every new hash's hint as before,
+/// and the reply's first is also marked.
+#[tokio::test(start_paused = true)]
+async fn with_responder_hints_every_hint_is_kept_and_one_marked() {
+    let (mut a, sockets, mut rx) = actor_with(true, true, false);
+    sample_reply(
+        &mut a,
+        &sockets,
+        host(1, 1001),
+        &[hash(1), hash(2), hash(3)],
+    );
+    assert_eq!(
+        harvests(&mut rx),
+        [(hash(1), true), (hash(2), false), (hash(3), false)]
+    );
+    assert_eq!(a.hints.as_ref().unwrap().held(), 3);
+    assert_eq!(get(&a.stats.hints_captured), 3);
+    assert_eq!(get(&a.stats.hint_first_marked), 1);
+}
+
+/// A responder failing the public-endpoint checks marks nothing; with the
+/// crawler paused nothing is harvested or decided.
+#[tokio::test(start_paused = true)]
+async fn rejected_or_paused_responders_mark_nothing() {
+    let (mut a, sockets, mut rx) = actor_with(false, true, false);
+    a.cfg.allow_private = false;
+    sample_reply(&mut a, &sockets, host(1, 1001), &[hash(1)]);
+    assert_eq!(harvests(&mut rx), [(hash(1), false)]);
+    assert_eq!(skipped(&a, HintFirstSkip::Rejected), 1);
+    assert_eq!(a.hints.as_ref().unwrap().held(), 0);
+    a.cfg.allow_private = true;
+    a.paused = true;
+    sample_reply(&mut a, &sockets, host(2, 1001), &[hash(2)]);
+    assert!(harvests(&mut rx).is_empty());
+    assert_eq!(skipped(&a, HintFirstSkip::Rejected), 1);
+}
+
+fn table_nodes(a: &mut Actor, n: u8) {
+    for i in 1..=n {
+        a.families[0].table.insert(
+            NodeInfo {
+                id: NodeId([0x10 * i; 20]),
+                addr: SocketAddr::from(([127, 0, i, 9], 900 + u16::from(i))),
+            },
+            Contact::Response,
+            0,
+        );
+    }
+}
+
+fn values(net: u8, n: u16) -> Vec<SocketAddr> {
+    (0..n)
+        .map(|i| SocketAddr::from(([10, net, (i >> 8) as u8, i as u8], 6881)))
+        .collect()
+}
+
+/// The runner's call: a hinted reply's values count toward CR-LOOKUP-END
+/// exactly like any reply's, so one responder never ends a request,
+/// however many values it sends; the request carries on routing.
+#[tokio::test(start_paused = true)]
+async fn a_hinted_reply_alone_never_ends_a_request() {
+    let (mut a, sockets, _rx) = actor_with(false, true, true);
+    table_nodes(&mut a, 3);
+    sample_reply(&mut a, &sockets, host(1, 1001), &[hash(1)]);
+    let mut rx = request(&mut a, &sockets, hash(1));
+    let [(tid, to)] = hinted(&a)[..] else {
+        panic!("one hinted query: {:?}", hinted(&a));
+    };
+    assert_eq!(to, host(1, 1001));
+    answer_hint(&mut a, &sockets, tid, values(1, 64));
+    assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+    let l = a.stats.snapshot().ledger;
+    assert_eq!(l.ended[LedgerEnd::EnoughValues as usize], 0);
+    assert_eq!(get(&a.stats.hint_useful), 1);
+    assert!(!a.pending.is_empty(), "ordinary routing carries on");
+}
+
+#[derive(Debug, Clone)]
+enum Hostile {
+    /// The hinted responder answers with these values (empty, huge,
+    /// duplicate, private or port-0 junk).
+    Answer(Vec<(u32, u16)>),
+    /// The same reply from another address in its /24: spoofed.
+    Spoofed(u8, Vec<(u32, u16)>),
+    /// A sample reply from another address in its /24, listing a new hash
+    /// (address rotation).
+    Rotate(u8, u8),
+}
+
+fn hostile() -> impl Strategy<Value = Hostile> {
+    let values = prop::collection::vec((any::<u32>(), 0u16..4), 0..120);
+    prop_oneof![
+        values.clone().prop_map(Hostile::Answer),
+        (2u8..250, values).prop_map(|(h, v)| Hostile::Spoofed(h, v)),
+        (2u8..250, 10u8..250).prop_map(|(h, k)| Hostile::Rotate(h, k)),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+
+    /// Hostile hinted replies, all from one /24, never end a request on
+    /// values, never inflate its values past 64 or let a junk endpoint in,
+    /// and leave the hint state bounded: at most one mark per IP.
+    #[test]
+    fn hostile_hinted_replies_end_nothing_early_and_stay_bounded(
+        script in prop::collection::vec(hostile(), 1..30),
+    ) {
+        {
+            let (mut a, sockets, mut harvested) = actor_with(false, true, true);
+            // Junk values include private and reserved endpoints.
+            a.cfg.allow_private = false;
+            table_nodes(&mut a, 3);
+            // Public addresses in one /24 for the responder and its rotations.
+            let r = |h: u8| SocketAddr::from(([31, 0, 0, h], 6881));
+            sample_reply(&mut a, &sockets, r(1), &[hash(1)]);
+            prop_assert_eq!(get(&a.stats.hint_first_marked), 1);
+            let _rx = request(&mut a, &sockets, hash(1));
+            let to_addrs = |v: &[(u32, u16)]| -> Vec<SocketAddr> {
+                v.iter().map(|(ip, p)| SocketAddr::from((std::net::Ipv4Addr::from(*ip), *p))).collect()
+            };
+            for step in script {
+                let tid = hinted(&a).first().map(|(t, _)| *t);
+                match (step, tid) {
+                    (Hostile::Answer(v), Some(tid)) => answer_hint(&mut a, &sockets, tid, to_addrs(&v)),
+                    (Hostile::Spoofed(h, v), Some(tid)) => {
+                        let bytes = tid.to_be_bytes();
+                        let response = Response { id: NodeId([7; 20]), values: to_addrs(&v), ..Default::default() };
+                        let msg = Message { transaction_id: &bytes, version: None, ip: None, read_only: false, body: Body::Response(response.clone()) };
+                        a.on_response(&sockets, 0, &msg, Some(&response), r(h));
+                    }
+                    (Hostile::Rotate(h, k), _) => sample_reply(&mut a, &sockets, r(h), &[hash(k)]),
+                    _ => {}
+                }
+                let l = a.stats.snapshot().ledger;
+                prop_assert_eq!(l.ended[LedgerEnd::EnoughValues as usize], 0);
+                for req in a.peer_requests.values() {
+                    prop_assert!(req.peers.len() <= 64);
+                    for p in &req.peers {
+                        prop_assert!(p.port() != 0 && endpoint_allowed(&a.cfg, *p));
+                    }
+                }
+                let h = a.hints.as_ref().unwrap();
+                prop_assert!(h.held() <= 250 && h.t1_len() <= 250);
+                prop_assert!(hinted(&a).len() <= 1);
+            }
+            // One mark per IP, at most: never two for one responder.
+            let marked: Vec<_> = std::iter::from_fn(|| harvested.try_recv().ok()).filter(|h| h.hint).collect();
+            prop_assert!(marked.len() as u64 == get(&a.stats.hint_first_marked));
+        }
+    }
 }

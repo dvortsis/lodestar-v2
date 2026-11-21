@@ -131,6 +131,10 @@ pub struct Harvest {
     pub info_hash: InfoHash,
     pub source: Source,
     pub peers: Vec<SocketAddr>,
+    /// CR-HINT-FIRST (`dht.hint_first`): a BEP 51 sample hash whose
+    /// responder the actor holds a fresh hint for, so the pool may ask for
+    /// it in its T1 tier. Always false with the switch off.
+    pub hint: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +175,12 @@ pub struct Config {
     /// asks the BEP 51 responder that listed its hash. Off allocates no
     /// hint state and sends nothing differently.
     pub responder_hints: bool,
+    /// CR-HINT-FIRST (`dht.hint_first`): a hash captured from a BEP 51
+    /// reply is marked for the pool's T1 tier, one hash per responder, and
+    /// its request first asks that responder, through CR-1a-H's checks and
+    /// guard. Off allocates no hint state unless `responder_hints` is on,
+    /// and marks nothing.
+    pub hint_first: bool,
     /// CR-LOOKUP-END (`dht.lookup_end`): a peer request ends, and frees its
     /// slot, once it holds enough values from enough distinct responders
     /// or each leg's closest set has answered, and an admitted request
@@ -267,6 +277,7 @@ impl Default for Config {
             paused: false,
             restart: None,
             responder_hints: false,
+            hint_first: false,
             lookup_end: false,
             target_prefixes: false,
             utp: None,
@@ -394,6 +405,10 @@ pub struct Stats {
     pub hint_useful: AtomicU64,
     /// Ordinary lookup queries skipped by a retained per-IP restriction.
     pub hint_guard_skips: AtomicU64,
+    /// CR-HINT-FIRST: sample hashes marked for the pool's T1 tier, and
+    /// those not marked by [`HintFirstSkip`].
+    pub hint_first_marked: AtomicU64,
+    pub hint_first_skipped: [AtomicU64; HintFirstSkip::ALL.len()],
     /// Gauges: hashes holding hints, and IPs the guard restricts.
     pub hints_held: AtomicU64,
     pub hint_guard_entries: AtomicU64,
@@ -505,6 +520,8 @@ impl Stats {
             hint_fallbacks: std::array::from_fn(|i| g(&self.hint_fallbacks[i])),
             hint_useful: g(&self.hint_useful),
             hint_guard_skips: g(&self.hint_guard_skips),
+            hint_first_marked: g(&self.hint_first_marked),
+            hint_first_skipped: std::array::from_fn(|i| g(&self.hint_first_skipped[i])),
             hints_held: g(&self.hints_held),
             hint_guard_entries: g(&self.hint_guard_entries),
             peer_stream_batches: g(&self.peer_stream_batches),
@@ -566,6 +583,40 @@ impl HintFallback {
 
     pub(crate) fn count(self, stats: &Stats) {
         Stats::inc(&stats.hint_fallbacks[self as usize]);
+    }
+}
+
+/// Why a new sample hash wasn't marked for T1
+/// (`dht_hint_first_skipped_total{reason}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintFirstSkip {
+    /// A T1 hint for the responder's IP is still outstanding, or the
+    /// per-IP guard restricts it now.
+    Responder,
+    /// [`hints::T1_RESPONDERS`] IPs already hold outstanding T1 hints.
+    Full,
+    /// The responder failed the public-endpoint checks, or its hint
+    /// couldn't be kept.
+    Rejected,
+}
+
+impl HintFirstSkip {
+    pub const ALL: [HintFirstSkip; 3] = [
+        HintFirstSkip::Responder,
+        HintFirstSkip::Full,
+        HintFirstSkip::Rejected,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HintFirstSkip::Responder => "responder",
+            HintFirstSkip::Full => "full",
+            HintFirstSkip::Rejected => "rejected",
+        }
+    }
+
+    pub(crate) fn count(self, stats: &Stats) {
+        Stats::inc(&stats.hint_first_skipped[self as usize]);
     }
 }
 
@@ -827,6 +878,9 @@ pub struct StatsSnapshot {
     pub hint_fallbacks: [u64; HintFallback::ALL.len()],
     pub hint_useful: u64,
     pub hint_guard_skips: u64,
+    pub hint_first_marked: u64,
+    /// By [`HintFirstSkip::ALL`].
+    pub hint_first_skipped: [u64; HintFirstSkip::ALL.len()],
     pub hints_held: u64,
     pub hint_guard_entries: u64,
     pub peer_stream_batches: u64,

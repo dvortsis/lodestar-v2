@@ -29,8 +29,9 @@ use super::tids::TxIds;
 use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
 use super::{
-    Command, Config, DhtEstimate, ExternalVotes, Harvest, HintFallback, HintReject, Intensity,
-    PeerAdmission, PeerPermit, PermitReturn, QueuedDrop, Snapshot, Source, Stats, TargetKind,
+    Command, Config, DhtEstimate, ExternalVotes, Harvest, HintFallback, HintFirstSkip, HintReject,
+    Intensity, PeerAdmission, PeerPermit, PermitReturn, QueuedDrop, Snapshot, Source, Stats,
+    TargetKind,
 };
 use crate::compact::{self, CompactNodes, NodeId, NodeInfo};
 use crate::krpc::{self, Body, ErrorBody, Message, Method, Query, Response, Want, error_code};
@@ -587,7 +588,8 @@ struct Actor {
     paused: bool,
     /// CR-0d: when sampling may start, and the restart proof.
     proof: Proof,
-    /// CR-1a-H: `None` unless `dht.responder_hints` is on.
+    /// CR-1a-H: `None` unless `dht.responder_hints` or CR-HINT-FIRST's
+    /// `dht.hint_first` is on.
     hints: Option<Hints>,
     /// CR-1b: `None` unless `dht.target_prefixes` is on or a sub-range
     /// shard narrows it (WK-4).
@@ -876,7 +878,7 @@ impl Actor {
             contacted: SeenFilter::new(CONTACTED_CAPACITY, 0.01),
             unsolicited_from: UnsolicitedFrom::default(),
             paused: cfg.paused,
-            hints: cfg.responder_hints.then(Hints::default),
+            hints: (cfg.responder_hints || cfg.hint_first).then(Hints::default),
             // A shard narrower than the 256 prefixes walks its range
             // whatever the switch says; otherwise the switch decides.
             prefixes: match shard.as_ref().map(Shard::prefixes) {
@@ -1032,6 +1034,17 @@ impl Actor {
     /// deduplicated; announces and lookup results always pass. Returns
     /// whether a new sighting reached the pipeline.
     fn harvest_hash(&mut self, hash: InfoHash, source: Source, peers: Vec<SocketAddr>) -> bool {
+        self.harvest_hash_as(hash, source, peers, false)
+    }
+
+    /// [`Actor::harvest_hash`], with CR-HINT-FIRST's T1 mark for the pool.
+    fn harvest_hash_as(
+        &mut self,
+        hash: InfoHash,
+        source: Source,
+        peers: Vec<SocketAddr>,
+        hint: bool,
+    ) -> bool {
         // Paused, nothing is harvested; the answers of lookups already
         // running still reach the pool that asked.
         if self.paused && source != Source::Lookup {
@@ -1063,6 +1076,7 @@ impl Actor {
                 info_hash: hash,
                 source,
                 peers,
+                hint,
             };
             if tx.try_send(h).is_err() {
                 Stats::inc(&self.stats.harvest_dropped);
@@ -1074,24 +1088,70 @@ impl Actor {
     }
 
     /// CR-1a-H: remembers a sample responder for a hash it just gave the
-    /// pipeline, after the public-endpoint checks.
-    fn capture_hint(&mut self, hash: InfoHash, from: SocketAddr) {
-        let Some(h) = &mut self.hints else {
-            return;
-        };
-        let families = &self.families;
-        let checked = hints::check(from, &self.cfg).and_then(|addr| {
+    /// pipeline, after the public-endpoint checks. Returns the endpoint
+    /// kept, if any.
+    fn capture_hint(&mut self, hash: InfoHash, from: SocketAddr) -> Option<SocketAddr> {
+        let h = self.hints.as_mut()?;
+        let checked = Actor::hint_endpoint(&self.families, &self.cfg, from);
+        match checked.and_then(|addr| h.capture(hash, addr, Instant::now()).map(|new| (addr, new)))
+        {
+            Ok((addr, new)) => {
+                if new {
+                    Stats::inc(&self.stats.hints_captured);
+                }
+                Some(addr)
+            }
+            Err(why) => {
+                why.count(&self.stats);
+                None
+            }
+        }
+    }
+
+    /// The public-endpoint and family checks a hint's responder passes.
+    fn hint_endpoint(
+        families: &[Family],
+        cfg: &Config,
+        from: SocketAddr,
+    ) -> Result<SocketAddr, HintReject> {
+        hints::check(from, cfg).and_then(|addr| {
             if families.iter().any(|f| f.ipv6 == addr.is_ipv6()) {
                 Ok(addr)
             } else {
                 Err(HintReject::Family)
             }
-        });
-        match checked.and_then(|addr| h.capture(hash, addr, Instant::now())) {
-            Ok(true) => Stats::inc(&self.stats.hints_captured),
-            Ok(false) => {}
-            Err(why) => why.count(&self.stats),
+        })
+    }
+
+    /// CR-HINT-FIRST: whether sample hash `hash`, from `from`, goes to the
+    /// pool marked for T1, with [`Hints::t1_check`]'s per-IP rule. `None`
+    /// when there's nothing to decide: the switch is off, or the pipeline
+    /// won't take the hash as new. A reply decides only its first new
+    /// hash, so one responder marks at most one hash per reply.
+    fn hint_first_candidate(&self, hash: &InfoHash, from: SocketAddr) -> Option<bool> {
+        let h = self.hints.as_ref().filter(|_| self.cfg.hint_first)?;
+        if self.paused || self.harvest.is_none() || self.seen.contains(hash) {
+            return None;
         }
+        let why = Actor::hint_endpoint(&self.families, &self.cfg, from)
+            .map_err(|_| HintFirstSkip::Rejected)
+            .and_then(|addr| h.t1_check(hash, addr, Instant::now()));
+        if let Err(why) = why {
+            why.count(&self.stats);
+        }
+        Some(why.is_ok())
+    }
+
+    /// CR-HINT-FIRST: keeps the T1 hash's hint and its per-IP mark.
+    fn capture_t1(&mut self, hash: InfoHash, from: SocketAddr) {
+        let Some(addr) = self.capture_hint(hash, from) else {
+            HintFirstSkip::Rejected.count(&self.stats);
+            return;
+        };
+        if let Some(h) = &mut self.hints {
+            h.mark_t1(hash, addr, Instant::now());
+        }
+        Stats::inc(&self.stats.hint_first_marked);
     }
 
     fn send(
@@ -1770,6 +1830,8 @@ impl Actor {
                         r.samples.is_some() && r.interval.is_some_and(|i| i <= SAMPLE_INTERVAL);
                     // A bounded number per reply, within the responder's
                     // block's share of the pipeline.
+                    // CR-HINT-FIRST: this reply has decided its one T1 hash.
+                    let mut decided = false;
                     for h in r
                         .samples
                         .iter()
@@ -1779,8 +1841,17 @@ impl Actor {
                         if !self.sample_sources.try_take_from(from.ip(), now_i) {
                             break;
                         }
-                        if self.harvest_hash(h, Source::Sample, Vec::new()) {
-                            self.capture_hint(h, from);
+                        let t1 = !decided
+                            && self
+                                .hint_first_candidate(&h, from)
+                                .inspect(|_| decided = true)
+                                == Some(true);
+                        if self.harvest_hash_as(h, Source::Sample, Vec::new(), t1) {
+                            if t1 {
+                                self.capture_t1(h, from);
+                            } else if self.cfg.responder_hints {
+                                self.capture_hint(h, from);
+                            }
                         }
                     }
                     // WK-10e: a node's interval is waited this install's

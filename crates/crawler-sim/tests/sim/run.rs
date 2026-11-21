@@ -264,10 +264,13 @@ async fn glue(
                     h.peers.len()
                 ));
                 let at = T0 + Instant::now().duration_since(start).as_secs() as i64;
+                let mut found = Found::key(h.info_hash, strategy(h.source)).with_peers(h.peers);
+                // CR-HINT-FIRST's mark, as the pipeline's DHT plugin passes it.
+                found.hint = h.hint;
                 let d = Discovery {
                     source,
                     reply: h.source == Source::Lookup,
-                    found: Found::key(h.info_hash, strategy(h.source)).with_peers(h.peers),
+                    found,
                     at,
                 };
                 if discoveries.try_send(d).is_err() {

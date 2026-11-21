@@ -221,6 +221,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     }
     render_admission(&mut o, p);
     render_stream_pool(&mut o, p);
+    render_hint_first_pool(&mut o, p);
     // Attempts and successes per transport; the success family replaces
     // the pool's unlabelled count (see `write_prometheus` for how the two
     // can differ). The uTP socket's own counters join when `dht.utp`
@@ -1111,7 +1112,7 @@ fn render_admission(o: &mut Out, p: &lodestar_sources::PoolStats) {
         "Requests granted finder permits.",
     );
     for (k, kind) in kinds.iter().enumerate() {
-        for (c, class) in ["interactive", "background"].iter().enumerate() {
+        for (c, class) in ["interactive", "background", "hinted"].iter().enumerate() {
             o.value(
                 "fetch_admission_grants_total",
                 &format!("kind=\"{kind}\",class=\"{class}\""),
@@ -1159,6 +1160,54 @@ fn render_admission(o: &mut Out, p: &lodestar_sources::PoolStats) {
 }
 
 /// CR-1a-S's streaming families on the pool's side (docs/metrics.md).
+/// CR-HINT-FIRST's pool families (docs/metrics.md); all zero with
+/// `dht.hint_first` off.
+fn render_hint_first_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
+    let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
+    o.one(
+        "fetch_hint_keys_total",
+        "counter",
+        "New keys taken with a trusted responder hint, for the T1 tier.",
+        get(&p.hint_keys),
+    );
+    o.one(
+        "fetch_hint_ignored_total",
+        "counter",
+        "Hint marks ignored: an untrusted source, the switch off, or a private or interactive key.",
+        get(&p.hint_ignored),
+    );
+    o.one(
+        "fetch_hint_t1_waits_total",
+        "counter",
+        "Hinted keys that waited for a lookup in the T1 tier.",
+        get(&p.hint_t1_waits),
+    );
+    o.family(
+        "fetch_hint_t1_left_total",
+        "counter",
+        "Hinted keys that left T1 for their ordinary queue.",
+    );
+    for (i, why) in ["full", "aged"].iter().enumerate() {
+        o.value(
+            "fetch_hint_t1_left_total",
+            &format!("reason=\"{why}\""),
+            get(&p.hint_t1_left[i]),
+        );
+    }
+    o.one(
+        "fetch_hint_lookups_total",
+        "counter",
+        "Hinted keys' first lookups sent, from T1 or at once.",
+        get(&p.hint_lookups),
+    );
+    o.one(
+        "fetch_hint_t1_waiting",
+        "gauge",
+        "T1 queue entries, live or stale.",
+        get(&p.hint_t1_waiting),
+    );
+}
+
 fn render_stream_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
     o.one(
@@ -1399,7 +1448,7 @@ fn render_ledger(o: &mut Out, d: &StatsSnapshot) {
 
 /// CR-1a-H's responder-hint families (docs/metrics.md).
 fn render_hints(o: &mut Out, d: &StatsSnapshot) {
-    use lodestar_dht::node::{HintFallback, HintReject};
+    use lodestar_dht::node::{HintFallback, HintFirstSkip, HintReject};
     o.one(
         "dht_peer_lookup_seconds_total",
         "counter",
@@ -1466,6 +1515,24 @@ fn render_hints(o: &mut Out, d: &StatsSnapshot) {
         "Ordinary lookup queries skipped by a retained hint restriction.",
         d.hint_guard_skips,
     );
+    o.one(
+        "dht_hint_first_marked_total",
+        "counter",
+        "Sample hashes marked for the fetch pool's T1 tier (CR-HINT-FIRST).",
+        d.hint_first_marked,
+    );
+    o.family(
+        "dht_hint_first_skipped_total",
+        "counter",
+        "Replies' first new hashes not marked for T1, by reason.",
+    );
+    for (i, why) in HintFirstSkip::ALL.iter().enumerate() {
+        o.value(
+            "dht_hint_first_skipped_total",
+            &format!("reason=\"{}\"", why.as_str()),
+            d.hint_first_skipped[i],
+        );
+    }
     o.one(
         "dht_hints_held",
         "gauge",
@@ -2237,7 +2304,12 @@ mod tests {
         d.peer_permit_returns[2] = 13;
         d.peer_permit_returns[6] = 14;
         let mut o = Out(String::new());
+        set(&p.admission_grants[0][2], 15);
+        set(&p.hint_keys, 16);
+        set(&p.hint_t1_left[1], 17);
+        set(&p.hint_t1_waiting, 18);
         render_admission(&mut o, &p);
+        render_hint_first_pool(&mut o, &p);
         render_permit_returns(&mut o, &d);
         let out = o.0;
         let mut d = StatsSnapshot {
@@ -2254,6 +2326,8 @@ mod tests {
         };
         d.hint_capture_rejected[3] = 7;
         d.hint_fallbacks[5] = 8;
+        d.hint_first_marked = 11;
+        d.hint_first_skipped[1] = 12;
         let mut h = Out(String::new());
         render_hints(&mut h, &d);
         for line in [
@@ -2271,6 +2345,9 @@ mod tests {
             "# TYPE lodestar_dht_hints_held gauge",
             "lodestar_dht_hints_held 5",
             "lodestar_dht_hint_guard_entries 6",
+            "lodestar_dht_hint_first_marked_total 11",
+            "lodestar_dht_hint_first_skipped_total{reason=\"full\"} 12",
+            "lodestar_dht_hint_first_skipped_total{reason=\"responder\"} 0",
         ] {
             assert!(
                 h.0.lines().any(|l| l == line),
@@ -2301,6 +2378,12 @@ mod tests {
             "lodestar_dht_peer_permit_returns_total{boundary=\"cancelled_active\"} 13",
             "lodestar_dht_peer_permit_returns_total{boundary=\"handoff_failed\"} 14",
             "lodestar_dht_peer_permit_returns_total{boundary=\"completed\"} 0",
+            "lodestar_fetch_admission_grants_total{kind=\"arrival\",class=\"hinted\"} 15",
+            "lodestar_fetch_hint_keys_total 16",
+            "lodestar_fetch_hint_t1_left_total{reason=\"aged\"} 17",
+            "lodestar_fetch_hint_t1_left_total{reason=\"full\"} 0",
+            "# TYPE lodestar_fetch_hint_t1_waiting gauge",
+            "lodestar_fetch_hint_t1_waiting 18",
         ] {
             assert!(out.lines().any(|l| l == line), "missing {line:?} in\n{out}");
         }
@@ -2308,7 +2391,7 @@ mod tests {
             out.lines()
                 .filter(|l| l.starts_with("lodestar_fetch_admission_grants_total{"))
                 .count(),
-            6
+            9
         );
     }
 

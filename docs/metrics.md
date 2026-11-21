@@ -757,6 +757,23 @@ These series count only with `dht.responder_hints` on ([the decision](decisions/
 
 `dht_hint_queries_total` + the sum of `dht_hint_fallbacks_total` = hints found at a leg's start. `dht_hint_useful_total` ≤ `dht_hint_queries_total`.
 
+## Hint-first (CR-HINT-FIRST, 2026-11-21)
+
+These series count only with `dht.hint_first` on ([the decision](decisions/2026-11-21-CR-HINT-FIRST.md)); with it off they're exported and stay 0. A hash new to us from a BEP 51 reply is marked for the fetch pool's T1 tier, one hash per responder, and its first lookup first asks that responder through CR-1a-H's checks and guard (whose series count those queries). No series has an infohash or endpoint label.
+
+| Series | Meaning |
+|---|---|
+| `dht_hint_first_marked_total` | Sample hashes marked for T1: at most one per reply, and one outstanding per responder IP. |
+| `dht_hint_first_skipped_total{reason}` | Replies' first new hashes not marked: `responder` (that IP has a T1 hint outstanding, or the per-IP guard restricts it), `full` (20,000 IPs hold outstanding T1 hints), `rejected` (the responder failed the public-endpoint checks, or its hint couldn't be kept). |
+| `fetch_hint_keys_total` | New keys the pool took as hinted: a mark from the DHT's source with the switch on, on a public, non-interactive key. |
+| `fetch_hint_ignored_total` | Hint marks the pool ignored: another source, the switch off, or a private or interactive key. |
+| `fetch_hint_t1_waits_total` | Hinted keys that waited for their first lookup in T1. |
+| `fetch_hint_t1_left_total{reason}` | Hinted keys that left T1 for their ordinary queue: `full` (the oldest, when 256 wait in T1 and a newer one arrives), `aged` (60 s in T1, when the DHT's hint has expired). |
+| `fetch_hint_lookups_total` | Hinted keys' first lookups sent, from T1 or at once. |
+| `fetch_hint_t1_waiting` | Gauge: T1 queue entries now, live or stale (at most 256 per queue). |
+
+`fetch_admission_grants_total` gains `class="hinted"`: grants from T1 under coordinated admission (the same one permit per request as any class). `fetch_hint_lookups_total` ≤ `fetch_hint_keys_total`; a hinted key whose first lookup comes from another queue (it left T1) isn't counted there.
+
 ## Streaming peers (CR-1a-S, 2026-10-31)
 
 These series count only with `dht.streaming_peers` on ([the decision](decisions/2026-10-31-CR-1a-S.md)); with it off they're exported and stay 0. A streaming lookup hands the pool its peers in batches of at most 8 as they arrive, with at most 2 queued and 1 held back per lookup, instead of one list at the end. No series has an infohash or endpoint label. Counts are per logical lookup (one session covers both address families), not unique hashes.

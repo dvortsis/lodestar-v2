@@ -820,6 +820,8 @@ impl Pipeline {
 
         // Plugins, with peer-request channels for the peer finders.
         let mut finders = Vec::new();
+        // CR-HINT-FIRST: the sources whose hint marks the pool trusts.
+        let mut finder_sources = Vec::new();
         let mut weights = HashMap::new();
         let mut sources = Vec::new();
         let mut tasks = Vec::new();
@@ -910,6 +912,7 @@ impl Pipeline {
             let peer_requests = m.is(Kind::PeerFinder).then(|| {
                 let (tx, rx) = mpsc::channel(1024);
                 finders.push(tx);
+                finder_sources.push(id);
                 rx
             });
             let peer_replies = m
@@ -977,6 +980,9 @@ impl Pipeline {
         // Held until setup, the pool starts paused; `Control` lifts it.
         let mut pool_config = config.pool.clone();
         pool_config.paused |= setup_hold::held(config.setup_done.as_ref());
+        if pool_config.hint_first {
+            pool_config.hint_sources = finder_sources;
+        }
         // The pool, the prepare stage and the worker's funnel, built as a
         // remote worker builds them (WK-7), on today's queues.
         let writer_stats = Arc::new(WriterStats::default());
