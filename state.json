@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T01:34Z",
+    "updated": "2026-11-21T02:09Z",
     "items": [
       {
         "slot": 1,
@@ -10667,12 +10667,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-sec-S1-18",
+        "slice": "CR-HINT-FIRST",
         "role": "build (opus, security)",
         "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
         "model": "opus",
-        "since": "2026-11-20T19:55Z",
-        "doing": "held: S1-18 and S1-19 (low, surface 1)",
+        "since": "2026-11-21T02:09Z",
+        "doing": "briefed; X-sec-S1-18 #998 merged da2afa7d (held: none open on surface 1)",
         "status": "running"
       },
       {
