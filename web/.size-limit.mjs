@@ -1490,14 +1490,16 @@ export default [
 	// Filters & Safety: its change dialogs and its review queue, beyond the screen's first view.
 	// runner §2.26, S-filters-2c: the change flow moved here from the Filters first view (−2.43 KB
 	// there); Block dialog +1.4 KB. Was 34.4 KB.
-	entry('Filters dialogs (on demand)', filtersDialogsLazy, '35.9 KB'),
+	// X-safety-undo-danger (runner §2.26): +133 B for Undo's loosening derivation and its Apply
+	// label (measured 36,031 B); the pack panels' +1 B is chunk-hash and gzip drift (7,912 B).
+	entry('Filters dialogs (on demand)', filtersDialogsLazy, '36.04 KB'),
 	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
 	// X-safety-toggles (runner §2.26): the rules' and packs' names, measured 4,013 B; it replaces
 	// "Filters pack descriptions" (1.6 KB). The packs list (1,557 B) and the pack panels (7,907 B)
 	// lost their pack ids and descriptions to it, so their limits fall to the measured sizes.
 	entry('Filters rule names (on demand)', filtersRuleTextLazy, '4.02 KB'),
 	entry('Filters packs list (on demand)', filtersPacksLazy, '1.56 KB'),
-	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '7.91 KB'),
+	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '7.92 KB'),
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
 	// X-sources-restructure: 41.3 KB; this walk includes the screen's own chunk, so it grows with the
 	// first view above (the dialogs are unchanged). Limit = measured + ~1.2%.

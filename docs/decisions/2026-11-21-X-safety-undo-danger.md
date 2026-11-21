@@ -39,7 +39,7 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
 - **Only Undo reads it.** `ChangeDialog` uses the danger style when the caller passes `danger` (the #1019 flows, unchanged), or when the change on screen is an `undo` whose assessment loosens child safety.
 - **Before the preview arrives, and after it fails,** the dialog has no assessment and no Apply button, and nothing in it uses the danger style. The style never comes from a guess.
 - **The screen's Undo button stays ordinary.** It can't know what it restores before the preview.
-- **Not colour alone** (a UX call, runner §2.26, to flag). In the other danger flows, Apply's label names the loosening action ("Turn off …", "Remove from the floor"). A danger Undo's Apply now reads "Undo and loosen child safety" (撤销并放宽儿童安全保护), a new message, `filters_undo_apply_loosens`. Otherwise it's "Apply", as before. No existing message said this, and with the flag alone every count can be 0, so the preview table can't carry the cue.
+- **Not colour alone** (a UX call, approved by the runner under §2.26). In the other danger flows, Apply's label names the loosening action ("Turn off …", "Remove from the floor"). A danger Undo's Apply now reads "Undo and loosen child safety" (撤销并放宽儿童安全保护), a new message, `filters_undo_apply_loosens`. Otherwise it's "Apply", as before. No existing message said this, and with the flag alone every count can be 0, so the preview table can't carry the cue.
 
 ## Tests
 - **Server** (`crates/api/src/filters.rs`, `mod tests`):
@@ -63,14 +63,12 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
 - No e2e spec or snapshot changed: the specs don't open an Undo that loosens child safety.
 
 ## Sizes
-gzip, main ce43c7e7 → this branch, each new limit the measured size rounded up to 0.01 kB (runner, §2.26).
+gzip, main 175b7fbb → this branch, each new limit the measured size rounded up to 0.01 kB (runner, §2.26).
 
 | Entry | main | branch | Limit before | Limit after |
 |---|---|---|---|---|
-| Filters dialogs (on demand) | 35,898 B | 35,965 B | 35.9 kB | 35.97 kB |
-| Settings InsightsScreen (first view) | 45,296 B | 45,302 B | 45.3 kB | 45.31 kB |
-| Settings NotificationsScreen (first view) | 45,504 B | 45,512 B | 45.51 kB | 45.52 kB |
-| Filters pack panels (on demand) | 7,911 B | 7,914 B | 7.91 kB | 7.92 kB |
+| Filters dialogs (on demand) | 35,898 B | 36,031 B | 35.9 kB | 36.04 kB |
+| Filters pack panels (on demand) | 7,911 B | 7,912 B | 7.91 kB | 7.92 kB |
 
-- **The dialogs' +67 B is the loosening derivation.** The chunk already loads only when needed.
-- **The rest is chunk-hash and gzip drift.** Neither Insights nor Notifications changed in code, and the pack panels were already 1 B over on main.
+- **The dialogs' +133 B** is Undo's loosening derivation and its own Apply label. The chunk already loads only when needed.
+- **The pack panels were already 1 B over on main;** the extra byte is chunk-hash and gzip drift. Insights and Notifications drifted before the merge with main and don't now, so their limits are unchanged.
