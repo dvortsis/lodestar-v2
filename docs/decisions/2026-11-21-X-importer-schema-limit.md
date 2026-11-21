@@ -1,4 +1,4 @@
-# X-importer-schema-limit decisions (#PR)
+# X-importer-schema-limit decisions (#1024)
 
 Runner brief X-importer-schema-limit, 2026-11-21, from #1018's review. SQLite 3.54 adds `SQLITE_LIMIT_SCHEMA`, and rusqlite 0.41 exposes it as `Limit::SQLITE_LIMIT_SCHEMA`. Without it, a hostile Magnetico file with a huge schema could make schema loading allocate a lot of memory before the progress-handler deadline stops it.
 
