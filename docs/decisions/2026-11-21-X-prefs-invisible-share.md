@@ -26,7 +26,7 @@ A key is refused when it is anything but exactly one character, or when that cha
 
 ### The dependencies (runner)
 
-- **`unicode-normalization` 0.1.24** in `crates/lodestar`, for `is_combining_mark` (General_Category M). filter and search already use the same version.
+- **`unicode-normalization`** in `crates/lodestar` (`"0.1.24"`, as filter and search write it; the lock holds 0.1.26, Unicode 18), for `is_combining_mark` (General_Category M). filter and search already use it.
 - **`unicode-properties` 0.1.4** as a dev-dependency only, as the independent reference in the exhaustive test. metainfo already uses it.
 - `Cargo.lock` gains the two names in `lodestar`'s list and no new package.
 
@@ -47,6 +47,7 @@ A key is refused when it is anything but exactly one character, or when that cha
 ## Tests
 
 - **`preferences::a_shortcut_key_is_one_character_that_shows`** goes over all of `char`. A one-character key is refused exactly when it's a control, whitespace, default-ignorable, Cf or Mn/Mc/Me, where the categories come from `unicode-properties`, not from the tables the rule uses.
+  - **The versions differ.** The rule's mark table is Unicode 18 (`unicode-normalization` 0.1.26, the version the lock holds), and the reference is Unicode 17 (`unicode-properties` 0.1.4). So a code point the reference leaves unassigned, and that isn't default-ignorable, is counted, never compared: it may be one of Unicode 18's new marks, such as U+05C8. Fewer than 500 may be refused that way; Unicode 18's new marks are far fewer, and a wrong table would refuse whole planes.
   - The cases: U+0941, U+093E, U+20DD, U+1D173, U+E0080, U+200B and U+FFFA are refused; `a`, `ü`, `/`, `?`, `字` and U+0905 are accepted.
 - **`preferences::repair_drops_refused_keys_and_what_their_defaults_displace`** covers nothing to repair, a three-step chain, and every remap refused.
 - **`settings::repair_tests`** goes through the registry:

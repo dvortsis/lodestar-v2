@@ -444,7 +444,19 @@ mod tests {
     fn a_shortcut_key_is_one_character_that_shows() {
         use unicode_properties::{GeneralCategory as G, UnicodeGeneralCategory};
         let mut refused = 0;
+        let mut newer = Vec::new();
         for c in (0..=0x10FFFF).filter_map(char::from_u32) {
+            // The rule's mark table can follow a later Unicode than the
+            // reference (unicode-normalization 0.1.26 is Unicode 18,
+            // unicode-properties 0.1.4 is 17): a code point the reference
+            // leaves unassigned may be a mark in the rule's. Those are
+            // counted, never compared.
+            if c.general_category() == G::Unassigned && !crate::text::default_ignorable(c) {
+                if !shortcut_key(&c.to_string()) {
+                    newer.push(c);
+                }
+                continue;
+            }
             let hidden = c.is_control()
                 || c.is_whitespace()
                 || crate::text::default_ignorable(c)
@@ -461,6 +473,8 @@ mod tests {
             );
         }
         assert!(refused > 2_000, "{refused}");
+        // Unicode 18's new marks, and nothing like a whole plane.
+        assert!(newer.len() < 500, "{}: {newer:?}", newer.len());
         for c in [
             '\u{0941}',  // Devanagari vowel sign U (Mn), passed before
             '\u{093e}',  // Devanagari vowel sign AA (Mc)
