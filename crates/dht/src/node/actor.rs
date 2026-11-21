@@ -2040,11 +2040,26 @@ impl Actor {
     /// Starts queued requests while there's a free slot, unless paused or
     /// parked for the bootstrap.
     fn start_queued(&mut self, sockets: &[SendSocket], now: Instant) {
-        while !self.paused && self.active_get_peers < self.peer_slots && !self.parks_lookups(now) {
+        let running = self.running_slots();
+        while !self.paused && self.active_get_peers < running && !self.parks_lookups(now) {
             let Some((hash, reply, permit)) = self.get_peers_queue.pop_front() else {
                 break;
             };
             self.start_peer_request(sockets, hash, reply, permit);
+        }
+    }
+
+    /// Owned requests that may run at once. With `dht.preset_slots` on
+    /// (CR-1c) that's the live preset's count, never more than the slots
+    /// sized at start, so after a live change down the running lookups
+    /// settle at the new preset's count and leave its rate and outstanding
+    /// cap to sampling and maintenance too; admission and the permits stay
+    /// sized at start. Off, the 32 slots.
+    fn running_slots(&self) -> usize {
+        if self.cfg.preset_slots {
+            self.peer_slots.min(self.cfg.intensity.peer_slots())
+        } else {
+            self.peer_slots
         }
     }
 

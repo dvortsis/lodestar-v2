@@ -15,6 +15,16 @@ use tokio::sync::Semaphore;
 const PRESETS: [Intensity; 3] = [Intensity::Low, Intensity::Balanced, Intensity::Aggressive];
 
 fn actor(intensity: Intensity, on: bool, query_timeout: Duration) -> (Actor, Vec<SendSocket>) {
+    actor_with(intensity, on, query_timeout, false)
+}
+
+/// [`actor`], with BEP 51 sampling on or off.
+fn actor_with(
+    intensity: Intensity,
+    on: bool,
+    query_timeout: Duration,
+    sample: bool,
+) -> (Actor, Vec<SendSocket>) {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     socket.set_nonblocking(true).unwrap();
     let addr = socket.local_addr().unwrap();
@@ -23,9 +33,9 @@ fn actor(intensity: Intensity, on: bool, query_timeout: Duration) -> (Actor, Vec
         bootstrap: vec![],
         allow_private: true,
         sample_start_delay: Some(Duration::ZERO),
-        // Only the requests under test send queries.
+        // Only the requests under test send queries, unless asked.
         harvest: crate::node::HarvestConfig {
-            sample: false,
+            sample,
             passive: false,
         },
         intensity,
@@ -227,10 +237,12 @@ async fn every_permit_returns_once_on_every_end() {
 
 /// At every preset with the switch on, and the slots full of requests
 /// that never hear back, no tick sends past the query rate (a full
-/// bucket, then the rate) or holds more than the outstanding cap, and no
-/// request sends more than its 64 queries or outlives its deadline.
+/// bucket, then the rate), and no request sends more than its 64 queries
+/// or outlives its deadline. One family's slots × `ALPHA` stay under the
+/// outstanding cap here by design; the live change to Low below is where
+/// that cap binds.
 #[tokio::test(start_paused = true)]
-async fn no_tick_passes_the_rate_or_the_outstanding_cap() {
+async fn no_tick_passes_the_rate_or_a_requests_caps() {
     for intensity in PRESETS {
         let slots = intensity.peer_slots();
         // Short timeouts keep every request asking.
@@ -342,10 +354,11 @@ async fn the_query_cap_holds_beside_a_full_set() {
 /// network: from the change on, no query goes out while Low's outstanding
 /// cap is reached, so the queries already in flight only drain, and once
 /// they've had their timeout the count stays within Low's cap. The rate
-/// falls to Low's at once.
+/// falls to Low's at once. An 8 s timeout lets Low's 50 a second alone
+/// hold 400 in flight, so it's the outstanding cap that binds.
 #[tokio::test(start_paused = true)]
 async fn a_live_change_to_low_holds_lows_caps_with_256_slots() {
-    let timeout = Duration::from_millis(500);
+    let timeout = Duration::from_secs(8);
     let (mut a, s) = actor(Intensity::Aggressive, true, timeout);
     table(&mut a, (1..=4096).map(node));
     let slots = Intensity::Aggressive.peer_slots();
@@ -415,4 +428,64 @@ fn the_slot_state_at_aggressive_is_bounded() {
     // updates it.
     assert!(per_slot < 48 * 1024, "{per_slot}");
     assert!(total < 12 * 1024 * 1024, "{total}");
+}
+
+/// After a live change from Aggressive to Low, with the pool keeping every
+/// slot asked for, the running lookups settle at Low's 32 (the 256 slots
+/// stay admitted and queued), and BEP 51 sampling still sends: the
+/// lookups don't hold all of Low's rate and outstanding cap.
+#[tokio::test(start_paused = true)]
+async fn after_a_change_to_low_lookups_settle_and_sampling_goes_on() {
+    let (mut a, s) = actor_with(Intensity::Aggressive, true, Duration::from_secs(8), true);
+    table(&mut a, (1..=4096).map(node));
+    let slots = Intensity::Aggressive.peer_slots();
+    let mut next = 0;
+    let mut held = Vec::new();
+    // The pool's part: ask again for every slot that comes free.
+    let mut refill = |a: &mut Actor, held: &mut Vec<PeerResult>| {
+        while let Some(r) = admit(a, next, None) {
+            held.push(r);
+            next += 1;
+        }
+    };
+    refill(&mut a, &mut held);
+    a.maintain(&s);
+    assert_eq!(a.active_get_peers, slots);
+
+    a.on_command(Command::SetIntensity(Intensity::Low));
+    let low = Intensity::Low.peer_slots();
+    let step = Duration::from_millis(100);
+    // Condition wait: the running lookups settle (each ends by its 25 s
+    // deadline), with a 60 s limit on the paused clock.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while a.active_get_peers > low {
+        assert!(
+            Instant::now() < deadline,
+            "running {} > {low}",
+            a.active_get_peers
+        );
+        tokio::time::advance(step).await;
+        a.maintain(&s);
+        refill(&mut a, &mut held);
+    }
+    assert_eq!(
+        a.get_peers_queue.len() + a.active_get_peers,
+        slots,
+        "the slots stay asked for"
+    );
+    // Settled, the running count stays within Low's, and sampling sends
+    // to fresh nodes (the table's have all timed out and cool down).
+    for n in 100_000..100_200 {
+        a.sampler.offer(node(n), Instant::now());
+    }
+    let sampled = a.stats.snapshot().samples_sent;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while a.stats.snapshot().samples_sent < sampled + 10 {
+        assert!(Instant::now() < deadline, "sampling starved");
+        tokio::time::advance(step).await;
+        a.maintain(&s);
+        refill(&mut a, &mut held);
+        assert!(a.active_get_peers <= low);
+        assert!(a.pending.len() <= Intensity::Low.max_outstanding());
+    }
 }
