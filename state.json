@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-21T17:24Z",
+  "updated_at": "2026-11-21T18:36Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T17:24Z",
+    "updated": "2026-11-21T18:36Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-metrics-prefix-doc",
+        "slice": "X-facet-group-case",
         "role": "build",
-        "agent": "session_01MMjhnB3mvwiYNgyqkQWJbK",
-        "model": "sonnet",
-        "since": "2026-11-21T17:24Z",
-        "doing": "brief sent; docs/metrics.md states the lodestar_ prefix; tables use unprefixed names"
+        "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
+        "model": "opus",
+        "since": "2026-11-21T18:36Z",
+        "doing": "brief sent; investigate display case for release-group facet values; plan before build"
       },
       {
         "slot": 2,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
         "since": "2026-11-21T16:22Z",
-        "doing": "rescoped to option A: real Undo preview plus loosens_child_safety; openapi regen waits for #1021"
+        "doing": "PR #1027 open; fresh review plus security review running"
       },
       {
         "slot": 3,
@@ -10680,7 +10680,7 @@
         "agent": "session_01MMjhnD5iaW7CGjAAtXeVfE",
         "model": "sonnet",
         "since": "2026-11-21T17:08Z",
-        "doing": "brief sent; one page frame and header primitive, shared h1 edge, h1 on Companions and Outputs"
+        "doing": "option C (class constants); sizes approved; PR next"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
         "since": "2026-11-21T16:32Z",
-        "doing": "brief sent; per-node sample backoff escalation behind dht.sample_backoff_escalate (default off)"
+        "doing": "streak redesign after self-review; PR next"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
