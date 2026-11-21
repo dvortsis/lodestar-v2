@@ -443,13 +443,16 @@ async fn a_repeated_parameter_is_named() {
         .unwrap();
     let (status, _, body) = call(&f.app, anon).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
-    // HEAD, which `get()` also serves, reads the query too.
-    let head = Request::head("/api/v1/search?sort=a&sort=b")
-        .header(header::COOKIE, &c)
-        .body(Body::empty())
-        .unwrap();
-    let (status, _, _) = call(&f.app, head).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // HEAD, which `get()` also serves, reads the query too: its answer is
+    // GET's repeated_parameter refusal (no body, the same length), not the
+    // extractor's shorter generic bad_parameter.
+    let uri = "/api/v1/search?q=a&q=b";
+    let (get_status, get_len) = status_and_length(&f.app, "GET", uri, &c).await;
+    let (head_status, head_len) = status_and_length(&f.app, "HEAD", uri, &c).await;
+    assert_eq!(get_status, StatusCode::BAD_REQUEST);
+    assert_eq!(head_status, StatusCode::BAD_REQUEST);
+    assert!(!get_len.is_empty());
+    assert_eq!(head_len, get_len);
     // POST reads its body, not the URL's query.
     let (status, _, body) = call(
         &f.app,
@@ -592,4 +595,29 @@ async fn exact_counts_both_on_demand() {
     assert_eq!(body["total_approx"], false);
     assert_eq!(body["groups"], WORKS);
     assert_eq!(body["groups_approx"], false);
+}
+
+/// A request's status and `content-length`: what a HEAD answer has to
+/// compare, since it carries no body.
+async fn status_and_length(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    cookie: &str,
+) -> (StatusCode, String) {
+    let mut req = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 1))));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let len = resp
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .map(|v| v.to_str().unwrap().to_owned())
+        .unwrap_or_default();
+    (resp.status(), len)
 }

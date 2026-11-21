@@ -704,6 +704,8 @@ async fn a_repeated_parameter_is_named() {
         ("/api/v1/facets?q=a&q=b", "q"),
         ("/api/v1/facets?limit.ext=2&limit.ext=3", "limit.ext"),
         ("/api/v1/facets?tz&tz=0", "tz"),
+        ("/api/v1/facets?lease=a&lease=b", "lease"),
+        ("/api/v1/facets?hidden=true&hidden=false", "hidden"),
     ] {
         let (status, body) = json_of(&f.app, get(uri, c)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
@@ -716,6 +718,39 @@ async fn a_repeated_parameter_is_named() {
             "{uri}"
         );
     }
+    // A repeated name a caller made up comes back escaped and capped, in
+    // the field and the message alike.
+    let bidi = "limit.%E2%80%AE";
+    let long = format!("limit.{}", "z".repeat(100));
+    for (uri, shown) in [
+        (
+            format!("/api/v1/facets?{bidi}=1&{bidi}=2"),
+            r"limit.\u{202e}".to_owned(),
+        ),
+        (
+            format!("/api/v1/facets?{long}=1&{long}=2"),
+            format!("limit.{}…", "z".repeat(58)),
+        ),
+    ] {
+        let (status, body) = json_of(&f.app, get(&uri, c)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let e = &body["error"];
+        assert_eq!(e["code"], "bad_parameter", "{body}");
+        assert_eq!(e["field"], shown, "{body}");
+        assert_eq!(
+            e["message"],
+            format!("{shown} was sent more than once: send it once."),
+            "{body}"
+        );
+        assert!(
+            !e["message"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .any(|c| c == '\u{202e}'),
+            "{body}"
+        );
+    }
     // A repeated `ast` is still the clearer ast_needs_post.
     let (status, body) = json_of(&f.app, get("/api/v1/facets?ast=x&ast=y", c)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
@@ -723,13 +758,16 @@ async fn a_repeated_parameter_is_named() {
     // Signed out, it's a 401 first: the parameters aren't read.
     let (status, _) = json_of(&f.app, get("/api/v1/facets?sort=a&sort=b", None)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    // HEAD reads the query too; POST reads only its body.
-    let head = Request::head("/api/v1/facets?sort=a&sort=b")
-        .header(header::COOKIE, &cookie)
-        .body(Body::empty())
-        .unwrap();
-    let (status, _, _) = call(&f.app, head).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // HEAD reads the query too: `q` twice is a 200 without the check, and
+    // HEAD's answer is the same refusal GET gets (no body, same length).
+    let uri = "/api/v1/facets?q=a&q=b";
+    let (get_status, get_len) = status_and_length(&f.app, "GET", uri, &cookie).await;
+    let (head_status, head_len) = status_and_length(&f.app, "HEAD", uri, &cookie).await;
+    assert_eq!(get_status, StatusCode::BAD_REQUEST);
+    assert_eq!(head_status, StatusCode::BAD_REQUEST);
+    assert!(!get_len.is_empty());
+    assert_eq!(head_len, get_len);
+    // POST reads only its body.
     let (status, body) = json_of(
         &f.app,
         post("/api/v1/facets?q=a&q=b", c, json!({ "q": "movie" })),
@@ -739,6 +777,39 @@ async fn a_repeated_parameter_is_named() {
     // Unknown parameters stay ignored, repeated or not.
     let (status, body) = json_of(&f.app, get("/api/v1/facets?x=1&x=2", c)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn a_bad_body_field_is_capped_and_escaped() {
+    let f = fixture(8);
+    let cookie = session(&f).await;
+    let c = Some(cookie.as_str());
+    // An ordinary path comes back as it was.
+    let (status, body) = json_of(
+        &f.app,
+        post("/api/v1/facets", c, json!({ "limits": { "ext": "x" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"]["code"], "bad_body");
+    assert_eq!(body["error"]["field"], "limits.ext");
+    // A long key with a bidi override: capped at 64 and escaped.
+    let key = format!("{}\u{202e}", "k".repeat(5_000));
+    let (status, body) = json_of(
+        &f.app,
+        post("/api/v1/facets", c, json!({ "limits": { key: "x" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let field = body["error"]["field"].as_str().unwrap();
+    assert_eq!(field, format!("limits.{}…", "k".repeat(57)));
+    let key = "a\u{202e}b";
+    let (_, body) = json_of(
+        &f.app,
+        post("/api/v1/facets", c, json!({ "limits": { key: "x" } })),
+    )
+    .await;
+    assert_eq!(body["error"]["field"], r"limits.a\u{202e}b", "{body}");
 }
 
 #[tokio::test]
@@ -788,4 +859,29 @@ async fn an_unknown_facet_is_echoed_short_and_printable() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "bad_parameter");
     assert_eq!(body["error"]["field"], format!("limit.{}…", "z".repeat(58)));
+}
+
+/// A request's status and `content-length`: what a HEAD answer has to
+/// compare, since it carries no body.
+async fn status_and_length(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    cookie: &str,
+) -> (StatusCode, String) {
+    let mut req = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 1))));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let len = resp
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .map(|v| v.to_str().unwrap().to_owned())
+        .unwrap_or_default();
+    (resp.status(), len)
 }

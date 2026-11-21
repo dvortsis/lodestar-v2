@@ -66,17 +66,21 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for Json<T> {
 
 /// The field a deserialization error is about: its path, or for a
 /// missing field (whose path is the parent) the parent plus its name.
+/// A path can hold a caller's map key, so it's shown capped and escaped
+/// as every echoed value is ([`crate::search::shown`]); an ordinary path
+/// comes back unchanged.
 fn bad_field(path: &str, message: &str) -> Option<String> {
     let missing = message
         .strip_prefix("missing field `")
         .and_then(|m| m.split_once('`'))
         .map(|(name, _)| name);
-    match (path, missing) {
-        (".", Some(name)) => Some(name.to_string()),
-        (".", None) => None,
-        (path, Some(name)) => Some(format!("{path}.{name}")),
-        (path, None) => Some(path.to_string()),
-    }
+    let field = match (path, missing) {
+        (".", Some(name)) => name.to_string(),
+        (".", None) => return None,
+        (path, Some(name)) => format!("{path}.{name}"),
+        (path, None) => path.to_string(),
+    };
+    Some(crate::search::shown(&field))
 }
 
 /// `application/json` or `application/*+json`, as `axum::Json` accepts.
@@ -218,4 +222,35 @@ pub fn same_origin_json(headers: &HeaderMap) -> ApiResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bad_field;
+
+    #[test]
+    fn a_bad_field_is_its_path_capped_and_escaped() {
+        // Ordinary paths, a body's or a query's, come back unchanged.
+        assert_eq!(bad_field("limit", "invalid digit"), Some("limit".into()));
+        assert_eq!(
+            bad_field("limits.ext", "invalid type"),
+            Some("limits.ext".into())
+        );
+        assert_eq!(bad_field(".", "missing field `q`"), Some("q".into()));
+        assert_eq!(
+            bad_field("filter", "missing field `name` at line 1"),
+            Some("filter.name".into())
+        );
+        assert_eq!(bad_field(".", "invalid type"), None);
+        // A long map key: cut at 64 characters and marked.
+        let long = format!("limits.{}", "k".repeat(5_000));
+        assert_eq!(
+            bad_field(&long, "invalid type"),
+            Some(format!("limits.{}…", "k".repeat(57)))
+        );
+        // A bidi override or a newline in a key comes back escaped.
+        let field = bad_field("limits.a\u{202e}b\nc", "invalid type").unwrap();
+        assert_eq!(field, r"limits.a\u{202e}b\nc");
+        assert!(!field.chars().any(|c| c.is_control() || c == '\u{202e}'));
+    }
 }
