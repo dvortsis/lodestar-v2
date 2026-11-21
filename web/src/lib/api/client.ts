@@ -115,6 +115,12 @@ type LoginHandler = (
 ) => void;
 let loginHandler: LoginHandler | undefined;
 let loginPending = false;
+/**
+ * The first login-required call that came before any handler (the shell installs them lazily, so
+ * a signed-out visitor's first request can fail first). Replayed once on install, unless a
+ * request worked meanwhile; one entry, the first wins (X-auth-early-401).
+ */
+let early: { path: string; opts: Parameters<LoginHandler>[1] } | undefined;
 
 /**
  * The shell registers where a 401 goes. `next` is the current path and query; `setupRequired`
@@ -123,11 +129,21 @@ let loginPending = false;
 export function onLoginRequired(handler: LoginHandler | undefined): void {
 	loginHandler = handler;
 	loginPending = false;
+	if (!handler || !early) return;
+	const e = early;
+	early = undefined;
+	// The filters below run again now, against the page the browser is on at install.
+	loginRequired(e.path, e.opts);
 }
 
 function loginRequired(path: string, opts: Parameters<LoginHandler>[1]): void {
 	const loc = globalThis.location;
-	if (!loginHandler || loginPending || AUTH_PATHS.has(path)) return;
+	if (AUTH_PATHS.has(path)) return;
+	if (!loginHandler) {
+		early ??= { path, opts };
+		return;
+	}
+	if (loginPending) return;
 	if (loc && AUTH_PAGES.some((p) => loc.pathname === p || loc.pathname.startsWith(p + '/'))) return;
 	loginPending = true;
 	loginHandler(loc ? loc.pathname + loc.search : '/', opts);
@@ -152,6 +168,7 @@ export function sessionOk(path = ''): void {
 	// A public GET /auth says nothing about the session; a login or setup does.
 	if (path === '/auth' || path === '/logout') return;
 	loginPending = false;
+	early = undefined; // the session works: an earlier 401 is stale
 	for (const f of [...sessionListeners]) f();
 }
 

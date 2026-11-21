@@ -212,6 +212,29 @@ async fn logged_in(f: &Fixture) -> String {
     cookie.unwrap()
 }
 
+/// GET /auth is never cached, signed in or out: the web UI decides from a
+/// fresh answer whether the session is live (X-auth-early-401).
+#[tokio::test]
+async fn auth_status_is_never_cached() {
+    let f = fixture();
+    let cache = |cookie: Option<String>| {
+        let app = f.app.clone();
+        async move {
+            let resp = app
+                .oneshot(get("/api/v1/auth", cookie.as_deref()))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            resp.headers()
+                .get(header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap().to_string())
+        }
+    };
+    assert_eq!(cache(None).await.as_deref(), Some("no-store"));
+    let cookie = logged_in(&f).await;
+    assert_eq!(cache(Some(cookie)).await.as_deref(), Some("no-store"));
+}
+
 #[tokio::test]
 async fn setup_login_and_protection() {
     let f = fixture();
