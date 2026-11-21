@@ -360,6 +360,10 @@ placement:
   - X-narrow-states
   - X-help
   - X-ui-checks
+  - X-ui-checks-1
+  - X-ui-checks-2
+  - X-ui-checks-3
+  - X-ui-checks-4
   - X-offline-retry
   - X-offline-retry-nits
   - W*
