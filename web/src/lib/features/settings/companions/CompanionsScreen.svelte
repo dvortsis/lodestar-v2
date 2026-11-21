@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Companions (§10.10.8, §18.10): the companions the catalogue offers, each with its
 	// health, version and the things you can do. It shows only what the server says; a failed or
 	// refused request leaves the last list on screen with a sentence in plain words.
@@ -61,6 +62,7 @@
 	}
 </script>
 
+<h1 class={PAGE_H1} tabindex="-1">{m.settings_companions_title()}</h1>
 <section class="flex flex-col gap-4" aria-labelledby="companions-heading">
 	<h2 id="companions-heading" class="text-small font-semibold">
 		{m.settings_companions_heading()}

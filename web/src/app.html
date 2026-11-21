@@ -117,31 +117,37 @@
 				<!-- /search only (the script below unhides it): the page heading and the query bar, box for
 				     box as routes/search and features/search/query/QueryBar.svelte draw them, so the
 				     bar is the first paint, not a late LCP. Inert: the app's own bar takes typing. -->
-				<div id="boot-h1" class="flex flex-col gap-2 pb-4" hidden>
-					<h1 class="mt-4 px-4 text-display font-semibold">Search</h1>
-					<div class="flex flex-col gap-1 px-4 py-2 xx-large:max-w-6xl" aria-hidden="true">
-						<div class="flex items-center gap-2">
-							<div class="relative min-w-0 flex-1">
-								<div
-									data-testid="query-editor"
-									class="block w-full rounded-field border border-field-border bg-base-100 px-4 text-body-lg"
-									style="height: var(--query-bar-height)"
-								></div>
+				<div
+					id="boot-h1"
+					class="flex w-full flex-1 flex-col px-4 py-4 large:px-6 large:py-6"
+					hidden
+				>
+					<div class="flex w-full flex-1 flex-col gap-4">
+						<h1 class="text-display font-semibold wrap-anywhere" tabindex="-1">Search</h1>
+						<div class="flex flex-col gap-1 xx-large:max-w-6xl" aria-hidden="true">
+							<div class="flex items-center gap-2">
+								<div class="relative min-w-0 flex-1">
+									<div
+										data-testid="query-editor"
+										class="block w-full rounded-field border border-field-border bg-base-100 px-4 text-body-lg"
+										style="height: var(--query-bar-height)"
+									></div>
+									<span
+										class="pointer-events-none absolute inset-0 truncate px-4 text-body-lg text-muted-text"
+										style="padding-block: calc(var(--spacing) * 3)"
+										><span class="medium:hidden">Search, or filter: res:1080p</span
+										><span class="hidden medium:inline"
+											>Search by name, or add a filter such as res:1080p</span
+										></span
+									>
+								</div>
 								<span
-									class="pointer-events-none absolute inset-0 truncate px-4 text-body-lg text-muted-text"
-									style="padding-block: calc(var(--spacing) * 3)"
-									><span class="medium:hidden">Search, or filter: res:1080p</span
-									><span class="hidden medium:inline"
-										>Search by name, or add a filter such as res:1080p</span
-									></span
+									class="btn btn-ghost pointer-coarse:min-h-(--target-min) pointer-coarse:min-w-(--target-min)"
+									>Syntax</span
 								>
 							</div>
-							<span
-								class="btn btn-ghost pointer-coarse:min-h-(--target-min) pointer-coarse:min-w-(--target-min)"
-								>Syntax</span
-							>
+							<p class="text-small">&nbsp;</p>
 						</div>
-						<p class="text-small">&nbsp;</p>
 					</div>
 				</div>
 			</main>

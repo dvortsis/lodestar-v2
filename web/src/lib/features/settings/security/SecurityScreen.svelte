@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Security (§10.10.8): change password, sessions, API keys and feed tokens, trusted
 	// proxy sign-in and secure cookies. Every risky change asks for the password in one shared
 	// dialog (PasswordDialog.svelte, loaded on use). The key manager and the proxy section load right
@@ -15,7 +16,7 @@
 	onDestroy(dismissPasswordDialogs);
 </script>
 
-<h1 class="text-title font-semibold">{m.settings_security_title()}</h1>
+<h1 class={PAGE_H1} tabindex="-1">{m.settings_security_title()}</h1>
 <p class="text-muted-text">{m.settings_security_purpose()}</p>
 <div class="flex flex-col gap-8">
 	<ChangePassword />
