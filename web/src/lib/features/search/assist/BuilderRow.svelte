@@ -4,6 +4,9 @@
 	// never commits, so an arrow key on a closed select can't rewrite the query. The row only reports
 	// text; the server parses it.
 	import { untrack } from 'svelte';
+	import { fieldLabel } from '$lib/format/label-field';
+	import { valueLabel } from '$lib/format/label-release';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
@@ -42,12 +45,18 @@
 
 	const spec = $derived(fields.find((f) => f.name === field));
 	const ops = $derived(opsOf(spec));
-	const opt = (value: string) => ({ value, label: value });
+	// Fields and values in plain words (X-labels), with the field's code beside it in the option
+	// ("Resolution (res)"): what a query types. The row still reports the codes.
+	const fieldOpt = (name: string) => {
+		const label = fieldLabel(name);
+		return { value: name, label: label === name ? name : `${label} (${name})` };
+	};
+	const valueOpt = (v: string) => ({ value: v, label: valueLabel(field, v, currentLocale()) });
 	// A fixed list is a Select only for one listed value; several (`movie,tv`) or a share's
 	// `video>=50%` stay text.
 	const valueOptions = $derived(
 		spec?.values && spec.type !== 'share' && (!value || spec.values.includes(value))
-			? spec.values.map(opt)
+			? spec.values.map(valueOpt)
 			: undefined
 	);
 	const dirty = $derived(field !== row.field || op !== row.op || value !== row.value);
@@ -76,7 +85,7 @@
 			dense
 			bind:value={field}
 			onchange={fieldChanged}
-			options={fields.map((f) => opt(f.name))}
+			options={fields.map((f) => fieldOpt(f.name))}
 		/></label
 	>
 	<label class="assist-field"

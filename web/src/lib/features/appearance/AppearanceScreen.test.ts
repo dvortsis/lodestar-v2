@@ -92,6 +92,19 @@ describe('narrow', () => {
 });
 
 describe('AppearanceScreen', () => {
+	it('names the current theme by its display name, not its id (X-labels)', async () => {
+		const { unmount } = render(AppearanceScreen);
+		expect(await screen.findByText('Current theme: Riverstone')).toBeTruthy();
+		unmount();
+		stubThemes();
+		get.mockImplementation(async (_p: string, o: { path: { section: string } }) =>
+			o.path.section === 'content' ? content() : prefs({ theme: 'moss' })
+		);
+		render(AppearanceScreen);
+		expect(await screen.findByText('Current theme: Moss')).toBeTruthy();
+		expect(screen.queryByText('Current theme: moss')).toBeNull();
+	});
+
 	it('has one h1 and applies a change at once, saving with the revision', async () => {
 		render(AppearanceScreen);
 		expect(await screen.findByRole('heading', { level: 1, name: 'Appearance' })).toBeTruthy();

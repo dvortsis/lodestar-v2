@@ -126,7 +126,7 @@
 						{/if}
 						<p class="ins-muted">
 							{m.insights_overview_exc_since()}
-							<RelativeTime seconds={e.since} timeZone="UTC" />
+							<RelativeTime seconds={e.since} />
 						</p>
 						{#if href}
 							<a

@@ -53,13 +53,45 @@ export function safe(value: string | number | boolean | null | undefined, max = 
 
 const pad = (n: number, w = 2) => String(n).padStart(w, '0');
 
-/** `HH:MM:SS.mmm` in local time or UTC, from the RFC 3339 `ts`; the raw text when it won't parse. */
-export function formatTime(ts: string, utc: boolean): string {
+const clocks = new Map<string, Intl.DateTimeFormat | null>();
+/** One 24-hour clock per zone; null for a zone this browser doesn't know (the caller falls back). */
+function clock(zone: string): Intl.DateTimeFormat | null {
+	let f = clocks.get(zone);
+	if (f === undefined) {
+		try {
+			f = new Intl.DateTimeFormat('en-US', {
+				timeZone: zone,
+				hour: '2-digit',
+				minute: '2-digit',
+				second: '2-digit',
+				hourCycle: 'h23'
+			});
+		} catch {
+			f = null;
+		}
+		clocks.set(zone, f);
+	}
+	return f;
+}
+
+/**
+ * `HH:MM:SS.mmm` from the RFC 3339 `ts`: in UTC, or in local time, which is `zone` (the display
+ * time zone from Language & region, X-labels U28) or else the browser's; the raw text when it
+ * won't parse.
+ */
+export function formatTime(ts: string, utc: boolean, zone?: string): string {
 	const d = new Date(ts);
 	if (Number.isNaN(d.getTime())) return safe(ts, 32);
-	return utc
-		? `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.${pad(d.getUTCMilliseconds(), 3)}`
-		: `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+	const ms = pad(d.getUTCMilliseconds(), 3);
+	if (utc)
+		return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.${ms}`;
+	const f = zone ? clock(zone) : null;
+	if (f) {
+		const parts = f.formatToParts(d);
+		const part = (type: string) => parts.find((p) => p.type === type)?.value ?? '00';
+		return `${part('hour')}:${part('minute')}:${part('second')}.${ms}`;
+	}
+	return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${ms}`;
 }
 
 const LEVELS = new Set(['error', 'warn', 'info', 'debug', 'trace']);
@@ -93,11 +125,11 @@ export function seqOf(id: string | null | undefined): number | null {
 }
 
 /** The line as the row shows it: also what Copy and Download write, and what the keys filter reads. */
-export function lineText(line: LogLine, utc: boolean, max = ROW_MAX): string {
+export function lineText(line: LogLine, utc: boolean, max = ROW_MAX, zone?: string): string {
 	const rep = line.repeated
 		? ` (repeated ${line.repeated.count} times in ${line.repeated.seconds} s)`
 		: '';
-	return `${formatTime(line.ts, utc)} ${line.level.toUpperCase()} ${line.component} ${safe(line.msg || line.event || line.target, max)}${rep}`;
+	return `${formatTime(line.ts, utc, zone)} ${line.level.toUpperCase()} ${line.component} ${safe(line.msg || line.event || line.target, max)}${rep}`;
 }
 
 /** Applies a `purge` frame: kinds turned off. Values read `[hidden]`; an opt-in's lines go. */

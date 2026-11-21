@@ -14,9 +14,11 @@
 		formatCount,
 		formatDateFull,
 		formatDate,
+		bucketTimeZone,
 		type MetricValue
 	} from '$lib/format';
-	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import { typeLabel } from '$lib/format/label-type';
+	import { currentLocale, displayTimeZone } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -158,23 +160,10 @@
 		adult: () => m.insights_group_adult(),
 		unclassified: () => m.insights_group_unclassified()
 	};
-	const types: Record<string, () => string> = {
-		movie: () => m.insights_type_movie(),
-		tv: () => m.insights_type_tv(),
-		video: () => m.insights_type_video(),
-		music: () => m.insights_type_music(),
-		audiobook: () => m.insights_type_audiobook(),
-		ebook: () => m.insights_type_ebook(),
-		comic: () => m.insights_type_comic(),
-		software: () => m.insights_type_software(),
-		game: () => m.insights_type_game(),
-		images: () => m.insights_type_images(),
-		other: () => m.insights_type_other(),
-		adult: () => m.insights_type_adult()
-	};
 	const reasonName = (k: string) => reasons[k]?.() ?? k;
 	const groupName = (k: string) => groups[k]?.() ?? k;
-	const typeName = (k: string) => types[k]?.() ?? k;
+	// The glossary's type names (X-labels), one spelling everywhere.
+	const typeName = (k: string) => typeLabel(k);
 
 	const model = $derived<StageModel | undefined>(data ? mapStage(stage, data, locale) : undefined);
 	const extraBars = $derived.by<BarsSpec[]>(() => {
@@ -217,7 +206,9 @@
 		custom: () => m.insights_overview_range_custom()
 	};
 	const bucket = $derived(data?.range.bucket ?? 'hour');
-	const tz = $derived(data?.range.tz ?? 'UTC');
+	// Instants in the display zone; buckets by `bucketTimeZone`, day buckets in UTC (X-labels).
+	const zone = $derived(displayTimeZone());
+	const tz = $derived(bucketTimeZone(bucket, zone));
 	const unit = $derived(
 		bucket === 'hour' ? m.insights_overview_per_hour() : m.insights_overview_per_day()
 	);
@@ -345,7 +336,9 @@
 		{#if data}
 			<span class="ins-muted ins-grow" data-testid="insights-stage-updated">
 				{m.insights_overview_stale_since()}
-				<RelativeTime seconds={data.updated_at} timeZone={tz} /> · {m.insights_overview_tz({ tz })}
+				<RelativeTime seconds={data.updated_at} timeZone={zone} /> · {m.insights_overview_tz({
+					tz: zone
+				})}
 			</span>
 		{/if}
 	</div>
@@ -369,7 +362,7 @@
 						m.insights_overview_stale_other({ reason: data.stale.reason })}</span
 				>
 				{m.insights_overview_stale_since()}
-				<RelativeTime seconds={data.stale.since} timeZone={tz} />.
+				<RelativeTime seconds={data.stale.since} timeZone={zone} />.
 			</Banner>
 		{/if}
 
@@ -488,7 +481,7 @@
 			</section>
 		{/each}
 
-		{#if stage === 'index'}<ImportMarkers annotations={marks} {tz} />{/if}
+		{#if stage === 'index'}<ImportMarkers annotations={marks} tz={zone} />{/if}
 
 		{#if extraBars.length || model.hists.length}
 			<section class="ins-section" aria-labelledby="ins-s-drivers">

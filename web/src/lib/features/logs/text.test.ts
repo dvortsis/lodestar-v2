@@ -31,6 +31,17 @@ describe('time and ids', () => {
 		expect(formatTime('2026-10-31T10:05:07.042Z', true)).toBe('10:05:07.042');
 		expect(formatTime('nonsense\u0000', true)).toBe('nonsense␀');
 	});
+	it("shows local time in the chosen zone, not the browser's (X-labels U28)", () => {
+		const ts = '2026-10-31T10:05:07.042Z';
+		expect(formatTime(ts, false, 'UTC')).toBe('10:05:07.042');
+		expect(formatTime(ts, false, 'Asia/Tokyo')).toBe('19:05:07.042');
+		// UTC−10, across a date boundary: still the wall clock there.
+		expect(formatTime('2026-11-01T03:30:00.005Z', false, 'Pacific/Honolulu')).toBe('17:30:00.005');
+		// The UTC switch wins over the zone.
+		expect(formatTime(ts, true, 'Asia/Tokyo')).toBe('10:05:07.042');
+		// A zone this browser doesn't know falls back to the browser's clock, never throws.
+		expect(formatTime(ts, false, 'Not/AZone')).toMatch(/^\d\d:\d\d:\d\d\.042$/);
+	});
 	it('reads the sequence of an id', () => {
 		expect(seqOf('00ff-12')).toBe(12);
 		expect(seqOf('x')).toBeNull();

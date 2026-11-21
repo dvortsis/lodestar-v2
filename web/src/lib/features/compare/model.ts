@@ -4,6 +4,8 @@ import type { components } from '$lib/api/schema';
 import type { Group } from '$lib/charts/shared';
 import { GROUP_ORDER } from '$lib/charts/shared';
 import { formatBytes, formatCount, formatDateTime, formatShare } from '$lib/format';
+import { attributeLabel as attributeValueLabel } from '$lib/format/label-release';
+import { fileGroupLabel, typeLabel } from '$lib/format/label-type';
 import { m } from '$lib/paraglide/messages.js';
 
 export type CompareResponse = components['schemas']['CompareResponse'];
@@ -61,34 +63,8 @@ export function attributeKeys(differs: Record<string, boolean>): string[] {
 /** The resolved title, or the raw name when the torrent has none. */
 export const headingOf = (t: CompareTorrent): string => t.title ?? t.name;
 
-const GROUP_LABEL: Record<Group, () => string> = {
-	video: () => m.video(),
-	audio: () => m.audio(),
-	// TODO(S-detail): switch these three and the types to the shared keys once they land.
-	images: () => m.compare_group_images(),
-	documents: () => m.compare_group_documents(),
-	archives: () => m.compare_group_archives(),
-	software: () => m.software(),
-	other: () => m.other()
-};
-export const groupLabel = (g: string): string =>
-	(GROUP_LABEL as Record<string, (() => string) | undefined>)[g]?.() ?? g;
-
-// TODO(S-detail): the content-type labels move to the shared keys when they land.
-const TYPE_LABEL: Record<string, () => string> = {
-	movie: () => m.compare_type_movie(),
-	tv: () => m.compare_type_tv(),
-	music: () => m.compare_type_music(),
-	audiobook: () => m.compare_type_audiobook(),
-	ebook: () => m.compare_type_ebook(),
-	comic: () => m.compare_type_comic(),
-	software: () => m.compare_type_software(),
-	game: () => m.compare_type_game(),
-	images: () => m.compare_type_images(),
-	video: () => m.compare_type_video(),
-	other: () => m.compare_type_other(),
-	adult: () => m.compare_type_adult()
-};
+/** A file-type group's label (`format/labels`). */
+export const groupLabel = (g: string): string => fileGroupLabel(g);
 
 export interface CompositionView {
 	segments: { group: Group; value: number; label: string }[];
@@ -105,7 +81,8 @@ export function compositionView(t: CompareTorrent, locale: string): CompositionV
 	);
 	const text = (c: (typeof ordered)[number]) => ({
 		share: formatShare(c.pct_bytes, locale),
-		group: groupLabel(c.group)
+		// "82% video": lower case in a sentence, as the glossary writes it (X-labels).
+		group: groupLabel(c.group).toLocaleLowerCase(locale)
 	});
 	let top = ordered[0]!;
 	for (const c of ordered) if (c.pct_bytes > top.pct_bytes) top = c;
@@ -157,7 +134,7 @@ export function buildRows(data: CompareResponse, locale: string): Row[] {
 		plain(
 			'type',
 			m.content_type(),
-			(t) => (t.content_type === null ? null : (TYPE_LABEL[t.content_type]?.() ?? t.content_type)),
+			(t) => (t.content_type === null ? null : typeLabel(t.content_type)),
 			m.compare_not_classified()
 		)
 	];
@@ -170,7 +147,9 @@ export function buildRows(data: CompareResponse, locale: string): Row[] {
 			differs: data.differs[key] === true,
 			cells: ts.map((t, i) => ({
 				testid: `compare-attr-${key}-${i}`,
-				text: t.attributes[key] ?? null,
+				// Values in plain words (X-labels): "H.264", "French", "WEB-DL".
+				text:
+					t.attributes[key] == null ? null : attributeValueLabel(key, t.attributes[key], locale),
 				name: m.compare_not_set()
 			}))
 		});

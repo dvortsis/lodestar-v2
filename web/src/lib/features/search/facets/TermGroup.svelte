@@ -47,13 +47,14 @@
 	const active = $derived(facet.values.some((v) => v.selected || v.excluded));
 
 	let find = $state('');
-	const shown = $derived(
-		more && find.trim()
-			? facet.values.filter((v) =>
-					labelOf(v.value).toLowerCase().includes(find.trim().toLowerCase())
-				)
-			: facet.values
-	);
+	// "Find" matches what's shown or the code a query types: "French" or `fr`, "H.264" or `h264`.
+	const shown = $derived.by(() => {
+		const q = find.trim().toLowerCase();
+		if (!more || !q) return facet.values;
+		return facet.values.filter(
+			(v) => labelOf(v.value).toLowerCase().includes(q) || v.value.toLowerCase().includes(q)
+		);
+	});
 	const hasMore = $derived(!!onmore && facet.distinct > facet.values.length);
 	const anyFixed = $derived(shown.some((v) => fixed.has(v.value)));
 </script>

@@ -1,10 +1,17 @@
 <script lang="ts">
 	// Level 2, Movement (§10.9.2): two separate, aligned line charts on the same times, never a
 	// dual axis. A null point is a gap (paused or not running), never 0. With Compare on, the
-	// previous period is a muted series. Time is shown in the server's `range.tz` (buckets are UTC).
+	// previous period is a muted series. Hour buckets and annotations are shown in the display zone,
+	// day buckets in UTC, as the server counts them (docs/metrics.md §2, X-labels).
 	import LineChart from '$lib/charts/LineChart.svelte';
-	import { formatCompact, formatCount, formatDateFull, type MetricValue } from '$lib/format';
-	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import {
+		bucketTimeZone,
+		formatCompact,
+		formatCount,
+		formatDateFull,
+		type MetricValue
+	} from '$lib/format';
+	import { currentLocale, displayTimeZone } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import ChartPanel from './ChartPanel.svelte';
 	import { resolve } from '$app/paths';
@@ -24,7 +31,8 @@
 
 	const locale = $derived(currentLocale());
 	const bucket = $derived(overview.range.bucket);
-	const tz = $derived(overview.range.tz);
+	const zone = $derived(displayTimeZone());
+	const tz = $derived(bucketTimeZone(bucket, zone));
 	const times = $derived(overview.trend.map((p) => p.at));
 	const unit = $derived(
 		bucket === 'hour' ? m.insights_overview_per_hour() : m.insights_overview_per_day()
@@ -135,11 +143,11 @@
 				<li
 					class="ins-item-row"
 					tabindex="0"
-					aria-label="{note(a)}, {formatDateFull(a.at, locale, { timeZone: tz })}"
+					aria-label="{note(a)}, {formatDateFull(a.at, locale, { timeZone: zone })}"
 					data-testid="insights-annotation-{a.kind}"
 				>
 					<span>{note(a)}</span>
-					<span class="ins-muted ins-num">{formatDateFull(a.at, locale, { timeZone: tz })}</span>
+					<span class="ins-muted ins-num">{formatDateFull(a.at, locale, { timeZone: zone })}</span>
 				</li>
 			{/each}
 		</ol>

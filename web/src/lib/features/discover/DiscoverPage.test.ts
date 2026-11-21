@@ -365,7 +365,7 @@ describe('rows', () => {
 			within(screen.getByTestId(`discover-row-${hash(1)}`)).getByText('Not classified yet')
 		).toBeTruthy();
 		expect(
-			within(screen.getByTestId(`discover-row-${hash(2)}`)).getByText('82% Video')
+			within(screen.getByTestId(`discover-row-${hash(2)}`)).getByText('82% video')
 		).toBeTruthy();
 	});
 

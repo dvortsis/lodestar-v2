@@ -2,8 +2,8 @@
 	// Level 3, Drivers (§10.9.2): the funnel by discovery cohort and where torrents were lost.
 	// Every figure is a server field: counts, the server's conversion, `final_cohorts`, the loss
 	// shares. Bars start at zero and are drawn from counts; incomplete cohorts are hatched.
-	import { formatCount, formatDateFull, formatPercent } from '$lib/format';
-	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import { bucketTimeZone, formatCount, formatDateFull, formatPercent } from '$lib/format';
+	import { currentLocale, displayTimeZone } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { FOCUS_RING } from '$lib/ui/classes';
@@ -32,7 +32,8 @@
 	const locale = $derived(currentLocale());
 	const total = $derived(overview.funnel_total);
 	const bucket = $derived(overview.range.bucket);
-	const tz = $derived(overview.range.tz);
+	// Cohort hours in the display zone, cohort days in UTC (docs/metrics.md §2, X-labels).
+	const tz = $derived(bucketTimeZone(bucket, displayTimeZone()));
 
 	const stageName = (s: FunnelStage) =>
 		({

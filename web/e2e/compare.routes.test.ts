@@ -46,7 +46,7 @@ for (const mode of ['light', 'dark'] as const) {
 			await expect(page.getByTestId('compare-row-size')).not.toContainText('differs');
 			await expect(page.getByTestId('compare-composition-1-bar')).toHaveAttribute(
 				'aria-label',
-				'80% Video, 20% Audio'
+				'80% video, 20% audio'
 			);
 			await expectNoA11yViolations(page);
 		});

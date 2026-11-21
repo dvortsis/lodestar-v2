@@ -21,7 +21,7 @@ describe('ResultRow, Comfortable', () => {
 		expect(text('r-seeders')).toBe('12');
 		expect(text('r-leechers')).toBe('3');
 		expect(text('r-trackers')).toContain('4 / 20');
-		expect(text('r-dominant')).toBe('82% Video');
+		expect(text('r-dominant')).toBe('82% video');
 		expect(screen.getByRole('img', { name: /82% video, 11% audio/i })).toBeTruthy();
 		expect(screen.getByTestId('r').dataset.density).toBe('comfortable');
 	});

@@ -11,6 +11,7 @@ import {
 	formatSpan,
 	type MetricValue
 } from '$lib/format';
+import { sourceIdLabel } from '$lib/format/label-source-names';
 import { m } from '$lib/paraglide/messages.js';
 
 export type StageId = 'discover' | 'fetch' | 'understand' | 'index' | 'serve';
@@ -311,7 +312,8 @@ export function discoverTables(r: DiscoverResponse, locale?: string): Table[] {
 				{ key: 'dropped', label: m.insights_stage_discover_dropped(), numeric: true }
 			],
 			rows: r.by_source.map((x) => ({
-				key: x.key,
+				// The source by name (X-labels); the server sends the plugin id.
+				key: sourceIdLabel(x.key),
 				reported: formatCount(x.reported, locale),
 				rediscovered: formatCount(x.rediscovered, locale),
 				dropped: formatCount(x.dropped, locale)

@@ -19,6 +19,10 @@ function serve(mock: Mock, over = {}, crawler = {}) {
 const ranges = (mock: Mock) =>
 	mock.calls('getInsightsOverview').map((r) => new URL(r.url()).searchParams.get('range'));
 
+// Times follow the zone Language & region chose; with Automatic, the browser's (X-labels, U28).
+// Pinned to UTC here, so the captions below don't depend on the machine running the spec.
+test.use({ timezoneId: 'UTC' });
+
 test.describe('the story', () => {
 	test('renders every level in order with its numbers', async ({ page, mock, go }) => {
 		serve(mock);
@@ -509,4 +513,20 @@ test.describe('the cohort list scrolls by keyboard (UI review 2026-11-13, B3)', 
 			await expectNoA11yViolations(page);
 		});
 	}
+});
+
+test.describe('in the chosen time zone (X-labels, U28)', () => {
+	test.use({ timezoneId: 'Pacific/Honolulu' });
+	test('Automatic follows the browser’s zone; hours are shown there', async ({
+		page,
+		mock,
+		go
+	}) => {
+		serve(mock);
+		await go('/insights');
+		await expect(page.getByTestId('insights-tz')).toHaveText('Times in Pacific/Honolulu');
+		await expect(page.getByTestId('insights-page')).toContainText(
+			'Event time, in Pacific/Honolulu'
+		);
+	});
 });
