@@ -74,12 +74,17 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
      - when picking the Node download from SHASUMS, index the matched line as a list: a single match is a string, and indexing it picks one character;
      - run `smoke.ps1` as administrator under PowerShell 7;
      - Edge won't start under SYSTEM, which Run Command uses, so browser suites use Playwright's own Chromium;
-     - time with Python's `perf_counter`, never `monotonic`, which ticks every 15.6 ms on Windows.
-     - building Lodestar's tests on `c6a.xlarge` (8 GiB) can run out of memory: two `rustc` processes of about 5.6 GB each with the default 1.9 GB pagefile hung Windows and dropped SSM (2026-11-20Z). Set a 16 GB pagefile and reboot first, build with `cargo test -j1`, and time nothing while it builds (stops took 18–40 s instead of 0.4 s).
+     - time with Python's `perf_counter`, never `monotonic`, which ticks every 15.6 ms on Windows;
+     - building Lodestar's tests on `c6a.xlarge` (8 GiB) can run out of memory: two `rustc` processes of about 5.6 GiB each with the default 1.9 GiB pagefile hung Windows and dropped SSM (2026-11-20Z). Set a 16 GiB pagefile and reboot first, build with `cargo test -j1`, and time nothing while it builds (stops took 18–40 s instead of 0.4 s).
 6. **Report each finding to the runner before writing any fix.**
 7. **Teardown:**
+   - **Take the root volume's id first.** Before `TerminateInstances`, read it from `DescribeInstances`: `BlockDeviceMappings`, the entry whose `DeviceName` is `/dev/sda1`, `Ebs.VolumeId`. Keep it in the session only: never write it to a file, a report, a PR or a message (no instance or volume ids in the repository's records).
    - `TerminateInstances`, then wait for `terminated`.
-   - Check that `DescribeVolumes` with `tag:Purpose=X-test-vm` no longer lists your volume. Never filter by `Project`: the owner's fleet volumes share it, and another lane's volume may be listed.
+   - **Check that volume by its id:** `DescribeVolumes` with `VolumeIds=[<that id>]`.
+     - It fails with `InvalidVolume.NotFound`, or returns the volume as `deleted`: it's gone.
+     - It returns it as `deleting`: check again in later calls until it's gone, with a 10 min deadline.
+     - Anything else (`available`, `in-use`, or still `deleting` at the deadline) means the volume survived. The test user's policy has no `ec2:DeleteVolume`, so don't try: tell the runner, without the id, and the owner deletes it.
+   - **The tag check is a backstop, not the test:** `DescribeVolumes` with `tag:Purpose=X-test-vm` lists every lane's test volumes (Linux lanes' too, all with the same `LaunchedBy`), and it finds nothing if the volume never got its tags. An `available` one there is a leftover to tell the runner about, not necessarily this lane's. Never filter by `Project`: the owner's fleet volumes share it.
    - Check `ce:GetCostAndUsage` for the day's EC2 cost.
    - Tell the runner and the owner.
 

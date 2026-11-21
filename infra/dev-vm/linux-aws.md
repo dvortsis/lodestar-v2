@@ -81,8 +81,13 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - A command over a few minutes runs in `tmux` on the instance (`sudo -iu lodestar tmux new -d -s lane '<command> > ~/results/<name>.log 2>&1'`), and the session polls the log's tail in later calls.
    - The connector gives up after 60 s, so keep each call under 45 s.
 7. **Teardown:**
+   - **Take the root volume's id first.** Before `TerminateInstances`, read it from `DescribeInstances`: `BlockDeviceMappings`, the entry whose `DeviceName` is `/dev/sda1`, `Ebs.VolumeId`. Keep it in the session only: never write it to a file, a report, a PR or a message (no instance or volume ids in the repository's records).
    - `TerminateInstances`, then wait for `terminated`.
-   - `DescribeVolumes` with `tag:Purpose=X-test-vm` must not list the lane's volume. Never filter by `Project`: the owner's fleet volumes share it.
+   - **Check that volume by its id:** `DescribeVolumes` with `VolumeIds=[<that id>]`.
+     - It fails with `InvalidVolume.NotFound`, or returns the volume as `deleted`: it's gone.
+     - It returns it as `deleting`: check again in later calls until it's gone, with a 10 min deadline.
+     - Anything else (`available`, `in-use`, or still `deleting` at the deadline) means the volume survived. The test user's policy has no `ec2:DeleteVolume`, so don't try: tell the runner, without the id, and the owner deletes it.
+   - **The tag check is a backstop, not the test:** `DescribeVolumes` with `tag:Purpose=X-test-vm` lists every lane's test volumes, and every lane tags them with the same `LaunchedBy`, so another lane's may be there. Only one with this lane's `Name` that is `available` is a leftover of this lane, and it finds nothing if the volume never got its tags. Never filter by `Project`: the owner's fleet volumes share it.
    - Report the instance hours. `c6a.xlarge` Linux costs about $0.15/h, plus about $0.02/h for the volume and address.
 
 ## Pitfalls
