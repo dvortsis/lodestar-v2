@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T09:49Z",
+    "updated": "2026-11-21T09:58Z",
     "items": [
       {
         "slot": 1,
@@ -10666,12 +10666,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-settings-leave-guard-split",
-        "role": "build (opus, security)",
+        "slice": "X-ui-guards",
+        "role": "build",
         "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
         "model": "opus",
-        "since": "2026-11-21T09:45Z",
-        "doing": "briefed: briefs/X-settings-leave-guard-split.md"
+        "since": "2026-11-21T09:58Z",
+        "doing": "brief sent; weighted icons, breakpoint ban, fixture axe"
       },
       {
         "slot": 3,
