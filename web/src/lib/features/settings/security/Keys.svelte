@@ -19,7 +19,7 @@
 	import { keyDate } from './date';
 	import Result from './Result.svelte';
 	import { statusIcons } from '$lib/ui/status';
-	import IconWarning from '~icons/ph/warning';
+	import IconWarning from '~icons/ph/warning-bold';
 
 	type Key = components['schemas']['KeyInfo'];
 	type Kind = components['schemas']['KeyKind'];

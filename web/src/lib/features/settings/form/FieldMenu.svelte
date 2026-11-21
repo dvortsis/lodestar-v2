@@ -6,7 +6,7 @@
 	import IconButton from '$lib/ui/controls/IconButton.svelte';
 	import Menu, { type MenuItem } from '$lib/ui/overlays/Menu.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconMenu from '~icons/ph/dots-three';
+	import IconMenu from '~icons/ph/dots-three-bold';
 	import type { FieldState } from './types';
 
 	interface Props {

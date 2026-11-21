@@ -3,7 +3,7 @@
 	// edges, zero baseline, empty bins empty), with a brush by pointer or keys (charts/Histogram).
 	// A settled brush replaces the facet's range clause; presets go above it (a snippet).
 	import type { Snippet } from 'svelte';
-	import Info from '~icons/ph/info';
+	import Info from '~icons/ph/info-bold';
 	import type { BrushRange } from '$lib/charts/brush';
 	import Histogram from '$lib/charts/Histogram.svelte';
 	import { DASH, formatBytes, formatCount, formatDate } from '$lib/format';

@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The server's plain-language effect warning (§20.11), in its own labelled region. Rendered as
 	// text only: it's built from names and queries the user (or a list) supplied.
-	import IconWarning from '~icons/ph/warning';
+	import IconWarning from '~icons/ph/warning-bold';
 	import { m } from '$lib/paraglide/messages.js';
 
 	interface Props {

@@ -2,8 +2,8 @@
 	// The channels the API has: "In the app" (`alert`) and "RSS" (`rss`). The notifier's external
 	// channels are stored but neither returned nor settable yet (B10a), so they aren't shown.
 	// Icon + text, never colour alone.
-	import IconBell from '~icons/ph/bell-simple';
-	import IconRss from '~icons/ph/rss';
+	import IconBell from '~icons/ph/bell-simple-bold';
+	import IconRss from '~icons/ph/rss-bold';
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { SavedSearch } from './api';

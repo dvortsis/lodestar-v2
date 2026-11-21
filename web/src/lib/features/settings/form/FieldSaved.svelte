@@ -4,8 +4,8 @@
 	// `SettingField.svelte` leaves to it).
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconRestart from '~icons/ph/arrows-clockwise';
-	import IconCheck from '~icons/ph/check-circle';
+	import IconRestart from '~icons/ph/arrows-clockwise-bold';
+	import IconCheck from '~icons/ph/check-circle-bold';
 	import type { SettingsForm } from './form.svelte';
 	import type { FieldKey } from './types';
 

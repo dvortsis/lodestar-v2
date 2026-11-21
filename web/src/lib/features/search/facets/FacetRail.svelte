@@ -3,7 +3,7 @@
 	// "More filters". Counts are the server's (disjunctive, "≈" when sampled, one note per panel);
 	// every click is an AST edit (toggle.ts) handed to `onchange`. The host decides what a change
 	// does: apply it at once (rail, left sheet) or stage it (bottom sheet).
-	import Info from '~icons/ph/info';
+	import Info from '~icons/ph/info-bold';
 	import { m } from '$lib/paraglide/messages.js';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';

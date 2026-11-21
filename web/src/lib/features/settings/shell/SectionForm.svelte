@@ -6,7 +6,7 @@
 	import { formatCount } from '$lib/format';
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
-	import IconRestart from '~icons/ph/arrows-clockwise';
+	import IconRestart from '~icons/ph/arrows-clockwise-bold';
 	import {
 		SettingField,
 		SettingsForm,

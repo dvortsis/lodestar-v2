@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import IconInfo from '~icons/ph/info';
-	import IconSuccess from '~icons/ph/check-circle';
-	import IconWarning from '~icons/ph/warning';
-	import IconError from '~icons/ph/x-circle';
-	import IconClose from '~icons/ph/x';
+	import IconInfo from '~icons/ph/info-bold';
+	import IconSuccess from '~icons/ph/check-circle-bold';
+	import IconWarning from '~icons/ph/warning-bold';
+	import IconError from '~icons/ph/x-circle-bold';
+	import IconClose from '~icons/ph/x-bold';
 	import { m } from '$lib/paraglide/messages.js';
 	import { FOCUS_RING, TARGET_MIN } from '../classes';
 	import { toast, toasts, type ToastItem } from './toasts.svelte';

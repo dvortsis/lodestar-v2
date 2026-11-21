@@ -1593,7 +1593,9 @@ export default [
 	// keys are gated by "Search results key commands (on demand)".
 	// X-results-drawer-adaptive (runner §2.26): +7 B for the row's 720 and 600 px container tiers
 	// (40,617 B), rounded up to 0.1 kB.
-	entry('Search results (lazy)', resultsFirst, '40.62 KB'),
+	// X-ui-guards (runner §2.26): 40,600 B on main → 40,753 B with Bold icons, rounded up at 0.01 kB. A reshuffle:
+	// the shared search glyphs moved here from the cards and the live banner, whose limits fall with it.
+	entry('Search results (lazy)', resultsFirst, '40.76 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
@@ -1612,10 +1614,13 @@ export default [
 	// X-alert-search-headroom: 4.65 → 4.6 KB. Save search's preload list moved to save-dialog.ts
 	// (−0.31 KB); measured 4.29 KB. Import the dialog only through save-dialog.ts.
 	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
-	entry('Search live banner (lazy)', liveLazy, '3.02 KB'),
+	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
+	// chunk); the limit falls to the measured size, rounded up at 0.01 kB, so the bytes aren't respent.
+	entry('Search live banner (lazy)', liveLazy, '2.58 KB'),
 	// Raised by the runner (§2.26): +21 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, SRC-17: the Unverified badge on a card (8,300 B → 8,364 B; measured 5 B over).
-	entry('Search cards (lazy)', cardsLazy, '8364 B'),
+	// X-ui-guards (runner §2.26): 8,303 → 7,965 B with Bold icons, as the live banner; rounded up at 0.01 kB.
+	entry('Search cards (lazy)', cardsLazy, '7.97 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),

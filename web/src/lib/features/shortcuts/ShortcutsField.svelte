@@ -2,8 +2,8 @@
 	// The `x-widget: shortcuts` editor (preferences.shortcut_keys): one row per remappable action.
 	// Controlled: `value` is the remaps (`{action: key}`), `onchange` gets the next map, nothing is
 	// saved here. "Change" takes the next key press; a key another action has asks for a Swap.
-	import IconError from '~icons/ph/x-circle';
-	import IconWarning from '~icons/ph/warning';
+	import IconError from '~icons/ph/x-circle-bold';
+	import IconWarning from '~icons/ph/warning-bold';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { ACTION_IDS, actionTitle, defaultKey, type ActionId } from './catalog';

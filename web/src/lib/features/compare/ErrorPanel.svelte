@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Errors the user can fix from here: the comparison's torrents with a Remove each (the same
 	// control as a column's), and a way back to Search. The server names no torrent for a 404.
-	import IconRemove from '~icons/ph/x';
+	import IconRemove from '~icons/ph/x-bold';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';

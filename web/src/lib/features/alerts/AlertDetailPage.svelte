@@ -5,9 +5,9 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
-	import IconTrash from '~icons/ph/trash';
-	import IconPause from '~icons/ph/pause';
-	import IconSearch from '~icons/ph/magnifying-glass';
+	import IconTrash from '~icons/ph/trash-bold';
+	import IconPause from '~icons/ph/pause-bold';
+	import IconSearch from '~icons/ph/magnifying-glass-bold';
 	import { events } from '$lib/state/events.svelte';
 	import { formatCount, formatDateTime } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';

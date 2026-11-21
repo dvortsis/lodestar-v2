@@ -1,5 +1,14 @@
+// @vitest-environment node
+import { RuleTester } from 'eslint';
 import { describe, expect, it } from 'vitest';
-import { findViolations, isExempt, stripComments } from './bans.mjs';
+import {
+	DEAD_BREAKPOINT,
+	UNWEIGHTED_ICON,
+	findViolations,
+	isExempt,
+	noBannedLiterals,
+	stripComments
+} from './bans.mjs';
 
 const kinds = (src: string) => findViolations(src).map((v) => v.kind);
 
@@ -13,7 +22,7 @@ describe('lint bans', () => {
 	it('flags Tailwind arbitrary values, including important and variant prefixes', () => {
 		expect(kinds('<div class="w-[13px]">')).toEqual(['arbitrary']);
 		expect(kinds('<div class="!mt-[2px]">')).toEqual(['arbitrary']);
-		expect(kinds('<div class="md:hover:-top-[3px]">')).toEqual(['arbitrary']);
+		expect(kinds('<div class="medium:hover:-top-[3px]">')).toEqual(['arbitrary']);
 		expect(kinds('<div class="[mask-type:alpha]">')).toEqual(['arbitrary']);
 	});
 
@@ -42,13 +51,13 @@ describe('lint bans', () => {
 	});
 
 	it('does not flag plain class names or https URLs', () => {
-		expect(kinds('<div class="w-4 md:p-2 hover:bg-primary">')).toEqual([]);
+		expect(kinds('<div class="w-4 medium:p-2 hover:bg-primary">')).toEqual([]);
 		expect(kinds("const u = 'https://example.com/a';")).toEqual([]);
 	});
 
 	it('rejects spacing steps that are off the ramp', () => {
 		expect(kinds('<div class="p-11">')).toEqual(['spacing']);
-		expect(kinds('<div class="md:-mt-15 gap-x-16">')).toEqual(['spacing']);
+		expect(kinds('<div class="medium:-mt-15 gap-x-16">')).toEqual(['spacing']);
 		expect(kinds('<div class="m-3.5 w-64 h-96">')).toEqual(['spacing']);
 		expect(kinds("const c = cond ? 'space-y-11' : 'top-20';")).toEqual(['spacing']);
 		expect(kinds('<div class="!inset-x-15 size-11">')).toEqual(['spacing']);
@@ -56,7 +65,7 @@ describe('lint bans', () => {
 
 	it('rejects text size classes outside the type scale', () => {
 		expect(kinds('<h1 class="text-h2 font-semibold">')).toEqual(['text']);
-		expect(kinds('<p class="md:text-lg">')).toEqual(['text']);
+		expect(kinds('<p class="medium:text-lg">')).toEqual(['text']);
 		expect(kinds('<span class="text-label font-semibold">')).toEqual(['text']);
 		expect(kinds('<span class="text-small">')).toEqual([]);
 		expect(kinds("const c = cond ? 'text-xs' : 'text-2xl';")).toEqual(['text']);
@@ -107,7 +116,7 @@ describe('lint bans', () => {
 			'13',
 			'14'
 		]) {
-			expect(kinds(`<div class="px-${n} -mt-${n} md:gap-y-${n} h-${n}">`)).toEqual([]);
+			expect(kinds(`<div class="px-${n} -mt-${n} medium:gap-y-${n} h-${n}">`)).toEqual([]);
 		}
 	});
 
@@ -127,9 +136,93 @@ describe('lint bans', () => {
 		expect(kinds('<div class="p-11 w-[13px]">').sort()).toEqual(['arbitrary', 'spacing']);
 	});
 
+	it('flags the default breakpoint variants the theme removed', () => {
+		for (const v of ['sm', 'md', 'lg', 'xl', '2xl'])
+			expect(kinds(`<div class="grid ${v}:grid-cols-2">`)).toEqual(['breakpoint']);
+		expect(kinds('<div class="p-4 xl:p-6">')).toEqual(['breakpoint']);
+		expect(kinds('<div class="hover:md:underline">')).toEqual(['breakpoint']);
+		expect(kinds('<div class="md:!p-2">')).toEqual(['breakpoint']);
+		expect(kinds("const c = wide ? 'lg:flex' : 'block';")).toEqual(['breakpoint']);
+		expect(kinds('<div class={`gap-2 sm:gap-4`}>')).toEqual(['breakpoint']);
+	});
+
+	it('accepts the theme breakpoints and code that only looks like a variant', () => {
+		for (const v of ['medium', 'large', 'x-large', 'xx-large', 'xxx-large'])
+			expect(kinds(`<div class="${v}:grid-cols-2">`)).toEqual([]);
+		expect(kinds('const sizes = { sm: 1, md: 2, lg: 3 };')).toEqual([]);
+		expect(kinds('const s = {sm:1,md:2};')).toEqual([]);
+		expect(kinds('function pad(md: string, lg?: number) {}')).toEqual([]);
+		expect(kinds('const w = wide ? lg : sm;')).toEqual([]);
+		expect(kinds("const label = 'Size: md';")).toEqual([]);
+		expect(kinds('// sm:grid-cols-2 in a comment')).toEqual([]);
+	});
+
+	it('flags Phosphor imports without a weight', () => {
+		expect(kinds("import IconGear from '~icons/ph/gear';")).toEqual(['icon']);
+		expect(kinds('import IconX from "~icons/ph/x-circle";')).toEqual(['icon']);
+		expect(kinds("export { default as bell } from '~icons/ph/bell';")).toEqual(['icon']);
+		expect(kinds("const load = () => import('~icons/ph/warning');")).toEqual(['icon']);
+		expect(kinds("import IconThin from '~icons/ph/gear-thin';")).toEqual(['icon']);
+		expect(kinds("import IconLight from '~icons/ph/gear-light';")).toEqual(['icon']);
+		expect(kinds("import IconDuo from '~icons/ph/gear-duotone';")).toEqual(['icon']);
+	});
+
+	it('accepts Bold and Fill Phosphor imports', () => {
+		expect(kinds("import IconGear from '~icons/ph/gear-bold';")).toEqual([]);
+		expect(kinds("import IconStar from '~icons/ph/star-fill';")).toEqual([]);
+		expect(kinds("import IconDots from '~icons/ph/dots-three-circle-bold';")).toEqual([]);
+		expect(kinds("import IconRaw from '~icons/ph/gear-bold?raw';")).toEqual([]);
+	});
+
+	it('flags the max-/min- forms of the removed breakpoints', () => {
+		for (const v of ['max-sm', 'max-md', 'min-lg', 'max-xl', 'min-2xl'])
+			expect(kinds(`<div class="${v}:hidden">`)).toEqual(['breakpoint']);
+		expect(kinds('<div class="max-medium:hidden min-large:flex">')).toEqual([]);
+		expect(kinds('<div class="max-w-full min-h-0">')).toEqual([]);
+	});
+
+	it('matches a bare import string, as eslint passes it, without quotes', () => {
+		expect(UNWEIGHTED_ICON.test('~icons/ph/gear')).toBe(true);
+		expect(UNWEIGHTED_ICON.test('~icons/ph/gear-bold')).toBe(false);
+		expect(UNWEIGHTED_ICON.test('~icons/ph/star-fill')).toBe(false);
+		expect(UNWEIGHTED_ICON.test('~icons/ph/gear-bold?raw')).toBe(false);
+		expect(DEAD_BREAKPOINT.test('sm:grid-cols-2')).toBe(true);
+	});
+
 	it('exempts the theme module and generated files', () => {
 		expect(isExempt('src/lib/theme/riverstone.ts')).toBe(true);
 		expect(isExempt('src/lib/api/schema.d.ts')).toBe(true);
 		expect(isExempt('src/lib/ui/Button.svelte')).toBe(false);
 	});
+});
+
+// The eslint half: the same rule `eslint.config.js` registers, run the way eslint runs it.
+RuleTester.describe = describe;
+RuleTester.it = it;
+RuleTester.itOnly = it.only;
+const tester = new RuleTester({ languageOptions: { ecmaVersion: 'latest', sourceType: 'module' } });
+const reports = (message: RegExp) => [{ message }];
+
+tester.run('no-banned-literals', noBannedLiterals, {
+	valid: [
+		"import IconGear from '~icons/ph/gear-bold';",
+		"import IconStar from '~icons/ph/star-fill';",
+		"const c = 'grid medium:grid-cols-2';",
+		'const sizes = { sm: 1, md: 2 };'
+	],
+	invalid: [
+		{
+			code: "import IconGear from '~icons/ph/gear';",
+			errors: reports(/Phosphor icon without a weight/)
+		},
+		{
+			code: "const load = () => import('~icons/ph/warning');",
+			errors: reports(/Phosphor icon without a weight/)
+		},
+		{
+			code: "const c = 'grid sm:grid-cols-2';",
+			errors: reports(/compile to nothing here/)
+		},
+		{ code: 'const c = `p-4 max-md:p-2`;', errors: reports(/compile to nothing here/) }
+	]
 });

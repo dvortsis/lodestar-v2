@@ -19,6 +19,22 @@ export const OFF_SCALE_TEXT =
 	/(?:^|[\s"'`:!(])text-(?:xs|sm|base|lg|xl|[2-9]xl|h[1-6]|heading|headline|subtitle|large|huge|tiny|md|medium|label)(?=$|[\s"'`)!;=/,}])/;
 
 /**
+ * A Tailwind breakpoint variant from the default screens (`sm:`, `md:`, `lg:`, `xl:`, `2xl:`): the
+ * theme resets `--breakpoint-*` to the §7 ranges (`medium:` … `xxx-large:`), so these, and their
+ * `max-*:`/`min-*:` forms, compile to nothing and the class silently does nothing (X-ui-guards). Only a class-like use counts: a
+ * prefix that starts a class or follows another variant, glued to a utility. `{ md: 1 }`, a
+ * parameter `md: string` and `cond ? sm : lg` are code, not classes, and stay allowed.
+ */
+export const DEAD_BREAKPOINT = /(?:^|[\s"'`!:])(?:(?:max|min)-)?(?:2xl|xl|lg|md|sm):(?=[a-z!-])/;
+
+/**
+ * A Phosphor import without a weight (§10.2 icons: Phosphor Bold, Fill only for selected or on
+ * states). `~icons/ph/gear` is the Regular weight, which the design doesn't use (X-ui-guards). It
+ * matches a source line (`'~icons/ph/gear'`) and a bare import string, which is what eslint sees.
+ */
+export const UNWEIGHTED_ICON = /~icons\/ph\/[a-z0-9-]+?(?<!-bold|-fill)(?=$|['"`?])/;
+
+/**
  * Spacing steps allowed in utilities (design-tokens.md §5): the §10.2 ramp as Tailwind steps,
  * where step n is n x 4px. Anything else (`p-11`, `gap-15`, `m-3.5`, `w-64`) is off the ramp.
  * Fixed sizes are not steps: they are named layout tokens from design-tokens.md §7, written
@@ -85,7 +101,7 @@ function stripFragmentValues(line) {
 	);
 }
 
-/** @returns {{ line: number, kind: 'hex' | 'arbitrary' | 'spacing' | 'text' }[]} */
+/** @returns {{ line: number, kind: 'hex' | 'arbitrary' | 'spacing' | 'text' | 'breakpoint' | 'icon' }[]} */
 export function findViolations(source) {
 	const found = [];
 	stripComments(source)
@@ -95,6 +111,56 @@ export function findViolations(source) {
 			if (ARBITRARY_VALUE.test(line)) found.push({ line: i + 1, kind: 'arbitrary' });
 			if (hasOffRampStep(line)) found.push({ line: i + 1, kind: 'spacing' });
 			if (OFF_SCALE_TEXT.test(line)) found.push({ line: i + 1, kind: 'text' });
+			if (DEAD_BREAKPOINT.test(line)) found.push({ line: i + 1, kind: 'breakpoint' });
+			if (UNWEIGHTED_ICON.test(line)) found.push({ line: i + 1, kind: 'icon' });
 		});
 	return found;
 }
+
+// §10.18: no hex colours and no Tailwind arbitrary values outside the theme module; §10.2:
+// spacing utilities only on the ramp (design-tokens.md §5); no dead breakpoint variants and no
+// unweighted Phosphor icons (X-ui-guards).
+// The eslint rule (`lodestar/no-banned-literals` in eslint.config.js), here beside its patterns so
+// bans.test.ts can run it; scripts/check-bans.mjs uses the same patterns.
+export const noBannedLiterals = {
+	meta: { type: 'problem', schema: [] },
+	create(context) {
+		function check(node, text, attribute) {
+			if (!(attribute && FRAGMENT_ATTRIBUTES.test(attribute)) && HEX_COLOUR.test(text)) {
+				context.report({ node, message: 'Hex colour literal: use a theme token.' });
+			}
+			if (ARBITRARY_VALUE.test(text)) {
+				context.report({
+					node,
+					message: 'Tailwind arbitrary value: use a token or scale value.'
+				});
+			}
+			if (DEAD_BREAKPOINT.test(text)) {
+				context.report({
+					node,
+					message:
+						'sm:/md:/lg:/xl:/2xl: compile to nothing here: use medium:, large:, x-large:, xx-large: or xxx-large:.'
+				});
+			}
+			if (UNWEIGHTED_ICON.test(text)) {
+				context.report({
+					node,
+					message:
+						'Phosphor icon without a weight: import the -bold glyph (-fill only for selected or on states).'
+				});
+			}
+			const steps = offRampSteps(text);
+			if (steps.length) {
+				context.report({
+					node,
+					message: `Spacing step ${steps.join(', ')} is off the ramp: use 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13 or 14 (fixed sizes are layout tokens).`
+				});
+			}
+		}
+		return {
+			Literal: (node) => typeof node.value === 'string' && check(node, node.value),
+			TemplateElement: (node) => check(node, node.value.raw),
+			SvelteLiteral: (node) => check(node, node.value, node.parent?.key?.name)
+		};
+	}
+};

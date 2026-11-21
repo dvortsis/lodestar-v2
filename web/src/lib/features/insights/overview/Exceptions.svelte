@@ -1,9 +1,9 @@
 <script lang="ts">
 	// Level 5, Exceptions (§10.9.2): what needs attention, errors first, each with an icon, one
 	// sentence and a fix link. A fix link exists only for a well-formed target.
-	import IconError from '~icons/ph/x-circle';
-	import IconWarning from '~icons/ph/warning';
-	import IconOk from '~icons/ph/check-circle';
+	import IconError from '~icons/ph/x-circle-bold';
+	import IconWarning from '~icons/ph/warning-bold';
+	import IconOk from '~icons/ph/check-circle-bold';
 	import { formatCount, formatSpan } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';

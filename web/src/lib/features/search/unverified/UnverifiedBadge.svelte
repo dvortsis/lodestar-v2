@@ -4,7 +4,7 @@
 	// Marks a result whose metadata Lodestar hasn't confirmed: icon + text, never colour alone.
 	// Drawn by hand rather than with ui/Badge, which imports every status icon, and in runes mode so
 	// the legacy runtime isn't pulled into the size-limited drawer and results chunks.
-	import Warning from '~icons/ph/warning';
+	import Warning from '~icons/ph/warning-bold';
 	import { m } from '$lib/paraglide/messages.js';
 </script>
 

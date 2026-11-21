@@ -2,7 +2,7 @@
 	// A field's conflict (§10.10.5): what's saved now, Keep mine or Use theirs, in its own row. It
 	// loads with the edit chunk, so the row and its icon stay off the first view.
 	import Button from '$lib/ui/controls/Button.svelte';
-	import IconWarning from '~icons/ph/warning';
+	import IconWarning from '~icons/ph/warning-bold';
 	import { m } from '$lib/paraglide/messages.js';
 	import { displayValue } from './display';
 	import type { SettingsForm } from './form.svelte';

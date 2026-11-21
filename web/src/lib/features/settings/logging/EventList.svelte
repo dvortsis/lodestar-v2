@@ -5,12 +5,12 @@
 	// one line of help. Required events show a lock and why; an opt-in's event follows its opt-in.
 	// Changes are staged as overrides of the Verbosity preset; Reset to preset drops them all.
 	import { getContext } from 'svelte';
-	import IconLock from '~icons/ph/lock-simple';
-	import IconError from '~icons/ph/x-circle';
-	import IconWarn from '~icons/ph/warning';
-	import IconInfo from '~icons/ph/info';
-	import IconDebug from '~icons/ph/bug';
-	import IconTrace from '~icons/ph/dots-three-circle';
+	import IconLock from '~icons/ph/lock-simple-bold';
+	import IconError from '~icons/ph/x-circle-bold';
+	import IconWarn from '~icons/ph/warning-bold';
+	import IconInfo from '~icons/ph/info-bold';
+	import IconDebug from '~icons/ph/bug-bold';
+	import IconTrace from '~icons/ph/dots-three-circle-bold';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';

@@ -15,7 +15,7 @@
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import type { components } from '$lib/api/schema';
-	import IconSpinner from '~icons/ph/circle-notch';
+	import IconSpinner from '~icons/ph/circle-notch-bold';
 	import type { Source } from './sources';
 
 	type Job = components['schemas']['BackgroundJob'];

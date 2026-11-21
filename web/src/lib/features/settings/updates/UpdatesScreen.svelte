@@ -12,7 +12,7 @@
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { whenOf } from './time';
 	import { checkFailedWords, failedWords, historyReasonWords, noEngineWords } from './reasons';
-	import IconWarn from '~icons/ph/warning';
+	import IconWarn from '~icons/ph/warning-bold';
 	import { formatCount } from '$lib/format';
 	import { ask } from '../form/dialogs';
 	import {

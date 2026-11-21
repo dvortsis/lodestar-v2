@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The custom range's two UTC-day inputs. Loaded on demand: most visits never open it.
 	import { untrack } from 'svelte';
-	import IconError from '~icons/ph/x-circle';
+	import IconError from '~icons/ph/x-circle-bold';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import { m } from '$lib/paraglide/messages.js';

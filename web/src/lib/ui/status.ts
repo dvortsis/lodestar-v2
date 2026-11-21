@@ -1,8 +1,8 @@
 // Badge and Banner share the same status vocabulary and icon/ink mapping.
-import IconInfo from '~icons/ph/info';
-import IconSuccess from '~icons/ph/check-circle';
-import IconWarning from '~icons/ph/warning';
-import IconError from '~icons/ph/x-circle';
+import IconInfo from '~icons/ph/info-bold';
+import IconSuccess from '~icons/ph/check-circle-bold';
+import IconWarning from '~icons/ph/warning-bold';
+import IconError from '~icons/ph/x-circle-bold';
 
 export const statusIcons = {
 	info: IconInfo,

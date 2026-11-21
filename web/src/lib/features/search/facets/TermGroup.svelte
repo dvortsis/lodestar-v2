@@ -3,7 +3,7 @@
 	// with its checkbox and excluded with the minus button; a selected value shows four ways (the
 	// box, medium weight, the value text, and its chip in the strip). Long lists ("Show more") get
 	// a search box over the values listed.
-	import Minus from '~icons/ph/minus-circle';
+	import Minus from '~icons/ph/minus-circle-bold';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';

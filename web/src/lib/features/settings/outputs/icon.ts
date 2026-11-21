@@ -4,7 +4,7 @@
 import { m } from '$lib/paraglide/messages.js';
 import type { About } from '../shell/screens';
 
-export { default } from '~icons/ph/share-network';
+export { default } from '~icons/ph/share-network-bold';
 export const ABOUT: Record<string, About> = {
 	outputs: { purpose: m.settings_outputs_purpose }
 };

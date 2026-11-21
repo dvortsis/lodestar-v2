@@ -2,9 +2,9 @@
 	// The global context bar (§10.9): range, compare, last updated and the crawler's pause and
 	// intensity. It stays usable when the overview fails to load. Compare is a parameter, not a
 	// filter; every non-default range is a chip that resets it.
-	import IconPause from '~icons/ph/pause';
-	import IconPlay from '~icons/ph/play';
-	import IconError from '~icons/ph/x-circle';
+	import IconPause from '~icons/ph/pause-bold';
+	import IconPlay from '~icons/ph/play-bold';
+	import IconError from '~icons/ph/x-circle-bold';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Lazy from './Lazy.svelte';

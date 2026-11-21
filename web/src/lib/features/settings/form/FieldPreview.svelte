@@ -4,7 +4,7 @@
 	// (`preview.ts`), which every preview has loaded.
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconWarning from '~icons/ph/warning';
+	import IconWarning from '~icons/ph/warning-bold';
 	import { automaticValue, estimatePart } from './display';
 	import type { FieldState } from './types';
 

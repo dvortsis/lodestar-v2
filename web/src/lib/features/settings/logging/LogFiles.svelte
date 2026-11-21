@@ -5,7 +5,7 @@
 	// is. Then the Danger zone: Delete log files (all, or only those with torrent details), each
 	// behind a dialog with the count and size, focus on Cancel.
 	import { tick } from 'svelte';
-	import IconWarn from '~icons/ph/warning';
+	import IconWarn from '~icons/ph/warning-bold';
 	import { api, isAbort } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
 	import { formatBytes, formatCount, formatDateTime } from '$lib/format';

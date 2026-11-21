@@ -12,7 +12,7 @@
 
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import IconWarning from '~icons/ph/warning-circle';
+	import IconWarning from '~icons/ph/warning-circle-bold';
 
 	interface Props {
 		/** Visible label. Omit when the control carries its own (Checkbox, Radio, Toggle). */

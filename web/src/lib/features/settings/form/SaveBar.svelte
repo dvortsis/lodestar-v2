@@ -4,8 +4,8 @@
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconRestart from '~icons/ph/arrows-clockwise';
-	import IconCheck from '~icons/ph/check-circle';
+	import IconRestart from '~icons/ph/arrows-clockwise-bold';
+	import IconCheck from '~icons/ph/check-circle-bold';
 	import type { SettingsForm } from './form.svelte';
 	import { askDiscard } from './questions';
 

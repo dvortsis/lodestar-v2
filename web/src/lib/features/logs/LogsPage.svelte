@@ -4,11 +4,11 @@
 	import { onMount, tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
-	import IconError from '~icons/ph/x-circle';
-	import IconWarn from '~icons/ph/warning';
-	import IconInfo from '~icons/ph/info';
-	import IconDebug from '~icons/ph/bug';
-	import IconTrace from '~icons/ph/dots-three-circle';
+	import IconError from '~icons/ph/x-circle-bold';
+	import IconWarn from '~icons/ph/warning-bold';
+	import IconInfo from '~icons/ph/info-bold';
+	import IconDebug from '~icons/ph/bug-bold';
+	import IconTrace from '~icons/ph/dots-three-circle-bold';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';

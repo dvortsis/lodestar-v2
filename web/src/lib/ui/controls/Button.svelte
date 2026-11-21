@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLButtonAttributes } from 'svelte/elements';
-	import IconSpinner from '~icons/ph/circle-notch';
+	import IconSpinner from '~icons/ph/circle-notch-bold';
 	import { FOCUS_RING, TARGET_MIN } from '../classes';
 
 	type Variant = 'primary' | 'secondary' | 'quiet' | 'danger';

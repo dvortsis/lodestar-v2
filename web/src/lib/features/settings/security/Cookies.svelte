@@ -3,8 +3,8 @@
 	// the environment, since turning it on over plain HTTP would lock everyone out.
 	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconOn from '~icons/ph/shield-check';
-	import IconOff from '~icons/ph/shield';
+	import IconOn from '~icons/ph/shield-check-bold';
+	import IconOff from '~icons/ph/shield-bold';
 
 	let state = $state<{ on: boolean; env: string | null } | 'failed'>();
 

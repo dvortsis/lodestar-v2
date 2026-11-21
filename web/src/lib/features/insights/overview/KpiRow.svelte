@@ -1,9 +1,9 @@
 <script lang="ts">
 	// Level 1, Status (§10.9.2): five KPIs. Every number is a response field through its formatter;
 	// a null is a dash with its reason, never 0. Deltas show only when the server sent one.
-	import IconRunning from '~icons/ph/check-circle';
-	import IconPaused from '~icons/ph/pause-circle';
-	import IconDegraded from '~icons/ph/warning';
+	import IconRunning from '~icons/ph/check-circle-bold';
+	import IconPaused from '~icons/ph/pause-circle-bold';
+	import IconDegraded from '~icons/ph/warning-bold';
 	import Kpi from '$lib/charts/Kpi.svelte';
 	import {
 		formatCompact,

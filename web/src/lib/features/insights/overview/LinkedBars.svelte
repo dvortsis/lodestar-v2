@@ -19,7 +19,7 @@
 	// Horizontal bars that start at zero, in the order given, each optionally a real link. Lengths
 	// come from the raw value (geometry only); the number shown arrives already formatted. Built
 	// here because `HBarList` re-sorts its rows and has no link.
-	import IconWarning from '~icons/ph/circle-half';
+	import IconWarning from '~icons/ph/circle-half-bold';
 	import { resolve } from '$app/paths';
 	import { lengthPct } from '$lib/charts/shared';
 	import type { Route } from './href';

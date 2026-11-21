@@ -3,16 +3,16 @@
 	// and hide the words visually; they stay in the accessible name. Numbers come from the server
 	// through the formatters; unknown is "—".
 	import type { Component } from 'svelte';
-	import IconBroadcast from '~icons/ph/broadcast';
-	import IconPause from '~icons/ph/pause-circle';
-	import IconRebuild from '~icons/ph/arrows-clockwise';
-	import IconWarning from '~icons/ph/warning';
-	import IconOffline from '~icons/ph/wifi-slash';
-	import IconUnknown from '~icons/ph/circle-dashed';
-	import IconConnecting from '~icons/ph/circle-notch';
-	import IconStarting from '~icons/ph/hourglass-medium';
-	import IconStalled from '~icons/ph/warning-octagon';
-	import IconRestart from '~icons/ph/power';
+	import IconBroadcast from '~icons/ph/broadcast-bold';
+	import IconPause from '~icons/ph/pause-circle-bold';
+	import IconRebuild from '~icons/ph/arrows-clockwise-bold';
+	import IconWarning from '~icons/ph/warning-bold';
+	import IconOffline from '~icons/ph/wifi-slash-bold';
+	import IconUnknown from '~icons/ph/circle-dashed-bold';
+	import IconConnecting from '~icons/ph/circle-notch-bold';
+	import IconStarting from '~icons/ph/hourglass-medium-bold';
+	import IconStalled from '~icons/ph/warning-octagon-bold';
+	import IconRestart from '~icons/ph/power-bold';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';
 	import { formatCompact, formatCount } from '$lib/format';

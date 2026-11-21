@@ -3,39 +3,7 @@ import svelte from 'eslint-plugin-svelte';
 import globals from 'globals';
 import ts from 'typescript-eslint';
 import svelteConfig from './svelte.config.js';
-import { ARBITRARY_VALUE, FRAGMENT_ATTRIBUTES, HEX_COLOUR, offRampSteps } from './scripts/bans.mjs';
-
-// §10.18: no hex colours and no Tailwind arbitrary values outside the theme module; §10.2:
-// spacing utilities only on the ramp (design-tokens.md §5).
-// Shares its patterns with scripts/check-bans.mjs.
-const noBannedLiterals = {
-	meta: { type: 'problem', schema: [] },
-	create(context) {
-		function check(node, text, attribute) {
-			if (!(attribute && FRAGMENT_ATTRIBUTES.test(attribute)) && HEX_COLOUR.test(text)) {
-				context.report({ node, message: 'Hex colour literal: use a theme token.' });
-			}
-			if (ARBITRARY_VALUE.test(text)) {
-				context.report({
-					node,
-					message: 'Tailwind arbitrary value: use a token or scale value.'
-				});
-			}
-			const steps = offRampSteps(text);
-			if (steps.length) {
-				context.report({
-					node,
-					message: `Spacing step ${steps.join(', ')} is off the ramp: use 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13 or 14 (fixed sizes are layout tokens).`
-				});
-			}
-		}
-		return {
-			Literal: (node) => typeof node.value === 'string' && check(node, node.value),
-			TemplateElement: (node) => check(node, node.value.raw),
-			SvelteLiteral: (node) => check(node, node.value, node.parent?.key?.name)
-		};
-	}
-};
+import { noBannedLiterals } from './scripts/bans.mjs';
 
 export default ts.config(
 	{

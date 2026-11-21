@@ -45,7 +45,7 @@
 >
 	<div class="flex flex-col gap-4">
 		<p class="text-small">{m.settings_companions_offer_intro()}</p>
-		<dl class="grid grid-cols-1 gap-2 text-small sm:grid-cols-2">
+		<dl class="grid grid-cols-1 gap-2 text-small">
 			{#each rows as [k, v], i (k)}
 				<dt class="text-muted-text">{k}</dt>
 				<dd class="break-words" data-offer-field={i} data-testid={`offer-field-${i}`}>{v}</dd>

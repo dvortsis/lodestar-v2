@@ -9,8 +9,8 @@
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import Select from '$lib/ui/fields/Select.svelte';
-	import IconSet from '~icons/ph/check-circle';
-	import IconUnset from '~icons/ph/circle-dashed';
+	import IconSet from '~icons/ph/check-circle-bold';
+	import IconUnset from '~icons/ph/circle-dashed-bold';
 	import { KINDS, type Client } from './clients';
 	import TestButton from './TestButton.svelte';
 
