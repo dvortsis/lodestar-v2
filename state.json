@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-21T15:38Z",
+  "updated_at": "2026-11-21T16:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T15:38Z",
+    "updated": "2026-11-21T16:22Z",
     "items": [
       {
         "slot": 1,
@@ -10666,12 +10666,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-labels",
+        "slice": "X-safety-undo-danger",
         "role": "build",
-        "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
+        "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
-        "since": "2026-11-21T14:05Z",
-        "doing": "PR #1023 review CHANGES; fixing facet find, vocab test, decisions CSV claim, nits"
+        "since": "2026-11-21T16:22Z",
+        "doing": "brief sent; Undo confirm takes the danger style when its preview loosens child safety"
       },
       {
         "slot": 3,
