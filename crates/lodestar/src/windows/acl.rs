@@ -370,16 +370,40 @@ fn plain(text: &str) -> String {
 }
 
 /// Characters that render as nothing or reorder text: the
-/// [`format_or_separator`] ones, and every Default_Ignorable_Code_Point
-/// besides, the filter's own set ([`lodestar_filter::normalize::invisible`]:
-/// variation selectors, the combining grapheme joiner, Hangul fillers,
-/// Khmer inherent vowels, tags) plus the Mongolian free variation selectors
-/// U+180B–U+180F, which that set leaves to Cf. What the temp log's
-/// [`quoted`] paths escape (X-win-path-ignorables).
+/// [`format_or_separator`] ones and every [`default_ignorable`] one. What
+/// the temp log's [`quoted`] paths escape (X-win-path-ignorables).
 pub(super) fn invisible(c: char) -> bool {
-    format_or_separator(c)
-        || lodestar_filter::normalize::invisible(c)
-        || matches!(c, '\u{180b}'..='\u{180f}')
+    format_or_separator(c) || default_ignorable(c)
+}
+
+/// Unicode's Default_Ignorable_Code_Point (DerivedCoreProperties.txt,
+/// Unicode 15): what renders as nothing, Cf or not. Beyond Cf, the
+/// combining grapheme joiner, the Hangul fillers, the Khmer inherent
+/// vowels, the Mongolian free variation selectors, the variation
+/// selectors, the reserved U+2065 and U+FFF0–FFF8, and plane 14. The
+/// filter crate keeps its own copy (`normalize::invisible`), which leaves
+/// U+180B–180D and U+180F out; this one is the property as published.
+fn default_ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}'
+            | '\u{034f}'
+            | '\u{061c}'
+            | '\u{115f}'..='\u{1160}'
+            | '\u{17b4}'..='\u{17b5}'
+            | '\u{180b}'..='\u{180f}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{3164}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{feff}'
+            | '\u{ffa0}'
+            | '\u{fff0}'..='\u{fff8}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0000}'..='\u{e0fff}'
+    )
 }
 
 /// Unicode's Cf, Zl and Zp characters (Unicode 15): format and separator
@@ -995,21 +1019,44 @@ mod tests {
         assert!(parse_inspection("F\ta\tb\tc\nF\ta\tb\tc\n").is_err());
     }
 
-    /// `quoted` escapes every default-ignorable the filter's set names,
-    /// the line and paragraph separators and the Mongolian free variation
-    /// selectors, over all of `char`; ordinary text, combining marks
-    /// included, is left as it is (X-win-path-ignorables).
+    /// `invisible` is exactly Cf, Zl, Zp and Default_Ignorable_Code_Point,
+    /// over all of `char`, and `quoted` escapes each; ordinary text,
+    /// combining marks included, is left as it is (X-win-path-ignorables).
     #[test]
     fn quoted_escapes_every_default_ignorable() {
         let escaped = |c: char| format!("\"{}\"", c.escape_unicode());
+        // Default_Ignorable_Code_Point as DerivedCoreProperties.txt
+        // (Unicode 15) lists it, written out here on its own.
+        let dicp = |c: char| {
+            matches!(
+                c as u32,
+                0x00AD
+                    | 0x034F
+                    | 0x061C
+                    | 0x115F..=0x1160
+                    | 0x17B4..=0x17B5
+                    | 0x180B..=0x180F
+                    | 0x200B..=0x200F
+                    | 0x202A..=0x202E
+                    | 0x2060..=0x206F
+                    | 0x3164
+                    | 0xFE00..=0xFE0F
+                    | 0xFEFF
+                    | 0xFFA0
+                    | 0xFFF0..=0xFFF8
+                    | 0x1BCA0..=0x1BCA3
+                    | 0x1D173..=0x1D17A
+                    | 0xE0000..=0xE0FFF
+            )
+        };
         for c in (0..=0x10FFFF).filter_map(char::from_u32) {
-            // Every Cf (visible format marks included), the separators,
-            // and every default-ignorable.
-            let must = lodestar_metainfo::format_char(c)
-                || lodestar_filter::normalize::invisible(c)
-                || matches!(c, '\u{2028}' | '\u{2029}' | '\u{180b}'..='\u{180f}');
-            if must {
-                assert!(invisible(c), "U+{:04X}", c as u32);
+            // Exactly: every Cf (visible format marks included), the line
+            // and paragraph separators, and every default-ignorable.
+            let want = lodestar_metainfo::format_char(c)
+                || matches!(c, '\u{2028}' | '\u{2029}')
+                || dicp(c);
+            assert_eq!(invisible(c), want, "U+{:04X}", c as u32);
+            if want {
                 assert_eq!(quoted(&c.to_string()), escaped(c), "U+{:04X}", c as u32);
             }
         }
