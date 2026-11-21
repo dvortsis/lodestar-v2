@@ -16,6 +16,7 @@ document disagree, the architecture document wins and this file is fixed.
   server and arrives in the response. Formatters only present.
 - **Every displayed count, KPI and chart container carries a `data-testid`**
   (§10.12 validation hooks).
+- **Series names on `/metrics`.** Every series carries the `lodestar_` prefix, and labels follow in braces as usual. The tables in this file give the bare name, so `dht_sample_sent_total` is scraped as `lodestar_dht_sample_sent_total` and `dht_queries_sent_total{purpose}` as `lodestar_dht_queries_sent_total{purpose="ping"}`. Where prose quotes a prefixed name (§7.6), it is the scraped name.
 - **Locale** is the UI locale (`en`, `zh`); every `Intl` call takes it.
   **Timezone** is the user's setting (default: the browser's), passed as
   `timeZone` to every `Intl.DateTimeFormat`; Insights shows which one is in use.
