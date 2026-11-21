@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T12:03Z",
+    "updated": "2026-11-21T12:30Z",
     "items": [
       {
         "slot": 1,
@@ -10675,12 +10675,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-prefs-invisible-share",
+        "slice": "X-testvm-teardown-by-id",
         "role": "build",
         "agent": "session_01MMjhnBpjPfQ45Zap7mZNyi",
         "model": "opus",
-        "since": "2026-11-21T10:44Z",
-        "doing": "brief sent; shared Default_Ignorable table, shortcut-key rule"
+        "since": "2026-11-21T12:30Z",
+        "doing": "brief sent; teardown checks the lane volume by id, windows.md GiB nits"
       },
       {
         "slot": 4,
