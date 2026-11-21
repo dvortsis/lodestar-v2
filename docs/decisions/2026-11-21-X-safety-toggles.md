@@ -54,7 +54,7 @@ Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI rev
   - The change, the preview, the effect warning and the password are exactly as before.
   - Whether a change weakens is still the server's call (`confirm`). The danger flag is the screen's, from what the button does, and never decides whether the password is asked.
   - Tests check each case, and that the password is still asked first.
-- **Undo is left ordinary (follow-up).** The screen can't tell what Undo reverses before it runs: it sends `{op: "undo"}`, and the server says what it restores only in the preview. Styling it would mean changing how Undo works, or styling the dialog from the preview's numbers (`core_caught_30d`, `removed_from_floor`), which would apply to every change's dialog. Both are outside this slice, so it's a follow-up for the runner.
+- **Undo is left ordinary (follow-up).** The screen can't tell what Undo reverses before it runs: it sends `{op: "undo"}`, and the server says what it restores only in the preview. Styling it would mean changing how Undo works, or styling the dialog from the preview's numbers (`core_caught_30d`, `removed_from_floor`), which would apply to every change's dialog. Both are outside this slice. The approach found: the Undo dialog, or every change's dialog, takes the danger style from the preview's `core_caught_30d` / `removed_from_floor`, so Undo itself doesn't change. The runner queues it as X-safety-undo-danger.
 - **A UX call to flag (§2.26):** with several CS rules on, the list shows several solid danger buttons, one per rule. `Button` has no outline danger variant, and the brief asks for the danger style on the row button, so it's used as it is.
 
 ## Packs collapsed (U32)
@@ -91,15 +91,16 @@ gzip, main ea6ff8c1 → this branch. The new limits are the runner's calls (§2.
 
 | Entry | Before | After | Limit before | Limit after |
 |---|---|---|---|---|
-| Settings FiltersScreen (first view) | 30,879 B | 31,401 B | 31.14 kB | 31.41 kB |
-| Filters rule names (on demand) | — | 3,999 B | — | 4.0 kB |
+| Settings FiltersScreen (first view) | 30,879 B | 31,414 B | 31.14 kB | 31.42 kB |
+| Filters rule names (on demand) | — | 4,013 B | — | 4.02 kB |
 | Filters pack descriptions (on demand) | 1,427 B | removed | 1.6 kB | removed |
 | Filters packs list (on demand) | 1,797 B | 1,557 B | 1.85 kB | 1.56 kB |
-| Filters pack panels (on demand) | 8,765 B | 7,878 B | 9 kB | 7.88 kB |
+| Filters pack panels (on demand) | 8,765 B | 7,907 B | 9 kB | 7.91 kB |
 | Filters dialogs (on demand) | 35,880 B | 35,898 B | 35.9 kB | 35.9 kB |
 | Detail drawer (own JS + CSS) | 28,139 B | 28,141 B | 28.14 kB | 28.15 kB |
 
-- **The first view's +522 B** is the names holder, `RuleLabel` (which the core rows need on first render), the rows' markup and the 1.5 s wait.
+- **The first view's +535 B** is the names holder, `RuleLabel` (which the core rows need on first render), the rows' markup and the 1.5 s wait.
+- **The review round** added 13 B to the first view (the holder keeps the two lookups), 14 B to the names (MW-6's and UC-2's own names) and 29 B to the pack panels (the waiting badge's `aria-describedby`), each limit again the measured size rounded up (runner).
 - **The Detail drawer's +2 B is chunk-hash and gzip drift that this PR doesn't cause in code.**
   - The drawer's code is unchanged.
   - About 30 other entries moved ±1–10 B the same way.

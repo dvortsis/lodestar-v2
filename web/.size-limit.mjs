@@ -1451,7 +1451,7 @@ export default [
 	// 45 → 45.3 (45.28), Language 45 → 45.1 (45.08): the engine's safety code in the first view (the
 	// secret flag for list fields, in-flight save tracking, the draft block after Sign out). The 401
 	// path is on demand. X-settings-leave-guard-split is the planned give-back.
-	// X-safety-toggles (runner §2.26): FiltersScreen 31.14 → 31.41 KB, measured 31,401 B, for the
+	// X-safety-toggles (runner §2.26): FiltersScreen 31.14 → 31.42 KB, measured 31,414 B, for the
 	// rules' names: the holder that loads them on demand, RuleLabel and the core rows' danger style.
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-15b: the Sources first view measured 30.54 KB (was 29.97 KB: the dialogs' loader, their state
@@ -1465,7 +1465,7 @@ export default [
 			`Settings ${name} (first view)`,
 			files,
 			name === 'FiltersScreen'
-				? '31.41 KB'
+				? '31.42 KB'
 				: name === 'JobsScreen'
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
@@ -1492,12 +1492,12 @@ export default [
 	// there); Block dialog +1.4 KB. Was 34.4 KB.
 	entry('Filters dialogs (on demand)', filtersDialogsLazy, '35.9 KB'),
 	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
-	// X-safety-toggles (runner §2.26): the rules' and packs' names, measured 3,999 B; it replaces
-	// "Filters pack descriptions" (1.6 KB). The packs list (1,557 B) and the pack panels (7,878 B)
+	// X-safety-toggles (runner §2.26): the rules' and packs' names, measured 4,013 B; it replaces
+	// "Filters pack descriptions" (1.6 KB). The packs list (1,557 B) and the pack panels (7,907 B)
 	// lost their pack ids and descriptions to it, so their limits fall to the measured sizes.
-	entry('Filters rule names (on demand)', filtersRuleTextLazy, '4.0 KB'),
+	entry('Filters rule names (on demand)', filtersRuleTextLazy, '4.02 KB'),
 	entry('Filters packs list (on demand)', filtersPacksLazy, '1.56 KB'),
-	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '7.88 KB'),
+	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '7.91 KB'),
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
 	// X-sources-restructure: 41.3 KB; this walk includes the screen's own chunk, so it grows with the
 	// first view above (the dialogs are unchanged). Limit = measured + ~1.2%.
