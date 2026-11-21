@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T20:19Z",
+    "updated": "2026-11-21T21:15Z",
     "items": [
       {
         "slot": 1,
@@ -10671,16 +10671,16 @@
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
         "since": "2026-11-21T19:46Z",
-        "doing": "PR #1030 open; fresh review running"
+        "doing": "PR #1030 review MERGE plus one assertion added (d2dd7fd2); CI running"
       },
       {
         "slot": 3,
-        "slice": "X-snapshot-stale-outputs",
+        "slice": "X-outputs-e2e-race",
         "role": "helper",
         "agent": "session_01MMjhnD5iaW7CGjAAtXeVfE",
         "model": "sonnet",
-        "since": "2026-11-21T20:19Z",
-        "doing": "#1028 merged; brief sent; finding why bp2560 baselines pass without the Outputs nav item"
+        "since": "2026-11-21T21:15Z",
+        "doing": "#1031 merged; brief sent; reproduce the bitmagnet /jobs race, fix the test"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
         "since": "2026-11-21T16:32Z",
-        "doing": "PR #1029 review CHANGES (flaky proptest, expired streak); fix push next"
+        "doing": "PR #1029 review fixes pushed (d6296b84), delta checked; CI running"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
