@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T14:05Z",
+    "updated": "2026-11-21T14:19Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-rusqlite-041",
+        "slice": "X-importer-schema-limit",
         "role": "build",
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
-        "since": "2026-11-21T12:03Z",
-        "doing": "brief sent; rusqlite 0.41 / libsqlite3-sys 0.39, drop the RUSTSEC-2026-0459 ignore"
+        "since": "2026-11-21T14:19Z",
+        "doing": "brief sent; harden() caps SQLITE_LIMIT_SCHEMA for hostile Magnetico files"
       },
       {
         "slot": 2,
