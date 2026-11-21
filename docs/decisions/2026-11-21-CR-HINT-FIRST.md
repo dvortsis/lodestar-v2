@@ -49,14 +49,24 @@ Hint-first reuses CR-1a-H's capture, its endpoint checks (at capture and again a
   - **Newest first (this slice's refinement, approved by the runner).** A hint is only worth its first minute, so T1 serves its newest key first. When T1 is full (`T1_WAITING`), its oldest key leaves for its ordinary queue, and the newcomer takes T1.
     - The first screen ran first-in, first-out. Marking runs at about 24 hashes a second against about 1.5 admitted lookups a second, so a full FIFO T1 served keys that had waited about 170 s, long past `HINT_TTL`: about 15k of 17k marked hints still expired unused.
   - **One place per key (the runner's addition).** A key waits in T1 or in its ordinary queue, never both. A key that leaves T1, full or aged, moves to its ordinary queue (`a_full_t1_sends_hinted_keys_to_their_ordinary_queue`).
-    - **The one exception is CR-ADM's own.** A waiting key a user takes an interest in gets an interactive copy, and whichever copy is granted first makes the other stale. That's today's rule for background keys. A T1 key follows it, and the interest also ends its hint.
-  - **Ageing.** A T1 waiter older than `T1_MAX_WAIT` (60 s, the DHT's `HINT_TTL`) goes to the back of the background queue, since its hint has expired (`an_aged_t1_key_goes_behind_background`).
+    - **A user's interest ends a key's hint** and gives it its interest place.
+      - Under coordinated admission, that's CR-ADM's own rule: the waiting key gets an interactive copy, and whichever copy is granted first makes the other stale (`interest_in_a_hinted_waiter_serves_it_first`).
+      - On the plain backlog, its T1 copy goes stale at once and the key moves to the backlog's front, its one place (`interest_in_a_hinted_backlog_key_serves_it_first`). The first review found that this path left the key in no queue at all, so the key a user waited on was never looked up. That's fixed, and the test is the reviewer's probe.
+  - **Ageing.** A T1 waiter older than `T1_MAX_WAIT` (60 s, the DHT's `HINT_TTL`) goes to the back of its ordinary queue and its hint ends, since the DHT's hint has expired. This holds in both queues (`an_aged_t1_key_goes_behind_background`, `an_aged_backlog_t1_key_goes_behind_the_backlog`, `an_aged_hinted_key_never_returns_to_t1`).
   - Only a key's first lookup can use T1. Retries and requeues are ordinary.
 - **No starvation.**
   - Interactive goes first, but never more than `INTERACTIVE_BURST` (4) in a row while a lower class waits.
   - T1 goes next, never more than `T1_BURST` in a row while background waits.
   - So background keeps at least 1 in 5 of the grants interactive doesn't take, and the lower classes keep at least 1 in 5 of all grants (`t1_goes_between_and_starves_no_one`, `t1_goes_first_with_the_same_permits_and_background_keeps_moving`, `the_plain_backlog_serves_t1_first_and_keeps_background_moving`).
+  - **By design,** while interactive is saturated and T1 isn't empty, background's share falls from 1 in 5 grants to 1 in 25: interactive takes 4 of every 5, and background 1 in 5 of the rest. Nothing starves.
 - **Dispatch** is CR-1a-H's, unchanged: the request takes its hash's hint and sends one direct `get_peers`, with every check repeated at send, then ordinary routing drives the legs.
+
+## A known limit (logged by the runner)
+- One /24 can hold up to 256 outstanding T1 marks, one per IP, about 15% of T1 at the measured marking rate. That buys only queue order, for one hash per IP at a time.
+- It's bounded by:
+  - the existing per-block sample share (`sample_sources`), which limits how many of a block's hashes reach the pool;
+  - `T1_RESPONDERS`, `T1_WAITING` and the burst rule.
+- A per-block T1 cap could be a later refinement; this slice leaves it as is.
 
 ## Finishing on values (the runner's refinement of item 4, §2.26, flagged under §2.19)
 - Item 4 says "the request finishes if it returns values". As built, a hinted reply's values count toward CR-LOOKUP-END's end condition exactly like any reply's: `Actor::has_enough_values`, with X-sec-S1-18's per-source rule.
@@ -149,6 +159,7 @@ The two orders' "as is" rows are identical: without CR-ADM, T1 never holds a key
   - `a_hinted_reply_alone_never_ends_a_request`;
   - the property test `hostile_hinted_replies_end_nothing_early_and_stay_bounded`. Its replies are empty, huge, duplicate, private or port-0 values, spoofed replies, and address rotation within one /24. None ends a request on values or lets a junk endpoint in, and the hint state stays bounded.
 - `crates/sources/src/pool/admission.rs`: `t1_goes_between_and_starves_no_one`, `t1_is_bounded_and_ages_into_background`.
-- `crates/sources/tests/hint_first.rs`: the five pool fixtures named above.
+- `crates/sources/tests/hint_first.rs`: eleven pool fixtures, those named above and `private_and_interactive_keys_never_take_t1`.
+- **Mutations.** 16 checked. The 12 from the first round all die, as do the first review's three survivors: interest stranding a hinted key, backlog ageing, and the private and interactive exclusion. One mutation survives as equivalent: not clearing the hint when admission ages a key. That key's hint is cleared anyway when its lookup is sent, before which it can't take T1 again. The clear is kept so the flag means what it says.
 - `crates/lodestar/src/config.rs`: `hint_first_is_off_unless_asked_for`. `crates/lodestar/src/metrics.rs`: the new families render each label with its own value.
 - CR-SIM: `hint_first_marks_and_sends_deterministically` (runs in CI), and the ignored `hint_first_screen`.

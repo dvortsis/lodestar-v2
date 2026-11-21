@@ -653,6 +653,7 @@ proptest! {
             let r = |h: u8| SocketAddr::from(([31, 0, 0, h], 6881));
             sample_reply(&mut a, &sockets, r(1), &[hash(1)]);
             prop_assert_eq!(get(&a.stats.hint_first_marked), 1);
+            let mut per_ip = std::collections::HashMap::from([(1u8, 1u32)]);
             let _rx = request(&mut a, &sockets, hash(1));
             let to_addrs = |v: &[(u32, u16)]| -> Vec<SocketAddr> {
                 v.iter().map(|(ip, p)| SocketAddr::from((std::net::Ipv4Addr::from(*ip), *p))).collect()
@@ -667,7 +668,16 @@ proptest! {
                         let msg = Message { transaction_id: &bytes, version: None, ip: None, read_only: false, body: Body::Response(response.clone()) };
                         a.on_response(&sockets, 0, &msg, Some(&response), r(h));
                     }
-                    (Hostile::Rotate(h, k), _) => sample_reply(&mut a, &sockets, r(h), &[hash(k)]),
+                    (Hostile::Rotate(h, k), _) => {
+                        let before = get(&a.stats.hint_first_marked);
+                        sample_reply(&mut a, &sockets, r(h), &[hash(k)]);
+                        if get(&a.stats.hint_first_marked) > before {
+                            *per_ip.entry(h).or_insert(0) += 1;
+                        }
+                        // One mark per IP: no time passes here, so none
+                        // expires and none may be marked twice.
+                        prop_assert!(per_ip.get(&h).copied().unwrap_or(0) <= 1);
+                    }
                     _ => {}
                 }
                 let l = a.stats.snapshot().ledger;
@@ -682,9 +692,10 @@ proptest! {
                 prop_assert!(h.held() <= 250 && h.t1_len() <= 250);
                 prop_assert!(hinted(&a).len() <= 1);
             }
-            // One mark per IP, at most: never two for one responder.
+            // Every mark reached the pool as one harvest, one per IP.
             let marked: Vec<_> = std::iter::from_fn(|| harvested.try_recv().ok()).filter(|h| h.hint).collect();
             prop_assert!(marked.len() as u64 == get(&a.stats.hint_first_marked));
+            prop_assert_eq!(marked.len() as u32, per_ip.values().sum::<u32>());
         }
     }
 }

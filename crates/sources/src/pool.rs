@@ -2768,8 +2768,8 @@ impl Pool {
         e.interest = true;
         // CR-HINT-FIRST: interest outranks T1. Its T1 copy goes stale (the
         // backlog's at once, admission's when either copy is granted, as
-        // CR-ADM's copies do).
-        e.hint = false;
+        // CR-ADM's copies do), and the key takes its interest place below.
+        let was_hinted = std::mem::take(&mut e.hint);
         self.vouched.waits.ask(&key);
         let spent = e.attempts >= self.cfg.max_attempts;
         match e.state {
@@ -2800,6 +2800,10 @@ impl Pool {
                     a.push(Class::Interactive, waiter, false);
                 }
             }
+            // A hinted key waiting in the backlog's T1, whose copy there just
+            // went stale: the front of the backlog, its one place now, as an
+            // interest key queued there would be.
+            State::LookupQueued if was_hinted => self.lookup_backlog.push_front(key),
             State::Fetching | State::LookupQueued | State::Lookup => {}
         }
     }
@@ -3028,8 +3032,17 @@ impl Pool {
     /// gives back a woken permit nobody is left to use.
     fn drain_admission(&mut self) {
         if let Some(a) = &mut self.admission {
-            let aged = a.age_t1(Instant::now());
-            self.stats.hint_t1_left[1].fetch_add(aged, Ordering::Relaxed);
+            // Their hints have expired: a requeue mustn't take T1 again.
+            for w in a.age_t1(Instant::now()) {
+                if let Some(e) = self
+                    .entries
+                    .get_mut(&w.key)
+                    .filter(|e| e.generation == w.generation)
+                {
+                    e.hint = false;
+                }
+                self.stats.hint_t1_left[1].fetch_add(1, Ordering::Relaxed);
+            }
         }
         loop {
             if self.lookups >= self.cfg.max_lookups {

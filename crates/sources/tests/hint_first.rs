@@ -110,8 +110,21 @@ impl Harness {
     }
 
     async fn discover(&self, n: u32, source: SourceId, hint: bool) {
+        self.discover_as(n, source, hint, false, false).await;
+    }
+
+    async fn discover_as(
+        &self,
+        n: u32,
+        source: SourceId,
+        hint: bool,
+        interest: bool,
+        private: bool,
+    ) {
         let mut found = Found::key(key(n), 0);
         found.hint = hint;
+        found.interest = interest;
+        found.private_source = private;
         self.disc
             .send(Discovery {
                 source,
@@ -136,6 +149,14 @@ impl Harness {
         Held {
             done,
             permit: r.permit,
+        }
+    }
+
+    /// Refused, as the actor refuses: the answer, then the permit.
+    fn refuse(&mut self, r: PeerRequest) {
+        r.admit.send(None).unwrap();
+        if r.permit.is_some() {
+            self.returned += 1;
         }
     }
 
@@ -353,5 +374,119 @@ async fn a_full_backlog_t1_sends_its_oldest_to_the_backlog() {
     assert_eq!(order[4], key(1), "the oldest, from the backlog");
     assert_eq!(order.iter().filter(|k| **k == key(1)).count(), 1);
     assert_eq!(load(&h.stats().hint_lookups), u64::from(T1_WAITING));
+    h.stop().await;
+}
+
+/// A user's interest in a hinted key waiting in the plain backlog's T1
+/// moves it to the backlog's front, its one place, so it's served next.
+#[tokio::test(start_paused = true)]
+async fn interest_in_a_hinted_backlog_key_serves_it_first() {
+    let mut h = Harness::start(config(false, true));
+    h.discover(100, dht(), false).await;
+    let first = h.next().await;
+    let first = h.accept(first);
+    h.discover(101, dht(), false).await;
+    h.discover(1, dht(), true).await;
+    h.until("both wait", |s| load(&s.hint_t1_waits) == 1).await;
+    // A user asks for it: a sighting with interest.
+    h.discover_as(1, other(), false, true, false).await;
+    h.until("the sighting", |s| load(&s.duplicates) == 1).await;
+    h.complete(first);
+    assert_eq!(h.serve(2).await, keys(&[1, 101]));
+    assert_eq!(load(&h.stats().hint_lookups), 0, "served for its interest");
+    h.stop().await;
+}
+
+/// The same under coordinated admission: the interactive copy is granted
+/// first and its T1 copy goes stale.
+#[tokio::test(start_paused = true)]
+async fn interest_in_a_hinted_waiter_serves_it_first() {
+    let mut h = Harness::start(config(true, true));
+    h.discover(100, dht(), false).await;
+    let first = h.next().await;
+    let first = h.accept(first);
+    h.discover(101, dht(), false).await;
+    h.discover(1, dht(), true).await;
+    h.until("both wait", |s| load(&s.admission_waiters) == 2)
+        .await;
+    h.discover_as(1, other(), false, true, false).await;
+    h.until("the sighting", |s| load(&s.duplicates) == 1).await;
+    h.complete(first);
+    assert_eq!(h.serve(2).await, keys(&[1, 101]));
+    assert_eq!(load(&h.stats().admission_grants[0][0]), 1, "interactive");
+    assert_eq!(load(&h.stats().hint_lookups), 0);
+    h.conserved().await;
+    h.stop().await;
+}
+
+/// The plain backlog's T1 ages too: a key waiting `T1_MAX_WAIT` goes
+/// behind the backlog.
+#[tokio::test(start_paused = true)]
+async fn an_aged_backlog_t1_key_goes_behind_the_backlog() {
+    let mut h = Harness::start(config(false, true));
+    h.discover(100, dht(), false).await;
+    let first = h.next().await;
+    let first = h.accept(first);
+    h.discover(1, dht(), true).await;
+    h.discover(101, dht(), false).await;
+    h.until("the hinted key waits", |s| load(&s.hint_t1_waits) == 1)
+        .await;
+    tokio::time::advance(Duration::from_secs(60)).await;
+    h.complete(first);
+    assert_eq!(h.serve(2).await, keys(&[101, 1]));
+    let s = h.stats();
+    assert_eq!(load(&s.hint_t1_left[1]), 1);
+    assert_eq!(load(&s.hint_lookups), 0);
+    h.stop().await;
+}
+
+/// A hint mark on a private or an interactive key is ignored: neither
+/// waits in T1.
+#[tokio::test(start_paused = true)]
+async fn private_and_interactive_keys_never_take_t1() {
+    let mut h = Harness::start(config(true, true));
+    h.discover(100, dht(), false).await;
+    let first = h.next().await;
+    let first = h.accept(first);
+    h.discover_as(1, dht(), true, false, true).await;
+    h.discover_as(2, dht(), true, true, false).await;
+    h.until("both counted", |s| load(&s.hint_ignored) == 2)
+        .await;
+    let s = h.stats();
+    assert_eq!(load(&s.hint_keys) + load(&s.hint_t1_waits), 0);
+    h.complete(first);
+    // The interactive key is served as interactive; the private one is
+    // never sent to a public finder.
+    assert_eq!(h.serve(1).await, keys(&[2]));
+    assert_eq!(load(&h.stats().admission_grants[0][0]), 1);
+    assert_eq!(load(&h.stats().admission_grants[0][2]), 0);
+    h.stop().await;
+}
+
+/// A key aged out of admission's T1 has lost its hint: refused and
+/// requeued, it doesn't take T1 again.
+#[tokio::test(start_paused = true)]
+async fn an_aged_hinted_key_never_returns_to_t1() {
+    let mut h = Harness::start(config(true, true));
+    h.discover(100, dht(), false).await;
+    let first = h.next().await;
+    let first = h.accept(first);
+    h.discover(1, dht(), true).await;
+    h.until("it waits", |s| load(&s.hint_t1_waits) == 1).await;
+    tokio::time::advance(Duration::from_secs(60)).await;
+    h.complete(first);
+    let r = h.next().await;
+    assert_eq!(r.key, key(1));
+    h.refuse(r);
+    // Requeued after the refusal hold, as background.
+    let again = h.next().await;
+    assert_eq!(again.key, key(1));
+    let s = h.stats();
+    assert_eq!(load(&s.hint_t1_waits), 1, "never queued in T1 again");
+    assert_eq!(load(&s.hint_t1_left[1]), 1);
+    assert_eq!(load(&s.hint_lookups), 0);
+    let again = h.accept(again);
+    h.complete(again);
+    h.conserved().await;
     h.stop().await;
 }

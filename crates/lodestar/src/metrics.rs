@@ -1159,7 +1159,6 @@ fn render_admission(o: &mut Out, p: &lodestar_sources::PoolStats) {
     );
 }
 
-/// CR-1a-S's streaming families on the pool's side (docs/metrics.md).
 /// CR-HINT-FIRST's pool families (docs/metrics.md); all zero with
 /// `dht.hint_first` off.
 fn render_hint_first_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
@@ -1208,6 +1207,7 @@ fn render_hint_first_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
     );
 }
 
+/// CR-1a-S's streaming families on the pool's side (docs/metrics.md).
 fn render_stream_pool(o: &mut Out, p: &lodestar_sources::PoolStats) {
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
     o.one(
