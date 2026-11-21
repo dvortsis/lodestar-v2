@@ -1,4 +1,4 @@
-# X-builder-group-case decisions (#PR)
+# X-builder-group-case decisions (#1037)
 
 Runner brief, 2026-11-21Z, after X-facet-group-case (#1033), which gave facet values a server display form (`FacetValue.label`, "RARBG" for `rarbg`) that the facet rail shows. The Builder's value options call `valueLabel(field, v, locale)` with no label (`web/src/lib/features/search/assist/BuilderRow.svelte`), so this slice checked whether a release group can show lower-cased there.
 
