@@ -281,14 +281,24 @@ impl Section for Preferences {
 }
 
 /// Saved remaps as this build reads them, when they no longer pass
-/// [`check_shortcuts`]: each remap whose key is now refused is dropped, so
-/// its action has its default key again. That default can be a key another
-/// remap took, so a remap that now shares a key with a restored default is
-/// dropped too, until nothing changes. The other remaps are kept. Whatever
-/// is still wrong is left to the check, which then ignores the field as for
-/// any invalid saved value. A round only follows one that restored a
-/// default, so there are at most `DEFAULT_SHORTCUTS.len() + 1` of them,
-/// each linear in the map, whatever its size.
+/// [`check_shortcuts`] (runner-approved, `docs/decisions/2026-11-21-X-prefs-invisible-share.md`):
+/// - every remap whose key isn't a shortcut key, for any reason (a
+///   character the rule now refuses, but also `""` or `"ab"`), is dropped,
+///   so its action has its default key again;
+/// - then every remap whose key is the default of an action without a
+///   remap is dropped, whatever the reason it collides: a default just
+///   restored, or one that was in effect all along (`detail.send` remapped
+///   to `j` while `results.next` still has `j`). That restores more
+///   defaults, so this repeats until nothing changes;
+/// - every other remap is kept.
+///
+/// [`Section::repair_saved`] keeps the result only if it then passes the
+/// check; what this can't fix (an action id that isn't one, more than
+/// [`MAX_SHORTCUTS`] remaps, two remaps sharing a key) leaves the field
+/// ignored whole, as any invalid saved value is. A round only follows one
+/// that restored a default, so there are at most
+/// `DEFAULT_SHORTCUTS.len() + 1` of them, each linear in the map, whatever
+/// its size.
 fn repair_shortcuts(keys: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut keys = keys.clone();
     keys.retain(|_, key| shortcut_key(key));
@@ -445,6 +455,10 @@ mod tests {
     /// a control, whitespace, default-ignorable, Cf or a mark (Mn, Mc, Me),
     /// the categories read from `unicode-properties`, not from the tables
     /// the rule uses.
+    ///
+    /// Upgrade `unicode-properties` and `unicode-normalization` together:
+    /// with the reference on a newer Unicode than the rule's mark table, a
+    /// mark new to the reference would fail the equality.
     #[test]
     fn a_shortcut_key_is_one_character_that_shows() {
         use unicode_properties::{GeneralCategory as G, UnicodeGeneralCategory};
@@ -521,6 +535,19 @@ mod tests {
         // Every remap refused: none left, the defaults hold.
         let all = map(&[("results.next", "\u{200b}"), ("x.y", "\u{e0080}")]);
         assert!(repair_shortcuts(&all).is_empty());
+        // A remap that collides with a default in effect all along (main
+        // ignored the whole field): it goes, the rest stay (runner).
+        let clash = map(&[("detail.send", "j"), ("search.focus", "f")]);
+        let repaired = repair_shortcuts(&clash);
+        assert_eq!(repaired, map(&[("search.focus", "f")]));
+        assert!(check_shortcuts(&repaired).is_ok());
+        assert_eq!(
+            Preferences::repair_saved("shortcut_keys", &serde_json::to_value(&clash).unwrap()),
+            Some(serde_json::to_value(&repaired).unwrap())
+        );
+        // Malformed keys go the same way.
+        let bad = map(&[("results.next", ""), ("results.select", "ab"), ("x.y", "q")]);
+        assert_eq!(repair_shortcuts(&bad), map(&[("x.y", "q")]));
     }
 
     #[test]

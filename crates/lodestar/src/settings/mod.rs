@@ -841,7 +841,9 @@ impl<T: Section> Entry<T> {
                 }
             };
             // Part of it refused by a newer rule: the rest is kept, and the
-            // log says so without the value.
+            // log says so without the value. A section's repair returns a
+            // value that passes its check (preferences' does), so the
+            // `invalid` line below can't follow this one for the same field.
             let value = match T::repair_saved(field.name, &value) {
                 Some(repaired) => {
                     ignored("invalid_entries");
