@@ -77,6 +77,7 @@
 		deleteOpen = true;
 	}
 
+	let heading = $state<HTMLElement>();
 	async function deleted(search: Pick<SavedSearch, 'id' | 'name'>) {
 		// Focus goes to the next row's name, else the previous one's, else the heading.
 		const rows = list.items ?? [];
@@ -88,7 +89,7 @@
 		const target = neighbour
 			? document.querySelector<HTMLElement>(`[data-alert-name="${neighbour.id}"]`)
 			: null;
-		(target ?? document.getElementById('alerts-heading'))?.focus();
+		(target ?? heading)?.focus();
 		void list.load();
 	}
 
@@ -123,158 +124,157 @@
 </script>
 
 <div class={PAGE_FRAME} data-page-frame="">
-	<div class={PAGE_BODY_WIDE}>
-		<section
-			class="contents"
-			aria-labelledby="alerts-heading"
-			aria-busy={showSkeleton || undefined}
-		>
-			<header class={PAGE_HEADER}>
-				<h1 id="alerts-heading" class={PAGE_H1} tabindex="-1">{m.alerts_title()}</h1>
-				<Button variant="primary" onclick={openCreate} data-testid="alerts-new">
-					{m.alerts_new()}
-				</Button>
-			</header>
+	<section
+		class={PAGE_BODY_WIDE}
+		aria-labelledby="alerts-heading"
+		aria-busy={showSkeleton || undefined}
+	>
+		<header class={PAGE_HEADER}>
+			<h1 id="alerts-heading" class={PAGE_H1} tabindex="-1" bind:this={heading}>
+				{m.alerts_title()}
+			</h1>
+			<Button variant="primary" onclick={openCreate} data-testid="alerts-new">
+				{m.alerts_new()}
+			</Button>
+		</header>
 
-			{#if list.error}
-				<Banner kind="error">
-					{list.items ? m.alerts_error_refresh() : m.alerts_error_load()}
-					{#snippet action()}
-						<Button dense onclick={() => void list.load()}>{m.alerts_retry()}</Button>
-					{/snippet}
-				</Banner>
-			{/if}
+		{#if list.error}
+			<Banner kind="error">
+				{list.items ? m.alerts_error_refresh() : m.alerts_error_load()}
+				{#snippet action()}
+					<Button dense onclick={() => void list.load()}>{m.alerts_retry()}</Button>
+				{/snippet}
+			</Banner>
+		{/if}
 
-			{#if showSkeleton}
-				<div class="al-skeleton" role="status" aria-label={m.alerts_loading()}>
-					{#if slow}
-						{#each Array.from({ length: SKELETON_ROWS }, (_, n) => n) as n (n)}
-							<Skeleton class="al-skeleton-row" />
-						{/each}
-					{/if}
-				</div>
-			{:else if list.items && list.items.length === 0}
-				<EmptyState title={m.alerts_empty_title()} text={m.alerts_empty_text()}>
-					{#snippet illustration()}<StateScene id="empty_state_explore" />{/snippet}
-				</EmptyState>
-			{:else if list.items}
-				{#snippet name(s: SavedSearch)}
-					<!-- eslint-disable svelte/no-navigation-without-resolve -- alertPath() resolves -->
-					<a
-						href={alertPath(s.id)}
-						class="al-name target"
-						data-alert-name={s.id}
-						data-testid="alerts-name-{s.id}">{s.name}</a
-					>
-					<!-- eslint-enable svelte/no-navigation-without-resolve -->
-				{/snippet}
-				{#snippet queryText(s: SavedSearch)}
-					{#if s.q.trim() === ''}
-						<span class="al-muted">{m.alerts_query_all()}</span>
-					{:else}
-						<Mono wrap>{s.q}</Mono>
-					{/if}
-				{/snippet}
-				{#snippet unread(s: SavedSearch)}
-					<span class="al-num" data-testid="alerts-unread-{s.id}"
-						>{formatCount(s.unread, locale)}</span
-					>
-				{/snippet}
-				{#snippet last(s: SavedSearch)}
-					{#if s.last_alert_at === null}
-						<span data-testid="alerts-last-{s.id}"
-							><span aria-hidden="true">—</span><span class="sr-only"
-								>{m.alerts_no_alerts_yet()}</span
-							></span
-						>
-					{:else}
-						<span data-testid="alerts-last-{s.id}"><RelativeTime seconds={s.last_alert_at} /></span>
-					{/if}
-				{/snippet}
-				{#snippet status(s: SavedSearch)}
-					{#if s.paused}
-						<Badge
-							><IconPause class="size-4 shrink-0" aria-hidden="true" /><span
-								data-testid="alerts-paused-{s.id}">{m.alerts_paused()}</span
-							></Badge
-						>
-					{/if}
-				{/snippet}
-				{#snippet actions(s: SavedSearch)}
-					<span class="al-actions">
-						<PauseToggle search={s} onUpdated={(u) => list.replace(u)} />
-						<Button
-							variant="quiet"
-							dense
-							aria-label={m.alerts_delete_aria({ name: s.name })}
-							onclick={() => void openDelete(s)}
-							data-testid="alerts-delete-{s.id}"
-						>
-							<IconTrash class="size-4" aria-hidden="true" />{m.alerts_delete()}
-						</Button>
-					</span>
-				{/snippet}
-
-				{#if wide}
-					<table class="al-table" data-testid="alerts-table">
-						<caption class="sr-only">{m.alerts_list_label()}</caption>
-						<thead>
-							<tr>
-								<th scope="col">{m.alerts_col_name()}</th>
-								<th scope="col">{m.alerts_col_query()}</th>
-								<th scope="col" class="al-right">{m.alerts_col_new()}</th>
-								<th scope="col">{m.alerts_col_channels()}</th>
-								<th scope="col">{m.alerts_col_last()}</th>
-								<th scope="col"><span class="sr-only">{m.alerts_col_actions()}</span></th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each list.items as s (s.id)}
-								<tr data-testid="alerts-row-{s.id}">
-									<th scope="row">
-										{@render name(s)}
-										{@render status(s)}
-									</th>
-									<td>{@render queryText(s)}</td>
-									<td class="al-right">{@render unread(s)}</td>
-									<td><ChannelBadges search={s} /></td>
-									<td>{@render last(s)}</td>
-									<td>{@render actions(s)}</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
+		{#if showSkeleton}
+			<div class="al-skeleton" role="status" aria-label={m.alerts_loading()}>
+				{#if slow}
+					{#each Array.from({ length: SKELETON_ROWS }, (_, n) => n) as n (n)}
+						<Skeleton class="al-skeleton-row" />
+					{/each}
+				{/if}
+			</div>
+		{:else if list.items && list.items.length === 0}
+			<EmptyState title={m.alerts_empty_title()} text={m.alerts_empty_text()}>
+				{#snippet illustration()}<StateScene id="empty_state_explore" />{/snippet}
+			</EmptyState>
+		{:else if list.items}
+			{#snippet name(s: SavedSearch)}
+				<!-- eslint-disable svelte/no-navigation-without-resolve -- alertPath() resolves -->
+				<a
+					href={alertPath(s.id)}
+					class="al-name target"
+					data-alert-name={s.id}
+					data-testid="alerts-name-{s.id}">{s.name}</a
+				>
+				<!-- eslint-enable svelte/no-navigation-without-resolve -->
+			{/snippet}
+			{#snippet queryText(s: SavedSearch)}
+				{#if s.q.trim() === ''}
+					<span class="al-muted">{m.alerts_query_all()}</span>
 				{:else}
-					<ul class="al-stack" aria-label={m.alerts_list_label()} data-testid="alerts-stack">
+					<Mono wrap>{s.q}</Mono>
+				{/if}
+			{/snippet}
+			{#snippet unread(s: SavedSearch)}
+				<span class="al-num" data-testid="alerts-unread-{s.id}"
+					>{formatCount(s.unread, locale)}</span
+				>
+			{/snippet}
+			{#snippet last(s: SavedSearch)}
+				{#if s.last_alert_at === null}
+					<span data-testid="alerts-last-{s.id}"
+						><span aria-hidden="true">—</span><span class="sr-only">{m.alerts_no_alerts_yet()}</span
+						></span
+					>
+				{:else}
+					<span data-testid="alerts-last-{s.id}"><RelativeTime seconds={s.last_alert_at} /></span>
+				{/if}
+			{/snippet}
+			{#snippet status(s: SavedSearch)}
+				{#if s.paused}
+					<Badge
+						><IconPause class="size-4 shrink-0" aria-hidden="true" /><span
+							data-testid="alerts-paused-{s.id}">{m.alerts_paused()}</span
+						></Badge
+					>
+				{/if}
+			{/snippet}
+			{#snippet actions(s: SavedSearch)}
+				<span class="al-actions">
+					<PauseToggle search={s} onUpdated={(u) => list.replace(u)} />
+					<Button
+						variant="quiet"
+						dense
+						aria-label={m.alerts_delete_aria({ name: s.name })}
+						onclick={() => void openDelete(s)}
+						data-testid="alerts-delete-{s.id}"
+					>
+						<IconTrash class="size-4" aria-hidden="true" />{m.alerts_delete()}
+					</Button>
+				</span>
+			{/snippet}
+
+			{#if wide}
+				<table class="al-table" data-testid="alerts-table">
+					<caption class="sr-only">{m.alerts_list_label()}</caption>
+					<thead>
+						<tr>
+							<th scope="col">{m.alerts_col_name()}</th>
+							<th scope="col">{m.alerts_col_query()}</th>
+							<th scope="col" class="al-right">{m.alerts_col_new()}</th>
+							<th scope="col">{m.alerts_col_channels()}</th>
+							<th scope="col">{m.alerts_col_last()}</th>
+							<th scope="col"><span class="sr-only">{m.alerts_col_actions()}</span></th>
+						</tr>
+					</thead>
+					<tbody>
 						{#each list.items as s (s.id)}
-							<li class="al-card" data-testid="alerts-row-{s.id}">
-								<div class="al-card-head">
+							<tr data-testid="alerts-row-{s.id}">
+								<th scope="row">
 									{@render name(s)}
 									{@render status(s)}
-								</div>
-								{@render queryText(s)}
-								<dl class="al-meta">
-									<div>
-										<dt>{m.alerts_col_new()}</dt>
-										<dd>{@render unread(s)}</dd>
-									</div>
-									<div>
-										<dt>{m.alerts_col_last()}</dt>
-										<dd>{@render last(s)}</dd>
-									</div>
-									<div>
-										<dt>{m.alerts_col_channels()}</dt>
-										<dd><ChannelBadges search={s} /></dd>
-									</div>
-								</dl>
-								{@render actions(s)}
-							</li>
+								</th>
+								<td>{@render queryText(s)}</td>
+								<td class="al-right">{@render unread(s)}</td>
+								<td><ChannelBadges search={s} /></td>
+								<td>{@render last(s)}</td>
+								<td>{@render actions(s)}</td>
+							</tr>
 						{/each}
-					</ul>
-				{/if}
+					</tbody>
+				</table>
+			{:else}
+				<ul class="al-stack" aria-label={m.alerts_list_label()} data-testid="alerts-stack">
+					{#each list.items as s (s.id)}
+						<li class="al-card" data-testid="alerts-row-{s.id}">
+							<div class="al-card-head">
+								{@render name(s)}
+								{@render status(s)}
+							</div>
+							{@render queryText(s)}
+							<dl class="al-meta">
+								<div>
+									<dt>{m.alerts_col_new()}</dt>
+									<dd>{@render unread(s)}</dd>
+								</div>
+								<div>
+									<dt>{m.alerts_col_last()}</dt>
+									<dd>{@render last(s)}</dd>
+								</div>
+								<div>
+									<dt>{m.alerts_col_channels()}</dt>
+									<dd><ChannelBadges search={s} /></dd>
+								</div>
+							</dl>
+							{@render actions(s)}
+						</li>
+					{/each}
+				</ul>
 			{/if}
-		</section>
-	</div>
+		{/if}
+	</section>
 </div>
 
 {#if SaveDialog}

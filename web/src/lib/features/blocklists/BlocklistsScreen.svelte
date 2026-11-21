@@ -74,12 +74,12 @@
 		}
 	}
 
+	let heading = $state<HTMLElement>();
 	// A change can remove the row whose button opened the dialog: focus falls to the heading.
 	function keepFocus() {
 		requestAnimationFrame(() =>
 			requestAnimationFrame(() => {
-				if (!document.activeElement || document.activeElement === document.body)
-					document.getElementById('blocklists-title')?.focus();
+				if (!document.activeElement || document.activeElement === document.body) heading?.focus();
 			})
 		);
 	}
@@ -98,7 +98,7 @@
 	});
 </script>
 
-<h1 id="blocklists-title" class={PAGE_H1} tabindex="-1">{m.blocklists_title()}</h1>
+<h1 class={PAGE_H1} tabindex="-1" bind:this={heading}>{m.blocklists_title()}</h1>
 <p class="text-muted-text">{m.blocklists_purpose()}</p>
 
 {#if problem}

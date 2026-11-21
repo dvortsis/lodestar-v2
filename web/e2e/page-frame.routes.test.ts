@@ -25,6 +25,8 @@ interface Destination {
 	name: string;
 	path: string;
 	settings?: true;
+	/** A selector that exists only once the screen has loaded (its own heading or root). */
+	ready?: string;
 	mock?: (mock: OpenApiMock) => void;
 	/** Started before the page loads (a live stream). */
 	before?: (page: Page) => Promise<unknown>;
@@ -54,6 +56,8 @@ const DESTINATIONS: Destination[] = [
 		path: '/insights/discover?range=30d',
 		mock: (m) => m.on('getInsightsDiscover', discoverFixture())
 	},
+	// An unknown Insights stage: the unavailable page, on the manuscript frame.
+	{ name: 'unavailable', path: '/insights/harvest' },
 	{
 		name: 'logs',
 		path: '/logs',
@@ -72,6 +76,7 @@ const DESTINATIONS: Destination[] = [
 		name: 'settings-keyboard',
 		path: '/settings/keyboard',
 		settings: true,
+		ready: '[data-testid="keyboard-screen"]',
 		mock: settingsMock((on) =>
 			on('getSettings', {
 				section: 'preferences',
@@ -106,12 +111,14 @@ const DESTINATIONS: Destination[] = [
 		name: 'settings-companions',
 		path: '/settings/companions',
 		settings: true,
+		ready: '#companions-heading',
 		mock: settingsMock((on) => on('listCompanions', { companions: [] }))
 	},
 	{
 		name: 'settings-outputs',
 		path: '/settings/outputs',
 		settings: true,
+		ready: '#outputs-torznab',
 		mock: settingsMock((on) => {
 			on('listKeys', { keys: [] });
 			on('listJobs', { jobs: [] });
@@ -124,6 +131,9 @@ interface Measure {
 	left: number;
 	right: number;
 	count: number;
+	inFrame: number;
+	busy: number;
+	overflow: boolean;
 }
 
 async function measure(page: Page): Promise<Measure> {
@@ -134,6 +144,9 @@ async function measure(page: Page): Promise<Measure> {
 		const box = (el: Element | null) => el?.getBoundingClientRect();
 		return {
 			count: heads.length,
+			inFrame: document.querySelectorAll('main [data-page-frame] h1').length,
+			busy: document.querySelectorAll('main [role="status"][aria-busy="true"]').length,
+			overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
 			h1: box(heads[0])?.left ?? -1,
 			left: box(inner)?.left ?? -1,
 			right: box(inner)?.right ?? -1
@@ -157,18 +170,24 @@ for (const width of WIDTHS) {
 				d.mock?.(mock);
 				await d.before?.(page);
 				await go(d.path);
-				await expect(page.locator('main h1').first()).toBeAttached();
-				// The heading can arrive with a lazy chunk: wait for the settled edge, not for time.
+				if (d.ready) await expect(page.locator(d.ready)).toBeAttached();
+				// The static boot page has an h1 too, and a lazy screen shows a placeholder h1 at the
+				// shell's edge while it loads: wait for the app's own frame, one h1 inside it, and no
+				// loading status, so the screen's own heading is what gets measured.
 				let m: Measure | undefined;
-				// The static boot page has an h1 too: wait for the app's own frame.
 				await expect
-					.poll(async () => ((m = await measure(page)), m.count === 1 && m.left >= 0), {
-						message: 'one h1 inside the page frame'
-					})
+					.poll(
+						async () => (
+							(m = await measure(page)),
+							m.count === 1 && m.inFrame === 1 && m.busy === 0 && m.left >= 0
+						),
+						{ message: 'one h1 inside the page frame, loaded' }
+					)
 					.toBe(true);
 				const got = m!;
 				rows.push(`| ${d.name} | ${width} | ${got.h1} | ${got.left} | ${got.right} |`);
 				edges.set(d.name, got.h1);
+				if (width === 390) expect(got.overflow, 'no horizontal scroll at 390 px').toBe(false);
 
 				// The gutter: 16 px below `large` (640), 24 px from it.
 				const gutter = width >= 640 ? 24 : 16;

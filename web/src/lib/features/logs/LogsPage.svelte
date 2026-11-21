@@ -237,225 +237,222 @@
 <svelte:window onkeydown={onWindowKey} />
 
 <div class={PAGE_FRAME} data-page-frame="">
-	<div class={PAGE_BODY_FULL}>
-		<section class="contents" aria-labelledby="logs-h">
-			<div bind:this={root} class="logs flex flex-col gap-2">
-				<div class="flex flex-wrap items-center gap-x-4 gap-y-1">
-					<h1 id="logs-h" class={PAGE_H1} tabindex="-1">{m.logs_title()}</h1>
-					<span class="text-small text-muted-text" data-testid="logs-status">{showStatus}</span>
-					{#if logging}
-						<a class="text-small underline" href={loggingHref}>{logging.chip}</a>
-					{/if}
-					<a class="ms-auto text-small underline" href={loggingHref}>{m.logs_open_full()}</a>
-				</div>
-
-				{#if banner}
-					<Banner kind="warning" title={m.logs_identifying_title()}>
-						{m.logs_identifying({ time: banner })}
-						<a class="underline" href={loggingHref}>{m.logs_identifying_manage()}</a>
-						{#if turnOffError}<p role="alert" class="text-small text-error">{turnOffError}</p>{/if}
-						{#snippet action()}
-							<Button variant="secondary" disabled={turningOff} onclick={turnOff}
-								>{m.settings_logging_turn_off()}</Button
-							>
-						{/snippet}
-					</Banner>
+	<section class={PAGE_BODY_FULL} aria-labelledby="logs-h">
+		<div bind:this={root} class="logs flex flex-col gap-2">
+			<div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+				<h1 id="logs-h" class={PAGE_H1} tabindex="-1">{m.logs_title()}</h1>
+				<span class="text-small text-muted-text" data-testid="logs-status">{showStatus}</span>
+				{#if logging}
+					<a class="text-small underline" href={loggingHref}>{logging.chip}</a>
 				{/if}
-
-				<div
-					class="logs-toolbar flex flex-wrap items-center gap-2"
-					role="toolbar"
-					aria-label={m.logs_toolbar()}
-				>
-					<Select
-						dense
-						aria-label={m.logs_level_label()}
-						bind:value={level}
-						options={LEVELS.map((l) => ({
-							value: l,
-							label: m.logs_level_min({ level: levelName(l) })
-						}))}
-					/>
-					<Input
-						dense
-						type="search"
-						class="logs-filter"
-						bind:value={text}
-						data-logs-filter
-						aria-label={m.logs_filter_label()}
-						placeholder={m.logs_filter_placeholder()}
-						maxlength={200}
-					/>
-					<Button
-						dense
-						variant={utc ? 'primary' : 'secondary'}
-						aria-pressed={utc}
-						onclick={() => (utc = !utc)}
-					>
-						{utc ? m.logs_time_utc() : m.logs_time_local()}
-					</Button>
-					<Button
-						dense
-						variant={wrap ? 'primary' : 'secondary'}
-						aria-pressed={wrap}
-						onclick={() => (wrap = !wrap)}
-					>
-						{m.logs_wrap()}
-					</Button>
-					<Button
-						dense
-						variant={view.paused ? 'primary' : 'secondary'}
-						aria-pressed={view.paused}
-						onclick={() => view.setPaused(!view.paused)}
-					>
-						{view.paused ? m.logs_resume() : m.logs_pause()}
-					</Button>
-					<Button
-						dense
-						disabled={!view.hasEarlier}
-						loading={view.loadingEarlier}
-						onclick={() => view.loadEarlier()}
-					>
-						{m.logs_load_earlier()}
-					</Button>
-					<Button dense disabled={!view.lines.length} onclick={copy}>{m.logs_copy()}</Button>
-					<Button dense disabled={!view.lines.length} onclick={download}>{m.logs_download()}</Button
-					>
-				</div>
-				<div class="flex flex-wrap gap-1" role="group" aria-label={m.logs_components()}>
-					{#each COMPONENTS as c (c)}
-						<Button
-							dense
-							variant={components.includes(c) ? 'primary' : 'quiet'}
-							aria-pressed={components.includes(c)}
-							onclick={() => toggleComponent(c)}>{c}</Button
-						>
-					{/each}
-				</div>
-
-				{#if detailed && logging && !logging.recordsDebug}
-					<Banner kind="info">{m.logs_not_recorded()}</Banner>
-				{/if}
-				{#if view.status === 'offline' || view.status === 'unavailable' || view.status === 'reconnecting'}
-					<Banner kind={view.status === 'reconnecting' ? 'info' : 'warning'}>
-						{view.status === 'offline'
-							? m.logs_offline()
-							: view.status === 'unavailable'
-								? m.logs_stream_error()
-								: m.logs_reconnecting()}
-						<Button dense variant="quiet" onclick={() => view.retry()}>{m.logs_retry()}</Button>
-					</Banner>
-				{/if}
-				{#if view.loadError}
-					<Banner kind="error"
-						>{m.logs_history_error()}
-						<Button dense variant="quiet" onclick={() => view.retry()}>{m.logs_retry()}</Button>
-					</Banner>
-				{/if}
-				{#if view.trimmed > 0}
-					<p class="text-small text-muted-text" data-testid="logs-trimmed">
-						{m.logs_trimmed({ count: view.trimmed, max: MAX_LINES })}
-					</p>
-				{/if}
-				{#if view.skipped > 0}
-					<p class="text-small text-muted-text">{m.logs_skipped({ count: view.skipped })}</p>
-				{/if}
-
-				<div
-					class="relative min-h-0 flex-1 rounded-box border border-field-border"
-					bind:this={wrapper}
-					onscrollcapture={onScroll}
-				>
-					{#if !view.loaded}
-						<div class="p-4" aria-busy="true"><Skeleton lines={6} /></div>
-					{:else if !view.lines.length}
-						<EmptyState
-							title={filtered ? m.logs_none_match() : m.logs_empty()}
-							text={filtered ? undefined : m.logs_empty_text()}
-						>
-							{#snippet action()}
-								{#if filtered}<Button onclick={clearFilters}>{m.logs_clear_filters()}</Button>{/if}
-							{/snippet}
-						</EmptyState>
-					{:else}
-						<!-- Announcements are off: a live stream read aloud is unusable (§10.10.12). -->
-						<div role="log" aria-live="off" aria-label={m.logs_list_label()} class="h-full">
-							{#key wrap}
-								<VirtualList
-									items={view.lines}
-									getKey={keyOf}
-									label={m.logs_list_label()}
-									measureRows
-									estimateSize={28}
-									bind:activeIndex
-									onActivate={(_, l) => toggle(keyOf(l))}
-									class="font-mono text-small"
-								>
-									{#snippet row(l)}
-										{@const Icon = ICONS[l.level]}
-										{@const open = expanded.has(keyOf(l))}
-										<div class="px-2 py-1 {TONE[l.level]}">
-											<div class="flex gap-2 {wrap || open ? '' : 'truncate'}">
-												<span class="shrink-0 text-muted-text"
-													>{formatTime(l.ts, utc, displayTimeZone())}</span
-												>
-												<span class="logs-level inline-flex shrink-0 items-center gap-1">
-													<Icon aria-hidden="true" />{levelName(l.level)}
-												</span>
-												<span class="logs-component shrink-0 text-muted-text"
-													>{safe(l.component, 32)}</span
-												>
-												<span
-													class="min-w-0 {wrap || open
-														? 'break-words whitespace-pre-wrap'
-														: 'truncate'}"
-												>
-													{safe(l.msg || l.event || l.target, open ? FIELD_MAX : undefined)}
-													{#if l.repeated}<span class="text-muted-text">
-															{m.logs_repeated({
-																count: l.repeated.count,
-																seconds: l.repeated.seconds
-															})}</span
-														>{/if}
-													{#if l.truncated}<span class="text-muted-text"> {m.logs_cut()}</span>{/if}
-												</span>
-											</div>
-											{#if open}
-												<dl class="mt-1 logs-fields gap-x-3 ps-4 text-muted-text">
-													{#each l.fields as f, n (n)}
-														<dt>{safe(f.name, 64)}</dt>
-														<dd class="break-words whitespace-pre-wrap">
-															{safe(f.value, FIELD_MAX)}
-														</dd>
-													{:else}
-														<dd class="col-span-2">{m.logs_no_fields()}</dd>
-													{/each}
-												</dl>
-											{/if}
-										</div>
-									{/snippet}
-								</VirtualList>
-							{/key}
-						</div>
-					{/if}
-					{#if !view.following && view.unseen > 0}
-						<div class="absolute inset-x-0 bottom-3 flex justify-center">
-							<Button variant="primary" dense onclick={jump}
-								>{m.logs_new_lines({ count: view.unseen })}</Button
-							>
-						</div>
-					{/if}
-				</div>
-				<!-- The live region says only "Paused"; the changing count sits outside it. -->
-				<div class="flex flex-wrap gap-x-4 text-small text-muted-text">
-					<span role="status"
-						>{[view.paused ? m.logs_paused_short() : '', notice].filter(Boolean).join(' · ')}</span
-					>
-					{#if view.paused}<span>{m.logs_paused({ count: view.held })}</span>{/if}
-				</div>
+				<a class="ms-auto text-small underline" href={loggingHref}>{m.logs_open_full()}</a>
 			</div>
-		</section>
-	</div>
+
+			{#if banner}
+				<Banner kind="warning" title={m.logs_identifying_title()}>
+					{m.logs_identifying({ time: banner })}
+					<a class="underline" href={loggingHref}>{m.logs_identifying_manage()}</a>
+					{#if turnOffError}<p role="alert" class="text-small text-error">{turnOffError}</p>{/if}
+					{#snippet action()}
+						<Button variant="secondary" disabled={turningOff} onclick={turnOff}
+							>{m.settings_logging_turn_off()}</Button
+						>
+					{/snippet}
+				</Banner>
+			{/if}
+
+			<div
+				class="logs-toolbar flex flex-wrap items-center gap-2"
+				role="toolbar"
+				aria-label={m.logs_toolbar()}
+			>
+				<Select
+					dense
+					aria-label={m.logs_level_label()}
+					bind:value={level}
+					options={LEVELS.map((l) => ({
+						value: l,
+						label: m.logs_level_min({ level: levelName(l) })
+					}))}
+				/>
+				<Input
+					dense
+					type="search"
+					class="logs-filter"
+					bind:value={text}
+					data-logs-filter
+					aria-label={m.logs_filter_label()}
+					placeholder={m.logs_filter_placeholder()}
+					maxlength={200}
+				/>
+				<Button
+					dense
+					variant={utc ? 'primary' : 'secondary'}
+					aria-pressed={utc}
+					onclick={() => (utc = !utc)}
+				>
+					{utc ? m.logs_time_utc() : m.logs_time_local()}
+				</Button>
+				<Button
+					dense
+					variant={wrap ? 'primary' : 'secondary'}
+					aria-pressed={wrap}
+					onclick={() => (wrap = !wrap)}
+				>
+					{m.logs_wrap()}
+				</Button>
+				<Button
+					dense
+					variant={view.paused ? 'primary' : 'secondary'}
+					aria-pressed={view.paused}
+					onclick={() => view.setPaused(!view.paused)}
+				>
+					{view.paused ? m.logs_resume() : m.logs_pause()}
+				</Button>
+				<Button
+					dense
+					disabled={!view.hasEarlier}
+					loading={view.loadingEarlier}
+					onclick={() => view.loadEarlier()}
+				>
+					{m.logs_load_earlier()}
+				</Button>
+				<Button dense disabled={!view.lines.length} onclick={copy}>{m.logs_copy()}</Button>
+				<Button dense disabled={!view.lines.length} onclick={download}>{m.logs_download()}</Button>
+			</div>
+			<div class="flex flex-wrap gap-1" role="group" aria-label={m.logs_components()}>
+				{#each COMPONENTS as c (c)}
+					<Button
+						dense
+						variant={components.includes(c) ? 'primary' : 'quiet'}
+						aria-pressed={components.includes(c)}
+						onclick={() => toggleComponent(c)}>{c}</Button
+					>
+				{/each}
+			</div>
+
+			{#if detailed && logging && !logging.recordsDebug}
+				<Banner kind="info">{m.logs_not_recorded()}</Banner>
+			{/if}
+			{#if view.status === 'offline' || view.status === 'unavailable' || view.status === 'reconnecting'}
+				<Banner kind={view.status === 'reconnecting' ? 'info' : 'warning'}>
+					{view.status === 'offline'
+						? m.logs_offline()
+						: view.status === 'unavailable'
+							? m.logs_stream_error()
+							: m.logs_reconnecting()}
+					<Button dense variant="quiet" onclick={() => view.retry()}>{m.logs_retry()}</Button>
+				</Banner>
+			{/if}
+			{#if view.loadError}
+				<Banner kind="error"
+					>{m.logs_history_error()}
+					<Button dense variant="quiet" onclick={() => view.retry()}>{m.logs_retry()}</Button>
+				</Banner>
+			{/if}
+			{#if view.trimmed > 0}
+				<p class="text-small text-muted-text" data-testid="logs-trimmed">
+					{m.logs_trimmed({ count: view.trimmed, max: MAX_LINES })}
+				</p>
+			{/if}
+			{#if view.skipped > 0}
+				<p class="text-small text-muted-text">{m.logs_skipped({ count: view.skipped })}</p>
+			{/if}
+
+			<div
+				class="relative min-h-0 flex-1 rounded-box border border-field-border"
+				bind:this={wrapper}
+				onscrollcapture={onScroll}
+			>
+				{#if !view.loaded}
+					<div class="p-4" aria-busy="true"><Skeleton lines={6} /></div>
+				{:else if !view.lines.length}
+					<EmptyState
+						title={filtered ? m.logs_none_match() : m.logs_empty()}
+						text={filtered ? undefined : m.logs_empty_text()}
+					>
+						{#snippet action()}
+							{#if filtered}<Button onclick={clearFilters}>{m.logs_clear_filters()}</Button>{/if}
+						{/snippet}
+					</EmptyState>
+				{:else}
+					<!-- Announcements are off: a live stream read aloud is unusable (§10.10.12). -->
+					<div role="log" aria-live="off" aria-label={m.logs_list_label()} class="h-full">
+						{#key wrap}
+							<VirtualList
+								items={view.lines}
+								getKey={keyOf}
+								label={m.logs_list_label()}
+								measureRows
+								estimateSize={28}
+								bind:activeIndex
+								onActivate={(_, l) => toggle(keyOf(l))}
+								class="font-mono text-small"
+							>
+								{#snippet row(l)}
+									{@const Icon = ICONS[l.level]}
+									{@const open = expanded.has(keyOf(l))}
+									<div class="px-2 py-1 {TONE[l.level]}">
+										<div class="flex gap-2 {wrap || open ? '' : 'truncate'}">
+											<span class="shrink-0 text-muted-text"
+												>{formatTime(l.ts, utc, displayTimeZone())}</span
+											>
+											<span class="logs-level inline-flex shrink-0 items-center gap-1">
+												<Icon aria-hidden="true" />{levelName(l.level)}
+											</span>
+											<span class="logs-component shrink-0 text-muted-text"
+												>{safe(l.component, 32)}</span
+											>
+											<span
+												class="min-w-0 {wrap || open
+													? 'break-words whitespace-pre-wrap'
+													: 'truncate'}"
+											>
+												{safe(l.msg || l.event || l.target, open ? FIELD_MAX : undefined)}
+												{#if l.repeated}<span class="text-muted-text">
+														{m.logs_repeated({
+															count: l.repeated.count,
+															seconds: l.repeated.seconds
+														})}</span
+													>{/if}
+												{#if l.truncated}<span class="text-muted-text"> {m.logs_cut()}</span>{/if}
+											</span>
+										</div>
+										{#if open}
+											<dl class="mt-1 logs-fields gap-x-3 ps-4 text-muted-text">
+												{#each l.fields as f, n (n)}
+													<dt>{safe(f.name, 64)}</dt>
+													<dd class="break-words whitespace-pre-wrap">
+														{safe(f.value, FIELD_MAX)}
+													</dd>
+												{:else}
+													<dd class="col-span-2">{m.logs_no_fields()}</dd>
+												{/each}
+											</dl>
+										{/if}
+									</div>
+								{/snippet}
+							</VirtualList>
+						{/key}
+					</div>
+				{/if}
+				{#if !view.following && view.unseen > 0}
+					<div class="absolute inset-x-0 bottom-3 flex justify-center">
+						<Button variant="primary" dense onclick={jump}
+							>{m.logs_new_lines({ count: view.unseen })}</Button
+						>
+					</div>
+				{/if}
+			</div>
+			<!-- The live region says only "Paused"; the changing count sits outside it. -->
+			<div class="flex flex-wrap gap-x-4 text-small text-muted-text">
+				<span role="status"
+					>{[view.paused ? m.logs_paused_short() : '', notice].filter(Boolean).join(' · ')}</span
+				>
+				{#if view.paused}<span>{m.logs_paused({ count: view.held })}</span>{/if}
+			</div>
+		</div>
+	</section>
 </div>
 
 <style>

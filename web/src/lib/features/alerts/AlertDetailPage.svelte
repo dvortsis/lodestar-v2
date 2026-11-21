@@ -161,188 +161,186 @@
 </script>
 
 <div class={PAGE_FRAME} data-page-frame="">
-	<div class={PAGE_BODY_WIDE}>
-		<section class="contents" aria-busy={d.loading || undefined}>
-			{#if d.error && !d.search}
-				<div class="al-missing">
-					<h1 class={PAGE_H1} tabindex="-1">
-						{notFound ? m.alerts_not_found_title() : m.alerts_title()}
+	<section class={PAGE_BODY_WIDE} aria-busy={d.loading || undefined}>
+		{#if d.error && !d.search}
+			<div class="al-missing">
+				<h1 class={PAGE_H1} tabindex="-1">
+					{notFound ? m.alerts_not_found_title() : m.alerts_title()}
+				</h1>
+				{#if notFound}
+					<p class="al-muted">{m.alerts_not_found_text()}</p>
+					<!-- eslint-disable svelte/no-navigation-without-resolve -- alertsPath() resolves -->
+					<a
+						href={alertsPath()}
+						class="btn btn-outline border-field-border {FOCUS_RING} {TARGET_MIN}"
+						>{m.alerts_back()}</a
+					>
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
+				{:else}
+					<Banner kind="error">
+						{m.alerts_error_load()}
+						{#snippet action()}
+							<Button dense onclick={() => void d.load()}>{m.alerts_retry()}</Button>
+						{/snippet}
+					</Banner>
+				{/if}
+			</div>
+		{:else}
+			<header class="al-header">
+				<div class="al-title-row">
+					<h1 class={PAGE_H1} tabindex="-1" data-testid="alert-name">
+						{d.search ? d.search.name : m.alerts_title()}
 					</h1>
-					{#if notFound}
-						<p class="al-muted">{m.alerts_not_found_text()}</p>
-						<!-- eslint-disable svelte/no-navigation-without-resolve -- alertsPath() resolves -->
+					{#if d.search?.paused}
+						<Badge variant="warning"
+							><IconPause class="size-4 shrink-0" aria-hidden="true" /><span
+								data-testid="alert-paused">{m.alerts_paused()}</span
+							></Badge
+						>
+					{/if}
+				</div>
+				{#if d.search}
+					{@const s = d.search}
+					<div class="al-query">
+						{#if s.q.trim() === ''}
+							<span class="al-muted">{m.alerts_query_all()}</span>
+						{:else}
+							<Mono wrap>{s.q}</Mono>
+						{/if}
+						<!-- eslint-disable svelte/no-navigation-without-resolve -- searchPath() resolves -->
 						<a
-							href={alertsPath()}
-							class="btn btn-outline border-field-border {FOCUS_RING} {TARGET_MIN}"
-							>{m.alerts_back()}</a
+							href={searchPath(s)}
+							class="btn btn-outline btn-sm border-field-border {FOCUS_RING} {TARGET_MIN}"
+							data-testid="alert-open-search"
+							><IconSearch class="size-4" aria-hidden="true" />{m.alerts_open_in_search()}</a
 						>
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
-					{:else}
+					</div>
+					<div class="al-meta">
+						<span data-testid="alert-opened-unread"
+							>{m.alerts_new_count({ count: formatCount(d.opened, locale) })}</span
+						>
+						<ChannelBadges search={s} />
+						<PauseToggle search={s} onUpdated={(u) => d.replace(u)} />
+						<Button
+							variant="quiet"
+							dense
+							aria-label={m.alerts_delete_aria({ name: s.name })}
+							onclick={() => void openDelete()}
+							data-testid="alert-delete"
+						>
+							<IconTrash class="size-4" aria-hidden="true" />{m.alerts_delete()}
+						</Button>
+					</div>
+					{#if feed}
+						<div class="al-feed">
+							<label class="al-feed-label" for="alert-feed">{m.alerts_feed_label()}</label>
+							<Input
+								id="alert-feed"
+								mono
+								readonly
+								value={feed}
+								onfocus={(e) => e.currentTarget.select()}
+								data-testid="alert-feed"
+							/>
+							<p class="al-muted">
+								{m.alerts_feed_help()}
+								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- settingsSecurityPath() resolves -->
+								<a href={settingsSecurityPath()} class="al-link">{m.alerts_feed_help_link()}</a>.
+							</p>
+						</div>
+					{/if}
+				{:else if loadingFirst}
+					<Skeleton lines={2} />
+				{/if}
+			</header>
+
+			{#if d.error && d.search}
+				<Banner kind="error">
+					{m.alerts_error_refresh()}
+					{#snippet action()}
+						<Button dense onclick={() => void d.retry()}>{m.alerts_retry()}</Button>
+					{/snippet}
+				</Banner>
+			{/if}
+
+			{#if d.fresh > 0}
+				<Banner kind="info">
+					<span data-testid="alert-banner">{bannerText(d.fresh)}</span>
+					{#snippet action()}
+						<Button dense onclick={() => void d.show()} data-testid="alert-show"
+							>{m.alerts_show()}</Button
+						>
+					{/snippet}
+				</Banner>
+			{/if}
+			<div class="sr-only" role="status" aria-live="polite" data-testid="alert-live">
+				{announcement}
+			</div>
+
+			{#if loadingFirst}
+				<div class="al-skeleton" data-testid="alert-skeleton">
+					{#if slow}
+						{#each [0, 1, 2] as n (n)}
+							<Skeleton class="al-skeleton-row" />
+						{/each}
+					{/if}
+				</div>
+			{/if}
+			{#if d.search}
+				{#if items.length === 0 && !d.loading}
+					<p class="al-empty" data-testid="alert-empty">
+						{d.search.paused ? m.alerts_empty_detail_paused() : m.alerts_empty_detail()}
+					</p>
+				{:else}
+					<div class="al-list" bind:this={listEl}>
+						<VirtualList
+							{items}
+							role="grid"
+							getKey={(it) => it.key}
+							label={m.alerts_matches_label({ name: d.search.name })}
+							estimateSize={rowHeight}
+							measureRows
+							bind:activeIndex={active}
+							onActivate={open}
+							hasMore={d.hasMore}
+							loadingMore={d.loadingMore}
+							onLoadMore={() => void d.loadMore()}
+							loadMoreLabel={m.alerts_loading()}
+						>
+							{#snippet row(it)}
+								{#if it.kind === 'mark'}
+									<div role="gridcell" class="al-divider-cell">
+										<h2 class="al-divider" data-testid="alert-divider">
+											{m.alerts_divider({ time: formatDateTime(it.at, locale) })}
+										</h2>
+									</div>
+								{:else}
+									<div role="gridcell" style:height="{rowHeight}px">
+										<ResultRow hit={it.row.torrent} {density} testid="alert-row-{it.row.id}">
+											{#snippet extra()}
+												<span data-testid="alert-row-{it.row.id}-matched"
+													>{m.alerts_matched()} <RelativeTime seconds={it.row.created_at} /></span
+												>
+											{/snippet}
+										</ResultRow>
+									</div>
+								{/if}
+							{/snippet}
+						</VirtualList>
+					</div>
+					{#if d.moreError}
 						<Banner kind="error">
-							{m.alerts_error_load()}
+							{m.alerts_error_more()}
 							{#snippet action()}
-								<Button dense onclick={() => void d.load()}>{m.alerts_retry()}</Button>
+								<Button dense onclick={() => void d.retryMore()}>{m.alerts_retry()}</Button>
 							{/snippet}
 						</Banner>
 					{/if}
-				</div>
-			{:else}
-				<header class="al-header">
-					<div class="al-title-row">
-						<h1 class={PAGE_H1} tabindex="-1" data-testid="alert-name">
-							{d.search ? d.search.name : m.alerts_title()}
-						</h1>
-						{#if d.search?.paused}
-							<Badge variant="warning"
-								><IconPause class="size-4 shrink-0" aria-hidden="true" /><span
-									data-testid="alert-paused">{m.alerts_paused()}</span
-								></Badge
-							>
-						{/if}
-					</div>
-					{#if d.search}
-						{@const s = d.search}
-						<div class="al-query">
-							{#if s.q.trim() === ''}
-								<span class="al-muted">{m.alerts_query_all()}</span>
-							{:else}
-								<Mono wrap>{s.q}</Mono>
-							{/if}
-							<!-- eslint-disable svelte/no-navigation-without-resolve -- searchPath() resolves -->
-							<a
-								href={searchPath(s)}
-								class="btn btn-outline btn-sm border-field-border {FOCUS_RING} {TARGET_MIN}"
-								data-testid="alert-open-search"
-								><IconSearch class="size-4" aria-hidden="true" />{m.alerts_open_in_search()}</a
-							>
-							<!-- eslint-enable svelte/no-navigation-without-resolve -->
-						</div>
-						<div class="al-meta">
-							<span data-testid="alert-opened-unread"
-								>{m.alerts_new_count({ count: formatCount(d.opened, locale) })}</span
-							>
-							<ChannelBadges search={s} />
-							<PauseToggle search={s} onUpdated={(u) => d.replace(u)} />
-							<Button
-								variant="quiet"
-								dense
-								aria-label={m.alerts_delete_aria({ name: s.name })}
-								onclick={() => void openDelete()}
-								data-testid="alert-delete"
-							>
-								<IconTrash class="size-4" aria-hidden="true" />{m.alerts_delete()}
-							</Button>
-						</div>
-						{#if feed}
-							<div class="al-feed">
-								<label class="al-feed-label" for="alert-feed">{m.alerts_feed_label()}</label>
-								<Input
-									id="alert-feed"
-									mono
-									readonly
-									value={feed}
-									onfocus={(e) => e.currentTarget.select()}
-									data-testid="alert-feed"
-								/>
-								<p class="al-muted">
-									{m.alerts_feed_help()}
-									<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- settingsSecurityPath() resolves -->
-									<a href={settingsSecurityPath()} class="al-link">{m.alerts_feed_help_link()}</a>.
-								</p>
-							</div>
-						{/if}
-					{:else if loadingFirst}
-						<Skeleton lines={2} />
-					{/if}
-				</header>
-
-				{#if d.error && d.search}
-					<Banner kind="error">
-						{m.alerts_error_refresh()}
-						{#snippet action()}
-							<Button dense onclick={() => void d.retry()}>{m.alerts_retry()}</Button>
-						{/snippet}
-					</Banner>
-				{/if}
-
-				{#if d.fresh > 0}
-					<Banner kind="info">
-						<span data-testid="alert-banner">{bannerText(d.fresh)}</span>
-						{#snippet action()}
-							<Button dense onclick={() => void d.show()} data-testid="alert-show"
-								>{m.alerts_show()}</Button
-							>
-						{/snippet}
-					</Banner>
-				{/if}
-				<div class="sr-only" role="status" aria-live="polite" data-testid="alert-live">
-					{announcement}
-				</div>
-
-				{#if loadingFirst}
-					<div class="al-skeleton" data-testid="alert-skeleton">
-						{#if slow}
-							{#each [0, 1, 2] as n (n)}
-								<Skeleton class="al-skeleton-row" />
-							{/each}
-						{/if}
-					</div>
-				{/if}
-				{#if d.search}
-					{#if items.length === 0 && !d.loading}
-						<p class="al-empty" data-testid="alert-empty">
-							{d.search.paused ? m.alerts_empty_detail_paused() : m.alerts_empty_detail()}
-						</p>
-					{:else}
-						<div class="al-list" bind:this={listEl}>
-							<VirtualList
-								{items}
-								role="grid"
-								getKey={(it) => it.key}
-								label={m.alerts_matches_label({ name: d.search.name })}
-								estimateSize={rowHeight}
-								measureRows
-								bind:activeIndex={active}
-								onActivate={open}
-								hasMore={d.hasMore}
-								loadingMore={d.loadingMore}
-								onLoadMore={() => void d.loadMore()}
-								loadMoreLabel={m.alerts_loading()}
-							>
-								{#snippet row(it)}
-									{#if it.kind === 'mark'}
-										<div role="gridcell" class="al-divider-cell">
-											<h2 class="al-divider" data-testid="alert-divider">
-												{m.alerts_divider({ time: formatDateTime(it.at, locale) })}
-											</h2>
-										</div>
-									{:else}
-										<div role="gridcell" style:height="{rowHeight}px">
-											<ResultRow hit={it.row.torrent} {density} testid="alert-row-{it.row.id}">
-												{#snippet extra()}
-													<span data-testid="alert-row-{it.row.id}-matched"
-														>{m.alerts_matched()} <RelativeTime seconds={it.row.created_at} /></span
-													>
-												{/snippet}
-											</ResultRow>
-										</div>
-									{/if}
-								{/snippet}
-							</VirtualList>
-						</div>
-						{#if d.moreError}
-							<Banner kind="error">
-								{m.alerts_error_more()}
-								{#snippet action()}
-									<Button dense onclick={() => void d.retryMore()}>{m.alerts_retry()}</Button>
-								{/snippet}
-							</Banner>
-						{/if}
-					{/if}
 				{/if}
 			{/if}
-		</section>
-	</div>
+		{/if}
+	</section>
 </div>
 
 {#if DeleteDialog && d.search}
