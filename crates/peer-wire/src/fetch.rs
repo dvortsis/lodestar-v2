@@ -73,6 +73,12 @@ pub struct FetchOptions {
     /// `metadata_size`, before the first piece request. `None` reserves
     /// nothing (the fetch downloads as soon as the size checks out).
     pub reserve: Option<Reserve>,
+    /// How long a large dict's first window may take once it's asked for
+    /// (X-fetch-first-window). [`FIRST_WINDOW_DEADLINE`] by default, and
+    /// every production caller keeps the default: the fetch pool's
+    /// admission bounds assume it. A test of a deliberately lossy link
+    /// can give itself room (X-flake-utp-lossy-win).
+    pub first_window_deadline: Duration,
 }
 
 /// A live address check, shared with whoever keeps the lists current.
@@ -178,6 +184,7 @@ impl Default for FetchOptions {
             allow_private: false,
             route_backoff: false,
             reserve: None,
+            first_window_deadline: FIRST_WINDOW_DEADLINE,
         }
     }
 }
@@ -737,7 +744,7 @@ where
                     bounded(wire.send_extended(id, &request), &mut pace, a.got, deadline).await?;
                 }
                 if size > FIRST_WINDOW {
-                    window_due = Some(Instant::now() + FIRST_WINDOW_DEADLINE);
+                    window_due = Some(Instant::now() + opts.first_window_deadline);
                 }
                 assembly = Some(a);
             }
@@ -1481,6 +1488,47 @@ mod tests {
         .expect("fetched");
         assert_eq!(got.info, info);
         peer.abort();
+    }
+
+    /// The default first-window bound is the fixed 4 s every production
+    /// caller relies on (X-flake-utp-lossy-win).
+    #[test]
+    fn the_first_window_deadline_defaults_to_the_bound() {
+        assert_eq!(FIRST_WINDOW_DEADLINE, Duration::from_secs(4));
+        assert_eq!(
+            FetchOptions::default().first_window_deadline,
+            FIRST_WINDOW_DEADLINE
+        );
+    }
+
+    /// A peer whose first window takes about 6 s (pieces 1.5 s apart) fails
+    /// it under the default bound, and finishes when a caller gives the
+    /// window more room.
+    #[tokio::test(start_paused = true)]
+    async fn the_first_window_deadline_is_the_options() {
+        let info: Vec<u8> = (0..(FIRST_WINDOW * 2)).map(|i| (i % 251) as u8).collect();
+        let key = InfoHash(Sha1::digest(&info).into());
+        for room in [None, Some(Duration::from_secs(10))] {
+            let (ours, theirs) = tokio::io::duplex(1 << 16);
+            let steady = Then::Steady { each: 1_500 };
+            let peer = tokio::spawn(scripted(theirs, info.clone(), usize::MAX, steady));
+            let mut opts = plain(Duration::from_secs(30));
+            opts.reserve = Some(Reserve(Arc::new(|_, _| Box::pin(async {}))));
+            if let Some(room) = room {
+                opts.first_window_deadline = room;
+            }
+            let got = timeout(
+                Duration::from_secs(30),
+                fetch_on_stream(ours, &key, &opts, false),
+            )
+            .await
+            .expect("it ends before the deadline");
+            match room {
+                None => assert!(matches!(got, Err(Error::FirstWindow)), "{got:?}"),
+                Some(_) => assert_eq!(got.expect("fetched").info, info),
+            }
+            peer.abort();
+        }
     }
 
     /// A real fetch over loopback TCP whose peer never sends its first

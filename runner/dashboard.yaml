@@ -455,6 +455,7 @@ placement:
   - X-flake-query-token-style
   - X-flake-relevance-lock
   - X-flake-utp-lossy
+  - X-flake-utp-lossy-win
   - X-flake-export-wal
   - X-flake-filter-trails
   - X-soak-screen-calibrate
