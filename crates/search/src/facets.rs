@@ -566,6 +566,10 @@ pub struct ValueCount {
     pub selected: bool,
     /// The query excludes it (`-res:480p`).
     pub excluded: bool,
+    /// How to show it, when that differs from `value` (only `group`:
+    /// the most common spelling in the stored names, [`group_labels`]).
+    /// `value` stays what a query matches on and a click sends.
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -753,6 +757,9 @@ pub fn facets(
         let mut counts = top(f, t, &f.selection(node), limit);
         if f == Facet::Adult && counts.values.is_empty() {
             continue;
+        }
+        if f == Facet::Group {
+            group_labels(searcher, index.fields(), &mut counts.values, cancel)?;
         }
         // `source` has no complement (`compile.rs`'s `provenance`): while
         // it's backfilled, documents the walk hasn't reached aren't
@@ -1295,6 +1302,7 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
                 count: *c,
                 selected,
                 excluded,
+                label: None,
             });
         } else {
             other += c;
@@ -1309,6 +1317,7 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
                 count: 0,
                 selected,
                 excluded,
+                label: None,
             });
         }
     }
@@ -1319,6 +1328,257 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
         approx: t.sampled,
         partial: false,
     }
+}
+
+/// Stored names read per listed `group` value for its spelling, at most.
+pub const LABEL_SAMPLES: usize = 8;
+/// Stored names read per request for `group` spellings, at most, however
+/// many values are listed (a runner call, §2.26).
+pub const LABEL_READS: usize = 256;
+/// Names a value needs to get a label: a long list (`limit=100`) reads
+/// this many per value, and the values past what [`LABEL_READS`] allows
+/// at this many each show as sent.
+pub const MIN_LABEL_SAMPLES: usize = 3;
+/// The longest value given a label, in bytes: the query language's
+/// longest keyword value (`query::tag_value`). Real groups are far
+/// shorter, and the scan of a name is bounded by it.
+const MAX_LABEL_BYTES: usize = 64;
+
+/// Sets each `group` value's `label` to its most common spelling in the
+/// stored names of the torrents that carry it (the index keeps tag terms
+/// lower-cased, `doc.rs`, so `rarbg` shows as "RARBG").
+///
+/// - **Which torrents:** up to [`LABEL_SAMPLES`] of the term's live
+///   documents in the snapshot, picked by rank along its posting lists
+///   ([`sample_docs`]), not from the matches of this search: every
+///   search on one snapshot reads the same names for a group.
+/// - **One vote per torrent:** a name votes for the last spelling of the
+///   value it holds as a word of its own ([`spelling_in`]), and
+///   [`choose_spelling`] takes the most votes, ties by byte order. The
+///   samples are spread over the group's torrents by rank, so a spelling
+///   wins only when it's on a large share of them, wherever in the index
+///   a junk or hostile record sits and however recently it was written.
+/// - **What may show:** names are untrusted, so a spelling is only
+///   [`fit_label`]: the value char for char under lower-casing, and
+///   NFKC-stable. A value longer than [`MAX_LABEL_BYTES`] gets none.
+/// - **Bounded:** at most [`LABEL_READS`] names per request, at least
+///   [`MIN_LABEL_SAMPLES`] per value; values in list order (the top
+///   counts first) until the reads run out, the rest showing as sent. A
+///   long list reads fewer names per value, so a spelling can differ
+///   between the default list and "Show more"; its samples are the first
+///   of the default list's ([`sample_ranks`]).
+/// - **No spelling found** (the group came from a file name, or no name
+///   holds a fit one): no label, and the value shows as sent.
+/// - **Hidden torrents vote too.** The samples are the term's documents,
+///   so a torrent the always-on filters hide can be one; all it can
+///   change is the case of a value already listed.
+///
+/// The value itself is unchanged: it's what a query matches and a click
+/// sends.
+fn group_labels(
+    searcher: &tantivy::Searcher,
+    fields: &crate::schema::Fields,
+    values: &mut [ValueCount],
+    cancel: &CancelToken,
+) -> Result<()> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    let per = (LABEL_READS / values.len()).clamp(MIN_LABEL_SAMPLES, LABEL_SAMPLES);
+    let mut left = LABEL_READS;
+    for v in values.iter_mut() {
+        if left < per {
+            break;
+        }
+        if v.value.len() > MAX_LABEL_BYTES {
+            continue;
+        }
+        cancel.check()?;
+        let term = tantivy::Term::from_field_text(
+            fields.tag,
+            &format!("{}:{}", TagKey::Group.as_str(), v.value),
+        );
+        let docs = sample_docs(searcher, &term, per, cancel)?;
+        left -= docs.len();
+        let mut votes = Vec::new();
+        for addr in docs {
+            let doc: tantivy::TantivyDocument = searcher.doc(addr)?;
+            let name = doc
+                .get_first(fields.name)
+                .and_then(|n| tantivy::schema::Value::as_str(&n));
+            if let Some(s) = name.and_then(|n| spelling_in(n, &v.value)) {
+                votes.push(s.to_owned());
+            }
+        }
+        v.label = choose_spelling(votes.iter().map(String::as_str))
+            .filter(|s| *s != v.value)
+            .map(str::to_owned);
+    }
+    Ok(())
+}
+
+/// Whether `label` may show for `value` (the runner's rules, §2.26): it
+/// differs from the value only by ASCII letters in upper case (`a`–`z`
+/// as `A`–`Z`), every other char exactly the value's; and it's
+/// NFKC-stable. So a label never holds a char the value doesn't, other
+/// than a capital ASCII letter: no compatibility char (the Kelvin sign,
+/// U+212A) and no other script's capital that reads as a Latin one, so a
+/// label can't look like another group's ("S1-20: labels limited to
+/// ASCII re-casing").
+pub(crate) fn fit_label(label: &str, value: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    let mut want = value.chars();
+    for c in label.chars() {
+        let Some(v) = want.next() else {
+            return false;
+        };
+        if c != v && !(c.is_ascii_uppercase() && c.to_ascii_lowercase() == v) {
+            return false;
+        }
+    }
+    want.next().is_none() && label.nfkc().eq(label.chars())
+}
+
+/// The ranks, among `total` documents, of `k` samples: the midpoints of
+/// the van der Corput sequence's first `k` points (1/2, 1/4, 3/4, 1/8,
+/// …) scaled to `total`, sorted and without repeats. The first `k` of a
+/// longer list are these, so a long facet list's three samples are among
+/// the default list's eight, and every sample set spreads over the
+/// documents by rank.
+pub(crate) fn sample_ranks(total: u64, k: usize) -> Vec<u64> {
+    let mut ranks: Vec<u64> = (1..=k as u64)
+        .map(|j| {
+            // The bits of j reversed, as a fraction of 2^32.
+            let u = u128::from((j as u32).reverse_bits());
+            ((u * u128::from(total)) >> 32) as u64
+        })
+        .collect();
+    ranks.sort_unstable();
+    ranks.dedup();
+    ranks
+}
+
+/// Up to `k` live documents with `term`, at [`sample_ranks`] along its
+/// posting lists (every segment's, in segment order). A rank on a deleted
+/// document takes the next live one. Each document once; the same
+/// snapshot always gives the same documents. Walks the postings up to the
+/// last rank: at most the term's documents, and a document has one group,
+/// so all the listed values' walks together visit each group-tagged
+/// document at most once.
+fn sample_docs(
+    searcher: &tantivy::Searcher,
+    term: &tantivy::Term,
+    k: usize,
+    cancel: &CancelToken,
+) -> Result<Vec<tantivy::DocAddress>> {
+    use tantivy::DocSet;
+    use tantivy::schema::IndexRecordOption;
+    let readers = searcher.segment_readers();
+    let mut freqs = Vec::with_capacity(readers.len());
+    for r in readers {
+        let df = r
+            .inverted_index(term.field())?
+            .doc_freq(term)
+            .map_err(crate::index::Error::Io)?;
+        freqs.push(u64::from(df));
+    }
+    let total: u64 = freqs.iter().sum();
+    let mut out: Vec<tantivy::DocAddress> = Vec::new();
+    let mut ranks = sample_ranks(total, k).into_iter().peekable();
+    let mut before = 0u64;
+    for (seg, reader) in readers.iter().enumerate() {
+        let end = before + freqs[seg];
+        if ranks.peek().is_none_or(|r| *r >= end) {
+            before = end;
+            continue;
+        }
+        let Some(mut p) = reader
+            .inverted_index(term.field())?
+            .read_postings(term, IndexRecordOption::Basic)
+            .map_err(crate::index::Error::Io)?
+        else {
+            before = end;
+            continue;
+        };
+        let alive = |d: DocId| reader.alive_bitset().is_none_or(|b| b.is_alive(d));
+        let mut rank = before;
+        let mut d = p.doc();
+        while d != TERMINATED {
+            let Some(&want) = ranks.peek() else { break };
+            if want >= end {
+                break;
+            }
+            if rank.is_multiple_of(u64::from(crate::cancel::CHECK_EVERY)) {
+                cancel.check()?;
+            }
+            if rank >= want && alive(d) {
+                let addr = tantivy::DocAddress::new(seg as u32, d);
+                if out.last() != Some(&addr) {
+                    out.push(addr);
+                }
+                // Every rank this document answers for.
+                while ranks.peek().is_some_and(|r| *r <= rank) {
+                    ranks.next();
+                }
+            }
+            d = p.advance();
+            rank += 1;
+        }
+        // Ranks left in this segment fell on deleted documents at its end.
+        while ranks.peek().is_some_and(|r| *r < end) {
+            ranks.next();
+        }
+        before = end;
+    }
+    Ok(out)
+}
+
+/// The spelling of `value` (lower case, as the index holds a tag) in
+/// `name`: the last [`fit_label`] substring that is a word of its own (no
+/// letter or digit on either side); `None` when there's none. A match
+/// inside another word (`flux` in "INFLUX") doesn't vote.
+///
+/// Linear in the name: only ASCII re-casing may differ ([`fit_label`]),
+/// so the name is ASCII-lower-cased once (same bytes, same offsets) and
+/// searched for non-overlapping matches; only those are checked.
+pub(crate) fn spelling_in<'a>(name: &'a str, value: &str) -> Option<&'a str> {
+    if value.is_empty() {
+        return None;
+    }
+    let lowered = name.to_ascii_lowercase();
+    let mut best = None;
+    let mut from = 0;
+    while let Some(start) = lowered[from..].find(value).map(|o| from + o) {
+        let end = start + value.len();
+        // `lowered` has `name`'s char boundaries, so this slice is one.
+        let cut = &name[start..end];
+        let edge = |c: Option<char>| !c.is_some_and(char::is_alphanumeric);
+        if edge(name[..start].chars().next_back())
+            && edge(name[end..].chars().next())
+            && fit_label(cut, value)
+        {
+            best = Some(cut);
+        }
+        from = end;
+    }
+    best
+}
+
+/// The spelling with the most votes, ties going to the first in byte
+/// order (`RARBG` before `Rarbg`); `None` with no votes. The order the
+/// votes come in doesn't matter.
+pub(crate) fn choose_spelling<'a>(votes: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
+    for v in votes {
+        *tally.entry(v).or_default() += 1;
+    }
+    // `max_by_key` keeps the last of equal maxima; reversed byte order
+    // makes that the first.
+    tally
+        .into_iter()
+        .rev()
+        .max_by_key(|(_, n)| *n)
+        .map(|(s, _)| s)
 }
 
 fn histogram(h: Histo, t: &Tally, first_run: Option<i64>) -> Histogram {

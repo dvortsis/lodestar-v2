@@ -91,13 +91,21 @@ export function languageLabel(code: string, locale: string): string {
 	}
 }
 
-/** A release group as written in the torrent's name: never re-cased for display. */
-export const groupLabel = (value: string): string => value;
+/**
+ * A release group as its torrents' names spell it: the server's `label` (`rarbg` → "RARBG") when
+ * it sent one, else the value as sent. Never re-cased here.
+ */
+export const groupLabel = (value: string, label?: string | null): string => label ?? value;
 /**
  * The value of a query field in plain words (`codec` `h264` → "H.264"): what the facets and the
  * Builder show. Fields with no table (`res`, `ext`, `has`) show the value as sent.
  */
-export function valueLabel(field: string, value: string, locale: string): string {
+export function valueLabel(
+	field: string,
+	value: string,
+	locale: string,
+	label?: string | null
+): string {
 	switch (field) {
 		case 'type':
 			return typeLabel(value);
@@ -112,7 +120,7 @@ export function valueLabel(field: string, value: string, locale: string): string
 		case 'lang':
 			return languageLabel(value, locale);
 		case 'group':
-			return groupLabel(value);
+			return groupLabel(value, label);
 		default:
 			// A flag's `yes` and `no` read as the facet rail says them; other values as sent.
 			return value === 'yes'

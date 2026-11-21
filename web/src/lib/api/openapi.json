@@ -15663,6 +15663,10 @@
             "type": "boolean",
             "description": "The query excludes it (`-res:480p`)."
           },
+          "label": {
+            "type": "string",
+            "description": "How to show it, when that differs from `value`: only `group`, the\nmost common spelling of the release group in its torrents' names\n(`rarbg` → \"RARBG\"). Absent otherwise. `value` stays what a query\nmatches and a click sends."
+          },
           "selected": {
             "type": "boolean",
             "description": "The query selects it."
