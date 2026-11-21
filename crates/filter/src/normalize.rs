@@ -114,7 +114,12 @@ fn confusable(c: char) -> char {
 /// [`visible_mark`] ones; U+2065, U+FFF0–FFF8 and U+E0000–E0FFF (the
 /// tags and plane 14's unassigned code points); and fillers that show as
 /// nothing (Hangul fillers, Khmer inherent vowels, variation selectors,
-/// the combining grapheme joiner).
+/// the Mongolian free variation selectors U+180B–180D and U+180F, the
+/// combining grapheme joiner). The variation selectors, the Mongolian ones
+/// and the combining grapheme joiner are combining marks too, which
+/// [`plan_char`] drops before it reads this, so listing them changes no
+/// reading: it keeps this exactly the Unicode set
+/// (`docs/decisions/2026-11-21-X-filter-dicp-doc.md`).
 #[inline]
 fn invisible(c: char) -> bool {
     // Nothing below the soft hyphen is invisible.
@@ -128,6 +133,7 @@ fn invisible(c: char) -> bool {
             | '\u{1160}'
             | '\u{17B4}'
             | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
             | '\u{3164}'
             | '\u{FE00}'..='\u{FE0F}'
             | '\u{2065}'
@@ -157,7 +163,9 @@ fn mark(c: char) -> bool {
 
 /// The [`invisible`] characters that the matching before
 /// F-normalize-invisible read as word breaks. Variation selectors
-/// (U+E0100–E01EF) are combining marks, dropped either way.
+/// (U+E0100–E01EF) and the Mongolian free variation selectors (U+180B–180D,
+/// U+180F) are combining marks, dropped either way, so a text holding one
+/// needs no second reading.
 fn newly_ignored(c: char) -> bool {
     matches!(
         c,
@@ -2034,7 +2042,7 @@ mod tests {
                     | '\u{061C}'
                     | '\u{115F}'..='\u{1160}'
                     | '\u{17B4}'..='\u{17B5}'
-                    | '\u{180E}'
+                    | '\u{180B}'..='\u{180F}'
                     | '\u{200B}'..='\u{200F}'
                     | '\u{202A}'..='\u{202E}'
                     | '\u{2060}'..='\u{206F}'
@@ -2103,6 +2111,36 @@ mod tests {
         for c in all_ignored() {
             assert_eq!(toks(&format!("hel{c}lo")), hello, "U+{:04X}", c as u32);
         }
+    }
+
+    /// The Mongolian free variation selectors (U+180B–180D, U+180F) are
+    /// default-ignorable and combining marks: dropped in both readings, as
+    /// the matching before dropped them, so they join a word, never split
+    /// one, and ask for no second reading
+    /// (docs/decisions/2026-11-21-X-filter-dicp-doc.md).
+    #[test]
+    fn mongolian_free_variation_selectors_read_as_nothing() {
+        let alpha_beta = crate::rules::keyword_tokens("alpha beta");
+        for c in ['\u{180B}', '\u{180C}', '\u{180D}', '\u{180F}'] {
+            let at = c as u32;
+            assert!(is_combining_mark(c), "U+{at:04X} is a combining mark");
+            assert!(invisible(c), "U+{at:04X}");
+            assert!(!newly_ignored(c) && !mark(c), "U+{at:04X}");
+            let mut ops = Vec::new();
+            plan_char(c, &mut ops);
+            assert!(ops.is_empty(), "U+{at:04X} reads as nothing: {ops:?}");
+            assert_eq!(toks(&format!("hel{c}lo")), toks("hello"), "U+{at:04X}");
+            assert!(has(&format!("hel{c}lo"), "hello", 0), "U+{at:04X}");
+            assert!(!has(&format!("hel{c}lo"), "hel", 0), "U+{at:04X}");
+            assert!(has(&format!("alpha{c}beta"), "alphabeta", 0), "U+{at:04X}");
+            let mut t = Vec::new();
+            tokens(&format!("The.Al{c}pha.{c}Be{c}ta{c}.2019"), &mut t);
+            assert!(crate::rules::in_a_row(&alpha_beta, &t), "U+{at:04X}");
+            assert!(!splits([format!("na\u{0430}me{c}").as_str()]), "U+{at:04X}");
+        }
+        // U+180E, the vowel separator, is a format character, ignored as
+        // it was.
+        assert!(invisible('\u{180E}') && !is_combining_mark('\u{180E}'));
     }
 
     /// Golden cases: the ranges `invisible` didn't cover before join a
