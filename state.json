@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T05:50Z",
+    "updated": "2026-11-21T05:52Z",
     "items": [
       {
         "slot": 1,
@@ -10677,13 +10677,12 @@
       },
       {
         "slot": 3,
-        "slice": "CR-COL-6",
+        "slice": "X-api-repeated-params",
         "role": "build",
         "agent": "session_01MMjhnBpjPfQ45Zap7mZNyi",
         "model": "opus",
-        "since": "2026-11-21T05:02Z",
-        "doing": "briefed; X-results-drawer-adaptive #1002 merged 59e18024",
-        "status": "running"
+        "since": "2026-11-21T05:52Z",
+        "doing": "briefed: briefs/X-api-repeated-params.md"
       },
       {
         "slot": 4,
