@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T07:46Z",
+    "updated": "2026-11-21T07:54Z",
     "items": [
       {
         "slot": 1,
@@ -10666,12 +10666,12 @@
       },
       {
         "slot": 2,
-        "slice": "CR-HINT-FIRST",
+        "slice": "X-flake-utp-lossy-win",
         "role": "build (opus, security)",
         "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
         "model": "opus",
-        "since": "2026-11-21T06:47Z",
-        "doing": "#1003 awaiting one re-run of an unrelated Windows uTP flake, then merge; building X-flake-utp-lossy-win (briefs/X-flake-utp-lossy-win.md)",
+        "since": "2026-11-21T07:54Z",
+        "doing": "building: FetchOptions.first_window_deadline hook (default 4 s) for the lossy uTP test",
         "status": "running"
       },
       {
