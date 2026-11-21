@@ -17,14 +17,14 @@ use lodestar_metainfo::InfoHash;
 use super::hints::{self, Hint, Hints};
 use super::ledger::{self, HintOutcome, LedgerEnd, QueryPurpose};
 use super::limits::{Answered, Network, SourceBuckets, network, source};
-use super::lookup::{Lookup, MAX_VALUES, Values};
+use super::lookup::{Lookup, MAX_VALUES, SentBy, Values};
 use super::peers::PeerStore;
 use super::prefixes::Prefixes;
 use super::proof::Proof;
 use super::sampler::{self, Sampler};
 use super::seen::SeenFilter;
 use super::shard::Shard;
-use super::stream::{LookupEnd, SessionAdmit, Stream};
+use super::stream::{LookupEnd, SessionAdmit, Stream, stream_source};
 use super::tids::TxIds;
 use super::tokens::Tokens;
 use super::transport::{Map, MapEntry, RecvSocket, SendSocket, Set};
@@ -69,12 +69,13 @@ const MAX_PEER_QUERIES: usize = 64;
 /// CR-LOOKUP-END: distinct, validated values that end a peer request early
 /// (with [`VALUE_RESPONDERS`]); see docs/decisions/2026-11-20-CR-LOOKUP-END.md.
 const ENOUGH_VALUES: usize = 8;
-/// CR-LOOKUP-END: the distinct sources (an IPv4 /24 or an IPv6 /48, as
-/// [`source`] keys them: one operator's usual allocation) whose replies must
-/// have carried values before [`ENOUGH_VALUES`] can end a request, and that a
-/// leg's closest set must span before it converges early. One responder,
-/// however many addresses it answers from in a network, can't end a lookup
-/// on its own.
+/// CR-LOOKUP-END: the fewest distinct sources (an IPv4 /24 or an IPv6
+/// /48, as [`source`] keys them: one operator's usual allocation) whose
+/// values can end a request, since each counts for at most
+/// `ENOUGH_VALUES / VALUE_RESPONDERS` of them (see
+/// [`Actor::has_enough_values`]); and the sources a leg's closest set must
+/// span before it converges early. One responder, however many addresses
+/// it answers from in a network, can't end a lookup on its own.
 const VALUE_RESPONDERS: usize = 2;
 /// Share of the query budget spent on BEP 51 sampling; the rest stays
 /// free for routing maintenance and lookups.
@@ -482,9 +483,8 @@ struct PeerRequest {
     expired: bool,
     /// CR-LEDGER: what the ledger records when it ends.
     ledger: ledger::Entry,
-    /// CR-LOOKUP-END: sources (/24, IPv6 /48) whose replies carried
-    /// values, at most [`VALUE_RESPONDERS`].
-    value_nets: Vec<Network>,
+    /// CR-LOOKUP-END: per source, the values it vouches for (X-sec-S1-18).
+    sent_by: SentBy,
     /// CR-LOOKUP-END ended it on enough values.
     enough: bool,
 }
@@ -1864,12 +1864,7 @@ impl Actor {
                     for p in &peers {
                         r.peers.insert(net, *p);
                     }
-                    // A second network repeating values already held counts:
-                    // the nodes storing a hash list the same swarm, and that
-                    // agreement is the corroboration the rule asks for.
-                    if r.value_nets.len() < VALUE_RESPONDERS && !r.value_nets.contains(&net) {
-                        r.value_nets.push(net);
-                    }
+                    r.sent_by.offer(net, &peers);
                 }
                 // CR-LEDGER: the request's first reply with values.
                 if !peers.is_empty()
@@ -1919,7 +1914,7 @@ impl Actor {
             && let Some(r) = owner.and_then(|o| self.peer_requests.get_mut(&o))
             && let Some(Reply::Stream(stream)) = r.reply.as_mut()
         {
-            stream.offer(&streamed, &self.stats);
+            stream.offer(stream_source(from.ip()), &streamed, &self.stats);
             if stream.first_sent() {
                 first_batch(&self.stats, r.started);
             }
@@ -1933,13 +1928,18 @@ impl Actor {
         self.drive_lookup(sockets, lid);
     }
 
-    /// CR-LOOKUP-END: whether request `owner` holds [`ENOUGH_VALUES`]
-    /// distinct values from [`VALUE_RESPONDERS`] sources. Always false
+    /// CR-LOOKUP-END, as X-sec-S1-18 refines it: whether request `owner`
+    /// holds [`ENOUGH_VALUES`] distinct values, and the sources that sent
+    /// them vouch for [`ENOUGH_VALUES`] between them, each for at most
+    /// `ENOUGH_VALUES / VALUE_RESPONDERS` distinct values it sent
+    /// ([`SentBy`]), repeats of each other's included. So it takes at
+    /// least [`VALUE_RESPONDERS`] sources, since each counts for at most
+    /// 4 today: 4 + 4 ends a request, and so does 3 + 3 + 2. Always false
     /// with the switch off.
     fn has_enough_values(&self, owner: u32) -> bool {
         self.cfg.lookup_end
             && self.peer_requests.get(&owner).is_some_and(|r| {
-                r.peers.len() >= ENOUGH_VALUES && r.value_nets.len() >= VALUE_RESPONDERS
+                r.peers.len() >= ENOUGH_VALUES && r.sent_by.spread() >= ENOUGH_VALUES
             })
     }
 
@@ -2101,7 +2101,7 @@ impl Actor {
                 started: Instant::now(),
                 expired: false,
                 ledger: ledger::Entry::default(),
-                value_nets: Vec::new(),
+                sent_by: SentBy::new(ENOUGH_VALUES / VALUE_RESPONDERS),
                 enough: false,
             },
         );

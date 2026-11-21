@@ -133,11 +133,11 @@ async fn enough_values_from_two_networks_end_the_request_early() {
         // 9 values, but all from network 127.0.0.0/24.
         answer(&mut a, &s, &n3, peers(5, 4), &[]);
         assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
-        // One value from a second network.
-        answer(&mut a, &s, &n2, peers(9, 1), &[]);
+        // Four values from a second network: its share (X-sec-S1-18).
+        answer(&mut a, &s, &n2, peers(9, 4), &[]);
         if on {
             let got = rx.try_recv().unwrap();
-            assert_eq!(got.len(), 10);
+            assert_eq!(got.len(), 13);
             assert_eq!(ended(&a, LedgerEnd::EnoughValues), 1);
             // n4's query is dropped with the request; the slot is free.
             assert!(a.pending.is_empty() && a.lookups.is_empty());
@@ -146,7 +146,7 @@ async fn enough_values_from_two_networks_end_the_request_early() {
             assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
             assert_eq!(a.pending.len(), 1, "n4 still out");
             answer(&mut a, &s, &n4, vec![], &[]);
-            assert_eq!(rx.try_recv().unwrap().len(), 10);
+            assert_eq!(rx.try_recv().unwrap().len(), 13);
             assert_eq!(ended(&a, LedgerEnd::Values), 1);
             assert_eq!(ended(&a, LedgerEnd::EnoughValues), 0);
         }
@@ -310,7 +310,7 @@ proptest! {
             }
             for r in a.peer_requests.values() {
                 prop_assert!(r.peers.len() <= 64);
-                prop_assert!(r.value_nets.len() <= 1);
+                prop_assert!(r.peers.sources() <= 1);
                 for p in &r.peers {
                     prop_assert!(p.port() != 0 && endpoint_allowed(&a.cfg, *p));
                 }
@@ -349,7 +349,7 @@ proptest! {
             }
             prop_assert_eq!(a.pending.len(), 3, "nothing was answered");
             for r in a.peer_requests.values() {
-                prop_assert!(r.peers.is_empty() && r.value_nets.is_empty());
+                prop_assert!(r.peers.is_empty());
             }
         }
     }
@@ -390,6 +390,93 @@ async fn a_second_network_corroborating_the_same_values_counts() {
     assert_eq!(ended(&a, LedgerEnd::EnoughValues), 1);
 }
 
+/// X-sec-S1-18: each of two networks must send four distinct values
+/// (repeats of the other's count) and the request must hold eight.
+#[tokio::test(start_paused = true)]
+async fn each_network_must_send_its_share_to_end_a_request() {
+    // (first network's values, second network's values, ends)
+    let cases: [(Vec<SocketAddr>, Vec<SocketAddr>, bool); 7] = [
+        (peers(0, 8), peers(8, 1), false),
+        (peers(0, 8), peers(8, 3), false),
+        (peers(0, 4), peers(4, 4), true),
+        (peers(0, 3), peers(3, 8), false),
+        // Corroboration: four of the first's values again.
+        (peers(0, 8), peers(2, 4), true),
+        // The same four values from each: only four distinct.
+        (peers(0, 4), peers(0, 4), false),
+        // One value eight times counts once.
+        (peers(0, 8), vec![peers(8, 1)[0]; 8], false),
+    ];
+    for (i, (first, second, ends)) in cases.into_iter().enumerate() {
+        let (mut a, s) = actor(true);
+        let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 1, 12), at(0x30, 2, 13));
+        table(&mut a, &[n1, n2, n3]);
+        let mut rx = request(&mut a, &s);
+        answer(&mut a, &s, &n1, first, &[]);
+        answer(&mut a, &s, &n2, second, &[]);
+        let case = format!("case {i}");
+        assert_eq!(rx.try_recv().is_ok(), ends, "{case}");
+        assert_eq!(
+            ended(&a, LedgerEnd::EnoughValues),
+            u64::from(ends),
+            "{case}"
+        );
+        if !ends {
+            assert_eq!(a.pending.len(), 1, "{case}: the leg runs on");
+        }
+    }
+}
+
+/// X-sec-S1-18: one source (here one address in one /24, answering for
+/// several node ids on different ports) repeating a value across replies
+/// vouches for it once.
+#[tokio::test(start_paused = true)]
+async fn a_value_repeated_across_one_sources_replies_counts_once() {
+    let (mut a, s) = actor(true);
+    let n1 = at(0x10, 0, 11);
+    let same: Vec<_> = (2..=5)
+        .map(|i| at(0x10 * i, 1, 10 + u16::from(i)))
+        .collect();
+    table(&mut a, &[&[n1][..], &same].concat());
+    let mut rx = request(&mut a, &s);
+    answer(&mut a, &s, &n1, peers(0, 8), &[]);
+    let repeated = peers(8, 1);
+    for n in &same {
+        assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+        answer(&mut a, &s, n, repeated.clone(), &[]);
+    }
+    assert_eq!(ended(&a, LedgerEnd::EnoughValues), 0);
+    assert_eq!(
+        rx.try_recv().unwrap().len(),
+        9,
+        "ends on convergence instead"
+    );
+}
+
+/// X-sec-S1-18: partial shares from three sources add up: 3 + 3 + 2 ends
+/// a request, 3 + 3 + 1 doesn't.
+#[tokio::test(start_paused = true)]
+async fn partial_shares_from_three_sources_add_up() {
+    for (third, ends) in [(2u16, true), (1, false)] {
+        let (mut a, s) = actor(true);
+        let n: Vec<_> = (0..4u8)
+            .map(|i| at(0x10 * (i + 1), i, 11 + u16::from(i)))
+            .collect();
+        table(&mut a, &n);
+        let mut rx = request(&mut a, &s);
+        answer(&mut a, &s, &n[0], peers(0, 3), &[]);
+        answer(&mut a, &s, &n[1], peers(3, 3), &[]);
+        assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+        answer(&mut a, &s, &n[2], peers(6, third), &[]);
+        assert_eq!(rx.try_recv().is_ok(), ends, "3 + 3 + {third}");
+        assert_eq!(
+            ended(&a, LedgerEnd::EnoughValues),
+            u64::from(ends),
+            "3 + 3 + {third}"
+        );
+    }
+}
+
 /// Each new end releases the request's permit exactly once, as
 /// `completed`, for a final reply and for a stream (which reads
 /// `complete`).
@@ -420,8 +507,8 @@ async fn every_new_end_returns_its_permit_once() {
             }
             assert_eq!(sem.available_permits(), 0);
             if end_on_values {
-                answer(&mut a, &s, &n1, peers(0, 8), &[]);
-                answer(&mut a, &s, &n2, peers(8, 1), &[]);
+                answer(&mut a, &s, &n1, peers(0, 4), &[]);
+                answer(&mut a, &s, &n2, peers(4, 4), &[]);
             } else {
                 for n in [&n1, &n2, &n3] {
                     answer(&mut a, &s, n, vec![], &[]);
@@ -486,6 +573,29 @@ proptest! {
     }
 }
 
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// X-sec-S1-18: with two networks answering, a request ends on values
+    /// exactly when each sends at least four distinct ones (repeats of the
+    /// other's included) and eight are distinct in all.
+    #[test]
+    fn two_networks_end_a_request_only_when_each_sends_a_share(first in 0u16..12, second in 0u16..12, overlap in 0u16..12) {
+        let (mut a, s) = actor(true);
+        let (n1, n2, n3) = (at(0x10, 0, 11), at(0x20, 1, 12), at(0x30, 2, 13));
+        table(&mut a, &[n1, n2, n3]);
+        let mut rx = request(&mut a, &s);
+        answer(&mut a, &s, &n1, peers(0, first), &[]);
+        // The second network repeats up to `overlap` of the first's values.
+        let start = first.saturating_sub(overlap);
+        answer(&mut a, &s, &n2, peers(start, second), &[]);
+        let distinct = first.max(start + second);
+        let ends = first >= 4 && second >= 4 && distinct >= 8;
+        prop_assert_eq!(rx.try_recv().is_ok(), ends);
+        prop_assert_eq!(ended(&a, LedgerEnd::EnoughValues), u64::from(ends));
+    }
+}
+
 /// On IPv6 a responder's source is its /48: replies from two /64s of one
 /// site count once, so they can't end a request on values; a second site
 /// can. (The node here is IPv4; the replies are matched to queries sent to
@@ -524,8 +634,8 @@ async fn two_ipv6_subnets_of_one_site_are_one_responder() {
         "one /48"
     );
     assert_eq!(ended(&a, LedgerEnd::EnoughValues), 0);
-    reply_from(&mut a, ip(2, 1), peers(10, 1));
-    assert_eq!(rx.try_recv().unwrap().len(), 11);
+    reply_from(&mut a, ip(2, 1), peers(10, 4));
+    assert_eq!(rx.try_recv().unwrap().len(), 14);
     assert_eq!(ended(&a, LedgerEnd::EnoughValues), 1);
 }
 
