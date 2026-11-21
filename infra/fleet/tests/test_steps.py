@@ -377,7 +377,7 @@ class Compose(unittest.TestCase):
         self.assertFalse([e for e in env if e.startswith("LODESTAR_DHT_") and "=" in e])  # none pinned here
         # Every LODESTAR_DHT_* variable Lodestar reads is a switch the collector knows,
         # or one of the settings it knows aren't switches: a new switch can't be missed.
-        read = set(re.findall(r'env\("(LODESTAR_DHT_[A-Z_]+)"\)', (ROOT / "crates/lodestar/src/config.rs").read_text()))
+        read = set(re.findall(r'env\("(LODESTAR_DHT_[A-Z0-9_]+)"\)', (ROOT / "crates/lodestar/src/config.rs").read_text()))
         self.assertIn("LODESTAR_DHT_ROUTE_BACKOFF", read)
         settings = _collector_constant("DHT_SETTING_ENV")
         self.assertEqual(sorted(read - set(settings) - set(switch_env())), [])
