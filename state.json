@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T22:08Z",
+    "updated": "2026-11-21T23:00Z",
     "items": [
       {
         "slot": 1,
@@ -10671,16 +10671,16 @@
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
         "since": "2026-11-21T21:47Z",
-        "doing": "cause found (hash names), measurement-only stable names approved; waits for #1033"
+        "doing": "X-filters-dialog-test-timeout PR in progress; determinism push held for #1033"
       },
       {
         "slot": 3,
-        "slice": "X-grid-two-col-large",
+        "slice": "X-ui-checks",
         "role": "helper",
         "agent": "session_01MMjhnD5iaW7CGjAAtXeVfE",
         "model": "sonnet",
-        "since": "2026-11-21T22:08Z",
-        "doing": "#1032 merged; brief sent; restore two columns on large: for three settings screens"
+        "since": "2026-11-21T23:00Z",
+        "doing": "#1034 merged; brief sent; step 0: check list and PR split before building"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
         "since": "2026-11-21T16:32Z",
-        "doing": "PR #1029 merged main to clear a slices.yaml conflict (2f0f3237); CI running"
+        "doing": "PR #1029 merged main again (26217c7a); CI running; merge on green"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
