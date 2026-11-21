@@ -405,10 +405,18 @@ proptest! {
     #[test]
     fn every_failure_cools_as_the_streak_says(
         escalate in any::<bool>(),
+        split in any::<bool>(),
         capacity in 2..24usize,
         ops in proptest::collection::vec(arb_op(), 1..400),
     ) {
-        let mut s = Sampler::with_capacity(capacity).with_escalation(escalate);
+        // With the split on, a spilled streak is forgotten, but the filter
+        // holds the node until the streak's end, so the model still holds.
+        let mut s = if split {
+            Sampler::split_with_capacity(capacity)
+        } else {
+            Sampler::with_capacity(capacity)
+        }
+        .with_escalation(escalate);
         let mut now = Instant::now();
         let mut token = 0u64;
         // In flight: the address, token and when it was reserved.

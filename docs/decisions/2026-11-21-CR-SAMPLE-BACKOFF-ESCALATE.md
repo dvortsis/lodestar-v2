@@ -39,6 +39,9 @@ What it shows:
 - **300 s holds the frontier best:** about 1,670–1,760 samples a minute throughout, against C's 1,730 without any loss, and A's fall to 860. Each step longer holds less, and 3600 s barely helps within 90 minutes.
 - **The repeat cost is the same at every value:** about one extra sample per never-answering node (about 3,360, nearly all to the 15 % dead). Each such node is asked once more, then sits at 6 h. So the value doesn't trade against repeats, and the shortest allowed one wins.
 - **The runner's bounds hold:** 300 s is the sim's sample interval, so it's never shorter than an answer's cooldown there, and it's under an hour (`the_first_backoff_is_within_the_runners_bounds`).
+- **In production, that holds only for nodes with a short interval.** A node that announces a longer interval (up to 6 h), or an install with `sample_interval_scale` above 1, cools for less after a lost sample than after an answer.
+  - **Why that's acceptable:** the retry is of a sample that was already due. The node's previous interval had passed when it was sampled, and a failed sample got no window, so asking again 300 s later asks for the window it owed once.
+  - **It's bounded:** at most once per streak, since a second failure cools for the full 6 h.
 - **In the long run** a dead node costs one extra sample per 6 h, a full table included (next section). The 90-minute screen sees only the first.
 - **Reproduce:** `cargo test -p lodestar-crawler-sim --test sim sampler_starve -- --ignored --nocapture` (about 90 s; the other values by editing `FIRST_FAILURE_SECS`).
 
@@ -60,7 +63,7 @@ What it shows:
   - **Split on:** a full table moves a streak to the spill filter as the cooldown it stands in for. It moves with its `forget`, in that order among the plain cooldowns. A short first cooldown is lengthened back to the switch-off one (never shorter), and the streak is forgotten.
     - So the 300 s cooldowns aren't what moves first. A node that keeps failing under table pressure is sampled at most as often as with the table empty: twice per 6 h and 5 minutes. That holds whether or not its streak is in the filter (`split_on_a_streak_moves_as_its_switch_off_cooldown`).
     - `saturated()` counts streaks as movable (`split_on_a_table_of_streaks_still_admits`).
-  - **Abort:** a reserved sample that's never sent keeps the streak it carried (the in-flight record holds its `forget`).
+  - **Abort:** a reserved sample that's never sent keeps the streak it carried (the in-flight record holds its `forget`). A streak whose `forget` has passed, brought back by an abort, is no streak: `reserve` ignores it (the runner's review B1, with its proptest seed committed), and the next prune drops it.
   - **The one thing that resets a streak is a restart** (below).
 - **Memory per entry:**
   - **The record grows from 24 to 32 bytes, with the switch on or off** (`a_streak_costs_no_more_than_the_record`). That's 8 bytes more per table entry, about 1.6 MB at the 200,000-entry cap.
@@ -82,8 +85,9 @@ X-sampler-cooldown-split's "Never shorter" rule stands for everything else: a co
   - A failure cools for 300 s, unless the node's previous leg-1 sample failed too and was sent within 6 h of it. Then the sampler still held the streak, so 6 h.
   - A 204 cools for 6 h. The network now records whether a reply was a 204 (`SampleAsk::unknown`).
   - An unanswered sample sent less than a query timeout before the stop can't have timed out, so it was sealed: the stop plus 6 h.
-  - That's still a lower bound. The sampler can only have escalated where the model says it didn't (a late answer the model reads as answered), never the other way.
+  - That's still a lower bound: the model escalates only where the sampler must have.
   - **It holds even with a full table.** Nothing drops a streak early, and a spilled streak restricts the node until the streak would have ended. So a sample after it is a first failure again in the sampler and in the model alike.
+  - **It assumes replies arrive within the query timeout** (the runner's review N2). A reply after the timeout but before the stop is read by the model as an answer with its interval. The sampler timed that sample out and may have cooled it for only 300 s, so the model's bound could then be too late. That can't happen in `restart_honoured`: the slowest reply takes 1.5 s, against a 4 s timeout.
   - Unit-tested in `earliest_resample_follows_the_escalation`.
 - **The restart with the switch on** (`restart_with_escalation_honours_the_bound`, no golden) passes every check the golden run asserts. No node was sampled before its bound, sampling resumed 1 s after the start, and every node due during leg 2 was sampled. 596 re-samples came within 6 h of a failure, so the switch was exercised.
 

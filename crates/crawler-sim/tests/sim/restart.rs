@@ -100,9 +100,11 @@ impl Drop for Dirs {
 /// sent within a ceiling of it: the sampler then still held the streak,
 /// which lasts until the earlier failure plus the ceiling, and that
 /// failure came after `prev`'s send. Otherwise it cools for the first
-/// failure's backoff. That's a lower bound too: the sampler can only have
-/// escalated where this says it didn't (a late answer the model reads as
-/// answered), never the other way. Nothing drops a streak early: a full
+/// failure's backoff. That's a lower bound too, given that every reply
+/// arrives within the query timeout (the scenario's slowest is 1.5 s,
+/// against 4 s): a later one is read here as an answer, with its
+/// interval, though the sampler timed the sample out and cooled it for
+/// less. Nothing drops a streak early: a full
 /// table keeps it (split off) or moves it to the spill filter as a
 /// cooldown to its end (split on), and an abort keeps it. And an
 /// unanswered sample sent less than the query timeout before the stop

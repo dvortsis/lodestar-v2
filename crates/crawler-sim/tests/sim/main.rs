@@ -296,6 +296,14 @@ fn restart_with_escalation_honours_the_bound() {
         "{}",
         r.text
     );
+    // The escalating model assumes every reply arrives within the query
+    // timeout (`restart::earliest_resample`).
+    let timeout = lodestar_dht::node::Config::default().query_timeout;
+    for a in &r.asks {
+        if let Some((at, _)) = a.reply {
+            assert!(at - a.sent < timeout, "a reply after the query timeout");
+        }
+    }
     let ceiling = lodestar_dht::node::testing::SAMPLE_MAX_INTERVAL;
     let mut last: std::collections::HashMap<_, &net::SampleAsk> = Default::default();
     let mut early = 0;

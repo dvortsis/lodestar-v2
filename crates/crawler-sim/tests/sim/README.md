@@ -81,9 +81,12 @@ The run asserts, and the report's last sections show:
     sample failed too and was sent within 6 h of it; then it cools for
     6 h. A 204 still cools for 6 h. An unanswered sample sent less than a
     query timeout before the stop can't have timed out, so it was sealed:
-    the stop plus 6 h. That's still a lower bound: the sampler can only
-    have escalated where the model says it didn't (a late answer the model
-    reads as answered). `restart_with_escalation_honours_the_bound` runs
+    the stop plus 6 h. That's still a lower bound, given that every reply
+    arrives within the query timeout (the scenario's slowest is 1.5 s,
+    against a 4 s timeout). A later reply would be read as an answer, with
+    its interval, though the sampler timed the sample out and cooled it
+    for less, so the model's bound could be too late.
+    `restart_with_escalation_honours_the_bound` runs
     the restart with the switch on, and it has no golden. With the switch
     off, the model is unchanged.
 - **Sampling resumes at once** for everything else: the first leg-2 sample

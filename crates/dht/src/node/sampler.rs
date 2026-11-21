@@ -409,7 +409,10 @@ impl Sampler {
                 Self::streak_of(state)
             }
             None => None,
-        };
+        }
+        // A streak that has ended but wasn't pruned yet (an abort can bring
+        // one back after its `forget`) is no streak.
+        .filter(|forget| *forget > now);
         if self.states.len() >= self.capacity {
             self.make_room(now);
         }
@@ -565,11 +568,22 @@ impl Sampler {
                 break;
             }
             self.struck.pop_first();
-            if matches!(self.states.get(&addr), Some(State::Struck { token: t, .. }) if *t == token)
-            {
-                self.states.remove(&addr);
-                self.recount(&addr, true);
+            match self.states.get(&addr).copied() {
+                Some(State::Struck { token: t, .. }) if t == token => {}
+                // Its short cooldown ends before its `forget`, so this
+                // needs `short` to lag by nearly the full backoff; if it
+                // ever did, the record still leaves with both entries.
+                Some(State::Cooling {
+                    until,
+                    token: t,
+                    struck: true,
+                }) if t == token => {
+                    self.short.remove(&(until, token, addr));
+                }
+                _ => continue,
             }
+            self.states.remove(&addr);
+            self.recount(&addr, true);
         }
     }
 
@@ -693,7 +707,9 @@ impl Sampler {
     }
     /// Remembered streaks whose short cooldown ended (escalation on only).
     pub fn struck(&self) -> usize {
-        self.struck.len() - self.short.len()
+        // Every short cooldown is also a streak (`cool`, `prune`).
+        debug_assert!(self.short.len() <= self.struck.len());
+        self.struck.len().saturating_sub(self.short.len())
     }
     /// Whether the sampler can't admit anyone: the table is full and,
     /// with the split on, no cooldown can move to the filter. With the
