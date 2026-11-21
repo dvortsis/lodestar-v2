@@ -55,9 +55,10 @@ const REBOOTSTRAP_TICKS: u32 = 30;
 const SEEN_CAPACITY: usize = 1_000_000;
 /// Hashes we offer when sampled ourselves (BEP 51 allows about 20 per reply).
 const RECENT_SAMPLES: usize = 20;
-/// Concurrent get_peers lookups, and how many requests may wait.
+/// Concurrent get_peers lookups, and how many requests may wait, with
+/// `dht.preset_slots` off (the tests' default; `Actor::peer_slots`).
+#[cfg(test)]
 const MAX_GET_PEERS: usize = super::PEER_REQUEST_CAPACITY;
-const MAX_GET_PEERS_QUEUE: usize = MAX_GET_PEERS;
 const LOOKUP_DEADLINE: Duration = Duration::from_secs(25);
 /// The join refresh's levels at most, from the farthest: 2^32 nodes is
 /// far more than the DHT holds (about 2^23), so deeper levels would only
@@ -596,6 +597,10 @@ struct Actor {
     prefixes: Option<Prefixes>,
     /// WK-4: the keyspace shard, `None` for no shard or the full one.
     shard: Option<Shard>,
+    /// Owned peer requests running or queued at once: 32
+    /// ([`super::PEER_REQUEST_CAPACITY`]), or the start preset's count with `dht.preset_slots` on (CR-1c).
+    /// Fixed for the run.
+    peer_slots: usize,
 }
 
 pub(crate) async fn run(
@@ -804,7 +809,7 @@ impl Actor {
         stats
             .ledger
             .slots_capacity
-            .store(MAX_GET_PEERS as u64, Ordering::Relaxed);
+            .store(cfg.peer_slots() as u64, Ordering::Relaxed);
         // WK-4: the full shard is no shard, byte for byte.
         let shard = cfg.shard.filter(|s| !s.is_full());
         let ids = initial_ids(&cfg, shard.as_ref(), saved, &mut rng);
@@ -886,6 +891,7 @@ impl Actor {
                 _ => cfg.target_prefixes.then(|| Prefixes::new(family_count)),
             },
             shard,
+            peer_slots: cfg.peer_slots(),
             proof: Proof::new(
                 cfg.state_path.as_deref(),
                 cfg.restart.as_ref(),
@@ -978,7 +984,7 @@ impl Actor {
                 self.scrape_rate = scrape_bucket(intensity, now);
             }
             Command::GetPeers(hash) => {
-                if self.get_peers_queue.len() + self.active_get_peers < MAX_GET_PEERS_QUEUE {
+                if self.get_peers_queue.len() + self.active_get_peers < self.peer_slots {
                     self.get_peers_queue.push_back((hash, None, None));
                 }
             }
@@ -2034,7 +2040,7 @@ impl Actor {
     /// Starts queued requests while there's a free slot, unless paused or
     /// parked for the bootstrap.
     fn start_queued(&mut self, sockets: &[SendSocket], now: Instant) {
-        while !self.paused && self.active_get_peers < MAX_GET_PEERS && !self.parks_lookups(now) {
+        while !self.paused && self.active_get_peers < self.peer_slots && !self.parks_lookups(now) {
             let Some((hash, reply, permit)) = self.get_peers_queue.pop_front() else {
                 break;
             };
@@ -2121,7 +2127,7 @@ impl Actor {
         self.drop_cancelled_queued();
         if !admit.is_closed()
             && !self.paused
-            && self.get_peers_queue.len() + self.active_get_peers < MAX_GET_PEERS
+            && self.get_peers_queue.len() + self.active_get_peers < self.peer_slots
         {
             if let Some(reply) = admit.accept() {
                 Stats::inc(&self.stats.peer_admitted);
