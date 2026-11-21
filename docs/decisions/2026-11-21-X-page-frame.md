@@ -94,5 +94,6 @@ Search's first-load JS is 44.70 kB (main 44.39 kB), under the 45 kB cap. The Set
 | Settings SourcesScreen | 34 kB | 34.031 kB | 34.04 kB | the shared `h1` string |
 | Insights stage pages | 40.85 kB | 40.975 kB | 40.98 kB | the shared `h1` string |
 | Builder (on demand) | 8.43 kB | 8.432 kB | 8.44 kB | chunk placement |
+| Search results (lazy) | 40.83 kB | 40.832 kB (CI) | 40.84 kB | not this PR: `main` measures 40,832 B in CI's build and this PR adds 0 B to the chunk; the old limit left `main` 2 B inside its edge (§2.18 port) |
 
 The Settings screens' `h1` moves from `text-title` (20 px) to the display size (28 px): a runner call under §2.26 (call 2 above).
