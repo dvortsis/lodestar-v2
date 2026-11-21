@@ -128,6 +128,8 @@ pub struct Switches {
     pub coordinated_admission: bool,
     /// CR-1a-H: `dht.responder_hints`.
     pub responder_hints: bool,
+    /// CR-HINT-FIRST: `dht.hint_first`.
+    pub hint_first: bool,
     /// CR-1a-S: `dht.streaming_peers`.
     pub streaming_peers: bool,
     /// CR-1b: `dht.target_prefixes`.
@@ -145,6 +147,12 @@ impl Switches {
             pool.finder_capacity = lodestar_dht::node::PEER_REQUEST_CAPACITY;
         }
         dht.responder_hints = self.responder_hints;
+        if self.hint_first {
+            // As the pipeline wires it: the glue's one source is the DHT's.
+            dht.hint_first = true;
+            pool.hint_first = true;
+            pool.hint_sources = vec![lodestar_store::SourceId::new(1).expect("valid source id")];
+        }
         pool.streaming_peers = self.streaming_peers;
         dht.target_prefixes = self.target_prefixes;
         dht.lookup_end = self.lookup_end;
@@ -155,6 +163,7 @@ impl Switches {
         let on: Vec<&str> = [
             (self.coordinated_admission, "coordinated_admission=true"),
             (self.responder_hints, "responder_hints=true"),
+            (self.hint_first, "hint_first=true"),
             (self.streaming_peers, "streaming_peers=true"),
             (self.target_prefixes, "target_prefixes=true"),
             (self.lookup_end, "lookup_end=true"),

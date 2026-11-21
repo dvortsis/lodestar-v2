@@ -194,6 +194,11 @@ pub struct Dht {
     /// the hash. Off by default (docs/decisions/2026-10-30-CR-1a-H.md);
     /// not in the Settings UI.
     pub responder_hints: bool,
+    /// CR-HINT-FIRST: a hash captured from a BEP 51 reply waits for its
+    /// first lookup in the fetch pool's T1 tier, one hash per responder,
+    /// and that lookup first asks the responder. Off by default
+    /// (docs/decisions/2026-11-21-CR-HINT-FIRST.md); not in the Settings UI.
+    pub hint_first: bool,
     /// CR-LOOKUP-END: a peer lookup ends, and frees its slot, once it holds
     /// enough values or its closest set has answered, and starts as soon
     /// as it's admitted. Off by default
@@ -240,6 +245,7 @@ impl Default for Dht {
             restart_witness_dir: None,
             coordinated_admission: false,
             responder_hints: false,
+            hint_first: false,
             lookup_end: false,
             streaming_peers: false,
             target_prefixes: false,
@@ -807,6 +813,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_RESPONDER_HINTS", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_HINT_FIRST") {
+            config.dht.hint_first = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_HINT_FIRST", &v))?;
+        }
         if let Some(v) = env("LODESTAR_DHT_LOOKUP_END") {
             config.dht.lookup_end = v
                 .parse()
@@ -895,6 +906,7 @@ impl Config {
                 .safe_restart
                 .then(|| dht::RestartConfig::new(self.dht.restart_witness_dir.clone())),
             responder_hints: self.dht.responder_hints,
+            hint_first: self.dht.hint_first,
             lookup_end: self.dht.lookup_end,
             target_prefixes: self.dht.target_prefixes,
             sampler_cooldown_split: self.dht.sampler_cooldown_split,
@@ -947,6 +959,8 @@ impl Config {
                 coordinated_admission: self.dht.coordinated_admission,
                 finder_capacity: dht::PEER_REQUEST_CAPACITY,
                 streaming_peers: self.dht.streaming_peers,
+                // The pipeline names the trusted sources (`hint_sources`).
+                hint_first: self.dht.hint_first,
                 ..PoolConfig::default()
             },
             fetch,
@@ -1550,6 +1564,38 @@ mod tests {
         assert!(
             Config::load(None, |k: &str| {
                 (k == "LODESTAR_DHT_RESPONDER_HINTS").then(|| "maybe".to_string())
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn hint_first_is_off_unless_asked_for() {
+        let pool = |c: &Config| c.pipeline_config().unwrap().pool;
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.hint_first);
+        assert!(!c.dht_config().hint_first);
+        assert!(!pool(&c).hint_first);
+        let env = |k: &str| (k == "LODESTAR_DHT_HINT_FIRST").then(|| "true".to_string());
+        let on = Config::load(None, env).unwrap();
+        assert!(on.dht_config().hint_first && pool(&on).hint_first);
+        // It doesn't turn CR-1a-H's switch on, or name sources itself.
+        assert!(!on.dht_config().responder_hints);
+        assert!(pool(&on).hint_sources.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nhint_first = true\n").unwrap();
+        assert!(
+            Config::load(Some(&path), no_env)
+                .unwrap()
+                .dht_config()
+                .hint_first
+        );
+        std::fs::write(&path, "[dht]\nhint_first = \"yes\"\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        assert!(
+            Config::load(None, |k: &str| {
+                (k == "LODESTAR_DHT_HINT_FIRST").then(|| "maybe".to_string())
             })
             .is_err()
         );

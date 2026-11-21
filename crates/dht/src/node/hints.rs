@@ -12,6 +12,10 @@
 //!   one hinted query in flight and [`HINT_NOT_BEFORE`] between hinted
 //!   sends. Ordinary routing honours a retained restriction too, so the
 //!   fallback can't bypass it.
+//!
+//! CR-HINT-FIRST (`dht.hint_first`, docs/decisions/2026-11-21-CR-HINT-FIRST.md)
+//! adds a third: per canonical IP, the one hash marked for the pool's T1
+//! tier whose hint is still outstanding, at most [`T1_RESPONDERS`] IPs.
 
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
@@ -22,7 +26,7 @@ use tokio::time::Instant;
 use lodestar_metainfo::InfoHash;
 
 use super::transport::Map;
-use super::{Config, HintFallback, HintReject};
+use super::{Config, HintFallback, HintFirstSkip, HintReject};
 
 // Candidate defaults (the decisions file): reviewed constants, not config.
 /// A hint is fresh while its age is below this.
@@ -37,6 +41,9 @@ pub(crate) const HINTED_ATTEMPTS_PER_FAMILY: usize = 1;
 /// the spec's "per pending key", but the actor can't see them, so this
 /// caps the table directly (about 3 MB full).
 pub(crate) const HINT_CAPACITY: usize = 20_000;
+/// CR-HINT-FIRST: canonical IPs with an outstanding T1 hint (marked, not
+/// yet taken, younger than [`HINT_TTL`]). A candidate default.
+pub(crate) const T1_RESPONDERS: usize = 20_000;
 /// Capture-order entries, live or stale, held at any moment: used hints
 /// leave stale entries, which [`Hints::capture`] compacts away past this.
 const ORDER_CAPACITY: usize = 4 * HINT_CAPACITY;
@@ -98,6 +105,9 @@ pub(crate) struct Hints {
     /// Captures in arrival order, which is time order, for pruning.
     order: VecDeque<(Instant, InfoHash, usize)>,
     guard: Map<IpAddr, Restriction>,
+    /// CR-HINT-FIRST: per canonical IP, the hash marked for T1 and when;
+    /// empty unless `dht.hint_first` is on.
+    t1: Map<IpAddr, (InfoHash, Instant)>,
     /// Compactions so far, for the amortised-bound test.
     #[cfg(test)]
     compactions: usize,
@@ -141,8 +151,53 @@ impl Hints {
     }
 
     /// Takes `key`'s hints, by family slot (IPv4, IPv6): each is used once.
+    /// A T1 mark for `key` at a taken hint's IP ends with it.
     pub fn take(&mut self, key: &InfoHash) -> [Option<Hint>; 2] {
-        self.by_key.remove(key).unwrap_or_default()
+        let found = self.by_key.remove(key).unwrap_or_default();
+        for hint in found.iter().flatten() {
+            let ip = canonical(hint.addr.ip());
+            if self.t1.get(&ip).is_some_and(|(k, _)| k == key) {
+                self.t1.remove(&ip);
+            }
+        }
+        found
+    }
+
+    #[cfg(test)]
+    pub fn t1_len(&self) -> usize {
+        self.t1.len()
+    }
+
+    /// CR-HINT-FIRST: whether `key`, just sampled from `addr` (already
+    /// through [`check`]), may be marked for T1 now: one outstanding T1
+    /// hash per canonical IP, none while the guard restricts that IP, at
+    /// most [`T1_RESPONDERS`] IPs, and room in the hint table to keep it.
+    pub fn t1_check(
+        &self,
+        key: &InfoHash,
+        addr: SocketAddr,
+        now: Instant,
+    ) -> Result<(), HintFirstSkip> {
+        let ip = canonical(addr.ip());
+        let outstanding = self.t1.get(&ip);
+        if outstanding.is_some_and(|(_, at)| now.duration_since(*at) < HINT_TTL)
+            || self.restricts(ip, now)
+        {
+            return Err(HintFirstSkip::Responder);
+        }
+        if outstanding.is_none() && self.t1.len() >= T1_RESPONDERS {
+            return Err(HintFirstSkip::Full);
+        }
+        if !self.by_key.contains_key(key) && self.by_key.len() >= HINT_CAPACITY {
+            return Err(HintFirstSkip::Rejected);
+        }
+        Ok(())
+    }
+
+    /// Records `key` as `addr`'s outstanding T1 hash (after
+    /// [`Hints::t1_check`] and a successful [`Hints::capture`]).
+    pub fn mark_t1(&mut self, key: InfoHash, addr: SocketAddr, now: Instant) {
+        self.t1.insert(canonical(addr.ip()), (key, now));
     }
 
     /// The per-IP guard's permission for a hinted send to `ip` now.
@@ -186,6 +241,8 @@ impl Hints {
     pub fn prune(&mut self, now: Instant) -> u64 {
         let expired = self.prune_hints(now);
         self.prune_guard(now);
+        self.t1
+            .retain(|_, (_, at)| now.duration_since(*at) < HINT_TTL);
         expired
     }
 
@@ -422,6 +479,76 @@ mod tests {
         // The kept entries still expire the hints.
         assert_eq!(h.prune(t0 + HINT_TTL), 2);
         assert_eq!(h.held(), 0);
+    }
+
+    /// CR-HINT-FIRST: one outstanding T1 hash per canonical IP (mapped
+    /// forms and ports included), none while the guard restricts it, and
+    /// the mark ends when the hint is taken or at the TTL.
+    #[test]
+    fn one_t1_hash_per_responder_until_taken_or_expired() {
+        let mut h = Hints::default();
+        let t0 = Instant::now();
+        let a: SocketAddr = "31.0.0.1:6881".parse().unwrap();
+        let a_port: SocketAddr = "31.0.0.1:7000".parse().unwrap();
+        let a_mapped: SocketAddr = "[::ffff:31.0.0.1]:6881".parse().unwrap();
+        let b: SocketAddr = "31.0.0.2:6881".parse().unwrap();
+        assert_eq!(h.t1_check(&key(1), a, t0), Ok(()));
+        h.capture(key(1), a, t0).unwrap();
+        h.mark_t1(key(1), a, t0);
+        for other in [a, a_port, a_mapped] {
+            assert_eq!(
+                h.t1_check(&key(2), other, t0),
+                Err(HintFirstSkip::Responder)
+            );
+        }
+        assert_eq!(h.t1_check(&key(2), b, t0), Ok(()));
+        // Taken: the mark ends, but the guard now holds the IP.
+        assert!(h.take(&key(1))[0].is_some());
+        assert_eq!(h.t1_len(), 0);
+        h.sent(a.ip(), t0);
+        assert_eq!(h.t1_check(&key(2), a, t0), Err(HintFirstSkip::Responder));
+        h.settled(a.ip());
+        assert_eq!(h.t1_check(&key(2), a, t0 + HINT_NOT_BEFORE), Ok(()));
+        // Expired at the TTL, and pruned.
+        h.capture(key(3), b, t0).unwrap();
+        h.mark_t1(key(3), b, t0);
+        let later = t0 + HINT_TTL - Duration::from_nanos(1);
+        assert_eq!(h.t1_check(&key(4), b, later), Err(HintFirstSkip::Responder));
+        assert_eq!(h.t1_check(&key(4), b, t0 + HINT_TTL), Ok(()));
+        h.prune(t0 + HINT_TTL);
+        assert_eq!(h.t1_len(), 0);
+    }
+
+    /// CR-HINT-FIRST: taking a hint ends only its own key's T1 mark.
+    #[test]
+    fn taking_another_keys_hint_keeps_the_mark() {
+        let mut h = Hints::default();
+        let t0 = Instant::now();
+        let a: SocketAddr = "31.0.0.1:6881".parse().unwrap();
+        h.capture(key(1), a, t0).unwrap();
+        h.capture(key(2), a, t0).unwrap();
+        h.mark_t1(key(1), a, t0);
+        h.take(&key(2));
+        assert_eq!(h.t1_len(), 1);
+        h.take(&key(1));
+        assert_eq!(h.t1_len(), 0);
+    }
+
+    /// CR-HINT-FIRST: at [`T1_RESPONDERS`] a new IP is refused; a stale
+    /// mark's IP may be marked again before the prune.
+    #[test]
+    fn t1_marks_are_bounded() {
+        let mut h = Hints::default();
+        let t0 = Instant::now();
+        for i in 0..T1_RESPONDERS as u32 {
+            h.t1.insert(ip(i), (key(i), t0));
+        }
+        let fresh = SocketAddr::new(ip(T1_RESPONDERS as u32), 1);
+        assert_eq!(h.t1_check(&key(0), fresh, t0), Err(HintFirstSkip::Full));
+        let known = SocketAddr::new(ip(0), 1);
+        assert_eq!(h.t1_check(&key(0), known, t0 + HINT_TTL), Ok(()));
+        h.prune(t0 + HINT_TTL);
+        assert_eq!(h.t1_check(&key(0), fresh, t0 + HINT_TTL), Ok(()));
     }
 
     #[test]

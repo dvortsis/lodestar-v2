@@ -255,6 +255,11 @@ pub struct Found {
     pub private_source: bool,
     /// A user is waiting on it: it jumps the fetch queue.
     pub interest: bool,
+    /// CR-HINT-FIRST (`dht.hint_first`): the DHT holds a fresh responder
+    /// hint for it, so the pool may ask for it in its T1 tier. The pool
+    /// honours it only from the DHT plugin's source with the switch on
+    /// (`PoolConfig::hint_sources`); from any other source it's ignored.
+    pub hint: bool,
     /// What the source asserted about the key. The [`Emitter`] clamps it
     /// to the [`claims`](crate::claims) limits.
     pub claims: Option<Box<Claims>>,
@@ -277,6 +282,7 @@ impl Found {
             strategy,
             private_source: false,
             interest: false,
+            hint: false,
             claims: None,
             provenance: None,
             usenet: None,

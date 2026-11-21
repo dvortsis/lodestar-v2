@@ -109,7 +109,11 @@ fn found(h: Harvest) -> Found {
         Source::Announce => strategy::ANNOUNCE,
         Source::Lookup => strategy::LOOKUP,
     };
-    Found::key(h.info_hash, strategy).with_peers(h.peers)
+    let mut found = Found::key(h.info_hash, strategy).with_peers(h.peers);
+    // CR-HINT-FIRST: the pool trusts it only from this plugin's source,
+    // and only with `dht.hint_first` on.
+    found.hint = h.hint;
+    found
 }
 
 /// The pool's streaming admission as the DHT actor sees it (CR-1a-S): the
@@ -277,6 +281,7 @@ mod tests {
             info_hash: InfoHash([1; 20]),
             source,
             peers: vec!["10.0.0.1:1".parse().unwrap()],
+            hint: false,
         };
         assert_eq!(found(h(Source::Sample)).strategy, strategy::SAMPLE);
         assert_eq!(found(h(Source::GetPeers)).strategy, strategy::GET_PEERS);
@@ -287,5 +292,11 @@ mod tests {
             !f.private_source,
             "the public DHT is never a private source"
         );
+        assert!(!f.hint);
+        let hinted = Harvest {
+            hint: true,
+            ..h(Source::Sample)
+        };
+        assert!(found(hinted).hint, "CR-HINT-FIRST's mark reaches the pool");
     }
 }

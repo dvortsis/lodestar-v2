@@ -32,6 +32,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         paused: false,
         restart: None,
         responder_hints: false,
+        hint_first: false,
         lookup_end: false,
         target_prefixes: false,
         utp: None,
@@ -130,7 +131,8 @@ async fn passive_get_peers_and_announce() {
         Harvest {
             info_hash: h,
             source: Source::GetPeers,
-            peers: vec![]
+            peers: vec![],
+            hint: false,
         }
     );
     // The same hash again is deduplicated.
