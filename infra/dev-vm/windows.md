@@ -78,13 +78,13 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
      - building Lodestar's tests on `c6a.xlarge` (8 GiB) can run out of memory: two `rustc` processes of about 5.6 GiB each with the default 1.9 GiB pagefile hung Windows and dropped SSM (2026-11-20Z). Set a 16 GiB pagefile and reboot first, build with `cargo test -j1`, and time nothing while it builds (stops took 18–40 s instead of 0.4 s).
 6. **Report each finding to the runner before writing any fix.**
 7. **Teardown:**
-   - **Take the root volume's id first.** Before `TerminateInstances`, read it from `DescribeInstances`: `BlockDeviceMappings`, the entry whose `DeviceName` is `/dev/sda1`, `Ebs.VolumeId`. Keep it in the session only: never write it to a file, a report, a PR or a message (no instance or volume ids in the repository's records).
+   - **Take the root volume's id first.** Before `TerminateInstances` (the mappings empty once it's gone), read it from `DescribeInstances`: the `BlockDeviceMappings` entry whose `DeviceName` is the instance's `RootDeviceName` (`/dev/sda1` for this launch), `Ebs.VolumeId`. Keep it in the session only: never write it to a file, a report, a PR or a message (the runner's rule for test lanes: no instance or volume ids in records).
    - `TerminateInstances`, then wait for `terminated`.
    - **Check that volume by its id:** `DescribeVolumes` with `VolumeIds=[<that id>]`.
-     - It fails with `InvalidVolume.NotFound`, or returns the volume as `deleted`: it's gone.
+     - It fails with `InvalidVolume.NotFound` (in `run_script`, a raised `ClientError`: catch it and read `e.response['Error']['Code']`), or returns the volume as `deleted`: it's gone.
      - It returns it as `deleting`: check again in later calls until it's gone, with a 10 min deadline.
-     - Anything else (`available`, `in-use`, or still `deleting` at the deadline) means the volume survived. The test user's policy has no `ec2:DeleteVolume`, so don't try: tell the runner, without the id, and the owner deletes it.
-   - **The tag check is a backstop, not the test:** `DescribeVolumes` with `tag:Purpose=X-test-vm` lists every lane's test volumes (Linux lanes' too, all with the same `LaunchedBy`), and it finds nothing if the volume never got its tags. An `available` one there is a leftover to tell the runner about, not necessarily this lane's. Never filter by `Project`: the owner's fleet volumes share it.
+     - `available` or `in-use` means the volume survived, and still `deleting` at the deadline means its deletion didn't finish. Either way, the test user's policy has no `ec2:DeleteVolume`, so don't try: tell the runner, without the id, and the owner deletes it.
+   - **The tag check is a backstop, not the test:** `DescribeVolumes` with `tag:Purpose=X-test-vm` lists every lane's test volumes (Linux lanes' too, all with the same `LaunchedBy`), and it finds nothing if the volume never got its tags. An `available` one there is a leftover, not necessarily this lane's: tell the runner, without its id. Never filter by `Project`: the owner's fleet volumes share it.
    - Check `ce:GetCostAndUsage` for the day's EC2 cost.
    - Tell the runner and the owner.
 
