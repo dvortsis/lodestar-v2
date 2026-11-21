@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-21T18:39Z",
+  "updated_at": "2026-11-21T21:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-21T18:39Z",
+  "last_heartbeat": "2026-11-21T21:38Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T21:15Z",
+    "updated": "2026-11-21T21:38Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
         "model": "opus",
         "since": "2026-11-21T18:36Z",
-        "doing": "bench and sizes approved; merging main after #1027, then PR"
+        "doing": "PR #1033 open; fresh review (security-sensitive) running"
       },
       {
         "slot": 2,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
         "since": "2026-11-21T16:32Z",
-        "doing": "PR #1029 review fixes pushed (d6296b84), delta checked; CI running"
+        "doing": "PR #1029 merged main to clear a slices.yaml conflict (2f0f3237); CI running"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -10780,7 +10780,7 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-21T18:39Z",
+  "heartbeat": "2026-11-21T21:38Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
