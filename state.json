@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T23:00Z",
+    "updated": "2026-11-21T23:25Z",
     "items": [
       {
         "slot": 1,
@@ -10671,16 +10671,16 @@
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
         "since": "2026-11-21T21:47Z",
-        "doing": "X-filters-dialog-test-timeout PR in progress; determinism push held for #1033"
+        "doing": "#1035 X-filters-dialog-test-timeout merged; determinism push held for #1033"
       },
       {
         "slot": 3,
-        "slice": "X-ui-checks",
+        "slice": "X-ui-checks-1",
         "role": "helper",
         "agent": "session_01MMjhnD5iaW7CGjAAtXeVfE",
         "model": "sonnet",
         "since": "2026-11-21T23:00Z",
-        "doing": "#1034 merged; brief sent; step 0: check list and PR split before building"
+        "doing": "split approved (4 parts); building part 1: chunk failure, focus return, settings save gap"
       },
       {
         "slot": 4,
