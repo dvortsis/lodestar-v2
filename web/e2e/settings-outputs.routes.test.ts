@@ -50,12 +50,16 @@ test.describe('Settings → Outputs', () => {
 	let exporting: boolean;
 	/** While set, the screen's first `/jobs` read (its mount read) waits for it: a slow first answer. */
 	let holdFirstRead: Promise<void> | null;
+	/** Releases a hold a failed test left, so no handler waits on it at teardown. */
+	let releaseHeld: (() => void) | null = null;
+	test.afterEach(() => releaseHeld?.());
 	test.beforeEach(async ({ mock }) => {
 		new SettingsBackend(index, values).attach(mock as unknown as MockLike);
 		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
 		sent = [];
 		exporting = false;
 		holdFirstRead = null;
+		releaseHeld = null;
 		on('listKeys', { keys: [key(1, 'Prowlarr')] });
 		on('createKey', (r: { postDataJSON(): Record<string, unknown> }) => {
 			const body = r.postDataJSON();
@@ -152,24 +156,37 @@ test.describe('Settings → Outputs', () => {
 	// otherwise already list the job, and the press would wait for an id above it (the CI failure
 	// of #1031). A real server creates the job when the download starts, after the press, so the
 	// screen needs no change. `data-ids-known` on the Start link is the screen's own signal that the
-	// read has answered. `slow` holds that first answer until a condition (the page has rendered),
-	// the race the test used to lose when the mock was slow to answer.
-	for (const slow of [false, true]) {
-		test(`starts the bitmagnet export and shows its progress${slow ? ' (slow first /jobs read)' : ''}`, async ({
+	// read has answered. Three orders:
+	//   prompt:      the read answers at once (as before);
+	//   slow:        the read is held until the page has rendered, then released and waited for;
+	//   press-first: the read is still held when Start is pressed, and answers after it (with the
+	//                job already listed): the screen then uses its clock fallback, so a late read
+	//                can't lose the export. This is the path the "no screen change" claim rests on.
+	for (const order of ['prompt', 'slow', 'press-first'] as const) {
+		test(`starts the bitmagnet export and shows its progress${order === 'prompt' ? '' : ` (${order})`}`, async ({
 			page,
 			go
 		}) => {
 			let release!: () => void;
-			if (slow) holdFirstRead = new Promise<void>((resolve) => (release = resolve));
+			if (order !== 'prompt')
+				holdFirstRead = new Promise<void>((resolve) => (releaseHeld = release = resolve));
 			await go('/settings/outputs');
 			await expect(page.getByTestId('outputs-bitmagnet-left-out')).toContainText('hidden torrents');
-			// The page is up, and only now does the slow read answer.
-			if (slow) release();
 			const start = page.getByTestId('outputs-bitmagnet-start');
-			await expect(start).toHaveAttribute('data-ids-known', 'true');
 			const download = page.waitForEvent('download');
-			exporting = true;
-			await start.click();
+			if (order === 'press-first') {
+				// Pressed before the read answers: the screen has no ids yet.
+				await expect(start).toHaveAttribute('data-ids-known', 'false');
+				exporting = true;
+				await start.click();
+				release();
+			} else {
+				// The page is up, and (for slow) only now does the read answer.
+				if (order === 'slow') release();
+				await expect(start).toHaveAttribute('data-ids-known', 'true');
+				exporting = true;
+				await start.click();
+			}
 			expect((await download).url()).toMatch(/\/api\/v1\/export\?format=bitmagnet$/);
 			await expect(page.getByTestId('outputs-bitmagnet-count')).toHaveText(
 				'Done: 42 torrents in the file.'
