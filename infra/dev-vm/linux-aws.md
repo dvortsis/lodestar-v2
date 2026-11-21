@@ -29,7 +29,7 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - the network interface with a public IPv4, exactly as `windows.md` Phase 2 step 2 says (the subnet has no NAT; the security group allows no inbound traffic);
    - the tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `LaunchedBy=<the UserId from GetCallerIdentity>`, `ExpiresAt=<now + lane length, at most 24 h>` and `Name=claude-dev-<yyyymmdd>-<role>` on the instance and the volume. The policy lets Claude stop, delete or run commands only on instances tagged `Purpose=X-test-vm` whose `LaunchedBy` is its own `UserId`, so the owner's own fleet instances, which share the other tags, stay out of reach;
    - default tenancy (leave `Placement.Tenancy` unset): the policy refuses dedicated tenancy.
-3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline.
+3. **Wait** for `DescribeInstanceInformation` to show it `Online`, with a 15 min deadline. Then take the root volume's id for teardown (step 7): from `DescribeInstances`, the `BlockDeviceMappings` entry whose `DeviceName` is the instance's `RootDeviceName` (`/dev/sda1` for this launch), `Ebs.VolumeId`. Keep it in the session only: never write it to a file, a report, a PR or a message (the runner's rule for test lanes: no instance or volume ids in records).
 4. **Bootstrap** with `AWS-RunShellScript` (`executionTimeout` 3600):
 
    ```bash
@@ -81,8 +81,13 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - A command over a few minutes runs in `tmux` on the instance (`sudo -iu lodestar tmux new -d -s lane '<command> > ~/results/<name>.log 2>&1'`), and the session polls the log's tail in later calls.
    - The connector gives up after 60 s, so keep each call under 45 s.
 7. **Teardown:**
-   - `TerminateInstances`, then wait for `terminated`.
-   - `DescribeVolumes` with `tag:Purpose=X-test-vm` must not list the lane's volume. Never filter by `Project`: the owner's fleet volumes share it.
+   - **Have the root volume's id** from step 3. If the session doesn't (it resumed after its sign-in expired), read it now, before `TerminateInstances`, as step 3 says. If the instance is already gone (the expiration guard ended it), its mappings are empty: skip the check by id, rely on the tag check below, and tell the runner the check by id couldn't run.
+   - `TerminateInstances`, then wait for `terminated`, with a 10 min deadline. If it isn't `terminated` by then, tell the runner.
+   - **Check that volume by its id:** `DescribeVolumes` with `VolumeIds=[<that id>]`.
+     - It fails with `InvalidVolume.NotFound` (in `run_script`, a raised `ClientError`: catch it and read `e.response['Error']['Code']`), or returns the volume as `deleted`: it's gone.
+     - It returns it as `deleting`: check again in later calls until it's gone, with a 10 min deadline.
+     - `available`, `in-use` or any other state (`error`, say) means the volume survived, and still `deleting` at the deadline means its deletion didn't finish. Either way, the test user's policy has no `ec2:DeleteVolume`, so don't try: tell the runner, without the id, and the owner deletes it.
+   - **The tag check is a backstop, not the test:** `DescribeVolumes` with `tag:Purpose=X-test-vm` lists every lane's test volumes (Windows lanes' too), and every lane tags them with the same `LaunchedBy`, so another lane's may be there. An `available` one with this lane's `Name` is probably this lane's leftover (two lanes with the same role on the same day share a `Name`); any other `available` one is a leftover too, not necessarily this lane's. Tell the runner about each, without its id. It finds nothing if the volume never got its tags. Never filter by `Project`: the owner's fleet volumes share it.
    - Report the instance hours. `c6a.xlarge` Linux costs about $0.15/h, plus about $0.02/h for the volume and address.
 
 ## Pitfalls
