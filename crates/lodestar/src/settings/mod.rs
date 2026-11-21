@@ -669,6 +669,16 @@ pub trait Section:
     fn check(&self, _field: &str) -> Result<(), String> {
         Ok(())
     }
+    /// A repair of `field`'s saved `value` at start, before it's checked:
+    /// for a value an older build saved that a newer rule refuses, keeping
+    /// what is still valid (preferences' shortcut keys). `None`, the
+    /// default, leaves it as it is. Only at start and only in memory: the
+    /// store keeps the saved text until the field is next saved, and a
+    /// patch never passes through it, so a refused value there is still
+    /// refused.
+    fn repair_saved(_field: &str, _value: &Value) -> Option<Value> {
+        None
+    }
     /// Each secret field with the fields that say where it's sent (the
     /// Torznab key and its URL). A patch that moves one of them elsewhere
     /// without sending the secret again resets the secret.
@@ -829,6 +839,17 @@ impl<T: Section> Entry<T> {
                         continue;
                     }
                 }
+            };
+            // Part of it refused by a newer rule: the rest is kept, and the
+            // log says so without the value. A section's repair returns a
+            // value that passes its check (preferences' does), so the
+            // `invalid` line below can't follow this one for the same field.
+            let value = match T::repair_saved(field.name, &value) {
+                Some(repaired) => {
+                    ignored("invalid_entries");
+                    repaired
+                }
+                None => value,
             };
             let mut trial = entry.effective_map(&saved);
             trial.insert(field.name.to_string(), value.clone());
@@ -1754,6 +1775,8 @@ impl SettingsApi for Registry {
 mod api_tests;
 #[cfg(test)]
 mod logging_tests;
+#[cfg(test)]
+mod repair_tests;
 #[cfg(test)]
 mod screen_tests;
 #[cfg(test)]

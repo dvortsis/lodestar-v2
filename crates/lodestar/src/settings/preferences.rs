@@ -172,38 +172,25 @@ pub const DEFAULT_SHORTCUTS: &[(&str, &str)] = &[
     ("help.shortcuts", "?"),
 ];
 
-/// A character that draws nothing on its own: a format character
-/// (zero-width, bidirectional controls, the BOM, the soft hyphen) or a
-/// combining mark. Without a Unicode table, the blocks that hold them.
+/// A character a shortcut key can't be, because the UI couldn't show it as
+/// the key (§10.16):
+/// - **default-ignorable** ([`crate::text::default_ignorable`]): it renders
+///   as nothing, in any font;
+/// - **a format character** (general category Cf,
+///   [`lodestar_metainfo::format_char`]): invisible, or it reorders the
+///   text around it. That includes the few Cf characters some fonts draw,
+///   such as the interlinear annotation marks U+FFF9–FFFB and the Arabic
+///   number signs U+0600–0605: they mark up the text around them and aren't
+///   keys anyone types, so refusing them costs nothing;
+/// - **a combining mark** (Mn, Mc or Me, in any script): it draws only on
+///   the character before it, so on its own it shows as a dotted circle or
+///   nothing.
+///
+/// Controls and whitespace are refused by [`shortcut_key`] itself.
 fn invisible(c: char) -> bool {
-    matches!(
-        c as u32,
-        0x00AD
-            | 0x034F
-            | 0x061C
-            | 0x115F..=0x1160
-            | 0x17B4..=0x17B5
-            | 0x180B..=0x180F
-            | 0x200B..=0x200F
-            | 0x202A..=0x202E
-            | 0x2060..=0x206F
-            | 0x3164
-            | 0xFE00..=0xFE0F
-            | 0xFEFF
-            | 0xFFA0
-            | 0xFFF0..=0xFFFB
-            | 0x0300..=0x036F
-            | 0x0483..=0x0489
-            | 0x0591..=0x05BD
-            | 0x0610..=0x061A
-            | 0x064B..=0x065F
-            | 0x1AB0..=0x1AFF
-            | 0x1DC0..=0x1DFF
-            | 0x20D0..=0x20FF
-            | 0xFE20..=0xFE2F
-            | 0xE0000..=0xE007F
-            | 0xE0100..=0xE01EF
-    )
+    crate::text::default_ignorable(c)
+        || lodestar_metainfo::format_char(c)
+        || unicode_normalization::char::is_combining_mark(c)
 }
 
 /// A single-key shortcut: one visible character.
@@ -255,6 +242,23 @@ impl Section for Preferences {
     /// Nor does a preference change how the server runs.
     fn apply(&self, _: &str, _: &mut Config) {}
 
+    /// Saved remaps with a key this build refuses (an older build allowed
+    /// it): see [`repair_shortcuts`].
+    fn repair_saved(field: &str, value: &serde_json::Value) -> Option<serde_json::Value> {
+        if field != "shortcut_keys" {
+            return None;
+        }
+        let keys: BTreeMap<String, String> = serde_json::from_value(value.clone()).ok()?;
+        if check_shortcuts(&keys).is_ok() {
+            return None;
+        }
+        // Only a repair that leaves a valid map: what it can't fix is ignored
+        // whole, as any invalid saved value is, and logged as that.
+        let repaired = repair_shortcuts(&keys);
+        (repaired != keys && check_shortcuts(&repaired).is_ok())
+            .then(|| serde_json::to_value(repaired).expect("a map of strings"))
+    }
+
     fn check(&self, field: &str) -> Result<(), String> {
         let ok = match field {
             "theme" => theme_id(&self.theme),
@@ -273,6 +277,48 @@ impl Section for Preferences {
             _ => "Must be a time zone, such as Europe/Berlin, or empty.",
         }
         .to_string())
+    }
+}
+
+/// Saved remaps as this build reads them, when they no longer pass
+/// [`check_shortcuts`] (runner-approved, `docs/decisions/2026-11-21-X-prefs-invisible-share.md`):
+/// - every remap whose key isn't a shortcut key, for any reason (a
+///   character the rule now refuses, but also `""` or `"ab"`), is dropped,
+///   so its action has its default key again;
+/// - then every remap whose key is the default of an action without a
+///   remap is dropped, whatever the reason it collides: a default just
+///   restored, or one that was in effect all along (`detail.send` remapped
+///   to `j` while `results.next` still has `j`). That restores more
+///   defaults, so this repeats until nothing changes;
+/// - every other remap is kept.
+///
+/// [`Section::repair_saved`] keeps the result only if it then passes the
+/// check; what this can't fix (an action id that isn't one, more than
+/// [`MAX_SHORTCUTS`] remaps, two remaps sharing a key) leaves the field
+/// ignored whole, as any invalid saved value is. A round only follows one
+/// that restored a default, so there are at most
+/// `DEFAULT_SHORTCUTS.len() + 1` of them, each linear in the map, whatever
+/// its size.
+fn repair_shortcuts(keys: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut keys = keys.clone();
+    keys.retain(|_, key| shortcut_key(key));
+    loop {
+        let restored: Vec<&str> = DEFAULT_SHORTCUTS
+            .iter()
+            .filter(|(action, _)| !keys.contains_key(*action))
+            .map(|(_, key)| *key)
+            .collect();
+        let clash: Vec<String> = keys
+            .iter()
+            .filter(|(_, key)| restored.contains(&key.as_str()))
+            .map(|(action, _)| action.clone())
+            .collect();
+        if clash.is_empty() {
+            return keys;
+        }
+        for action in clash {
+            keys.remove(&action);
+        }
     }
 }
 
@@ -403,6 +449,105 @@ mod tests {
             })
             .collect();
         assert!(check_shortcuts(&many).is_err());
+    }
+
+    /// Over all of `char`, a one-character key is refused exactly when it's
+    /// a control, whitespace, default-ignorable, Cf or a mark (Mn, Mc, Me),
+    /// the categories read from `unicode-properties`, not from the tables
+    /// the rule uses.
+    ///
+    /// Upgrade `unicode-properties` and `unicode-normalization` together:
+    /// with the reference on a newer Unicode than the rule's mark table, a
+    /// mark new to the reference would fail the equality.
+    #[test]
+    fn a_shortcut_key_is_one_character_that_shows() {
+        use unicode_properties::{GeneralCategory as G, UnicodeGeneralCategory};
+        let mut refused = 0;
+        let mut newer = Vec::new();
+        for c in (0..=0x10FFFF).filter_map(char::from_u32) {
+            // The rule's mark table can follow a later Unicode than the
+            // reference (unicode-normalization 0.1.26 is Unicode 18,
+            // unicode-properties 0.1.4 is 17): a code point the reference
+            // leaves unassigned may be a mark in the rule's. Those are
+            // counted, never compared.
+            if c.general_category() == G::Unassigned && !crate::text::default_ignorable(c) {
+                if !shortcut_key(&c.to_string()) {
+                    newer.push(c);
+                }
+                continue;
+            }
+            let hidden = c.is_control()
+                || c.is_whitespace()
+                || crate::text::default_ignorable(c)
+                || matches!(
+                    c.general_category(),
+                    G::Format | G::NonspacingMark | G::SpacingMark | G::EnclosingMark
+                );
+            refused += usize::from(hidden);
+            assert_eq!(
+                shortcut_key(&c.to_string()),
+                !hidden,
+                "{:?}",
+                c.escape_unicode()
+            );
+        }
+        assert!(refused > 2_000, "{refused}");
+        // Unicode 18's 37 new marks, and nothing like a block.
+        assert!(newer.len() < 100, "{}: {newer:?}", newer.len());
+        for c in [
+            '\u{0941}',  // Devanagari vowel sign U (Mn), passed before
+            '\u{093e}',  // Devanagari vowel sign AA (Mc)
+            '\u{20dd}',  // combining enclosing circle (Me)
+            '\u{1d173}', // musical symbol begin beam, default-ignorable
+            '\u{e0080}', // unassigned in plane 14, default-ignorable
+            '\u{200b}',  // zero-width space
+            '\u{fffa}',  // interlinear annotation separator (Cf)
+        ] {
+            assert!(!shortcut_key(&c.to_string()), "{:?}", c.escape_unicode());
+        }
+        for key in ["a", "ü", "/", "?", "字", "\u{0905}"] {
+            assert!(shortcut_key(key), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn repair_drops_refused_keys_and_what_their_defaults_displace() {
+        let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(a, k)| (a.to_string(), k.to_string()))
+                .collect()
+        };
+        // Nothing refused, no clash: unchanged.
+        let fine = map(&[("results.next", "k"), ("results.previous", "j")]);
+        assert_eq!(repair_shortcuts(&fine), fine);
+        // A chain: next's j comes back, so send's j goes and its s comes
+        // back, so select's s goes. search.focus's f stays.
+        let chain = map(&[
+            ("results.next", "\u{0941}"),
+            ("detail.send", "j"),
+            ("results.select", "s"),
+            ("search.focus", "f"),
+        ]);
+        let repaired = repair_shortcuts(&chain);
+        assert_eq!(repaired, map(&[("search.focus", "f")]));
+        assert!(check_shortcuts(&repaired).is_ok());
+        // Every remap refused: none left, the defaults hold.
+        let all = map(&[("results.next", "\u{200b}"), ("x.y", "\u{e0080}")]);
+        assert!(repair_shortcuts(&all).is_empty());
+        // A remap that collides with a default in effect all along (main
+        // ignored the whole field): it goes, the rest stay (runner).
+        let clash = map(&[("detail.send", "j"), ("search.focus", "f")]);
+        let repaired = repair_shortcuts(&clash);
+        assert_eq!(repaired, map(&[("search.focus", "f")]));
+        assert!(check_shortcuts(&repaired).is_ok());
+        assert_eq!(
+            Preferences::repair_saved("shortcut_keys", &serde_json::to_value(&clash).unwrap()),
+            Some(serde_json::to_value(&repaired).unwrap())
+        );
+        // Malformed keys go the same way.
+        let bad = map(&[("results.next", ""), ("results.select", "ab"), ("x.y", "q")]);
+        assert_eq!(repair_shortcuts(&bad), map(&[("x.y", "q")]));
     }
 
     #[test]
