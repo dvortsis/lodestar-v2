@@ -117,6 +117,13 @@ pub struct FacetValue {
     pub count: u64,
     /// The query excludes it (`-res:480p`).
     pub excluded: bool,
+    /// How to show it, when that differs from `value`: only `group`, the
+    /// most common spelling of the release group in its torrents' names
+    /// (`rarbg` → "RARBG"). Absent otherwise. `value` stays what a query
+    /// matches and a click sends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub label: Option<String>,
     /// The query selects it.
     pub selected: bool,
     pub value: String,
