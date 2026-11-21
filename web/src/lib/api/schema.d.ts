@@ -3167,6 +3167,16 @@ export interface components {
              *     digits). Send it back as `held` to accept with the password.
              */
             held_version?: string;
+            /**
+             * @description The change loosens child safety: it turns a child-safety core rule
+             *     off or weakens one (an exception to it, or an override that can
+             *     bypass it), takes entries off the locked floor, or releases or marks
+             *     as a false positive a hold by a child-safety rule. For Undo it
+             *     compares the kept rule set with the current one, whatever those
+             *     rules caught. Style only: `confirm` still decides the password.
+             *     Sent only when true.
+             */
+            loosens_child_safety?: boolean;
             neutralize: null | components["schemas"]["Preview"];
             /**
              * @description For `accept_pack_versions`: what accepting each version does, from
