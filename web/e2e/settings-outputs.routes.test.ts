@@ -48,11 +48,14 @@ test.describe('Settings → Outputs', () => {
 	let sent: { op: string; body: unknown }[];
 	/** Set once the download starts: until then `/jobs` holds no export, as on a fresh server. */
 	let exporting: boolean;
+	/** While set, the screen's first `/jobs` read (its mount read) waits for it: a slow first answer. */
+	let holdFirstRead: Promise<void> | null;
 	test.beforeEach(async ({ mock }) => {
 		new SettingsBackend(index, values).attach(mock as unknown as MockLike);
 		const on = mock.on.bind(mock) as (id: string, f: unknown) => unknown;
 		sent = [];
 		exporting = false;
+		holdFirstRead = null;
 		on('listKeys', { keys: [key(1, 'Prowlarr')] });
 		on('createKey', (r: { postDataJSON(): Record<string, unknown> }) => {
 			const body = r.postDataJSON();
@@ -67,7 +70,13 @@ test.describe('Settings → Outputs', () => {
 					};
 		});
 		// A download is a navigation, which the mock doesn't answer; the job is what the screen shows.
-		on('listJobs', () => {
+		on('listJobs', async () => {
+			if (holdFirstRead) {
+				const held = holdFirstRead;
+				holdFirstRead = null;
+				await held;
+			}
+			// What the server holds when it answers, not when it was asked.
 			const at = Math.floor(Date.now() / 1000);
 			if (!exporting) return { jobs: [] };
 			return {
@@ -137,32 +146,51 @@ test.describe('Settings → Outputs', () => {
 			.toBe(false);
 	});
 
-	test('starts the bitmagnet export and shows its progress', async ({ page, go }) => {
-		await go('/settings/outputs');
-		await expect(page.getByTestId('outputs-bitmagnet-left-out')).toContainText('hidden torrents');
-		const download = page.waitForEvent('download');
-		exporting = true;
-		await page.getByTestId('outputs-bitmagnet-start').click();
-		expect((await download).url()).toMatch(/\/api\/v1\/export\?format=bitmagnet$/);
-		await expect(page.getByTestId('outputs-bitmagnet-count')).toHaveText(
-			'Done: 42 torrents in the file.'
-		);
-		// The example command wraps instead of scrolling, between words where it can: nothing of it is hidden at any width.
-		const curl = page.getByTestId('outputs-bitmagnet-curl');
-		await expect(curl).toContainText('http://<bitmagnet-host>:3333/import');
-		for (const width of [320, 360, 768, 1366]) {
-			await page.setViewportSize({ width, height: 900 });
-			await expect.poll(() => curl.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-		}
-		// Nor does the page scroll sideways on a phone.
-		await page.setViewportSize({ width: 360, height: 900 });
-		await expect
-			.poll(() =>
-				page.evaluate(
-					() => document.documentElement.scrollWidth <= document.documentElement.clientWidth
+	// The screen reads `/jobs` once when it opens, to learn the ids already taken, and a press then
+	// looks for a job above the highest. The mock lists the export's job only once `exporting` is
+	// set, so the test must not set it until that first read has been answered: a late answer would
+	// otherwise already list the job, and the press would wait for an id above it (the CI failure
+	// of #1031). A real server creates the job when the download starts, after the press, so the
+	// screen needs no change. `data-ids-known` on the Start link is the screen's own signal that the
+	// read has answered. `slow` holds that first answer until a condition (the page has rendered),
+	// the race the test used to lose when the mock was slow to answer.
+	for (const slow of [false, true]) {
+		test(`starts the bitmagnet export and shows its progress${slow ? ' (slow first /jobs read)' : ''}`, async ({
+			page,
+			go
+		}) => {
+			let release!: () => void;
+			if (slow) holdFirstRead = new Promise<void>((resolve) => (release = resolve));
+			await go('/settings/outputs');
+			await expect(page.getByTestId('outputs-bitmagnet-left-out')).toContainText('hidden torrents');
+			// The page is up, and only now does the slow read answer.
+			if (slow) release();
+			const start = page.getByTestId('outputs-bitmagnet-start');
+			await expect(start).toHaveAttribute('data-ids-known', 'true');
+			const download = page.waitForEvent('download');
+			exporting = true;
+			await start.click();
+			expect((await download).url()).toMatch(/\/api\/v1\/export\?format=bitmagnet$/);
+			await expect(page.getByTestId('outputs-bitmagnet-count')).toHaveText(
+				'Done: 42 torrents in the file.'
+			);
+			// The example command wraps instead of scrolling, between words where it can: nothing of it is hidden at any width.
+			const curl = page.getByTestId('outputs-bitmagnet-curl');
+			await expect(curl).toContainText('http://<bitmagnet-host>:3333/import');
+			for (const width of [320, 360, 768, 1366]) {
+				await page.setViewportSize({ width, height: 900 });
+				await expect.poll(() => curl.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+			}
+			// Nor does the page scroll sideways on a phone.
+			await page.setViewportSize({ width: 360, height: 900 });
+			await expect
+				.poll(() =>
+					page.evaluate(
+						() => document.documentElement.scrollWidth <= document.documentElement.clientWidth
+					)
 				)
-			)
-			.toBe(true);
-		await expectNoA11yViolations(page);
-	});
+				.toBe(true);
+			await expectNoA11yViolations(page);
+		});
+	}
 });
