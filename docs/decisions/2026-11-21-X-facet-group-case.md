@@ -31,12 +31,11 @@ Runner brief, 2026-11-21Z, from the "Release-group case" follow-up in `docs/deci
   - a property test: the samples for 3 are among those for 8, are spread over both halves, and are never closer than 1/16 of the term's documents.
 - **Bounded work on untrusted names.** A value longer than 64 bytes gets no label: that's the query language's longest keyword value, and real groups are far shorter. Each name is scanned once, in one pass (a 16 KB name of near-misses is a test case). The cancel token is checked between values and every 4,096 postings of a walk.
 - **Hidden torrents can vote.** The samples are the term's documents, so a torrent the always-on filters hide (Adult while hidden, filter rules) can be one. All it can change is the case of a value the facet already lists; the counts never include it (§8).
-- **What may show (runner call, §2.26).** Names are untrusted, so a spelling shows only when it passes `fit_label`:
-  - each char lower-cases to exactly the value's char in its place, so it has the same chars and the same count, only re-cased;
-  - it's NFKC-stable (`label == nfkc(label)`).
-  - So compatibility characters never show: the Kelvin sign (U+212A, which lower-cases to `k`), the Angstrom sign (U+212B), ligatures and full-width forms. Nor does a char whose lower case is two chars (`İ`).
+- **What may show (runner calls, §2.26).** Names are untrusted, so a spelling shows only when it passes `fit_label`:
+  - **S1-20: labels limited to ASCII re-casing.** It may differ from the value only by ASCII letters in upper case (`a`–`z` as `A`–`Z`); every other char is exactly the value's. So a label never holds a char the value doesn't, other than a capital ASCII letter, and can't pass for another group's name: no lookalikes of another group. A non-ASCII letter keeps the value's form ("GRüPPE" for `grüppe`).
+  - It's NFKC-stable (`label == nfkc(label)`), so compatibility characters never show: the Kelvin sign (U+212A), the Angstrom sign (U+212B), ligatures and full-width forms.
+  - It has the value's char count, so no char whose lower case is two chars (`İ`).
   - A name with no fit spelling gives no label, and the value shows as sent.
-  - **A known gap:** a group ending in a Greek capital sigma gets no label. The index lower-cases it to a final `ς`, and the char-for-char rule lower-cases it to `σ`.
 
 ## The read cap (runner call, §2.26)
 - **At most 256 stored names per request, whatever the limit; at least 3 per value, at most 8.**

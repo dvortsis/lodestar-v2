@@ -1417,20 +1417,22 @@ fn group_labels(
     Ok(())
 }
 
-/// Whether `label` may show for `value` (the runner's rule, §2.26): each
-/// of its chars lower-cases to exactly the value's char in its place, so
-/// it has the same chars, only re-cased; and it's NFKC-stable, so a
-/// compatibility char (the Kelvin sign `K`, U+212A, lower-cases to `k`)
-/// never shows.
+/// Whether `label` may show for `value` (the runner's rules, §2.26): it
+/// differs from the value only by ASCII letters in upper case (`a`–`z`
+/// as `A`–`Z`), every other char exactly the value's; and it's
+/// NFKC-stable. So a label never holds a char the value doesn't, other
+/// than a capital ASCII letter: no compatibility char (the Kelvin sign,
+/// U+212A) and no other script's capital that reads as a Latin one, so a
+/// label can't look like another group's ("S1-20: labels limited to
+/// ASCII re-casing").
 pub(crate) fn fit_label(label: &str, value: &str) -> bool {
     use unicode_normalization::UnicodeNormalization;
     let mut want = value.chars();
     for c in label.chars() {
-        let mut low = c.to_lowercase();
-        let (Some(l), None) = (low.next(), low.next()) else {
+        let Some(v) = want.next() else {
             return false;
         };
-        if want.next() != Some(l) {
+        if c != v && !(c.is_ascii_uppercase() && c.to_ascii_lowercase() == v) {
             return false;
         }
     }
@@ -1536,43 +1538,28 @@ fn sample_docs(
 /// letter or digit on either side); `None` when there's none. A match
 /// inside another word (`flux` in "INFLUX") doesn't vote.
 ///
-/// Linear in the name: it's lower-cased once, char for char (a char whose
-/// lower case is several chars becomes a NUL, which no value matches),
-/// and searched for non-overlapping matches; only those are checked.
+/// Linear in the name: only ASCII re-casing may differ ([`fit_label`]),
+/// so the name is ASCII-lower-cased once (same bytes, same offsets) and
+/// searched for non-overlapping matches; only those are checked.
 pub(crate) fn spelling_in<'a>(name: &'a str, value: &str) -> Option<&'a str> {
-    let len = value.chars().count();
-    if len == 0 || value.contains('\0') {
+    if value.is_empty() {
         return None;
     }
-    let mut lowered = String::with_capacity(name.len());
-    // Per char: (byte offset in `lowered`, byte offset in `name`).
-    let mut at: Vec<(usize, usize)> = Vec::with_capacity(name.len() + 1);
-    for (i, c) in name.char_indices() {
-        at.push((lowered.len(), i));
-        let mut low = c.to_lowercase();
-        match (low.next(), low.next()) {
-            (Some(l), None) => lowered.push(l),
-            _ => lowered.push('\0'),
-        }
-    }
-    at.push((lowered.len(), name.len()));
+    let lowered = name.to_ascii_lowercase();
     let mut best = None;
     let mut from = 0;
-    while let Some(off) = lowered[from..].find(value).map(|o| from + o) {
-        let first = at.partition_point(|(l, _)| *l < off);
-        // A match always starts on a char of `lowered`.
-        if let Some(&(_, start)) = at.get(first) {
-            let end = at[first + len].1;
-            let cut = &name[start..end];
-            let edge = |c: Option<char>| !c.is_some_and(char::is_alphanumeric);
-            if edge(name[..start].chars().next_back())
-                && edge(name[end..].chars().next())
-                && fit_label(cut, value)
-            {
-                best = Some(cut);
-            }
+    while let Some(start) = lowered[from..].find(value).map(|o| from + o) {
+        let end = start + value.len();
+        // `lowered` has `name`'s char boundaries, so this slice is one.
+        let cut = &name[start..end];
+        let edge = |c: Option<char>| !c.is_some_and(char::is_alphanumeric);
+        if edge(name[..start].chars().next_back())
+            && edge(name[end..].chars().next())
+            && fit_label(cut, value)
+        {
+            best = Some(cut);
         }
-        from = off + value.len();
+        from = end;
     }
     best
 }

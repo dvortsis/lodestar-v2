@@ -1495,7 +1495,8 @@ fn a_long_list_reads_fewer_names_per_group() {
     assert_eq!(values.len(), 100);
     // 256 reads at 3 each: the top 85 get their spelling, the rest show
     // as sent.
-    let labelled = LABEL_READS / MIN_LABEL_SAMPLES;
+    let labelled = 85;
+    assert_eq!(LABEL_READS / MIN_LABEL_SAMPLES, labelled);
     for (i, v) in values.iter().enumerate() {
         let want = format!("Grp{}", v.value.trim_start_matches("grp"));
         if i < labelled {
@@ -1513,7 +1514,7 @@ fn a_long_list_reads_fewer_names_per_group() {
 
 #[test]
 fn spellings_are_found_as_words() {
-    let cases: [(&str, &str, Option<&str>); 14] = [
+    let cases: [(&str, &str, Option<&str>); 19] = [
         ("Movie.2020.1080p-RARBG", "rarbg", Some("RARBG")),
         // The last word of its own wins over an earlier one.
         ("Rarbg.Pack.Movie-RARBG", "rarbg", Some("RARBG")),
@@ -1530,7 +1531,16 @@ fn spellings_are_found_as_words() {
         ("Nothing here", "rarbg", None),
         ("", "rarbg", None),
         ("RARBG", "", None),
-        ("Ünïcode-GRÜPPE", "grüppe", Some("GRÜPPE")),
+        // Only ASCII letters are re-cased (S1-20): a non-ASCII letter keeps
+        // the value's form.
+        ("Ünïcode-GRÜPPE", "grüppe", None),
+        ("Ünïcode-GRüPPE", "grüppe", Some("GRüPPE")),
+        // Capitals of other scripts never show (S1-20): the lower-case в
+        // and ν stay, or there's no label.
+        ("Movie.2024.1080p-RARВG", "rarвg", None),
+        ("Movie.2024.1080p-RARвG", "rarвg", Some("RARвG")),
+        ("Movie-ΝTB", "νtb", None),
+        ("Movie-νTB", "νtb", Some("νTB")),
         // Lower-casing that changes the char count (İ is "i̇"): not char
         // for char, so no label.
         ("Show-İSTANBUL", "i̇stanbul", None),
@@ -1566,29 +1576,23 @@ mod label_props {
 
     use super::super::{choose_spelling, fit_label, sample_ranks, spelling_in};
 
-    /// The runner's rule (§2.26), stated directly.
+    /// The runner's rules (§2.26, S1-20), stated directly: the value with
+    /// some ASCII letters in upper case, and NFKC-stable.
     fn fit(label: &str, value: &str) -> bool {
-        let lowered: Vec<String> = label.chars().map(|c| c.to_lowercase().collect()).collect();
         label.chars().count() == value.chars().count()
-            && lowered
-                .iter()
+            && label
+                .chars()
                 .zip(value.chars())
-                .all(|(l, v)| *l == v.to_string())
+                .all(|(l, v)| l == v || (v.is_ascii_lowercase() && l == v.to_ascii_uppercase()))
             && label.nfkc().collect::<String>() == label
     }
 
-    /// `value` with each char's case flipped by `mask`.
+    /// `value` with the ASCII letters `mask` picks in upper case.
     fn recased(value: &str, mask: &[bool]) -> String {
         value
             .chars()
             .zip(mask.iter().cycle())
-            .map(|(c, up)| {
-                if *up {
-                    c.to_uppercase().collect::<String>()
-                } else {
-                    c.to_string()
-                }
-            })
+            .map(|(c, up)| if *up { c.to_ascii_uppercase() } else { c })
             .collect()
     }
 
@@ -1599,16 +1603,18 @@ mod label_props {
             value in "[a-zäöüßσ0-9 ]{1,12}",
         ) {
             if let Some(s) = spelling_in(&name, &value) {
-                prop_assert_eq!(s.to_lowercase(), value.clone());
+                prop_assert_eq!(s.to_ascii_lowercase(), value.clone());
                 prop_assert!(name.contains(s));
                 prop_assert!(fit(s, &value));
+                // No char outside the value's, but a capital ASCII letter.
+                prop_assert!(s.chars().all(|c| value.contains(c) || c.is_ascii_uppercase()));
             }
         }
 
         #[test]
         fn a_label_is_the_value_re_cased_and_nfkc_stable(
-            label in "[a-zA-Z0-9\u{212A}\u{212B}\u{130}\u{FB01}\u{FF21}ÅåKkσΣς ]{0,10}",
-            value in "[a-z0-9åkσς ]{0,10}",
+            label in "[a-zA-Z0-9\u{212A}\u{212B}\u{130}\u{FB01}\u{FF21}ÅåKkσΣςВвΝν ]{0,10}",
+            value in "[a-z0-9åkσςвν ]{0,10}",
         ) {
             prop_assert_eq!(fit_label(&label, &value), fit(&label, &value));
             // And against the label's own lower case.
@@ -1616,8 +1622,8 @@ mod label_props {
             prop_assert_eq!(fit_label(&label, &own), fit(&label, &own));
             if fit_label(&label, &value) {
                 prop_assert_eq!(label.chars().count(), value.chars().count());
-                let compat = ['\u{212A}', '\u{212B}', '\u{FB01}', '\u{FF21}', '\u{130}'];
-                prop_assert!(!label.contains(compat), "{:?}", label);
+                let banned = ['\u{212A}', '\u{212B}', '\u{FB01}', '\u{FF21}', '\u{130}', 'Å', 'Σ', 'В', 'Ν'];
+                prop_assert!(!label.contains(banned), "{:?}", label);
             }
         }
 
@@ -1638,7 +1644,7 @@ mod label_props {
             };
             let got = spelling_in(&name, &value);
             prop_assert!(got.is_some(), "{:?} {:?}", name, value);
-            prop_assert_eq!(got.unwrap().to_lowercase(), value);
+            prop_assert_eq!(got.unwrap(), word.as_str());
         }
 
         #[test]
@@ -1695,14 +1701,22 @@ mod label_props {
 fn only_a_re_cased_nfkc_stable_spelling_may_show() {
     assert!(fit_label("RARBG", "rarbg"));
     assert!(fit_label("rarbg", "rarbg"));
-    assert!(fit_label("GRÜPPE", "grüppe"));
-    assert!(fit_label("ΑΒΓ", "αβγ"));
+    // Only ASCII letters re-case (S1-20): other scripts' capitals, which
+    // can read as Latin ones, never show.
+    assert!(!fit_label("GRÜPPE", "grüppe"));
+    assert!(fit_label("GRüPPE", "grüppe"));
+    assert!(!fit_label("ΑΒΓ", "αβγ"));
+    assert!(!fit_label("RARВG", "rarвg"));
+    assert!(fit_label("RARвG", "rarвg"));
+    assert!(!fit_label("ΝTB", "νtb"));
+    assert!(fit_label("νTB", "νtb"));
     // The Kelvin sign lower-cases to `k`, the Angstrom sign to `å`; NFKC
     // makes them K and Å, so they never show.
     assert!(!fit_label("\u{212A}ING", "king"));
     assert!(!fit_label("\u{212B}NGSTROM", "ångstrom"));
     // Two chars from one (İ), or another char count.
     assert!(!fit_label("İ", "i\u{307}"));
+    assert!(!fit_label("İ", "i"));
     assert!(!fit_label("RARB", "rarbg"));
     assert!(!fit_label("RARBGX", "rarbg"));
     // Compatibility forms: a ligature, a full-width letter.
