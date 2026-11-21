@@ -1614,8 +1614,9 @@ export default [
 	entry('Search index-state banners (on demand)', indexStateLazy, '4.1 KB'),
 	entry('Search Block settle (on demand)', settleLazy, '0.6 KB'),
 	// runner §2.26, SRC-17: the Source facet and Show unverified (16,800 B → 17,696 B, the measured 831 B over rounded up to 64 B).
-	// X-labels (runner §2.26): 17,635 → 18,748 B, the value names (codecs, HDR, languages, types).
-	entry('Facet rail (lazy)', facetsLazy, '18.75 KB'),
+	// X-labels (runner §2.26): 17,635 → 18,825 B, the value names (codecs, HDR, languages, types),
+	// and Find matching the code as well as the label (review).
+	entry('Facet rail (lazy)', facetsLazy, '18.83 KB'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
@@ -1637,10 +1638,11 @@ export default [
 	entry('Search assist (on demand)', assistLazy, '6.59 KB'),
 	// zh strings inlined (H-zh); runner §2.26. 1.64 → 1.75 KB, no meaning trimmed further.
 	entry('Natural phrasing (on demand)', naturalLazy, '1.75 KB'),
-	// X-labels (runner §2.26): 5,673 → 8,360 B, the 48 field labels and the value names; the value names are
+	// X-labels (runner §2.26): 5,673 → 8,430 B, the 48 field labels and the value names ("Yes"/"No"
+	// for flags, review); the value names are
 	// shared with the Facet rail, which Search has loaded first, so loading them lazily saved nobody
 	// anything and grew five entries.
-	entry('Builder (on demand)', builderLazy, '8.36 KB'),
+	entry('Builder (on demand)', builderLazy, '8.43 KB'),
 	// X-detail-headroom: the settings subscription (L3's visibility revalidation) and its event client
 	// load on demand, from visibility-events.ts, so they are no longer in this first view.
 	// X-detail-headroom: detail.css is split so each entry carries only its own rules: host.css (drawer
