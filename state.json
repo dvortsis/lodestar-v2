@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T06:39Z",
+    "updated": "2026-11-21T06:47Z",
     "items": [
       {
         "slot": 1,
@@ -10671,8 +10671,8 @@
         "role": "build (opus, security)",
         "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
         "model": "opus",
-        "since": "2026-11-21T02:09Z",
-        "doing": "briefed; X-sec-S1-18 #998 merged da2afa7d (held: none open on surface 1)",
+        "since": "2026-11-21T06:47Z",
+        "doing": "#1003 awaiting one re-run of an unrelated Windows uTP flake, then merge; building X-flake-utp-lossy-win (briefs/X-flake-utp-lossy-win.md)",
         "status": "running"
       },
       {
