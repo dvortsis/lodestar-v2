@@ -1,4 +1,4 @@
-# X-facet-group-case decisions (#PR)
+# X-facet-group-case decisions (#1033)
 
 Runner brief, 2026-11-21Z, from the "Release-group case" follow-up in `docs/decisions/2026-11-21-X-labels.md`. Architecture §8 (facets), §10.4; budgets §3 and §10.1.
 
