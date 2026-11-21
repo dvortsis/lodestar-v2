@@ -158,7 +158,7 @@
 }
 
 /* By the row's own width, not the viewport's (§10.15). Above 480 px the facts drop from the end
-   of the line (the technical trackers fact is last); at 480 px and under, all but size,
+   of the line, whose order (ResultRow) is their priority; at 480 px and under, all but size,
    availability, discovered and a feature's own fact go. Density stays the user's choice. */
 @container result-row (max-width: 480px) {
 	.rr-raw,
@@ -169,15 +169,6 @@
 	}
 	.rr-facts {
 		gap: calc(var(--spacing) * 2);
-	}
-	.rr-size {
-		order: -2;
-	}
-	.rr-extra {
-		order: -3;
-	}
-	.rr-swarm {
-		order: -1;
 	}
 	.rr-action {
 		padding-inline: var(--spacing);

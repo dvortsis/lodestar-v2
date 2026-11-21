@@ -115,30 +115,7 @@
 						>{/each}
 				</span>
 			{/if}
-			{#if comfortable}
-				<span class="rr-fact rr-comp" data-testid="{id}-composition">
-					{#if comp}
-						<span class="rr-bar"
-							><CategoryBar
-								segments={comp.segments}
-								summary={comp.summary}
-								testid="{id}-compbar"
-							/></span
-						>
-						<span data-testid="{id}-dominant">{comp.dominant}</span>
-					{:else}
-						<span>{m.search_results_not_classified()}</span>
-					{/if}
-				</span>
-			{/if}
 			<span class="rr-fact rr-size" data-testid="{id}-size">{formatBytes(hit.size, locale)}</span>
-			{#if comfortable}
-				<span class="rr-fact" data-testid="{id}-files"
-					>{(hit.files === 1 ? m.search_results_files_one : m.search_results_files_other)({
-						count: formatCount(hit.files, locale)
-					})}</span
-				>
-			{/if}
 			<span class="rr-fact rr-swarm" data-testid="{id}-swarm">
 				<span class="sr-only">{m.seeders()}: </span><ArrowUp class="rr-icon" aria-hidden="true" />
 				{#if hit.seeders === null}
@@ -189,6 +166,30 @@
 					</span>
 				{/if}
 			</span>
+			<!-- Composition and file count after the choice facts, so a narrow row keeps those. -->
+			{#if comfortable}
+				<span class="rr-fact rr-comp" data-testid="{id}-composition">
+					{#if comp}
+						<span class="rr-bar"
+							><CategoryBar
+								segments={comp.segments}
+								summary={comp.summary}
+								testid="{id}-compbar"
+							/></span
+						>
+						<span data-testid="{id}-dominant">{comp.dominant}</span>
+					{:else}
+						<span>{m.search_results_not_classified()}</span>
+					{/if}
+				</span>
+			{/if}
+			{#if comfortable}
+				<span class="rr-fact" data-testid="{id}-files"
+					>{(hit.files === 1 ? m.search_results_files_one : m.search_results_files_other)({
+						count: formatCount(hit.files, locale)
+					})}</span
+				>
+			{/if}
 			<!-- Technical (§10.4): last, so the first to drop on a narrow row. -->
 			{#if comfortable}
 				<span class="rr-fact" data-testid="{id}-trackers">

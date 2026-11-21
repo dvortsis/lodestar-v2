@@ -102,6 +102,9 @@ test.describe('the drawer beside the results', () => {
 			await uncovered(page.getByTestId('results-toolbar').getByRole('button').last());
 			await uncovered(rowOf(page, 1));
 			await factsWhole(page);
+			// The narrower rows still show the choice facts (I3).
+			for (const fact of ['size', 'swarm', 'discovered'])
+				await onLine(page.getByTestId(`result-${hashOf(1)}-${fact}`));
 		});
 	}
 

@@ -21,18 +21,19 @@ Slice X-results-drawer-adaptive (Track U step 3): UI review findings I1 and I3, 
   - `1lh` follows the line height, so it still holds under WCAG 1.4.12 text spacing (L5). A test injects the 1.4.12 overrides.
   - Dropped facts stay in the accessibility tree, and they are all in the drawer and in Table mode.
 - **Its limits.** The first fact on the line can't wrap away, so a first fact wider than the whole row is still cut: a feature's own fact, or the badge group. Under 1.4.12 text spacing, a badge can be about half a pixel taller than `1lh`, so its bottom border clips; the text doesn't. Compact rows don't wrap, since their facts don't flex; a 768 px test shows none is cut there.
-- **What drops first.** Facts drop from the end of the line. The technical trackers fact (§10.4 keeps it off the row; X-row-rail removes it) now comes last, after the discovered time, so it is the first to go.
+- **What drops first.** Facts drop from the end of the line, so the line's order is its priority. It is now: a feature's own fact, the badges, size, availability, discovered, then the composition bar, the file count and, last, the technical trackers fact (§10.4 keeps that off the row; X-row-rail removes it).
+  - **Why the composition bar and file count moved behind availability and discovered.** CI's first 1440 px baseline, with the drawer in flow, showed rows about 560 px wide that kept the bar and the file count but had dropped the seeders and the discovered time. Those are what a choice rests on (I3). The reorder costs no CSS. A test now requires size, availability and discovered on the visible line with the drawer in flow.
   - The 480 px container tier (`@container result-row`) now also keeps the discovered time, so a phone shows when each torrent was found (I3).
   - The tiers read the row's own width, not the viewport's (§10.15).
-- **Middle tiers left out.** Tiers at 720 and 600 px, which would drop the composition bar and file count before the discovered time, would have cost about 30 B gzipped. Search results had 54 B of headroom under its size budget, so the wrap rule carries those widths instead.
+- **No middle tiers.** Tiers at 720 and 600 px, which would drop the composition bar and file count first while keeping §10.4's order, would have cost about 30 B gzipped, and Search results had 54 B of headroom. The reorder does the same job at no cost, and it also made the 480 px tier's `order` rules unnecessary, so they're gone.
 - **Discover's Newest leads with the discovered time (I3).** The rule `[aria-labelledby='discover-newest-h'] .rr-discovered { order: -4 }` is in `row.css`, so Discover's markup (outside this slice's owns) is unchanged.
-- **The facts order within §10.4.** Only the trackers fact moved, behind the discovered time. §10.4's listed choice facts keep their order.
+- **The facts order, against §10.4.** §10.4 lists badges, composition bar, size, files, availability and discovered, in that order. The row now shows size, availability and discovered before the composition bar and file count. This is the slice's call, made so that narrow rows keep the choice facts. **For the runner:** X-row-rail's two-tier row may settle the order for good; if it keeps this one, §10.4's list should follow.
 
 ## Sizes
 
 - **One limit raised, by the runner (§2.26, 2026-11-20).** The global "CSS" entry in `web/.size-limit.mjs` goes from 19.72 KB to 19.73 KB. That covers only the new token: 5 B gzipped, which takes the sheet from 19,717 B to 19,722 B, 2 B over the old limit. The built sheet is otherwise byte-identical to `main`'s. That one line is outside this slice's owns, and the change was made after X-session-draft-keep, which was editing the same file, merged.
 - Every other `size-limit` entry passes unchanged.
-- Search results (lazy) is at 40,603 of 40,610 B. The next change to the row (X-row-rail) needs a budget review.
+- Search results (lazy) is at 40,599 of 40,610 B. The next change to the row (X-row-rail) needs a budget review.
 - Detail drawer is at 28,111 of 28,128 B.
 - A comment using the word "shrink" had added a `.shrink` utility to the global sheet. It was reworded, so Tailwind's scan of `.svelte` comments costs nothing here.
 
