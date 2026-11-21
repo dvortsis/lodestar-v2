@@ -63,6 +63,15 @@ VERIFY_SHARE = 0.05
 RATE_SLACK_SECONDS = 2.0
 A1_SLOTS = 32
 LEDGER = collect.LEDGER
+HINT, SPLIT = collect.HINT, collect.SPLIT
+# CR-COL-6: the hint-first tier's series every scrape of a hint segment carries, in both arms.
+HINT_SERIES = tuple(HINT.values())
+CR_ADM = "coordinated_admission"
+# The runner's call (2026-11-21): stage 3's control should have CR-ADM on, since #1003's screen
+# shows the T1 tier does little without it. Without it the effect report says so; never a verdict.
+HINT_WITHOUT_ADM = ("The control doesn't have coordinated admission (CR-ADM) on: #1003's screen shows the hint-first "
+                    "tier does little without it, so a small or absent effect may come from that. The verdict "
+                    "is unchanged.")
 ADMISSION_COUNTERS = ("fetch_admission_waits_total", "fetch_admission_wait_cancelled_total",
                       "fetch_admission_wakeups_total", "fetch_admission_grants_total",
                       "fetch_admission_refusals_total", "fetch_admission_holds_total",
@@ -272,6 +281,13 @@ def required_series(kind, treatment, switches):
     if treatment == "lc":  # r5.1 A1 and the ledger it's read from, in both arms
         req += [(LEDGER[k], {}) for k in ("residence", "ended", "occupied")]
         req += [(LEDGER["queries"], {"purpose": collect.LEDGER_PEER_PURPOSE}), ("dht_queries_out_total", {})]
+    if treatment == "hint":  # CR-COL-6: the hint-first tier's series, in both arms
+        req += [(n, {}) for n in HINT_SERIES]
+        if switches.get(CR_ADM):  # T1's grants, under coordinated admission only
+            req += [("fetch_admission_grants_total", {"class": collect.HINT_GRANT_CLASS})]
+    if treatment == "split":  # CR-COL-6: the sampler split's series and the table's size, in both arms
+        req += [(SPLIT["full_seconds"], {}), (SPLIT["spill"], {}), ("dht_sample_cooling", {}),
+                ("dht_sample_inflight", {})]
     return req
 
 
@@ -661,6 +677,10 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treat
     preset = ((run.get("config") or {}).get("settings_api") or {}).get("intensity")
     if treatment == "lc":
         out["mechanism"]["lookup_cost_pair"] = lookup_cost_pair(checks, window, switches, preset)
+    # CR-COL-6: stage 3's mechanisms, checked in a hint or split segment's treatment arm;
+    # reported in every segment, their series listed absent where the binary lacks them.
+    out["hint_first"] = hint_first(checks, window, switches, treatment == "hint")
+    out["sampler_split"] = sampler_split(checks, window, switches, hourly, treatment == "split")
     # CR-LEDGER's W, q and y; absent series are reported absent (older binaries).
     out["ledger"] = {"window": ledger(t_s, end),
                      "hourly": [ledger(a, b) for a, b in zip(bounds, bounds[1:])]}
@@ -746,6 +766,70 @@ def lookup_cost_pair(checks, window, switches, preset):
                    {"max_slots_occupied": out["max_slots_occupied"]})
         checks.add("A1", "query_rate_within_preset", len(window) > 1 and not over, "void",
                    {"peak_queries_per_second": peak, "intervals_over_or_unread": len(over)} if over else None)
+    return out
+
+
+def hint_first(checks, window, switches, judged):
+    """CR-HINT-FIRST's mechanism. In a hint segment's treatment arm (the switch on): marks and
+    hinted lookups above 0, and the pool ignored no more marks than it took as keys; otherwise
+    the segment is void (rule 5). More ignored than taken means marks are coming from somewhere
+    unexpected (another source, the switch off, a private or interactive key)."""
+    a, b = window[0], window[-1]
+    parts = {k: optional_delta(a, b, HINT[k]) for k in ("marked", "keys", "ignored", "waits", "lookups")}
+    skipped = {r: optional_delta(a, b, HINT["skipped"], reason=r) for r in sorted(collect.HINT_SKIPPED_REASONS)}
+    left = {r: optional_delta(a, b, HINT["left"], reason=r) for r in sorted(collect.HINT_LEFT_REASONS)}
+    grants = optional_delta(a, b, "fetch_admission_grants_total", **{"class": collect.HINT_GRANT_CLASS})
+    waiting = [v for v in (get(r["snap"], HINT["waiting"]) for r in window) if v is not None]
+    out = {"on": bool(switches.get("hint_first")), **parts, "skipped": skipped, "left_t1": left,
+           "hinted_grants": grants, "max_t1_waiting": max(waiting, default=None)}
+    out["absent"] = sorted([k for k, v in parts.items() if v is None]
+                           + (["skipped"] if None in skipped.values() else [])
+                           + (["left_t1"] if None in left.values() else [])
+                           + (["hinted_grants"] if grants is None else []) + ([] if waiting else ["t1_waiting"]))
+    if judged and out["on"]:
+        marked, lookups, keys, ignored = (parts[k] for k in ("marked", "lookups", "keys", "ignored"))
+        checks.add("5", "hint_first_marks_hashes", (marked or 0) > 0, "void", {"marked": marked})
+        checks.add("5", "hint_first_lookups_sent", (lookups or 0) > 0, "void", {"lookups": lookups})
+        within = keys is not None and ignored is not None and ignored <= keys
+        checks.add("5", "hint_ignored_within_keys", within, "void",
+                   None if within else {"ignored": ignored, "keys": keys,
+                                        "note": "more hint marks ignored than taken: marks from an unexpected source"})
+    return out
+
+
+def sampler_split(checks, window, switches, hourly, judged):
+    """X-sampler-cooldown-split's mechanism and rule 6.4's report. In a split segment's
+    treatment arm (the switch on), once the sampler's table has filled, the spill filter holds
+    slots at some scrape; otherwise the segment is void (rule 5). A table that never filled in
+    the window didn't exercise the split: reported, not a failure. In every segment, the
+    sampler-full time and the worst hours of stored per minute are reported, never decided on."""
+    spill = [get(r["snap"], SPLIT["spill"]) for r in window]
+    table = [None if c is None or i is None else c + i for c, i in
+             ((get(r["snap"], "dht_sample_cooling"), get(r["snap"], "dht_sample_inflight")) for r in window)]
+    # The filter is allocated when the table first fills, so slots in use also mean it filled.
+    full = [k for k, (t, s) in enumerate(zip(table, spill))
+            if (t is not None and t >= collect.SAMPLER_TABLE) or (s or 0) > 0]
+    first = full[0] if full else None
+    spilled = first is not None and any((s or 0) > 0 for s in spill[first:])
+    a, b = window[0], window[-1]
+    hours = [{"hour": h["hour"], "stored_per_min": h["stored_per_min"]} for h in hourly]
+    out = {"on": bool(switches.get("sampler_cooldown_split")),
+           "sampler_full_seconds": optional_delta(a, b, SPLIT["full_seconds"]),
+           "max_spill_slots": max((s for s in spill if s is not None), default=None),
+           "max_table_entries": max((t for t in table if t is not None), default=None),
+           "table_filled_after_seconds": None if first is None else round(window[first]["e"] - a["e"]),
+           "worst_hours_stored_per_min": sorted(hours, key=lambda h: h["stored_per_min"])[:3]}
+    out["absent"] = sorted(([] if out["sampler_full_seconds"] is not None else ["sampler_full_seconds"])
+                           + ([] if out["max_spill_slots"] is not None else ["spill_slots"])
+                           + ([] if out["max_table_entries"] is not None else ["table_entries"]))
+    if judged and out["on"]:
+        if first is None:
+            out["spill_check"] = "not_exercised"  # the table never filled: nothing for the split to do
+        else:
+            out["spill_check"] = "spilled" if spilled else "table_full_without_spill"
+            checks.add("5", "spill_slots_used_once_table_fills", spilled, "void",
+                       None if spilled else {"table_filled_after_seconds": out["table_filled_after_seconds"],
+                                             "max_table_entries": out["max_table_entries"]})
     return out
 
 
@@ -1047,7 +1131,8 @@ def segment_view(report):
             "reason_at_start": (report.get("startup") or {}).get("suppression_reason_at_start"),
             "clean_stop": report.get("clean_stop"), "guardrails": report.get("guardrails") or {},
             "minutes": w.get("minutes"), "winners": report.get("winners"),
-            "ledger": (report.get("ledger") or {}).get("window")}
+            "ledger": (report.get("ledger") or {}).get("window"),
+            "hint_first": report.get("hint_first"), "sampler_split": report.get("sampler_split")}
 
 
 def judge_block(reports, treatment, winners=None):
@@ -1171,6 +1256,14 @@ def analyze_effect(treatment, block_reports, winners=None):
     out["treatment_segments"] = [{"net": s["net"], "p95": s["p95"], "p95_measured": s["p95_measured"]}
                                  for b in valid for s, a in zip(b["segments"], b["order"]) if a == "B" and s["verdict"] == "valid"]
     out["ledger_by_arm"] = ledger_by_arm(valid)
+    if treatment == "hint":  # CR-COL-6: the tier's counts per arm, and the runner's CR-ADM warning
+        out["hint_first_by_arm"] = stage3_by_arm(valid, "hint_first", ("marked", "keys", "ignored", "lookups"))
+        if CR_ADM not in (winners or []):
+            out["warnings"] = [HINT_WITHOUT_ADM]
+    if treatment == "split":  # CR-COL-6: rule 6.4's report, per arm; never decided on
+        out["sampler_split_by_arm"] = stage3_by_arm(valid, "sampler_split",
+                                                    ("sampler_full_seconds", "max_spill_slots",
+                                                     "worst_hours_stored_per_min"))
     if len(controls) > 1:
         out.update(outcome="invalid", decided=False,
                    reason="the control's switch set differs between blocks of this treatment (r5.1 A2)")
@@ -1213,6 +1306,13 @@ def ledger_by_arm(blocks):
             means[k] = sum(vals) / len(vals) if vals and len(vals) == len(rows) else None
         out[arm] = {"segments": rows, "mean": means}
     return out
+
+
+def stage3_by_arm(blocks, key, fields):
+    """Stage 3's per-segment report fields for each valid segment, by arm. Reported, not fitted."""
+    return {arm: [{k: (s[key] or {}).get(k) for k in fields}
+                  for b in blocks for s, a in zip(b["segments"], b["order"]) if a == arm and s["verdict"] == "valid"]
+            for arm in "AB"}
 
 
 def guardrail_fits(blocks):

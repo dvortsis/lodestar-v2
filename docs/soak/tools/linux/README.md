@@ -357,6 +357,27 @@ Every segment also reports CR-LEDGER's `W`, `q` and `y` (`ledger`), and `effect`
 reports them per arm (`ledger_by_arm`). An older binary's are reported absent.
 See `docs/decisions/2026-11-20-CR-COL-5.md`.
 
+### Stage 3: hint-first and the sampler split (CR-COL-6)
+
+Both are stacked treatments, so they take `--winners` as stage 2 does.
+- **`--treatment hint`** turns on `hint_first` in B (`LODESTAR_DHT_HINT_FIRST`). A
+  treatment segment is void unless hashes are marked for the T1 tier, hinted keys'
+  first lookups are sent, and the pool ignores no more hint marks than it takes.
+  If the winners don't include `coordinated_admission`, `effect` adds a warning:
+  the tier does little without it. The verdict doesn't change.
+- **`--treatment split`** turns on `sampler_cooldown_split` in B
+  (`LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT`). Once the sampler's 200,000-place table
+  fills, a treatment segment is void unless the spill filter holds slots. If the
+  table never fills in the window, the split wasn't exercised (`spill_check`
+  reads `not_exercised`); that isn't a failure.
+- **Rule 6.4, for split, in both arms:** each segment reports its sampler-full time
+  and its three worst hours of stored per minute (`sampler_split`), and `effect`
+  lists them per arm (`sampler_split_by_arm`). They're reported, never decided on.
+
+Each treatment's series are required in both arms of its own segments. Every other
+segment reports them under `hint_first` and `sampler_split` and lists the missing
+ones as `absent`. See `docs/decisions/2026-11-21-CR-COL-6.md`.
+
 ## Tests
 
 ```sh
