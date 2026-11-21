@@ -5479,6 +5479,133 @@ mod tests {
         assert!(api.assess(&Change::Undo, 1_000).is_ok());
     }
 
+    /// A floor removal takes entries off the floor, so it loosens child
+    /// safety (the `removed_from_floor` rule after the match); keeping
+    /// them doesn't.
+    #[test]
+    fn a_floor_removal_loosens_child_safety() {
+        let api = memory_api();
+        let (a, b) = ([0xa1u8; 20], [0xb2u8; 20]);
+        {
+            let mut store = api.store();
+            store
+                .sync_floor_file("/config/blocked.txt", &[a, b], 1)
+                .unwrap();
+            // `b` dropped from the file: pending removal.
+            store
+                .sync_floor_file("/config/blocked.txt", &[a], 2)
+                .unwrap();
+        }
+        let resolve = |remove| Change::ResolveFloorRemoval {
+            source: "file:/config/blocked.txt".into(),
+            hashes: None,
+            remove,
+        };
+        let removing = api.assess(&resolve(true), 1_000).unwrap();
+        assert_eq!(removing.preview.removed_from_floor, 1);
+        assert!(removing.loosens_child_safety);
+        let keeping = api.assess(&resolve(false), 1_000).unwrap();
+        assert!(!keeping.loosens_child_safety);
+    }
+
+    /// Release reads a tombstone's rule too: releasing a hash only a CS
+    /// rule tombstoned loosens child safety, one a pack rule did doesn't.
+    #[test]
+    fn releasing_a_cs_tombstone_loosens_child_safety() {
+        for (rule, cs) in [("CS-4a", true), ("MW-4", false)] {
+            let api = memory_api();
+            let hash = [0x19; 20];
+            api.store()
+                .write(&lodestar_store::WriteBatch {
+                    filtered: &[lodestar_store::Filtered {
+                        hashes: std::slice::from_ref(&hash),
+                        rule,
+                        action: Action::Drop.code(),
+                        held: Some(lodestar_store::Held::Tombstone),
+                        sealed: None,
+                        evidence: &[],
+                        at: 1_000,
+                        expires_at: 0,
+                        adult_hold: false,
+                    }],
+                    ..Default::default()
+                })
+                .unwrap();
+            assert_eq!(api.store().quarantine_rule(&hash).unwrap(), None);
+            let a = api
+                .assess(&Change::Release { hash: hex(&hash) }, 1_000)
+                .unwrap();
+            assert_eq!(a.preview.tombstones, 1, "{rule}");
+            assert_eq!(a.loosens_child_safety, cs, "{rule}");
+        }
+    }
+
+    /// The current side is the engine reloaded from the stored set: with
+    /// the engine lagging the store on a pack switch, an Undo that turns
+    /// the pack back off still counts it.
+    #[test]
+    fn undo_reads_the_rule_set_as_stored_when_the_engine_lags() {
+        let api = memory_api();
+        hits(&api, "MW-1", 2);
+        apply_change(&api, pack("malware", false));
+        {
+            let mut store = api.store();
+            // Kept: malware off. Stored now: on. The engine still has it off.
+            let kept = api.previous_data(&store).unwrap();
+            store.save_previous(&kept).unwrap();
+            store.set_pack_switch("malware", true).unwrap();
+        }
+        assert!(
+            !api.engine.current().packs.is_on(PackRule::Mw1),
+            "the engine lags"
+        );
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (0, 2), "{p:?}");
+    }
+
+    /// Exceptions match on their value too: a kept exception to a CS rule
+    /// that differs from the current one only in what it matches is one
+    /// Undo puts back.
+    #[test]
+    fn undo_compares_exceptions_by_value() {
+        let api = memory_api();
+        let exception = |b| Change::AddException {
+            rule: "CS-5a".into(),
+            what: by_hash([b; 20]),
+        };
+        let id = applied(&api, exception(0x21)).id.unwrap();
+        let kept = api.previous_data(&api.store()).unwrap();
+        apply_change(&api, Change::RemoveException { id });
+        apply_change(&api, exception(0x22));
+        // Kept: the exception for 0x21; now: the one for 0x22.
+        api.store().save_previous(&kept).unwrap();
+        assert!(loosens(&api));
+    }
+
+    /// Overrides match on their strength too: a kept Override where a
+    /// Neutralize term on the same word is now is one Undo puts back.
+    #[test]
+    fn undo_compares_overrides_by_strength() {
+        let api = memory_api();
+        let keyword = |neutralize| Change::AddOverride {
+            what: MatchInput {
+                keyword: Some("lexb".into()),
+                ..MatchInput::default()
+            },
+            neutralize,
+            scope: None,
+            expires_days: None,
+            shadow_days: None,
+        };
+        let id = applied(&api, keyword(false)).id.unwrap();
+        let kept = api.previous_data(&api.store()).unwrap();
+        apply_change(&api, Change::RemoveOverride { id });
+        apply_change(&api, keyword(true));
+        // Kept: Override "lexb"; now: Neutralize term "lexb".
+        api.store().save_previous(&kept).unwrap();
+        assert!(loosens(&api));
+    }
+
     /// The kept set parses as Undo restores it: unnamed core rules are on,
     /// locked ones are never listed.
     #[test]
