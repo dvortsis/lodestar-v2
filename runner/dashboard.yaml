@@ -466,6 +466,13 @@ placement:
   - X-fleet-switch-passthrough
   - X-metrics-prefix-doc
   - X-testvm-teardown-by-id
+  - X-importer-schema-limit
+  - X-api-openapi-400s
+  - X-testvm-delete-on-termination
+  - X-facet-exclude-fill
+  - X-grid-two-col-large
+  - X-snapshot-stale-outputs
+  - X-fleet-stacked-arms
   - X-prefs-invisible-share
   - X-api-openapi-repeated
   - X-flake-export-wal
@@ -1854,6 +1861,11 @@ owner_queue:
   action: 'CR-1c (lookup slots sized to the preset) failed one of its two screen conditions on 8 seeds: stored per minute +110% and stored per DHT query +26%, but stored per slot-second -16%, because each extra lookup reaches lower-value hashes. Should a change whose purpose is more slots need per slot-second to rise, or are per query (politeness) and the memory bound the right conditions? Until you answer, CR-1c merges with its switch off and stays out of CR-AB-LC (docs/decisions/2026-11-21-runner-records-r6.md)'
   unblocks: Whether CR-1c is tested with CR-LOOKUP-END in CR-AB-LC, as you asked on 2026-11-20
   when: Before CR-AB-LC starts on the experiment host
+- n: 33
+  type: decision
+  action: 'Grant the test-VM user ec2:DeleteVolume on volumes tagged Purpose=X-test-vm whose LaunchedBy is its own UserId (infra/dev-vm/aws-claude-testvm.json)? Today it has none, so a test volume that survives teardown waits for you to delete it, and costs about $0.02/h until then. The runner recommends yes, scoped exactly like its existing terminate permission'
+  unblocks: Test lanes that clean up their own leftover volume
+  when: Any time; IAM changes are yours
 
 gates:
 - id: G-v05
