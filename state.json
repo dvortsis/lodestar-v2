@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T09:44Z",
+    "updated": "2026-11-21T09:45Z",
     "items": [
       {
         "slot": 1,
@@ -10666,13 +10666,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-flake-utp-lossy-win",
+        "slice": "X-settings-leave-guard-split",
         "role": "build (opus, security)",
         "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
         "model": "opus",
-        "since": "2026-11-21T07:54Z",
-        "doing": "building: FetchOptions.first_window_deadline hook (default 4 s) for the lossy uTP test",
-        "status": "running"
+        "since": "2026-11-21T09:45Z",
+        "doing": "briefed: briefs/X-settings-leave-guard-split.md"
       },
       {
         "slot": 3,
