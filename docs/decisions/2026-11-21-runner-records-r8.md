@@ -1,6 +1,6 @@
 # runner-records-r8 decisions (#1025)
 
-The runner's records PR after r7 (#1020). It records the runner's calls from the afternoon of 2026-11-21. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
+The runner's records PR after r7 (#1020). It records the runner's calls from later on 2026-11-21. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
 ## Calls in merged slices
 - **X-labels (#1023):**
@@ -8,7 +8,7 @@ The runner's records PR after r7 (#1020). It records the runner's calls from the
   - **Per-field label modules** (`format/label-*.ts`), not one barrel, so each screen loads only the names it shows.
   - **Two lazy passes were measured and reverted.**
     - *Builder:* loading the value names on demand grew the Builder to 8,722 B and five other entries by 20–100 B, because the bundler regrouped the chunks. Search loads the same module before anyone opens the Builder, so the lazy load saved no user anything.
-    - *Insights stage pages:* also measured and reverted.
+    - *Insights stage pages:* a separate type-name table in `label-type` was measured and reverted, because it made every entry that shows types larger.
   - **Size limits,** each the measured size rounded up to 0.01 kB:
 
     | Entry | Limit |
@@ -46,14 +46,16 @@ The runner's records PR after r7 (#1020). It records the runner's calls from the
     - Undo's confirm takes the danger style from it, so an Undo that turns off a CS rule that caught nothing in 30 days still shows danger, like that rule's own "Turn off".
     - The flow, the warning text, the password step and what Undo does are unchanged (§2.39).
   - **The new field changes `openapi.json` and `schema.d.ts`.** The slice regenerates them only after #1021 merged, so two running slices never owned those files at once.
+  - **Undo's own Apply label** reads "Undo and loosen child safety" (zh 撤销并放宽儿童安全保护) when the flag is set. In the other danger flows, the cue beyond colour is Apply's label naming the action. With the flag alone, every count can be 0, so without its own label colour would be the only signal.
   - **Size limits,** each the measured size rounded up to 0.01 kB:
 
     | Entry | Limit | Why |
     |---|---|---|
-    | Filters dialogs | 35.97 kB | +67 B, the derivation |
-    | Settings InsightsScreen | 45.31 kB | hash and gzip drift |
-    | Settings NotificationsScreen | 45.52 kB | hash and gzip drift |
-    | Filters pack panels | 7.92 kB | hash and gzip drift |
+    | Filters dialogs | 36.04 kB | +133 B: the flag check and the Apply label |
+    | Filters pack panels | 7.92 kB | already 1 B over on `main`, plus 1 B of drift |
+
+    Settings InsightsScreen and NotificationsScreen no longer drift once the branch takes in `main`, so their limits stay.
+  - **The slice's own `runner/slices.yaml` entry** gains `crates/api/src/filters.rs`, `openapi.json` and `schema.d.ts` in its PR, so the yaml keeps other slices that own those files apart from it.
 - **CR-SAMPLE-BACKOFF-ESCALATE:**
   - **The switch has a fixed name:** config key `dht.sample_backoff_escalate`, environment variable `LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE`, off by default.
   - **With it on,** a node's first failed sample in a row gets a short cooldown, between the node's own sample interval and 1 h, chosen from the simulation. A second failure in a row gets the existing 6 h.
@@ -66,6 +68,7 @@ The runner's records PR after r7 (#1020). It records the runner's calls from the
 - **X-facet-group-case:** release-group facet values show their display case. The facet still matches on the lower-cased term. The display form comes from data the index already holds; if that needs a schema version bump, it rides the next one.
 - **X-insights-source-names:**
   - The Insights by-source rows carry the plugin's display name from the server, as the provenance rows already do.
-  - The client drops its own 287 B name table.
-  - The insights CSV keeps its `key` column (the plugin id) and adds a `name` column after it, so existing readers of the CSV keep working.
+  - The client drops its own 287 B name table, and the Insights stage pages size limit comes down with it.
+  - The name is for by-source rows only; the IP-family rows share the type and carry none.
+  - The insights CSV keeps its `key` column (the plugin id) and adds a `name` column after it, so readers that go by column name keep working. A reader that goes by position sees the columns after it shift, which the release notes say.
 - **X-narrow-states, note only:** Logs already shows local times in the chosen zone since #1023, so that part of I28 is done.
