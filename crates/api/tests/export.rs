@@ -1888,3 +1888,21 @@ async fn a_private_upload_is_never_exported_and_a_crawled_bep27_one_still_is() {
         assert!(!text.contains("Private.Upload"), "{format}: {text}");
     }
 }
+
+#[tokio::test]
+async fn an_unknown_field_is_echoed_short_and_marked() {
+    let f = fixture(&golden_torrents()[..2], Opts::default());
+    let c = session(&f).await;
+    // 64 characters echo whole; 65 are cut and marked with "…".
+    for (n, shown) in [(64, "x".repeat(64)), (65, format!("{}…", "x".repeat(64)))] {
+        let uri = format!("/api/v1/export?fields=name,{}", "x".repeat(n));
+        let (status, body) = json_of(&f.app, get(&uri, Some(&c))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{n}: {body}");
+        assert_eq!(body["error"]["code"], "unknown_field");
+        assert_eq!(
+            body["error"]["message"],
+            format!("Unknown field \"{shown}\": see ExportField for the names."),
+            "{n}"
+        );
+    }
+}

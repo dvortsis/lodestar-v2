@@ -306,10 +306,12 @@ fn shape(p: &ExportRequest) -> ApiResult<Shape> {
                     .into_iter()
                     .find(|f| f.as_str() == name)
                     .ok_or_else(|| {
-                        let shown: String = name.chars().take(64).collect();
                         ApiError::bad_request(
                             "unknown_field",
-                            format!("Unknown field {shown:?}: see ExportField for the names."),
+                            format!(
+                                "Unknown field {}: see ExportField for the names.",
+                                crate::search::echo(name)
+                            ),
                         )
                         .field("fields")
                     })?;

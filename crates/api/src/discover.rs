@@ -71,7 +71,8 @@ fn tab(kind: Option<&str>) -> ApiResult<Option<&'static str>> {
             ApiError::bad_request(
                 "unknown_type",
                 format!(
-                    "Unknown type {kind:?}: use movie, tv, music, audiobook, ebook, comic, software, game, images, video, other or adult."
+                    "Unknown type {}: use movie, tv, music, audiobook, ebook, comic, software, game, images, video, other or adult.",
+                    search::echo(kind)
                 ),
             )
             .field("type")
