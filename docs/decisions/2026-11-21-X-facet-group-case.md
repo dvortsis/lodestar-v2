@@ -58,19 +58,20 @@ Runner brief, 2026-11-21Z, from the "Release-group case" follow-up in `docs/deci
 ## Budgets
 - **Index size:** unchanged, 0 B per torrent.
 - **The Builder still shows groups lower-cased.** Its value list (`assist/BuilderRow.svelte`, outside this slice) calls `valueLabel` without a label. It's a follow-up for the runner.
-- **`/facets` latency (§3, gate p95 ≤ 100 ms):** accepted by the runner (§2.26), under its 5 ms line. Measured with search-bench at 200,010 synthetic torrents, `--queries 1500`. Three runs each of main (6d117c17) and this branch, interleaved on one dataset. The median of the three runs' p95, in ms:
+- **`/facets` latency (§3, gate p95 ≤ 100 ms):** accepted by the runner (§2.26), under its 5 ms line. Measured with search-bench at 200,000 synthetic torrents, `--queries 1500`, with the rank sampler. Three runs each of main (bdb189a3) and this branch, interleaved on one dataset. The median of the three runs' p95, in ms:
 
 | Class | main, limit 8 | branch, limit 8 | main, group limit 100 | branch, group limit 100 |
 |---|---|---|---|---|
-| broad word | 6.19 | 6.17 | 6.60 | 6.04 |
-| word + selections | 9.05 | 8.55 | 9.11 | 8.56 |
-| browse everything | 35.78 | 27.03 | 29.28 | 32.73 |
-| browse + selections | 27.19 | 21.38 | — | — |
+| broad word | 6.57 | 6.28 | 6.44 | 6.01 |
+| word + selections | 9.03 | 8.70 | 8.38 | 8.53 |
+| browse everything | 35.03 | 33.28 | 31.96 | 33.30 |
+| browse + selections | 25.29 | 25.36 | — | — |
 
-  - The p50 of "broad word" is 2.06 ms on main and 1.99 ms on the branch.
-  - The differences are within run-to-run noise: the same binary's p95 for "browse everything" ranged 32.0–36.6 ms on main. The largest rise, "browse" at group limit 100 (+3.5 ms), is under the runner's 5 ms line.
+  - The p50 of "broad word" is 2.17 ms on main and 2.02 ms on the branch.
+  - The differences are within run-to-run noise: the same binary's p95 for "browse everything" ranged 30.9–35.5 ms on main. The largest rise, "browse" at group limit 100 (+1.3 ms), is under the runner's 5 ms line.
+  - The first version, which sampled by doc id, measured the same within noise (largest rise +3.5 ms, the same class).
   - The group-limit-100 rows came from a local, uncommitted copy of `facets_path` that also runs `limit.group=100`; the committed bench is unchanged.
-  - The reads land in the searcher's document-store block cache.
+  - The name reads land in the searcher's document-store block cache; a rank walk visits at most the group's own postings, cheap beside a facet pass.
 - **Web size (gzip; main 6d117c17 → branch):**
   - Facet rail (lazy): 18,825 → 18,848 B. The limit goes from 18.83 to 18.85 kB (runner, §2.26).
   - Builder (on demand): 8,430 → 8,441 B, from `valueLabel`'s optional `label` argument in `label-release`, which it shares with the rail. The limit goes from 8.43 to 8.45 kB (runner, §2.26).
