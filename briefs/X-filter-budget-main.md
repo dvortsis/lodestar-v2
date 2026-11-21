@@ -32,3 +32,6 @@ The `filter budget (§20.8)` CI job is red on main. It runs `cargo test --releas
 `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test -p lodestar-filter`, the budget test in release (5 runs), `cd tools/status-connector && npm test`. The PR touches crates/filter, so the CI budget job runs on it and must pass.
 
 When CI is green on your head, send the runner `ready <pr> <sha>`.
+
+## Update (runner, 2026-11-21T08:0xZ): superseded by X-filter-budget-noise
+The session found no code or toolchain regression. The red was host noise in a contiguous block of cases, the same shape as an earlier flake at the last green commit, which the gate's spread and jitter checks can't see. The slice is renamed X-filter-budget-noise. A held case over budget is re-measured once at the end, with a fresh adjacent calibration, and fails only if it's over both times (or a per-case adjacent calibration). A steady injected slowdown must still fail, and re-measures are printed. The budget, cases, rule counts, calibration workload, ENGINE_SPEED and CI job don't change. This is a runner call under §2.26, flagged to the owner under §2.19.

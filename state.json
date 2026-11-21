@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T07:54Z",
+    "updated": "2026-11-21T08:03Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-filter-budget-main",
+        "slice": "X-filter-budget-noise",
         "role": "build",
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
-        "since": "2026-11-21T07:46Z",
-        "doing": "briefed: briefs/X-filter-budget-main.md"
+        "since": "2026-11-21T08:03Z",
+        "doing": "building: re-measure held over-budget cases with fresh calibration (briefs/X-filter-budget-main.md update)"
       },
       {
         "slot": 2,
