@@ -141,7 +141,34 @@ impl Default for ExportConfig {
 }
 
 pub fn routes() -> Router<ApiState> {
-    Router::new().route("/export", get(export_get).post(export_post))
+    Router::new().route(
+        "/export",
+        get(export_get)
+            .post(export_post)
+            .layer(axum::middleware::from_fn(needs_post)),
+    )
+}
+
+/// Any `ast` or `hashes` in a GET or HEAD query is `ast_needs_post` or
+/// `hashes_need_post`, sent once or more, as `/search` answers an `ast`
+/// (X-api-openapi-repeated). It runs before the query extractor, whose
+/// repeat check would otherwise answer a repeated one first, and inside the
+/// session guard, so a signed-out request is still a 401. With both, `ast`
+/// is named.
+async fn needs_post(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match search::post_only_param(&req, &["ast", "hashes"]) {
+        Some("ast") => search::ast_on_get().into_response(),
+        Some(_) => hashes_on_get().into_response(),
+        None => next.run(req).await,
+    }
+}
+
+fn hashes_on_get() -> ApiError {
+    ApiError::bad_request("hashes_need_post", "Send hashes with POST.").field("hashes")
 }
 
 /// Downloads a query's results as a file. To export an AST or a
@@ -174,7 +201,7 @@ pub fn routes() -> Router<ApiState> {
                 ("Cache-Control" = String, description = "`no-store`."),
             )
         ),
-        (status = 400, body = ErrorEnvelope, description = "A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`); `ast` or `hashes` in the query string is a `bad_parameter` (POST them)."),
+        (status = 400, body = ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type), `ast_needs_post` (any `ast`; POST it), `hashes_need_post` (any `hashes`; POST them), `query_syntax`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused` or `hidden_unused` (`hidden=true` with `bitmagnet`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
         (status = 404, body = ErrorEnvelope, description = "`collection_not_found`."),
         (status = 429, body = ErrorEnvelope, description = "`too_many_jobs`: four jobs are running or paused."),
         (status = 503, body = ErrorEnvelope, description = "`search_disabled` (a query while search is off), or `shutting_down`."),
@@ -187,14 +214,7 @@ pub(crate) async fn export_get(
     adult: Option<Extension<ExportAdult>>,
     Query(p): Query<ExportRequest>,
 ) -> ApiResult<Response> {
-    if p.ast.is_some() {
-        return Err(ApiError::bad_request("ast_needs_post", "Send an AST with POST.").field("ast"));
-    }
-    if p.hashes.is_some() {
-        return Err(
-            ApiError::bad_request("hashes_need_post", "Send hashes with POST.").field("hashes"),
-        );
-    }
+    // `needs_post` answered any `ast` or `hashes` in the query already.
     let adult = adult.map(|a| a.0.0).unwrap_or_default();
     start(s, jobs, config.map(|c| c.0).unwrap_or_default(), adult, p).await
 }
@@ -222,7 +242,7 @@ pub(crate) async fn export_get(
                 ("Cache-Control" = String, description = "`no-store`."),
             )
         ),
-        (status = 400, body = ErrorEnvelope, description = "As `GET /export`'s, or `too_many_hashes`, `bad_hash`."),
+        (status = 400, body = ErrorEnvelope, description = "`bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`), `too_many_hashes` or `bad_hash`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
         (status = 403, body = ErrorEnvelope, description = "`cross_origin`."),
         (status = 404, body = ErrorEnvelope, description = "`collection_not_found`."),
         (status = 429, body = ErrorEnvelope, description = "`too_many_jobs`."),

@@ -323,7 +323,7 @@ async fn run(
                 ("X-Accel-Buffering" = String, description = "`no`, so a proxy doesn't buffer it."),
             )
         ),
-        (status = 400, description = "A bad filter (`bad_parameter`, `unknown_component`), with `field`.", body = ErrorEnvelope),
+        (status = 400, description = "With `field`: `repeated_parameter` (a parameter sent more than once), or a bad filter (`bad_parameter`, `unknown_component`).", body = ErrorEnvelope),
         (status = 401, description = "No session (`login_required`); keys and feed tokens can't read logs.", body = ErrorEnvelope),
         (
             status = 429,

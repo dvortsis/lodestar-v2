@@ -570,7 +570,7 @@ pub(crate) async fn catalog() -> Json<LogCatalog> {
     ),
     responses(
         (status = 200, body = LogHistory),
-        (status = 400, description = "A bad parameter (`bad_parameter`, `unknown_component`) or a cursor from other filters (`bad_cursor`), with `field`.", body = ErrorEnvelope),
+        (status = 400, description = "With `field`: `repeated_parameter` (a parameter sent more than once), `bad_parameter`, `unknown_component`, or `bad_cursor` (a cursor from other filters).", body = ErrorEnvelope),
         (status = 401, description = "No session (`login_required`).", body = ErrorEnvelope),
         (
             status = 429,
@@ -753,7 +753,7 @@ async fn download_with(
                 ("Cache-Control" = String, description = "`no-store`."),
             )
         ),
-        (status = 400, description = "A bad parameter (`bad_parameter`).", body = ErrorEnvelope),
+        (status = 400, description = "With `field`: `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`format` or `redact`).", body = ErrorEnvelope),
         (status = 401, description = "No session (`login_required`).", body = ErrorEnvelope),
         (status = 404, description = "No such file (`log_file_not_found`, `field: \"name\"`).", body = ErrorEnvelope),
         (status = 429, description = "Log files are being read already (`logs_busy`).", body = ErrorEnvelope),
@@ -793,7 +793,7 @@ pub(crate) async fn download(
             content_type = "application/zip",
             body = String,
         ),
-        (status = 400, description = "A bad parameter (`bad_parameter`).", body = ErrorEnvelope),
+        (status = 400, description = "With `field`: `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`format` or `redact`).", body = ErrorEnvelope),
         (status = 401, description = "No session (`login_required`).", body = ErrorEnvelope),
         (status = 429, description = "Log files are being read already (`logs_busy`).", body = ErrorEnvelope),
         (status = 503, description = "Not served here (`logs_unavailable`).", body = ErrorEnvelope),

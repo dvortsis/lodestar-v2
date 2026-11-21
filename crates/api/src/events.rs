@@ -1054,7 +1054,7 @@ pub(crate) fn session_of(auth: &Auth, headers: &HeaderMap, peer: IpAddr) -> u64 
                 ("X-Accel-Buffering" = String, description = "`no`, so a proxy doesn't buffer it."),
             )
         ),
-        (status = 400, description = "An unknown topic (`unknown_topic`, `field: \"topics\"`).", body = ErrorEnvelope),
+        (status = 400, description = "`unknown_topic`: an unknown or empty topic; or `repeated_parameter`: `topics` sent more than once. Either with `field: \"topics\"`.", body = ErrorEnvelope),
         (status = 401, description = "No session (`login_required`).", body = ErrorEnvelope),
         (
             status = 429,
