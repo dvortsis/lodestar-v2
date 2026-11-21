@@ -453,7 +453,7 @@ async fn get_search(
     request_body = SearchRequest,
     responses(
         (status = 200, body = SearchResponse),
-        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep` or `bad_cursor`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep` or `bad_cursor`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
     )
 )]
 pub(crate) async fn search_post(

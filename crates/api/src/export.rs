@@ -162,8 +162,8 @@ async fn needs_post(
     use axum::response::IntoResponse;
     match search::post_only_param(&req, &["ast", "hashes"]) {
         Some("ast") => search::ast_on_get().into_response(),
-        Some(_) => hashes_on_get().into_response(),
-        None => next.run(req).await,
+        Some("hashes") => hashes_on_get().into_response(),
+        _ => next.run(req).await,
     }
 }
 
@@ -242,7 +242,7 @@ pub(crate) async fn export_get(
                 ("Cache-Control" = String, description = "`no-store`."),
             )
         ),
-        (status = 400, body = ErrorEnvelope, description = "`bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`), `too_many_hashes` or `bad_hash`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
+        (status = 400, body = ErrorEnvelope, description = "`bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`), `too_many_hashes` or `bad_hash`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
         (status = 403, body = ErrorEnvelope, description = "`cross_origin`."),
         (status = 404, body = ErrorEnvelope, description = "`collection_not_found`."),
         (status = 429, body = ErrorEnvelope, description = "`too_many_jobs`."),

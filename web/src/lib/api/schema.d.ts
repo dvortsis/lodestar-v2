@@ -13615,7 +13615,7 @@ export interface operations {
                     "text/plain": string;
                 };
             };
-            /** @description `bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`), `too_many_hashes` or `bad_hash`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
+            /** @description `bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`), `too_many_hashes` or `bad_hash`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -13726,7 +13726,7 @@ export interface operations {
                     "application/json": components["schemas"]["FacetsResponse"];
                 };
             };
-            /** @description `bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz` or `bad_cursor` (`lease`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
+            /** @description `bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz` or `bad_cursor` (`lease`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -15643,7 +15643,7 @@ export interface operations {
                     "application/json": components["schemas"]["SearchResponse"];
                 };
             };
-            /** @description `bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep` or `bad_cursor`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
+            /** @description `bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep` or `bad_cursor`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
             400: {
                 headers: {
                     [name: string]: unknown;

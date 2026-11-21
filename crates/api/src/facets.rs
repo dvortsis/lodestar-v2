@@ -93,7 +93,7 @@ pub(crate) async fn facets_get(
     request_body = FacetsRequest,
     responses(
         (status = 200, body = FacetsResponse),
-        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz` or `bad_cursor` (`lease`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz` or `bad_cursor` (`lease`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
     )
 )]
 pub(crate) async fn facets_post(

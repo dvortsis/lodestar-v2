@@ -1935,13 +1935,16 @@ async fn ast_and_hashes_on_get_need_post() {
         ("format=csv&hashes", "hashes_need_post", "hashes"),
         ("hashes=x&ast=y", "ast_needs_post", "ast"),
         ("%61st=x", "ast_needs_post", "ast"),
+        ("%68ashes=x", "hashes_need_post", "hashes"),
     ] {
         let uri = format!("/api/v1/export?{query}");
         let resp = f.app.clone().oneshot(get(&uri, Some(&c))).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri}");
         let get_length = length(&resp);
         assert!(get_length.is_some(), "{uri}");
-        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["error"]["code"], code, "{uri}: {body}");
         assert_eq!(body["error"]["field"], field, "{uri}: {body}");
@@ -1949,15 +1952,27 @@ async fn ast_and_hashes_on_get_need_post() {
         let resp = f.app.clone().oneshot(head(&uri)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "HEAD {uri}");
         assert_eq!(length(&resp), get_length, "HEAD {uri}");
-        // Signed out, the guard answers first.
+        // Signed out, the guard answers first, on HEAD too.
         let (status, body) = json_of(&f.app, get(&uri, None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}: {body}");
+        let signed_out = Request::head(&uri).body(Body::empty()).unwrap();
+        let status = f.app.clone().oneshot(signed_out).await.unwrap().status();
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "HEAD {uri}");
     }
     // A POST reads its body, never the URL's query.
-    let (status, body) = json_of(
-        &f.app,
-        post("/api/v1/export?ast=x&hashes=y", Some(&c), json!({ "q": "" })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let resp = f
+        .app
+        .clone()
+        .oneshot(post(
+            "/api/v1/export?ast=x&hashes=y",
+            Some(&c),
+            json!({ "q": "" }),
+        ))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 24)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
 }
