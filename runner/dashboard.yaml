@@ -352,6 +352,8 @@ placement:
   - X-page-frame
   - X-ctl-geometry
   - X-labels
+  - X-facet-group-case
+  - X-insights-source-names
   - X-shell-home
   - X-narrow-states
   - X-help

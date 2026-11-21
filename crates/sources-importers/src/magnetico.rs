@@ -44,6 +44,17 @@ pub const FUTURE_SLACK: i64 = 86_400;
 
 const LIMITS: lodestar_metainfo::Limits = lodestar_metainfo::Limits::DEFAULT;
 const POSITION_VERSION: u8 = 1;
+/// The most schema objects SQLite loads from a source
+/// (`SQLITE_LIMIT_SCHEMA`). It counts tables (views among them), indexes
+/// and triggers, including `sqlite_schema` itself, automatic indexes and
+/// the primary-key index of each `WITHOUT ROWID` table. magneticod's
+/// largest schema, v3 with FTS5, counts 18, so this is 14 times that.
+/// For a well-formed schema, the cap bounds parsing: SQLite refuses the
+/// file at the first object over it. For a schema SQLite finds corrupt,
+/// the statement deadline bounds parsing, as it did before the cap.
+const MAX_SCHEMA_OBJECTS: i32 = 256;
+/// The message SQLite sets when a schema passes `SQLITE_LIMIT_SCHEMA`.
+const TOO_MANY_SCHEMA_OBJECTS: &str = "too many schema objects";
 
 /// Why a source can't be read. Bounded labels only: no names, hashes,
 /// paths or row content, so it's safe for logs and metrics.
@@ -139,6 +150,11 @@ impl fmt::Display for Refusal {
                 f,
                 "the database can't be opened ({why}): make sure magneticod has stopped \
                  cleanly, or import a consistent copy"
+            ),
+            Refusal::Unavailable(why @ "schema_too_large") => write!(
+                f,
+                "the database can't be read ({why}): it has far more tables or indexes than \
+                 a magneticod database has, so it isn't one Lodestar can import"
             ),
             Refusal::Unavailable(why) => write!(
                 f,
@@ -1081,6 +1097,7 @@ fn harden(
         (Limit::SQLITE_LIMIT_ATTACHED, 0),
         (Limit::SQLITE_LIMIT_EXPR_DEPTH, 100),
         (Limit::SQLITE_LIMIT_VARIABLE_NUMBER, 1024),
+        (Limit::SQLITE_LIMIT_SCHEMA, MAX_SCHEMA_OBJECTS),
     ] {
         conn.set_limit(limit, value)?;
     }
@@ -1338,6 +1355,14 @@ fn map_err(e: rusqlite::Error) -> Refusal {
         Some(ErrorCode::ReadOnly | ErrorCode::CannotOpen) => Refusal::Unavailable("open_failed"),
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => Refusal::NotQuiescent,
         Some(ErrorCode::TooBig) => Refusal::Unavailable("value_too_big"),
+        // Schema loading stops with SQLITE_ABORT and SQLite's own fixed
+        // text, never the file's, when the schema passes the cap.
+        Some(ErrorCode::OperationAborted)
+            if matches!(&e, rusqlite::Error::SqliteFailure(_, Some(m))
+                if m == TOO_MANY_SCHEMA_OBJECTS) =>
+        {
+            Refusal::Unavailable("schema_too_large")
+        }
         _ => Refusal::Unavailable("read_failed"),
     }
 }
