@@ -175,10 +175,6 @@
 		announce = m.detail_announce({ title });
 	});
 
-	// In flow: the width the viewer chose, up to the most that leaves the results
-	// --results-min-width, but never under the drawer's own minimum: there the results give way
-	// instead, down to their floor. The Drawer clamps to that maximum, so a narrow window never
-	// rewrites the stored width. Overlays use their tokens; full screen takes the container.
 	// Back and "Back to Search" close like the drawer's own X: focus returns to the invoker.
 	function back() {
 		const target = focusTarget();
@@ -186,6 +182,11 @@
 		if (target?.isConnected) target.focus();
 	}
 
+	// In flow: the width the viewer chose, up to the most that leaves the results
+	// --results-min-width (the Drawer's maxWidth below), but never under the drawer's own minimum:
+	// there the results give way instead, down to their floor. The Drawer clamps to that maximum,
+	// so a narrow window never rewrites the stored width. Overlays use their tokens; full screen
+	// takes the container.
 	const width = $derived(
 		mode === 'full'
 			? 100_000

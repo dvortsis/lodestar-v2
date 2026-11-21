@@ -157,9 +157,20 @@
 	order: -4;
 }
 
-/* By the row's own width, not the viewport's (§10.15). Above 480 px the facts drop from the end
-   of the line, whose order (ResultRow) is their priority; at 480 px and under, all but size,
-   availability, discovered and a feature's own fact go. Density stays the user's choice. */
+/* By the row's own width (its content box), not the viewport's (§10.15), in §10.4's order: the
+   composition fact goes first, then the file count (both are in the drawer and Table mode); at
+   480 px and under, all but size, availability, discovered and a feature's own fact. Past that,
+   facts drop from the end of the line. Density stays the user's choice. */
+@container result-row (max-width: 720px) {
+	.rr-comp {
+		display: none;
+	}
+}
+@container result-row (max-width: 600px) {
+	.rr-files {
+		display: none;
+	}
+}
 @container result-row (max-width: 480px) {
 	.rr-raw,
 	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-discovered):not(.rr-extra),

@@ -4,7 +4,13 @@
 // WCAG 1.4.12 text spacing, and Discover's Newest leads with the discovered time. Name ends in
 // `routes.test.ts` so the `core` project runs it.
 import type { Locator, Page } from '@playwright/test';
-import { hit, newest, response, showAdultSettings } from '../src/lib/features/discover/testing';
+import {
+	group,
+	hit,
+	newest,
+	response,
+	showAdultSettings
+} from '../src/lib/features/discover/testing';
 import { body, expect, grid, hashOf, hits, row, rowOf, server } from './search-results.fixtures';
 import { expectPageSnapshot, freezeClock } from './snapshot';
 import { test } from './support/test';
@@ -29,8 +35,9 @@ const box = async (l: Locator) => {
 	return b!;
 };
 
-/** Every fact on the visible rows is either wholly inside its facts line or wrapped out of it:
- * none is cut at the line's end. Returns how many facts were checked. */
+/** Every facts line is one line tall, and every fact on it is either wholly inside the part
+ * that shows (the line, as far as the row's text column reaches) or wrapped out of it: none is
+ * cut at the end. Returns how many facts were checked. */
 async function factsWhole(page: Page): Promise<number> {
 	const cut = await page.evaluate(() => {
 		const bad: string[] = [];
@@ -38,12 +45,15 @@ async function factsWhole(page: Page): Promise<number> {
 		for (const line of document.querySelectorAll<HTMLElement>('.rr-facts')) {
 			const l = line.getBoundingClientRect();
 			if (l.width === 0) continue;
+			const lh = parseFloat(getComputedStyle(line).lineHeight);
+			if (l.height > lh + 1) bad.push(`a facts line ${l.height} px tall (one line: ${lh})`);
+			const right = Math.min(l.right, line.closest('.rr-main')!.getBoundingClientRect().right);
 			for (const fact of line.children) {
 				const f = fact.getBoundingClientRect();
 				if (f.width === 0) continue; // display: none in this tier
 				seen++;
 				const wrapped = f.top >= l.bottom - 1;
-				const inside = f.right <= l.right + 1 && f.left >= l.left - 1;
+				const inside = f.right <= right + 1 && f.left >= l.left - 1;
 				if (!wrapped && !inside) bad.push(`${fact.className}: ${fact.textContent?.trim()}`);
 			}
 		}
@@ -118,9 +128,15 @@ test.describe('the drawer beside the results', () => {
 		await go('/search?q=lantern');
 		await openRow(page, 1);
 		await expect(host(page)).toHaveAttribute('data-mode', 'inline');
-		expect((await box(drawer(page))).width).toBe(480);
-		// About 542 px with overlay scrollbars; a classic scrollbar takes its width from it.
-		expect((await box(panel(page))).width).toBeGreaterThanOrEqual(480);
+		const d = await box(drawer(page));
+		expect(d.width).toBe(480);
+		// Inside the window, not pushed past its edge.
+		expect(d.x + d.width).toBeLessThanOrEqual(1366 + 0.5);
+		// Narrower than --results-min-width, never under the floor (§2.66). About 542 px with
+		// overlay scrollbars; a classic scrollbar takes its width from it.
+		const r = (await box(panel(page))).width;
+		expect(r).toBeLessThan(560);
+		expect(r).toBeGreaterThanOrEqual(480);
 	});
 
 	test('a stored width is used once the window fits it', async ({ page, go, mock }) => {
@@ -183,6 +199,18 @@ test.describe('the drawer beside the results', () => {
 	});
 });
 
+// Review 02 §3a: the 768 and 1024 px cells with result rows on them.
+for (const width of [768, 1024]) {
+	test(`the ${width} px cell with result rows`, async ({ page, go, mock }) => {
+		await freezeClock(page);
+		await page.setViewportSize({ width, height: 900 });
+		server(mock, () => body(hits(6)));
+		await go('/search?q=lantern');
+		await expect(row(page, 6)).toBeVisible();
+		await expectPageSnapshot(page, `search-rows-${width}`);
+	});
+}
+
 test.describe('rows adapt to their own width', () => {
 	for (const width of [390, 768, 1024, 1366, 1920]) {
 		test(`no fact is cut mid-word at ${width} px`, async ({ page, go, mock }) => {
@@ -197,6 +225,64 @@ test.describe('rows adapt to their own width', () => {
 				await onLine(page.getByTestId(`${id}-${fact}`));
 		});
 	}
+
+	test('the tiers follow the row, not the window', async ({ page, go, mock }) => {
+		server(mock, () => body(hits(3)));
+		const id = `result-${hashOf(1)}`;
+		// A 1024 px window: rows about 704 px, 680 px inside their padding (container queries read
+		// the content box), under the 720 px tier. The composition fact goes;
+		// the file count stays. A viewport query would keep both.
+		await page.setViewportSize({ width: 1024, height: 900 });
+		await go('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		await expect(page.getByTestId(`${id}-composition`)).toBeHidden();
+		await onLine(page.getByTestId(`${id}-files`));
+		// A wider window, a wider row: both show.
+		await page.setViewportSize({ width: 1920, height: 900 });
+		await onLine(page.getByTestId(`${id}-composition`));
+		await onLine(page.getByTestId(`${id}-files`));
+		// The same page at 1366 px with the drawer in flow: rows about 542 px (518 px inside), under
+		// the 600 px tier, so the file count goes too.
+		await page.setViewportSize({ width: 1366, height: 900 });
+		await openRow(page, 2);
+		await expect(host(page)).toHaveAttribute('data-mode', 'inline');
+		await expect(page.getByTestId(`${id}-files`)).toBeHidden();
+		await expect(page.getByTestId(`${id}-composition`)).toBeHidden();
+		for (const fact of ['size', 'swarm', 'discovered'])
+			await onLine(page.getByTestId(`${id}-${fact}`));
+	});
+
+	test("Discover's side panels: a narrow row in a wide window", async ({ page, go, mock }) => {
+		mock.on('getSettings', showAdultSettings(false));
+		mock.on('getDiscover', () =>
+			response({
+				newest: newest({ hits: [hit(1)], total: 1, type: null }),
+				rising: group({ hits: [hit(3)] }),
+				recently_resolved: group({ hits: [hit(4)] })
+			})
+		);
+		// At 1366 px the side panels' rows are about 429 px: the 480 px tier, in a desktop window.
+		await page.setViewportSize({ width: 1366, height: 900 });
+		await go('/discover');
+		const side = page.locator('[aria-labelledby="discover-rising-h"] .rr-row').first();
+		await expect(side).toBeVisible();
+		expect((await box(side)).width).toBeLessThanOrEqual(480);
+		await expect(side.locator('.rr-badges')).toBeHidden();
+		await expect(side.locator('.rr-files')).toBeHidden();
+		for (const fact of ['.rr-size', '.rr-swarm', '.rr-discovered'])
+			await onLine(side.locator(fact));
+		// At 1920 px they're about 614 px, 590 px inside their padding (container queries read the
+		// content box): past the 480 px tier, so the badges come back, but the composition fact and
+		// file count stay out.
+		await page.setViewportSize({ width: 1920, height: 900 });
+		await expect.poll(async () => (await box(side)).width).toBeGreaterThan(600);
+		await onLine(side.locator('.rr-badges'));
+		await expect(side.locator('.rr-files')).toBeHidden();
+		await expect(side.locator('.rr-comp')).toBeHidden();
+		for (const fact of ['.rr-size', '.rr-swarm', '.rr-discovered'])
+			await onLine(side.locator(fact));
+		expect(await factsWhole(page)).toBeGreaterThan(0);
+	});
 
 	test.describe('compact', () => {
 		test.use({ density: 'compact' });
