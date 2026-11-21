@@ -4,7 +4,8 @@ import { configure, fireEvent, render, screen, waitFor } from '@testing-library/
 import FiltersScreen from './FiltersScreen.svelte';
 import { adultOn } from './model.svelte';
 import { mockFetch } from '../flows/testing/fetch';
-import { finished, strengthening, weakening } from '../flows/testing/fixtures';
+import { finished, preview, running, strengthening, weakening } from '../flows/testing/fixtures';
+import { loosensChildSafety } from '../flows/changes';
 
 configure({ defaultHidden: true, asyncUtilTimeout: 10_000 });
 
@@ -220,6 +221,88 @@ describe('danger style for loosening child safety', () => {
 		const button = await screen.findByTestId('change-apply');
 		expect(button.className).toContain('btn-primary');
 		expect(button.textContent?.trim()).toBe('Turn on Minor age near sexual terms');
+	});
+});
+
+describe('Undo takes the danger style from its assessment (X-safety-undo-danger)', () => {
+	const dialogDanger = () =>
+		screen.getByTestId('change-dialog').closest('[role="dialog"]')!.querySelector('.btn-error');
+	const zero = { core_caught_30d: 0, removed_from_floor: 0 };
+	const undoCases: [string, Parameters<typeof weakening>[0], boolean][] = [
+		[
+			'the server says loosens child safety',
+			{ loosens_child_safety: true, preview: preview(zero) },
+			true
+		],
+		['loosens the child-safety core', { preview: preview({ ...zero, core_caught_30d: 2 }) }, true],
+		[
+			'removes entries from the floor',
+			{ preview: preview({ ...zero, removed_from_floor: 1 }) },
+			true
+		],
+		['loosens only other rules', { loosens_child_safety: false, preview: preview(zero) }, false],
+		['comes from a server without the flag', { preview: preview(zero) }, false]
+	];
+	for (const [name, over, danger] of undoCases)
+		it(`an Undo that ${name}: Apply is ${danger ? '' : 'not '}in the danger style, the flow the same`, async () => {
+			setup();
+			job(weakening(over));
+			const undo = await screen.findByTestId('filters-undo');
+			// The screen's button can't know what Undo restores: always ordinary.
+			expect(undo.className).not.toContain('btn-error');
+			await fireEvent.click(undo);
+			await screen.findByTestId('change-password');
+			const button = screen.getByTestId('change-apply');
+			expect(button.className.includes('btn-error')).toBe(danger);
+			expect(button.className.includes('btn-primary')).toBe(!danger);
+			// Not colour alone: the label names what it does, as the other loosening flows' do.
+			expect(button.textContent?.trim()).toBe(danger ? 'Undo and loosen child safety' : 'Apply');
+			// The same request, and the password before any apply.
+			expect(JSON.parse(net.to('/filters/preview/jobs')[0]?.body ?? 'null')).toEqual({
+				change: { op: 'undo' }
+			});
+			expect(net.to('/filters/apply')).toHaveLength(0);
+		});
+	it('an Undo that only strengthens keeps the ordinary style', async () => {
+		setup();
+		job(strengthening({ preview: preview(zero) }));
+		await fireEvent.click(await screen.findByTestId('filters-undo'));
+		expect((await screen.findByTestId('change-apply')).className).toContain('btn-primary');
+		expect(dialogDanger()).toBeNull();
+	});
+	it('is ordinary while the preview runs, and after it fails', async () => {
+		setup();
+		net.on('GET /filters/preview/jobs/{id}', { body: running() });
+		await fireEvent.click(await screen.findByTestId('filters-undo'));
+		await screen.findByTestId('change-previewing');
+		expect(dialogDanger()).toBeNull();
+		await fireEvent.click(screen.getByTestId('change-cancel'));
+		await waitFor(() => expect(screen.queryByTestId('change-dialog')).toBeNull());
+
+		net.error('GET /filters/preview/jobs/{id}', 500, 'internal');
+		await fireEvent.click(screen.getByTestId('filters-undo'));
+		await screen.findByTestId('change-error');
+		expect(dialogDanger()).toBeNull();
+	});
+	it('only Undo reads the flag: other changes keep their own style', async () => {
+		setup();
+		job(weakening({ loosens_child_safety: true }));
+		await fireEvent.click(await screen.findByTestId('pack-switch-malware'));
+		await screen.findByTestId('change-password');
+		expect(screen.getByTestId('change-apply').className).toContain('btn-primary');
+	});
+	it('reads the flag, and the child-safety counts as support', () => {
+		const a = (flag: boolean | undefined, over = {}) => ({
+			loosens_child_safety: flag,
+			preview: preview({ ...zero, ...over })
+		});
+		expect(loosensChildSafety(a(undefined))).toBe(false);
+		expect(loosensChildSafety(a(false))).toBe(false);
+		expect(loosensChildSafety(a(true))).toBe(true);
+		expect(loosensChildSafety(a(false, { core_caught_30d: 1 }))).toBe(true);
+		expect(loosensChildSafety(a(false, { removed_from_floor: 1 }))).toBe(true);
+		// Other loosening counts aren't child safety.
+		expect(loosensChildSafety(a(false, { caught_30d: 9, quarantine: 9 }))).toBe(false);
 	});
 });
 
