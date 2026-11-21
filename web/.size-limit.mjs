@@ -1444,6 +1444,8 @@ export default [
 	// measured) back under the §10.1 45 KB route cap, so it has the default limit again.
 	// X-web-hygiene-1107 (runner §2.26): NotificationsScreen 45 → 45.1 KB (+100 B), measured 45.01 KB, for the
 	// field menu's keyboard-open flag in the shared SettingField. No other budget moves.
+	// X-auth-early-401 (runner §2.26): Notifications 45.5 → 45.51 KB, measured 45,502 B, for the
+	// early-401 replay in the shared API client (rounded up to the next 0.01 KB).
 	// X-session-draft-keep (runner §2.26): Notifications 45.2 → 45.5 KB (measured 45.49), Insights
 	// 45 → 45.3 (45.28), Language 45 → 45.1 (45.08): the engine's safety code in the first view (the
 	// secret flag for list fields, in-flight save tracking, the draft block after Sign out). The 401
@@ -1470,7 +1472,7 @@ export default [
 							: name === 'SourcesScreen'
 								? '34 KB'
 								: name === 'NotificationsScreen'
-									? '45.5 KB'
+									? '45.51 KB'
 									: name === 'InsightsScreen'
 										? '45.3 KB'
 										: name === 'LanguageScreen'
@@ -1634,7 +1636,9 @@ export default [
 	// hashes in its imports moved by a few bytes). Runner to confirm.
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
 	// ENR-13: one dynamic import for the identified-as section (§2.26, runner): 28,064 B -> 28,128 B.
-	entry('Detail drawer (own JS + CSS)', drawerView, '28128 B'),
+	// X-auth-early-401 (runner §2.26): the early-401 replay in the shared API client: 28,133 B
+	// measured, rounded up to the next 0.01 KB.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28.14 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1647,7 +1651,9 @@ export default [
 	// 21,795 B, residue 19 B, rounded up to 64 B).
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
 	// ENR-13: the same import (§2.26, runner): 21,904 B -> 21,952 B.
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21952 B'),
+	// X-auth-early-401 (runner §2.26): the same replay: 21,967 B measured locally, 21,971 B in CI
+	// (its build SHA moves the chunk names), rounded up to the next 0.01 KB.
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.98 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[

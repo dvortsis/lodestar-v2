@@ -280,6 +280,7 @@ placement:
   - X-settings-followups
   - X-wizard-labels-signout
   - X-session-draft-keep
+  - X-auth-early-401
   - X-settings-find
   - X-setup-token-boot
   - X-first-run

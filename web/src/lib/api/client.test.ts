@@ -6,7 +6,8 @@ import {
 	latest,
 	mustRestartPaging,
 	onLoginRequired,
-	parseRetryAfter
+	parseRetryAfter,
+	sessionOk
 } from './client';
 
 const json = (body: unknown, init: ResponseInit = {}) =>
@@ -21,6 +22,8 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
 	fetchMock = vi.fn();
 	vi.stubGlobal('fetch', fetchMock);
+	// Drain any early 401 an earlier test left (it would replay into the next handler).
+	onLoginRequired(() => {});
 	onLoginRequired(undefined);
 });
 afterEach(() => {
@@ -388,5 +391,120 @@ describe('latest()', () => {
 		await expect(slot.run(() => Promise.reject(new ApiError(500, 'x', '')))).rejects.toMatchObject({
 			code: 'x'
 		});
+	});
+});
+
+describe('a 401 before the shell installs its handler (X-auth-early-401)', () => {
+	const unauth = (setup = false) =>
+		json(
+			{ error: { code: 'login_required', message: 'x' }, setup_required: setup },
+			{ status: 401 }
+		);
+
+	it('is kept and sent on once the handler is installed', async () => {
+		fetchMock.mockImplementation(async () => unauth(true));
+		await api.get('/search').catch(() => {});
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		expect(handler).toHaveBeenCalledOnce();
+		expect(handler).toHaveBeenCalledWith(location.pathname + location.search, {
+			setupRequired: true
+		});
+		// Once: installing again (the Settings form's re-arm) doesn't replay it.
+		onLoginRequired(handler);
+		expect(handler).toHaveBeenCalledOnce();
+	});
+
+	it('is dropped when a request works before the install', async () => {
+		fetchMock.mockImplementation(async () => unauth());
+		await api.get('/search').catch(() => {});
+		fetchMock.mockImplementation(async () => json({}));
+		await api.get('/settings');
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		expect(handler).not.toHaveBeenCalled();
+	});
+
+	it('is not cleared by the public GET /auth, which proves nothing', async () => {
+		fetchMock.mockImplementation(async () => unauth());
+		await api.get('/search').catch(() => {});
+		sessionOk('/auth');
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		expect(handler).toHaveBeenCalledOnce();
+	});
+
+	it('is never kept for the auth endpoints themselves', async () => {
+		fetchMock.mockImplementation(async () => unauth());
+		await api.post('/login', { body: { password: 'b' } }).catch(() => {});
+		await api.get('/auth').catch(() => {});
+		await api.post('/legal/accept', { body: { version: 1 } }).catch(() => {});
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		expect(handler).not.toHaveBeenCalled();
+	});
+
+	it("doesn't let an auth endpoint's 401 take the one slot from a real one", async () => {
+		fetchMock.mockImplementation(async () => unauth());
+		await api.post('/legal/accept', { body: { version: 1 } }).catch(() => {});
+		await api.get('/auth').catch(() => {});
+		fetchMock.mockImplementation(async () => unauth(true)); // the real one, after them
+		await api.get('/search').catch(() => {});
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		expect(handler).toHaveBeenCalledOnce();
+		expect(handler).toHaveBeenCalledWith(location.pathname + location.search, {
+			setupRequired: true
+		});
+	});
+
+	it('is not sent on when the browser is on the sign-in or setup page at install', async () => {
+		for (const page of ['/login?next=%2F', '/setup']) {
+			fetchMock.mockImplementation(async () => unauth());
+			await api.get('/search').catch(() => {});
+			history.replaceState(null, '', page);
+			const handler = vi.fn();
+			onLoginRequired(handler);
+			history.replaceState(null, '', '/');
+			expect(handler).not.toHaveBeenCalled();
+			onLoginRequired(undefined);
+		}
+	});
+
+	it('replays the first of several early 401s, once', async () => {
+		fetchMock.mockImplementation(async () => unauth());
+		await Promise.allSettled([api.get('/search'), api.get('/settings'), api.get('/filters')]);
+		fetchMock.mockImplementation(async () => unauth(true)); // a later, different one
+		await api.get('/parse').catch(() => {});
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		expect(handler).toHaveBeenCalledOnce();
+		expect(handler).toHaveBeenCalledWith(expect.any(String), { setupRequired: false });
+		// And the usual once-until-a-success still holds after it.
+		await api.get('/search').catch(() => {});
+		expect(handler).toHaveBeenCalledOnce();
+	});
+
+	it('keeps an early Legal Notice 409 the same way', async () => {
+		fetchMock.mockImplementation(async () => envelope('notice_required', 409));
+		await api.get('/search').catch(() => {});
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		expect(handler).toHaveBeenCalledWith(location.pathname + location.search, {
+			setupRequired: false,
+			noticeRequired: true
+		});
+	});
+
+	it('an uninstall keeps nothing to replay, and a 401 meanwhile is kept for the next install', async () => {
+		const first = vi.fn();
+		onLoginRequired(first);
+		onLoginRequired(undefined);
+		fetchMock.mockImplementation(async () => unauth());
+		await api.get('/search').catch(() => {});
+		expect(first).not.toHaveBeenCalled();
+		const second = vi.fn();
+		onLoginRequired(second);
+		expect(second).toHaveBeenCalledOnce();
 	});
 });

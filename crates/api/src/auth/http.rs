@@ -239,15 +239,21 @@ pub(crate) async fn auth_status(
     State(s): State<ApiState>,
     headers: HeaderMap,
     req: axum::http::Extensions,
-) -> axum::Json<AuthStatus> {
+) -> impl IntoResponse {
     let logged_in = logged_in(&s.auth, &headers, peer_ip(&req));
-    axum::Json(AuthStatus {
-        logged_in,
-        // Only to the signed-in admin: nobody else learns whether it was
-        // accepted.
-        notice_required: logged_in && s.auth.notice_pending(),
-        setup_required: s.auth.needs_setup(),
-    })
+    // No cache may keep it: the web UI decides from a fresh answer whether
+    // the session is live, and a stale `logged_in: true` would lift its
+    // unsaved-draft block after a Sign out (X-session-draft-keep).
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::Json(AuthStatus {
+            logged_in,
+            // Only to the signed-in admin: nobody else learns whether it was
+            // accepted.
+            notice_required: logged_in && s.auth.notice_pending(),
+            setup_required: s.auth.needs_setup(),
+        }),
+    )
 }
 
 /// Claims a fresh instance with the setup token from the logs, a new
