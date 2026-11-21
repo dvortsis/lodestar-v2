@@ -365,14 +365,52 @@ fn printable(text: &str) -> String {
 /// a refusal are whoever could write the folder's choice).
 fn plain(text: &str) -> String {
     text.chars()
-        .filter(|c| !c.is_control() && !invisible(*c))
+        .filter(|c| !c.is_control() && !format_or_separator(*c))
         .collect()
 }
 
-/// Unicode's Cf, Zl and Zp characters (Unicode 15): format and separator
-/// characters that render as nothing or reorder text. Shared with the
-/// service's Event Log note (`service::event_log_text`).
+/// Characters that render as nothing or reorder text: the
+/// [`format_or_separator`] ones and every [`default_ignorable`] one. What
+/// the temp log's [`quoted`] paths escape (X-win-path-ignorables).
 pub(super) fn invisible(c: char) -> bool {
+    format_or_separator(c) || default_ignorable(c)
+}
+
+/// Unicode's Default_Ignorable_Code_Point, as the Default_Ignorable_Code_Point
+/// section of DerivedCoreProperties.txt lists it (Unicode 15; Unicode 16's
+/// is the same): what renders as nothing, Cf or not. Beyond Cf, the
+/// combining grapheme joiner, the Hangul fillers, the Khmer inherent
+/// vowels, the Mongolian free variation selectors, the variation
+/// selectors, the reserved U+2065 and U+FFF0–FFF8, and plane 14.
+fn default_ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}'
+            | '\u{034f}'
+            | '\u{061c}'
+            | '\u{115f}'..='\u{1160}'
+            | '\u{17b4}'..='\u{17b5}'
+            | '\u{180b}'..='\u{180f}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{3164}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{feff}'
+            | '\u{ffa0}'
+            | '\u{fff0}'..='\u{fff8}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0000}'..='\u{e0fff}'
+    )
+}
+
+/// Unicode's Cf, Zl and Zp characters (Unicode 15): format and separator
+/// characters that render as nothing or reorder text. What [`plain`] and
+/// the service's Event Log note (`service::one_line`) drop. Narrower than
+/// [`invisible`] on purpose: [`plain`] builds a pasteable `icacls` command,
+/// which must name the folder as it is, so it drops no more than these.
+pub(super) fn format_or_separator(c: char) -> bool {
     matches!(
         c,
         '\u{00ad}'
@@ -397,6 +435,48 @@ pub(super) fn invisible(c: char) -> bool {
             | '\u{e0001}'
             | '\u{e0020}'..='\u{e007f}'
     )
+}
+
+/// A path (or a setting's value) as the temp log shows it: in plain
+/// quotes, as Windows users read and paste it (`"C:\ProgramData\Lodestar"`,
+/// not `Debug`'s doubled backslashes). A value can come from a config file,
+/// so a control or [`invisible`] character (bidirectional controls,
+/// zero-width characters, separators, variation selectors) and a `"`
+/// are never written raw: each is `\u{…}`. Not `Debug`'s `\t` or `\n`, which, among single
+/// backslashes, would read as path text: a TOML `"D:\temp"` holds a TAB,
+/// and must not show as the full path `D:\temp`. The Event Log shows the
+/// same path without quotes, flattened by `service::one_line` instead, as
+/// its one-line message needs. Used by the service's refusals and by
+/// [`secure_dir`]'s own errors.
+pub(super) fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    escape_into(&mut out, text, |c| c == '"');
+    out.push('"');
+    out
+}
+
+/// Text from elsewhere (the system's own error, which on Windows is
+/// PowerShell's stderr and can echo a path or entry name over several
+/// lines) on one line, unquoted: every control character, CR and LF
+/// included, and every [`invisible`] one as `\u{…}`, as [`quoted`] writes
+/// them. A `"` stays as it is, since nothing quotes this text.
+pub(super) fn escaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    escape_into(&mut out, text, |_| false);
+    out
+}
+
+/// `text` into `out`, with control and [`invisible`] characters, and any
+/// `also` picks, as `\u{…}`.
+fn escape_into(out: &mut String, text: &str, also: impl Fn(char) -> bool) {
+    for c in text.chars() {
+        if c.is_control() || invisible(c) || also(c) {
+            out.extend(c.escape_unicode());
+        } else {
+            out.push(c);
+        }
+    }
 }
 
 /// A SID [`full_sid`] spells out, if it's one `icacls` can take as `*SID`.
@@ -482,16 +562,18 @@ pub fn refusal(
 /// it if needed. It never changes an existing folder. An error says why
 /// the service won't use it.
 pub fn secure_dir(dir: &Path, own_sid: Option<&str>, ops: &impl Ops) -> Result<(), String> {
-    let shown = dir.display();
+    // The folder as the temp log shows every path, quoted, and the
+    // system's own error on one line: nothing unprintable raw in either.
+    let shown = quoted(&dir.display().to_string());
     let inspect = || {
         ops.inspect(dir)
-            .map_err(|e| format!("reading {shown}'s permissions: {e}"))
+            .map_err(|e| format!("reading {shown}'s permissions: {}", escaped(&e.to_string())))
     };
     let seen = match inspect()? {
         Some(seen) => seen,
         None => {
             ops.create(dir)
-                .map_err(|e| format!("creating {shown}: {e}"))?;
+                .map_err(|e| format!("creating {shown}: {}", escaped(&e.to_string())))?;
             inspect()?.ok_or_else(|| format!("{shown} vanished after it was created"))?
         }
     };
@@ -952,6 +1034,155 @@ mod tests {
         assert!(parse_inspection("E\tArchive\tO:BAD:\tx\n").is_err());
         assert!(parse_inspection("F\ta\tb\n").is_err());
         assert!(parse_inspection("F\ta\tb\tc\nF\ta\tb\tc\n").is_err());
+    }
+
+    /// `invisible` is exactly Cf, Zl, Zp and Default_Ignorable_Code_Point,
+    /// over all of `char`, and `quoted` escapes each; ordinary text,
+    /// combining marks included, is left as it is (X-win-path-ignorables).
+    #[test]
+    fn quoted_escapes_every_default_ignorable() {
+        let escaped = |c: char| format!("\"{}\"", c.escape_unicode());
+        // Default_Ignorable_Code_Point as the Default_Ignorable_Code_Point
+        // section of DerivedCoreProperties.txt lists it (Unicode 15; 16's is
+        // the same), written out here on its own.
+        let dicp = |c: char| {
+            matches!(
+                c as u32,
+                0x00AD
+                    | 0x034F
+                    | 0x061C
+                    | 0x115F..=0x1160
+                    | 0x17B4..=0x17B5
+                    | 0x180B..=0x180F
+                    | 0x200B..=0x200F
+                    | 0x202A..=0x202E
+                    | 0x2060..=0x206F
+                    | 0x3164
+                    | 0xFE00..=0xFE0F
+                    | 0xFEFF
+                    | 0xFFA0
+                    | 0xFFF0..=0xFFF8
+                    | 0x1BCA0..=0x1BCA3
+                    | 0x1D173..=0x1D17A
+                    | 0xE0000..=0xE0FFF
+            )
+        };
+        for c in (0..=0x10FFFF).filter_map(char::from_u32) {
+            // Exactly: every Cf (visible format marks included), the line
+            // and paragraph separators, and every default-ignorable.
+            let want = lodestar_metainfo::format_char(c)
+                || matches!(c, '\u{2028}' | '\u{2029}')
+                || dicp(c);
+            assert_eq!(invisible(c), want, "U+{:04X}", c as u32);
+            if want {
+                assert_eq!(quoted(&c.to_string()), escaped(c), "U+{:04X}", c as u32);
+            }
+        }
+        // The brief's examples, each on its own.
+        for c in [
+            '\u{fe0f}',
+            '\u{e0100}',
+            '\u{034f}',
+            '\u{115f}',
+            '\u{1160}',
+            '\u{3164}',
+            '\u{ffa0}',
+            '\u{17b4}',
+            '\u{17b5}',
+            '\u{180b}',
+            '\u{180f}',
+        ] {
+            assert_eq!(quoted(&c.to_string()), escaped(c), "U+{:04X}", c as u32);
+        }
+        for c in [
+            'a', 'Z', '0', 'é', 'ß', '中', '\u{0301}', '\u{05b0}', '😀', ' ', '\\',
+        ] {
+            assert_eq!(
+                quoted(&c.to_string()),
+                format!("\"{c}\""),
+                "U+{:04X}",
+                c as u32
+            );
+        }
+    }
+
+    /// [`plain`] drops only Cf, Zl and Zp, not the wider set: the `icacls`
+    /// command it builds must name a folder such as `D:\Music ❤️` (U+FE0F)
+    /// or one holding a Hangul filler as it is.
+    #[test]
+    fn plain_keeps_what_only_the_temp_log_escapes() {
+        for name in [
+            "D:\\Music \u{2764}\u{fe0f}",
+            "D:\\a\u{3164}b",
+            "D:\\a\u{034f}b",
+        ] {
+            assert_eq!(plain(name), name, "{name:?}");
+        }
+        assert_eq!(plain("D:\\a\u{202e}b\u{2028}c"), "D:\\abc");
+    }
+
+    /// [`secure_dir`]'s own errors name the folder as the temp log shows
+    /// every path: quoted, backslashes as written, nothing unprintable raw.
+    #[test]
+    fn secure_dir_errors_quote_the_folder() {
+        struct Failing(bool);
+        impl Ops for Failing {
+            fn inspect(&self, _: &Path) -> io::Result<Option<Inspection>> {
+                match self.0 {
+                    true => Err(io::Error::other("denied")),
+                    false => Ok(None),
+                }
+            }
+            fn create(&self, _: &Path) -> io::Result<()> {
+                Err(io::Error::other("disk\nfull"))
+            }
+        }
+        let dir = Path::new("D:\\Lode\u{202e}star\\data");
+        let shown = r#""D:\Lode\u{202e}star\data""#;
+        assert_eq!(
+            secure_dir(dir, Some(OWN), &Failing(true)).unwrap_err(),
+            format!("reading {shown}'s permissions: denied")
+        );
+        assert_eq!(
+            secure_dir(dir, Some(OWN), &Failing(false)).unwrap_err(),
+            format!(r"creating {shown}: disk\u{{a}}full")
+        );
+        // Created, then gone.
+        let fake = Fake::new(vec![None, None]);
+        assert_eq!(
+            secure_dir(dir, Some(OWN), &fake).unwrap_err(),
+            format!("{shown} vanished after it was created")
+        );
+    }
+
+    /// The system's own error in [`secure_dir`]'s messages, PowerShell's
+    /// stderr on Windows, which echoes paths and entry names over several
+    /// lines, comes out as one line with nothing unprintable raw: a name
+    /// someone planted in the folder can't forge a line or reorder text.
+    #[test]
+    fn secure_dir_errors_escape_the_systems_own_text() {
+        struct Failing;
+        impl Ops for Failing {
+            fn inspect(&self, _: &Path) -> io::Result<Option<Inspection>> {
+                Err(io::Error::other(
+                    "Get-Acl : Access denied to D:\\data\\x\u{202e}gpj.exe\r\nAt line:1\nok",
+                ))
+            }
+            fn create(&self, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let why = secure_dir(Path::new(r"D:\data"), Some(OWN), &Failing).unwrap_err();
+        assert_eq!(
+            why,
+            r#"reading "D:\data"'s permissions: Get-Acl : Access denied to D:\data\x\u{202e}gpj.exe\u{d}\u{a}At line:1\u{a}ok"#
+        );
+        assert!(
+            !why.chars().any(|c| c.is_control() || invisible(c)),
+            "{why}"
+        );
+        // Plain text, and a `"` inside it, stay as they are: no quotes.
+        assert_eq!(escaped(r#"say "hi" to C:\x"#), r#"say "hi" to C:\x"#);
     }
 
     /// Fake [`Ops`]: a folder whose inspections are scripted in order.
