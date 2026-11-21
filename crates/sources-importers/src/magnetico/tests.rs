@@ -1401,3 +1401,101 @@ proptest! {
         prop_assert_eq!(c.read, n);
     }
 }
+
+/// How many schema objects SQLite counts for `path`: the smallest
+/// `SQLITE_LIMIT_SCHEMA` it opens under.
+fn schema_objects(path: &Path) -> i32 {
+    let loads = |n| {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        conn.set_limit(Limit::SQLITE_LIMIT_SCHEMA, n).unwrap();
+        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .is_ok()
+    };
+    let (mut lo, mut hi) = (1, 1 << 16);
+    assert!(loads(hi));
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if loads(mid) { hi = mid } else { lo = mid + 1 }
+    }
+    lo
+}
+
+/// A v3 source with `extra` more indexes, so it counts 18 + `extra`.
+fn crowded(dir: &Path, name: &str, extra: i32) -> PathBuf {
+    let path = fixture(dir, name, Layout::V3, &rows(3));
+    let conn = Connection::open(&path).unwrap();
+    let ddl: String = (0..extra)
+        .map(|i| format!("CREATE INDEX crowd_{i} ON files (path);"))
+        .collect();
+    conn.execute_batch(&format!("BEGIN; {ddl} COMMIT;"))
+        .unwrap();
+    drop(conn);
+    path
+}
+
+#[test]
+fn magneticods_schemas_are_far_under_the_schema_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let counts: Vec<(Layout, i32)> = [
+        Layout::V0,
+        Layout::V1,
+        Layout::V2,
+        Layout::V3,
+        Layout::V3NoSeeders,
+    ]
+    .into_iter()
+    .map(|l| {
+        (
+            l,
+            schema_objects(&fixture(dir.path(), &format!("{l:?}"), l, &rows(3))),
+        )
+    })
+    .collect();
+    // The decisions file's numbers: v3 (FTS5, its four shadow tables, two
+    // of them WITHOUT ROWID, and four triggers) is the largest.
+    assert_eq!(
+        counts,
+        [
+            (Layout::V0, 4),
+            (Layout::V1, 5),
+            (Layout::V2, 6),
+            (Layout::V3, 18),
+            (Layout::V3NoSeeders, 18),
+        ]
+    );
+    assert!(counts[3].1 * 14 <= MAX_SCHEMA_OBJECTS);
+}
+
+#[test]
+fn a_schema_at_the_cap_opens_and_imports() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = crowded(dir.path(), "at", MAX_SCHEMA_OBJECTS - 18);
+    assert_eq!(schema_objects(&path), MAX_SCHEMA_OBJECTS);
+    let mut src = open_ok(&path);
+    let (batches, _) = read_all(&mut src);
+    assert_eq!(batches.iter().map(|b| b.records.len()).sum::<usize>(), 3);
+}
+
+#[test]
+fn a_schema_over_the_cap_is_refused_without_naming_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = crowded(dir.path(), "over", MAX_SCHEMA_OBJECTS - 18 + 1);
+    assert_eq!(schema_objects(&path), MAX_SCHEMA_OBJECTS + 1);
+    let refusal = open(&path, &OpenPolicy::default()).unwrap_err();
+    assert_eq!(refusal, Refusal::Unavailable("schema_too_large"));
+    assert_eq!(refusal.label(), "source_unavailable");
+    let text = refusal.to_string();
+    assert!(text.contains("schema_too_large"), "{text}");
+    assert!(
+        !text.contains("crowd_") && !text.contains("files"),
+        "{text}"
+    );
+    // Far over the cap is refused the same way, not after loading it all.
+    let path = crowded(dir.path(), "far", 8 * MAX_SCHEMA_OBJECTS);
+    assert_eq!(
+        open(&path, &OpenPolicy::default()).unwrap_err(),
+        Refusal::Unavailable("schema_too_large")
+    );
+}
