@@ -1,4 +1,4 @@
-# X-undo-danger-tests decisions (#PR)
+# X-undo-danger-tests decisions (#1030)
 
 Runner, 2026-11-21Z, after #1027 (X-safety-undo-danger) merged: its fresh review's one important finding, that two branches of `Assessment.loosens_child_safety` had no test, plus the review's optional nits. Tests only: nothing in `crates/api/src/filters.rs` outside `mod tests` changes.
 
