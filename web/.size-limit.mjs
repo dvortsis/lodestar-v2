@@ -1304,7 +1304,9 @@ export default [
 	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice's box and its token (measured 19.67 KB on
 	// the tree with main merged, residue 16 B, rounded up to 64 B). Still under the §10.1 20 KB.
 	// X-results-drawer-adaptive (runner §2.26): +2 B for --results-min-width-drawer (19,722 B).
-	entry('CSS', search.css, '19.73 KB'),
+	// X-page-frame (runner §2.26): 19.73 → 19.79 KB, measured 19,783 B: the frame's gutters and caps
+	// (large:px-6, large:py-6, print:p-0, max-w-7xl) and the h1's one class string.
+	entry('CSS', search.css, '19.79 KB'),
 	...(appEntry
 		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
 		: []),
@@ -1369,7 +1371,7 @@ export default [
 	// OUT-2 (runner §2.26): back under the §10.1 cap (44.98 KB measured) after the registry's
 	// default-only glob; it had been 45.1 KB at 45.06 KB measured.
 	// X-session-draft-keep (runner §2.26): 45 → 45.5 KB, measured 45.45, for the same safety code.
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45.5 KB'),
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45.58 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1460,12 +1462,16 @@ export default [
 	// X-sources-restructure: the Sources first view measured 33.59 KB (was ~30.7 KB): the filter box,
 	// collapsible groups with their summary, rows that expand (~2 KB) and the consent legend, whose
 	// text is in en and zh (~0.9 KB). Limit = measured + ~1.2%.
+	// X-page-frame (runner §2.26): Settings Section 45.5 → 45.58, Filters 31.42 → 31.53, Sources 34 →
+	// 34.04, Notifications 45.51 → 45.66, Insights 45.3 → 45.45, Language 45.1 → 45.24 KB (+30 to
+	// +150 B each): the one h1 class string (28 px display, focus ring, wrap-anywhere) where it was
+	// `text-title font-semibold`.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
 			`Settings ${name} (first view)`,
 			files,
 			name === 'FiltersScreen'
-				? '31.42 KB'
+				? '31.53 KB'
 				: name === 'JobsScreen'
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
@@ -1473,13 +1479,13 @@ export default [
 						: name === 'CompanionsScreen'
 							? '33 KB'
 							: name === 'SourcesScreen'
-								? '34 KB'
+								? '34.04 KB'
 								: name === 'NotificationsScreen'
-									? '45.51 KB'
+									? '45.66 KB'
 									: name === 'InsightsScreen'
-										? '45.3 KB'
+										? '45.45 KB'
 										: name === 'LanguageScreen'
-											? '45.1 KB'
+											? '45.24 KB'
 											: '45 KB'
 		)
 	),
@@ -1642,7 +1648,8 @@ export default [
 	// for flags, review); the value names are
 	// shared with the Facet rail, which Search has loaded first, so loading them lazily saved nobody
 	// anything and grew five entries.
-	entry('Builder (on demand)', builderLazy, '8.43 KB'),
+	// X-page-frame (runner §2.26): 8.43 → 8.44 KB, measured 8,432 B.
+	entry('Builder (on demand)', builderLazy, '8.44 KB'),
 	// X-detail-headroom: the settings subscription (L3's visibility revalidation) and its event client
 	// load on demand, from visibility-events.ts, so they are no longer in this first view.
 	// X-detail-headroom: detail.css is split so each entry carries only its own rules: host.css (drawer
@@ -1699,7 +1706,8 @@ export default [
 		own('/insights/[stage]', { onDemand: stageLazy }),
 		// X-labels (runner §2.26): 39,440 → 40,848 B: the glossary type names (927 B) and the plugin-name table
 		// (287 B), which goes when the API sends plugin names (queued by the runner).
-		'40.85 KB'
+		// X-page-frame (runner §2.26): 40.85 → 40.98 KB, measured 40,975 B, for the shared h1 class string.
+		'40.98 KB'
 	),
 	entry(
 		'Insights stage charts (uPlot, on demand)',
