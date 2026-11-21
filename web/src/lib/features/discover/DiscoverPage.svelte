@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { PAGE_BODY_WIDE, PAGE_FRAME, PAGE_H1 } from '$lib/ui/layout/classes';
+	import { PAGE_BODY_FULL, PAGE_FRAME, PAGE_H1 } from '$lib/ui/layout/classes';
 	// Discover (§10.7): Newest with a tab per content type, then Rising and Recently resolved.
 	// The URL is the state: `?type=<tab>` and `?density=`. Every count, section and the Adult rule
 	// come from `GET /discover`; the client names, lays out and links, and never filters or counts.
@@ -158,7 +158,7 @@
 {/snippet}
 
 <div class={PAGE_FRAME} data-page-frame="">
-	<div class={PAGE_BODY_WIDE}>
+	<div class={PAGE_BODY_FULL}>
 		<div class="contents" style:--row-h="{rowHeight}px">
 			<h1 class={PAGE_H1} tabindex="-1">{m.discover_title()}</h1>
 

@@ -7,13 +7,13 @@ Slice session, 2026-11-21Z. It answers UI review I11 and P15 (`docs/review/2026-
 - **One set of class strings, `web/src/lib/ui/layout/classes.ts`, used by every destination's wrapper and `h1`.** `PAGE_FRAME` (the gutters), `PAGE_BODY_FULL`, `PAGE_BODY_WIDE` and `PAGE_BODY_MANUSCRIPT` (the content box and its cap), `PAGE_HEADER` (the heading row, where a page puts actions beside its `h1`) and `PAGE_H1`. The old per-page classes (`.al-page`, `.dsc-page`, `.cmp-page`, `.ls-detail-page`'s box, `.sc-h1`, `.as-h1`, the `h1` rules of Compare, Discover and Alerts) are removed where nothing else used them.
 - **Runner call (§2.26): class constants, not components.** A first version had `PageFrame.svelte` and `PageHeader.svelte`. Built, they were 329 B and 399 B gzipped plus their classes, about 0.75 to 0.9 kB in every route that used them, and with them Search's first view measured 45.31 kB against the §10.1 cap of 45 kB. The consistency comes from the classes, and the e2e spec below enforces the frame, so the components were deleted. Search is 44.70 kB.
 - **Gutters:** `px-4` (16 px) below `large` (640 px), `large:px-6` (24 px) from it; `py-4` / `large:py-6` likewise. Tailwind's default steps, all on the §10.2 ramp. Print has none (`print:p-0`), as the Insights print rule had.
-- **Widths:** `full` has no cap (Search with its rail and drawer, Insights, Logs, the Settings shell); `wide` is `max-w-7xl` (80 rem, 1,280 px; Alerts, Compare, Discover, Detail); `manuscript` is `--manuscript-width` (720 px; the unavailable page). Settings sections keep their `--manuscript-width` column inside the shell. No new token: `docs/design-tokens.md` is unchanged.
+- **Widths:** `full` has no cap (Search with its rail and drawer, Insights, Logs, the Settings shell); `wide` is `max-w-7xl` (80 rem, 1,280 px; Alerts, Compare, Detail; Discover is `full`, because its side panels need the width and it had no cap); `manuscript` is `--manuscript-width` (720 px; the unavailable page). Settings sections keep their `--manuscript-width` column inside the shell. No new token: `docs/design-tokens.md` is unchanged.
 - **The `h1`:** one style everywhere, `text-display font-semibold` (28 / 32), `wrap-anywhere`, the shared focus ring and `tabindex="-1"` (a script focus target, never a tab stop), for the pages that move focus to it after a change.
 - **Left-aligned, never centred.** `mx-auto` was why the edges differed at 1440 px (Alerts at 84, Detail at 176). The cap now limits only the right edge, so every page starts at the same gutter at every width.
 
 ## UX calls (runner calls under `docs/owner-decisions.md` §2.26)
 
-1. **Left-aligned pages at wide widths** (above). Alerts, Detail and Insights lose their centred column; the content stays left, as the Search page already was.
+1. **Left-aligned pages at wide widths** (above). Alerts, Detail and Insights lose their centred column (Insights was capped at 96 rem and still is); the content stays left, as the Search page already was.
 2. **One heading size, 28 px.** Settings screens, Detail and Insights stage pages were 20 px (`text-title`), the others 28. Settings screens now match the rest (I11).
 3. **Insights shows its `h1`.** The overview's was `sr-only`; I11 names "not visible on Insights" as the defect, so it is visible. The About screen's `h1` stays `sr-only`: its logo and name header is its visible heading, and no review finding asks otherwise.
 4. **Companions and Outputs gain their `h1`**, reusing the nav titles (`settings_companions_title`, `settings_outputs_title`). No new message, so no en or zh file changes.
@@ -47,13 +47,13 @@ Measured with `e2e/page-frame.routes.test.ts` (`PAGE_FRAME_TABLE=1`) on `main` a
 | Settings (all screens) | 1024 | 304 | 16 | 1008 | 312 | 24 | 1000 |
 | Settings, Companions and Outputs | 1024 | none | 16 | 1008 | 312 | 24 | 1000 |
 | Search | 1440 | 16 | 16 | 1424 | 24 | 24 | 1416 |
-| Discover | 1440 | 24 | 24 | 1416 | 24 | 24 | 1344 |
-| Alerts | 1440 | 84 | 84 | 1356 | 24 | 24 | 1344 |
-| Alert detail | 1440 | 84 | 84 | 1356 | 24 | 24 | 1344 |
+| Discover | 1440 | 24 | 24 | 1416 | 24 | 24 | 1416 |
+| Alerts | 1440 | 84 | 84 | 1356 | 24 | 24 | 1304 |
+| Alert detail | 1440 | 84 | 84 | 1356 | 24 | 24 | 1304 |
 | Insights | 1440 | sr | 24 | 1416 | 24 | 24 | 1416 |
 | Insights stage | 1440 | 24 | 24 | 1416 | 24 | 24 | 1416 |
-| Compare | 1440 | 16 | 16 | 1424 | 24 | 24 | 1344 |
-| Detail | 1440 | 176 | 176 | 1264 | 24 | 24 | 1344 |
+| Compare | 1440 | 16 | 16 | 1424 | 24 | 24 | 1304 |
+| Detail | 1440 | 176 | 176 | 1264 | 24 | 24 | 1304 |
 | Settings (all screens) | 1440 | 304 | 16 | 1424 | 312 | 24 | 1416 |
 | Settings, Companions and Outputs | 1440 | none | 16 | 1424 | 312 | 24 | 1416 |
 
@@ -63,7 +63,8 @@ After the change every destination's `h1` is at 16 px at 390 px and at 24 px at 
 
 - `web/src/lib/ui/layout/layout.test.ts`: the class constants carry the gutters, the caps and the `h1` style, never centre, and use no hex or arbitrary value.
 - `web/e2e/page-frame.routes.test.ts` (the `core` project): every destination at 390, 1024 and 1440 px has exactly one `h1` inside the page frame, at 16 px (24 px from `large`), and every Settings screen shares one edge. It waits on conditions with the 10 s deadline and has no fixed sleeps.
-- Snapshots: none regenerated here; CI generates them (`web/e2e/README.md`). The key screens that change are Search, Settings and Detail at every breakpoint.
+- Existing specs updated: `detail.routes.test.ts` (the page is the shared frame, not a 1,120 px centred box) and the static boot shell in `app.html` (the Search heading and query bar now use the frame's classes, so `boot-shell.routes.test.ts` still finds no shift).
+- Snapshots: none regenerated here, because a local PNG is not valid (`web/e2e/README.md`); CI generates them. Changed: `search-results-adaptive.routes.test.ts` (`search-rows-768`, `search-rows-1024`, `search-drawer-1440`) and the matrix smoke baselines for the key routes Search, Settings and Detail at every breakpoint and theme.
 
 ## Not done, and follow-ups
 
@@ -72,4 +73,18 @@ After the change every destination's `h1` is at 16 px at 390 px and at 24 px at 
 
 ## Size
 
-Search's first-load JS is 44.70 kB (main 44.39 kB), under the 45 kB cap. The Settings first views and Insights stage pages grow by about 0.12 kB: the `h1` is now the 28 px display style with the focus ring and `wrap-anywhere`, where it was `text-title font-semibold`. The raises, each the measured size rounded up, are in `.size-limit.mjs`; the runner approved the numbers in this session (see the PR description).
+Search's first-load JS is 44.70 kB (main 44.39 kB), under the 45 kB cap. The Settings first views and Insights stage pages grow by 30 to 150 B: the `h1` is now the 28 px display style with the focus ring and `wrap-anywhere`, where it was `text-title font-semibold`, and one string serves every page. Raises (runner approved, §2.26), each the measured size rounded up to 0.01 kB:
+
+| Entry | Limit | Measured | New limit | Why |
+|---|---|---|---|---|
+| CSS | 19.73 kB | 19.783 kB | 19.79 kB | the frame's `large:px-6`, `large:py-6`, `print:p-0`, `max-w-7xl` |
+| Settings section | 45.5 kB | 45.578 kB | 45.58 kB | the shared `h1` string |
+| Settings FiltersScreen | 31.42 kB | 31.525 kB | 31.53 kB | the shared `h1` string |
+| Settings InsightsScreen | 45.3 kB | 45.445 kB | 45.45 kB | the shared `h1` string |
+| Settings LanguageScreen | 45.1 kB | 45.231 kB | 45.24 kB | the shared `h1` string |
+| Settings NotificationsScreen | 45.51 kB | 45.655 kB | 45.66 kB | the shared `h1` string |
+| Settings SourcesScreen | 34 kB | 34.031 kB | 34.04 kB | the shared `h1` string |
+| Insights stage pages | 40.85 kB | 40.975 kB | 40.98 kB | the shared `h1` string |
+| Builder (on demand) | 8.43 kB | 8.432 kB | 8.44 kB | chunk placement |
+
+The Settings screens' `h1` moves from `text-title` (20 px) to the display size (28 px): a runner call under §2.26 (call 2 above).

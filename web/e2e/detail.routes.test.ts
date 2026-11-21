@@ -54,11 +54,13 @@ for (const [themeId, colorMode] of [
 				// Parsed loads when its section scrolls near
 				await page.locator('[data-section="parsed"]').scrollIntoViewIfNeeded();
 				await expect(page.getByTestId('detail-parsed-years')).toHaveText('2019');
-				// the page is the results-column width; its header keeps the manuscript width
-				const box = await page.locator('.ls-detail-page').boundingBox();
-				const head = await page.locator('.ls-detail-page > header').boundingBox();
-				expect(head!.width).toBeLessThanOrEqual(720 + 1);
-				const want = Math.min(page.viewportSize()!.width, 1120);
+				// the page is the shared frame (X-page-frame): left-aligned at the gutter, up to 80 rem;
+				// its summary keeps the manuscript width
+				const box = await page.locator('main [data-page-frame] > div').boundingBox();
+				const summary = await page.locator('[data-section="summary"]').boundingBox();
+				expect(summary!.width).toBeLessThanOrEqual(720 + 1);
+				const gutter = page.viewportSize()!.width >= 640 ? 24 : 16;
+				const want = Math.min(page.viewportSize()!.width - 2 * gutter, 1280);
 				expect(Math.abs(box!.width - want)).toBeLessThanOrEqual(1);
 				await settled(page);
 				await expectNoA11yViolations(page);
