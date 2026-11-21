@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T23:25Z",
+    "updated": "2026-11-21T23:50Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-facet-group-case",
+        "slice": "X-builder-group-case",
         "role": "build",
         "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
         "model": "opus",
-        "since": "2026-11-21T18:36Z",
-        "doing": "PR #1033 review CHANGES (S1-20 blocking, label rule tightened; 1M bench asked)"
+        "since": "2026-11-21T23:50Z",
+        "doing": "#1033 merged (S1-20 fixed); step 0: can a group value reach the Builder"
       },
       {
         "slot": 2,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
         "since": "2026-11-21T21:47Z",
-        "doing": "#1035 X-filters-dialog-test-timeout merged; determinism push held for #1033"
+        "doing": "#1035 merged; determinism push released after #1033"
       },
       {
         "slot": 3,
