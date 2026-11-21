@@ -438,9 +438,24 @@ describe('a 401 before the shell installs its handler (X-auth-early-401)', () =>
 		fetchMock.mockImplementation(async () => unauth());
 		await api.post('/login', { body: { password: 'b' } }).catch(() => {});
 		await api.get('/auth').catch(() => {});
+		await api.post('/legal/accept', { body: { version: 1 } }).catch(() => {});
 		const handler = vi.fn();
 		onLoginRequired(handler);
 		expect(handler).not.toHaveBeenCalled();
+	});
+
+	it("doesn't let an auth endpoint's 401 take the one slot from a real one", async () => {
+		fetchMock.mockImplementation(async () => unauth());
+		await api.post('/legal/accept', { body: { version: 1 } }).catch(() => {});
+		await api.get('/auth').catch(() => {});
+		fetchMock.mockImplementation(async () => unauth(true)); // the real one, after them
+		await api.get('/search').catch(() => {});
+		const handler = vi.fn();
+		onLoginRequired(handler);
+		expect(handler).toHaveBeenCalledOnce();
+		expect(handler).toHaveBeenCalledWith(location.pathname + location.search, {
+			setupRequired: true
+		});
 	});
 
 	it('is not sent on when the browser is on the sign-in or setup page at install', async () => {
