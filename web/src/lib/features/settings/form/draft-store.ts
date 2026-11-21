@@ -1,11 +1,12 @@
 // Drafts' storage and writing them (§10.10.5; the format is in `draft.ts`). Part of a section's
 // first view, so an edit is kept from the first keystroke even when the edit chunk can't load.
 // Reading and restoring one (`draft.ts`) load with the edit chunk.
+import { DRAFT_PREFIX, draftsBlocked, storage } from './draft-scope';
 import { devWarn } from './schema';
 import type { FieldSpec } from './types';
 import { dirtyNames, isLocked, JsonDraft, RESET, type SectionState } from './values';
 
-export const DRAFT_PREFIX = 'lodestar.settings.draft.v1.';
+export { DRAFT_PREFIX, storage } from './draft-scope';
 export const DRAFT_MAX_BYTES = 64 * 1024;
 
 export interface DraftSection {
@@ -22,13 +23,12 @@ export interface Draft {
 
 export type SpecOf = (section: string, name: string) => FieldSpec | undefined;
 
-export function storage(): Storage | undefined {
-	try {
-		return globalThis.sessionStorage ?? undefined;
-	} catch {
-		return undefined; // blocked (sandboxed frame, privacy settings)
-	}
-}
+/**
+ * Never kept in a draft: a secret (`writeOnly`), a field holding one anywhere in its schema (a
+ * list whose items carry credentials), or a read-only field. By the schema's flags, never names.
+ */
+export const neverDrafted = (spec: FieldSpec): boolean =>
+	spec.writeOnly || spec.holdsSecret === true || spec.readOnly;
 
 /** Only fields a draft may hold: dirty, not locked, not secret, known to the form. */
 export function draftOf(
@@ -41,7 +41,7 @@ export function draftOf(
 		for (const name of dirtyNames(s)) {
 			const f = s.fields[name]!;
 			const spec = specOf(section, name);
-			if (!spec || spec.writeOnly || spec.readOnly || isLocked(f.saved)) continue;
+			if (!spec || neverDrafted(spec) || isLocked(f.saved)) continue;
 			if (f.mine instanceof JsonDraft) continue; // half-typed JSON: nothing to restore
 			const d = (out[section] ??= { revision: s.revision, base: {}, mine: {}, reset: [] });
 			d.base[name] = f.base;
@@ -57,9 +57,9 @@ export function writeDraft(id: string, draft: Draft | null): boolean {
 	const store = storage();
 	if (!store) return false;
 	try {
-		if (!draft) {
+		if (!draft || draftsBlocked()) {
 			store.removeItem(DRAFT_PREFIX + id);
-			return true;
+			return !draft;
 		}
 		const text = JSON.stringify(draft);
 		if (new TextEncoder().encode(text).length > DRAFT_MAX_BYTES) {

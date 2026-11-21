@@ -12,6 +12,7 @@
 	import { loadControls } from './controls.svelte';
 	import { lazyPart } from './lazy.svelte';
 	import { loadEdit, loadedEdit, preloadSettingsForm, type SettingsForm } from './form.svelte';
+	import { signInPending } from './draft-scope';
 	import { hardNavigate, leaveDecision } from './leave';
 	import { loadMessages, messagesFailed, messagesLoaded } from './messages';
 	import type { FieldKey } from './types';
@@ -104,7 +105,7 @@
 	$effect(() => BarPart.want(barShown));
 	$effect(() => SummaryPart.want(summaryShown));
 	$effect(() => NoticePart.want(notice));
-	$effect(() => DraftPart.want(form.draft));
+	$effect(() => DraftPart.want(form.draft || form.kept));
 	// The edit chunk didn't load: nothing can be saved from this page until a reload. A stored
 	// draft whose offer didn't load says so on its own.
 	const partFailed = $derived(
@@ -237,12 +238,31 @@
 			type: nav.type,
 			from: nav.from?.url ?? null,
 			to: nav.to?.url ?? null,
-			bypass
+			bypass,
+			signIn: signInPending()
 		});
 		if (decision === 'allow') return;
 		nav.cancel(); // for 'leave', this raises the browser's own prompt
-		if (decision === 'prompt' && nav.to) void confirmLeave(nav.to.url, nav.willUnload);
+		const to = nav.to?.url;
+		if (!to || decision === 'browser') return;
+		const ask = () => void confirmLeave(to, nav.willUnload);
+		if (decision === 'prompt') return ask();
+		// The session ended (or setup is due): all of that loads only now (X-session-draft-keep).
+		void import('./signed-out').then(
+			(mod) => mod.onSessionEnd(decision, form, to, asking.signal, leaveTo, ask),
+			ask
+		);
 	});
+
+	async function leaveTo(href: string) {
+		bypass = true;
+		try {
+			// eslint-disable-next-line svelte/no-navigation-without-resolve -- the router's own target, already resolved
+			await goto(href);
+		} finally {
+			bypass = false;
+		}
+	}
 
 	/** Asks Save / Discard / Keep editing, then continues to `to` the way the user was going. */
 	async function confirmLeave(to: URL, unload: boolean) {
@@ -254,15 +274,7 @@
 			hardNavigate(to.href);
 			return;
 		}
-		await edit.askToLeave(form, to, unload, asking.signal, async (href) => {
-			bypass = true;
-			try {
-				// eslint-disable-next-line svelte/no-navigation-without-resolve -- the router's own target, already resolved
-				await goto(href);
-			} finally {
-				bypass = false;
-			}
-		});
+		await edit.askToLeave(form, to, unload, asking.signal, leaveTo);
 	}
 </script>
 
@@ -282,7 +294,7 @@
 		/>
 	{/if}
 
-	{#if form.draft && DraftPart.part}
+	{#if (form.draft || form.kept) && DraftPart.part}
 		<DraftPart.part {form} />
 	{:else if form.draftUnavailable}
 		<Banner kind="warning">

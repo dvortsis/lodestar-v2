@@ -12,6 +12,7 @@
 import {
 	clearDraft,
 	DRAFT_PREFIX,
+	neverDrafted,
 	storage,
 	type Draft,
 	type DraftSection,
@@ -91,8 +92,7 @@ export function planRestore(
 			const ok =
 				spec &&
 				f &&
-				!spec.writeOnly &&
-				!spec.readOnly &&
+				!neverDrafted(spec) &&
 				!isLocked(f.saved) &&
 				Object.hasOwn(d.base, name) &&
 				validate(spec, mine) === undefined;

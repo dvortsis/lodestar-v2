@@ -106,6 +106,7 @@ export function restoreDraft(e: Engine) {
 }
 
 export function dropDraft(e: Engine) {
+	e.kept = null;
 	e.draftData = null;
 	e.draft = null;
 	clearDraft(e.id);
@@ -124,6 +125,7 @@ export function discard(e: Engine) {
 	e.formErrors = [];
 	clearTimeout(e.draftTimer);
 	if (e.useDrafts && !e.draft) clearDraft(e.id);
+	e.kept = null;
 	if (e.status === 'save-error' || e.status === 'offline') e.status = 'ready';
 	e.saveError = undefined;
 	e.schedulePreview();
@@ -389,10 +391,15 @@ export async function holding<T>(
 ): Promise<T> {
 	e.inFlight = sent;
 	if (keys) e.sending = new Set(keys);
+	// Every save, Undo, Retry or secret removal goes through here, so `settled()` sees each one.
+	let p: Promise<T> | undefined;
 	try {
-		return await f();
+		p = f();
+		e.flight = p;
+		return await p;
 	} finally {
 		afterSend(e, sent);
+		if (p && e.flight === p) e.flight = null;
 	}
 }
 
@@ -468,6 +475,7 @@ async function saveNow(e: Engine): Promise<SaveResult> {
 			startUndo(e, prev, r.batch, r.values);
 			e.status = 'saved';
 			e.saveError = undefined;
+			e.kept = null;
 			if (e.useDrafts) {
 				if (dirtyKeys(e).length === 0) {
 					clearTimeout(e.draftTimer);

@@ -171,6 +171,8 @@ const settingsOnDemand = [
 	/features\/settings\/form\/(Number|Slider|Choice|Secret|Chips|Json)Control\.svelte$/,
 	/features\/settings\/form\/(instant|preview|menu|save-key|copy)\.ts$/,
 	/features\/settings\/form\/ConfirmDialog\.svelte$/,
+	/features\/settings\/form\/(signed-out|kept-restore)\.ts$/,
+	/features\/settings\/form\/KeptNote\.svelte$/,
 	// Filters & Safety loads its change flows on the first change (S-filters-2c).
 	...filtersDoor
 ];
@@ -1364,7 +1366,8 @@ export default [
 	// CMP-9a: the Companions registry entry adds ≈ 80 B here, which the 20 B of headroom couldn't take.
 	// OUT-2 (runner §2.26): back under the §10.1 cap (44.98 KB measured) after the registry's
 	// default-only glob; it had been 45.1 KB at 45.06 KB measured.
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45 KB'),
+	// X-session-draft-keep (runner §2.26): 45 → 45.5 KB, measured 45.45, for the same safety code.
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45.5 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1440,6 +1443,10 @@ export default [
 	// measured) back under the §10.1 45 KB route cap, so it has the default limit again.
 	// X-web-hygiene-1107 (runner §2.26): NotificationsScreen 45 → 45.1 KB (+100 B), measured 45.01 KB, for the
 	// field menu's keyboard-open flag in the shared SettingField. No other budget moves.
+	// X-session-draft-keep (runner §2.26): Notifications 45.2 → 45.5 KB (measured 45.49), Insights
+	// 45 → 45.3 (45.28), Language 45 → 45.1 (45.08): the engine's safety code in the first view (the
+	// secret flag for list fields, in-flight save tracking, the draft block after Sign out). The 401
+	// path is on demand. X-settings-leave-guard-split is the planned give-back.
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-15b: the Sources first view measured 30.54 KB (was 29.97 KB: the dialogs' loader, their state
 	// and the purge button), limit = measured + ~1.2%; the dialogs load on demand, 36.2 KB, limit 37 KB.
@@ -1462,8 +1469,12 @@ export default [
 							: name === 'SourcesScreen'
 								? '34 KB'
 								: name === 'NotificationsScreen'
-									? '45.2 KB'
-									: '45 KB'
+									? '45.5 KB'
+									: name === 'InsightsScreen'
+										? '45.3 KB'
+										: name === 'LanguageScreen'
+											? '45.1 KB'
+											: '45 KB'
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
@@ -1668,7 +1679,9 @@ export default [
 	// rule-pack step's flow, which load with their steps: 32.97 -> 48.74 KB, limit 53.6 KB.
 	entry('Welcome route (own JS + CSS)', wizardFirst, '16.5 KB'),
 	// runner §2.26, UP-1: measured 53603 B, the watch labels.
-	entry('Wizard steps (on demand)', wizardLazy, '53.7 KB'),
+	// X-session-draft-keep (runner §2.26): 53.7 → 54.4 KB, measured 54.32: the wizard embeds
+	// SettingsForm, so it carries that code too, until X-settings-leave-guard-split.
+	entry('Wizard steps (on demand)', wizardLazy, '54.4 KB'),
 	// S-blocklists: the wizard's blocklist step, measured separately so the limit above stays.
 	entry('Blocklist wizard step (on demand)', blocklistStepLazy, '8.3 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:

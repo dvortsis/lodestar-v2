@@ -1,5 +1,7 @@
 <script lang="ts">
-	// The offer of a draft from earlier (§10.10.5): Restore or Discard.
+	// The offer of a draft from earlier (§10.10.5): Restore or Discard. After a sign-in that kept
+	// the draft (X-session-draft-keep), it's already restored and `form.kept` (KeptNote, loaded on
+	// demand) says it isn't saved yet.
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import { formatCount } from '$lib/format';
@@ -10,7 +12,9 @@
 	let { form }: { form: SettingsForm } = $props();
 </script>
 
-{#if form.draft}
+{#if form.kept && !form.draft}
+	<form.kept />
+{:else if form.draft}
 	<Banner kind="info" title={m.settings_form_draft_title()}>
 		<span data-testid="draft-text"
 			>{form.draft.dropped

@@ -64,6 +64,16 @@ function kindOf(p: Obj): { kind: FieldKind; enum?: string[] } {
 	}
 }
 
+/** A `writeOnly` subschema anywhere under `prop` (items, properties, alternatives): the schema's
+ * own flag, found in its JSON. A schema that can't be serialized counts as holding a secret. */
+function nestedSecret(prop: Obj): boolean {
+	try {
+		return /"writeOnly":true/.test(JSON.stringify(prop));
+	} catch {
+		return true;
+	}
+}
+
 /** One section's fields, in the order the schema gives (`x-group`, then `x-order`). */
 export function readSection(section: SettingsSection): FieldSpec[] {
 	const schema: unknown = section.schema;
@@ -93,6 +103,7 @@ export function readSection(section: SettingsSection): FieldSpec[] {
 			readOnly: f.read_only || prop.readOnly === true,
 			restartRequired: f.restart_required
 		};
+		if (nestedSecret(prop)) spec.holdsSecret = true;
 		if (values) spec.enum = values;
 		const keywords = str(prop['x-keywords']);
 		if (keywords) spec.keywordsKey = keywords;
