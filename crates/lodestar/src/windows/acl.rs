@@ -376,13 +376,12 @@ pub(super) fn invisible(c: char) -> bool {
     format_or_separator(c) || default_ignorable(c)
 }
 
-/// Unicode's Default_Ignorable_Code_Point (DerivedCoreProperties.txt,
-/// Unicode 15): what renders as nothing, Cf or not. Beyond Cf, the
+/// Unicode's Default_Ignorable_Code_Point, as the Default_Ignorable_Code_Point
+/// section of DerivedCoreProperties.txt lists it (Unicode 15; Unicode 16's
+/// is the same): what renders as nothing, Cf or not. Beyond Cf, the
 /// combining grapheme joiner, the Hangul fillers, the Khmer inherent
 /// vowels, the Mongolian free variation selectors, the variation
-/// selectors, the reserved U+2065 and U+FFF0–FFF8, and plane 14. The
-/// filter crate keeps its own copy (`normalize::invisible`), which leaves
-/// U+180B–180D and U+180F out; this one is the property as published.
+/// selectors, the reserved U+2065 and U+FFF0–FFF8, and plane 14.
 fn default_ignorable(c: char) -> bool {
     matches!(
         c,
@@ -452,15 +451,32 @@ pub(super) fn format_or_separator(c: char) -> bool {
 pub(super) fn quoted(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
+    escape_into(&mut out, text, |c| c == '"');
+    out.push('"');
+    out
+}
+
+/// Text from elsewhere (the system's own error, which on Windows is
+/// PowerShell's stderr and can echo a path or entry name over several
+/// lines) on one line, unquoted: every control character, CR and LF
+/// included, and every [`invisible`] one as `\u{…}`, as [`quoted`] writes
+/// them. A `"` stays as it is, since nothing quotes this text.
+pub(super) fn escaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    escape_into(&mut out, text, |_| false);
+    out
+}
+
+/// `text` into `out`, with control and [`invisible`] characters, and any
+/// `also` picks, as `\u{…}`.
+fn escape_into(out: &mut String, text: &str, also: impl Fn(char) -> bool) {
     for c in text.chars() {
-        if c.is_control() || c == '"' || invisible(c) {
+        if c.is_control() || invisible(c) || also(c) {
             out.extend(c.escape_unicode());
         } else {
             out.push(c);
         }
     }
-    out.push('"');
-    out
 }
 
 /// A SID [`full_sid`] spells out, if it's one `icacls` can take as `*SID`.
@@ -546,17 +562,18 @@ pub fn refusal(
 /// it if needed. It never changes an existing folder. An error says why
 /// the service won't use it.
 pub fn secure_dir(dir: &Path, own_sid: Option<&str>, ops: &impl Ops) -> Result<(), String> {
-    // As the temp log shows every path: quoted, nothing unprintable raw.
+    // The folder as the temp log shows every path, quoted, and the
+    // system's own error on one line: nothing unprintable raw in either.
     let shown = quoted(&dir.display().to_string());
     let inspect = || {
         ops.inspect(dir)
-            .map_err(|e| format!("reading {shown}'s permissions: {e}"))
+            .map_err(|e| format!("reading {shown}'s permissions: {}", escaped(&e.to_string())))
     };
     let seen = match inspect()? {
         Some(seen) => seen,
         None => {
             ops.create(dir)
-                .map_err(|e| format!("creating {shown}: {e}"))?;
+                .map_err(|e| format!("creating {shown}: {}", escaped(&e.to_string())))?;
             inspect()?.ok_or_else(|| format!("{shown} vanished after it was created"))?
         }
     };
@@ -1025,8 +1042,9 @@ mod tests {
     #[test]
     fn quoted_escapes_every_default_ignorable() {
         let escaped = |c: char| format!("\"{}\"", c.escape_unicode());
-        // Default_Ignorable_Code_Point as DerivedCoreProperties.txt
-        // (Unicode 15) lists it, written out here on its own.
+        // Default_Ignorable_Code_Point as the Default_Ignorable_Code_Point
+        // section of DerivedCoreProperties.txt lists it (Unicode 15; 16's is
+        // the same), written out here on its own.
         let dicp = |c: char| {
             matches!(
                 c as u32,
@@ -1116,7 +1134,7 @@ mod tests {
                 }
             }
             fn create(&self, _: &Path) -> io::Result<()> {
-                Err(io::Error::other("full"))
+                Err(io::Error::other("disk\nfull"))
             }
         }
         let dir = Path::new("D:\\Lode\u{202e}star\\data");
@@ -1127,7 +1145,7 @@ mod tests {
         );
         assert_eq!(
             secure_dir(dir, Some(OWN), &Failing(false)).unwrap_err(),
-            format!("creating {shown}: full")
+            format!(r"creating {shown}: disk\u{{a}}full")
         );
         // Created, then gone.
         let fake = Fake::new(vec![None, None]);
@@ -1135,6 +1153,36 @@ mod tests {
             secure_dir(dir, Some(OWN), &fake).unwrap_err(),
             format!("{shown} vanished after it was created")
         );
+    }
+
+    /// The system's own error in [`secure_dir`]'s messages, PowerShell's
+    /// stderr on Windows, which echoes paths and entry names over several
+    /// lines, comes out as one line with nothing unprintable raw: a name
+    /// someone planted in the folder can't forge a line or reorder text.
+    #[test]
+    fn secure_dir_errors_escape_the_systems_own_text() {
+        struct Failing;
+        impl Ops for Failing {
+            fn inspect(&self, _: &Path) -> io::Result<Option<Inspection>> {
+                Err(io::Error::other(
+                    "Get-Acl : Access denied to D:\\data\\x\u{202e}gpj.exe\r\nAt line:1\nok",
+                ))
+            }
+            fn create(&self, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let why = secure_dir(Path::new(r"D:\data"), Some(OWN), &Failing).unwrap_err();
+        assert_eq!(
+            why,
+            r#"reading "D:\data"'s permissions: Get-Acl : Access denied to D:\data\x\u{202e}gpj.exe\u{d}\u{a}At line:1\u{a}ok"#
+        );
+        assert!(
+            !why.chars().any(|c| c.is_control() || invisible(c)),
+            "{why}"
+        );
+        // Plain text, and a `"` inside it, stay as they are: no quotes.
+        assert_eq!(escaped(r#"say "hi" to C:\x"#), r#"say "hi" to C:\x"#);
     }
 
     /// Fake [`Ops`]: a folder whose inspections are scripted in order.
