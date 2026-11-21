@@ -204,6 +204,11 @@ pub struct Dht {
     /// as it's admitted. Off by default
     /// (docs/decisions/2026-11-20-CR-LOOKUP-END.md); not in the Settings UI.
     pub lookup_end: bool,
+    /// CR-1c: the DHT runs up to the intensity preset's count of peer
+    /// lookups at once (32, 80 or 256 for Low, Balanced, Aggressive) instead
+    /// of 32, for the intensity it starts with. Off by default
+    /// (docs/decisions/2026-11-21-CR-1c.md); not in the Settings UI.
+    pub preset_slots: bool,
     /// CR-1a-S: a peer lookup hands the fetch pool its peers in bounded
     /// batches as they arrive. Off by default
     /// (docs/decisions/2026-10-31-CR-1a-S.md); not in the Settings UI.
@@ -247,6 +252,7 @@ impl Default for Dht {
             responder_hints: false,
             hint_first: false,
             lookup_end: false,
+            preset_slots: false,
             streaming_peers: false,
             target_prefixes: false,
             utp: false,
@@ -823,6 +829,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_LOOKUP_END", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_PRESET_SLOTS") {
+            config.dht.preset_slots = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_PRESET_SLOTS", &v))?;
+        }
         if let Some(v) = env("LODESTAR_DHT_STREAMING_PEERS") {
             config.dht.streaming_peers = v
                 .parse()
@@ -908,6 +919,7 @@ impl Config {
             responder_hints: self.dht.responder_hints,
             hint_first: self.dht.hint_first,
             lookup_end: self.dht.lookup_end,
+            preset_slots: self.dht.preset_slots,
             target_prefixes: self.dht.target_prefixes,
             sampler_cooldown_split: self.dht.sampler_cooldown_split,
             ..dht::Config::default()
@@ -957,7 +969,9 @@ impl Config {
             pool: PoolConfig {
                 max_sockets: sockets,
                 coordinated_admission: self.dht.coordinated_admission,
-                finder_capacity: dht::PEER_REQUEST_CAPACITY,
+                // The DHT's slots (CR-1c: the start preset's with
+                // `dht.preset_slots` on), so a permit is always a slot.
+                finder_capacity: self.dht_config().peer_slots(),
                 streaming_peers: self.dht.streaming_peers,
                 // The pipeline names the trusted sources (`hint_sources`).
                 hint_first: self.dht.hint_first,
@@ -1622,6 +1636,48 @@ mod tests {
         assert!(
             Config::load(None, |k: &str| {
                 (k == "LODESTAR_DHT_LOOKUP_END").then(|| "maybe".to_string())
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn preset_slots_is_off_unless_asked_for() {
+        let finders = |c: &Config| c.pipeline_config().unwrap().pool.finder_capacity;
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.preset_slots);
+        assert!(!c.dht_config().preset_slots);
+        assert_eq!(finders(&c), dht::PEER_REQUEST_CAPACITY);
+        let env = |k: &str| (k == "LODESTAR_DHT_PRESET_SLOTS").then(|| "true".to_string());
+        let on = Config::load(None, env).unwrap();
+        assert!(on.dht_config().preset_slots);
+        // The pool's permits are the DHT's slots, for the start preset.
+        assert_eq!(on.dht_config().peer_slots(), 80);
+        assert_eq!(finders(&on), 80);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (name, slots) in [("low", 32), ("balanced", 80), ("aggressive", 256)] {
+            std::fs::write(
+                &path,
+                format!("[dht]\npreset_slots = true\nintensity = \"{name}\"\n"),
+            )
+            .unwrap();
+            let c = Config::load(Some(&path), no_env).unwrap();
+            assert!(c.dht_config().preset_slots, "{name}");
+            assert_eq!(finders(&c), slots, "{name}");
+            assert_eq!(c.dht_config().peer_slots(), slots, "{name}");
+        }
+        // Off, every preset keeps 32.
+        std::fs::write(&path, "[dht]\nintensity = \"aggressive\"\n").unwrap();
+        assert_eq!(
+            finders(&Config::load(Some(&path), no_env).unwrap()),
+            dht::PEER_REQUEST_CAPACITY
+        );
+        std::fs::write(&path, "[dht]\npreset_slots = \"yes\"\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        assert!(
+            Config::load(None, |k: &str| {
+                (k == "LODESTAR_DHT_PRESET_SLOTS").then(|| "maybe".to_string())
             })
             .is_err()
         );

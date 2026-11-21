@@ -1083,7 +1083,6 @@ fn hint_first_screen() {
 #[test]
 #[ignore = "measurement: a few minutes of wall time"]
 fn lookup_end_screen() {
-    use lodestar_dht::node::LedgerEnd;
     let off = scenario::live_lookup();
     let on = Scenario {
         switches: Switches {
@@ -1092,7 +1091,39 @@ fn lookup_end_screen() {
         },
         ..off.clone()
     };
-    let v = screen(&off, &on);
+    print_screen(&off, &on);
+}
+
+/// The CR-1c screen: as [`lookup_end_screen`], with `dht.lookup_end` on
+/// in both arms (the pair is one treatment, r5.1 A1) and
+/// `dht.preset_slots` off against on.
+/// `cargo test -p lodestar-crawler-sim --test sim preset_slots_screen -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: a few minutes of wall time"]
+fn preset_slots_screen() {
+    let lookup_end = Switches {
+        lookup_end: true,
+        ..Switches::default()
+    };
+    let off = Scenario {
+        switches: lookup_end,
+        ..scenario::live_lookup()
+    };
+    let on = Scenario {
+        switches: Switches {
+            preset_slots: true,
+            ..lookup_end
+        },
+        ..off.clone()
+    };
+    print_screen(&off, &on);
+}
+
+/// Runs `off` against `on` over `SCREEN_SEEDS` and prints each seed's
+/// ledger, the means, and the keep figures.
+fn print_screen(off: &Scenario, on: &Scenario) {
+    use lodestar_dht::node::LedgerEnd;
+    let v = screen(off, on);
     let per_slot_s = |l: &run::Ledger| l.stored_per_min / 60.0 / l.slots.max(1e-9);
     let per_query = |l: &run::Ledger| l.stored_per_min / 60.0 / l.queries_per_s.max(1e-9);
     let share = |l: &run::Ledger, why: LedgerEnd| l.ended_share[why as usize];

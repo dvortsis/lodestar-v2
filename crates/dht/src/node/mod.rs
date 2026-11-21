@@ -81,7 +81,26 @@ impl Intensity {
             Intensity::Aggressive => 4096,
         }
     }
+
+    /// CR-1c (`dht.preset_slots`): owned peer requests the actor runs or
+    /// queues at once with the switch on, sized so the preset's query rate
+    /// binds before the slots do: `ceil(rate · W / q_all)`, with `W` =
+    /// 16.2 s and `q_all` = 43 queries per lookup (CR-LOOKUP-END's screen,
+    /// on), at least [`PEER_REQUEST_CAPACITY`], at most [`MAX_PEER_SLOTS`]
+    /// (the pool's `max_lookups`), rounded up to a multiple of 16. See
+    /// `docs/decisions/2026-11-21-CR-1c.md`.
+    pub fn peer_slots(self) -> usize {
+        match self {
+            Intensity::Low => 32,
+            Intensity::Balanced => 80,
+            Intensity::Aggressive => MAX_PEER_SLOTS,
+        }
+    }
 }
+
+/// CR-1c: the most slots any preset has ([`Intensity::peer_slots`]), equal
+/// to the pool's default `max_lookups`.
+pub const MAX_PEER_SLOTS: usize = 256;
 
 /// The public routers used when there's no saved state.
 pub const DEFAULT_BOOTSTRAP: &[&str] = &[
@@ -187,6 +206,13 @@ pub struct Config {
     /// starts at once instead of on the next tick. Off, lookups end and
     /// start exactly as before.
     pub lookup_end: bool,
+    /// CR-1c (`dht.preset_slots`): the actor runs or queues up to
+    /// [`Intensity::peer_slots`] owned peer requests for the intensity it
+    /// starts with, instead of [`PEER_REQUEST_CAPACITY`]. The count is
+    /// fixed for the node's run, as the pool's semaphore is; the rate and
+    /// outstanding cap still follow [`NodeHandle::set_intensity`]. Off,
+    /// the slots are 32 as before.
+    pub preset_slots: bool,
     /// CR-1b's target prefixes (`dht.target_prefixes`): BEP 51 sample and
     /// exploration targets take the next of 256 eight-bit prefixes, per
     /// family, with a random suffix. Off draws every target at random, as
@@ -258,6 +284,21 @@ impl std::fmt::Debug for Deny {
     }
 }
 
+impl Config {
+    /// The owned peer requests the actor runs or queues at once: the start
+    /// preset's [`Intensity::peer_slots`] with `preset_slots` on, else
+    /// [`PEER_REQUEST_CAPACITY`]. Size a coordinated-admission semaphore
+    /// (the pool's `finder_capacity`) and the channel that feeds the node
+    /// to this.
+    pub fn peer_slots(&self) -> usize {
+        if self.preset_slots {
+            self.intensity.peer_slots()
+        } else {
+            PEER_REQUEST_CAPACITY
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -279,6 +320,7 @@ impl Default for Config {
             responder_hints: false,
             hint_first: false,
             lookup_end: false,
+            preset_slots: false,
             target_prefixes: false,
             utp: None,
             shard: None,
@@ -976,7 +1018,7 @@ pub type PeerResult = oneshot::Receiver<Vec<SocketAddr>>;
 /// `None` means backpressure/paused; it must not consume a network attempt.
 pub type PeerAdmission = oneshot::Sender<Option<PeerResult>>;
 /// One owned request's slot, under coordinated admission (CR-ADM). The
-/// caller's semaphore holds [`PEER_REQUEST_CAPACITY`] of them; the actor
+/// caller's semaphore holds [`Config::peer_slots`] of them; the actor
 /// keeps the permit for as long as the request holds a slot, and dropping
 /// it gives the slot back.
 pub type PeerPermit = tokio::sync::OwnedSemaphorePermit;
@@ -1223,7 +1265,9 @@ impl Node {
         harvest: Option<mpsc::Sender<Harvest>>,
     ) -> Node {
         let stats = Arc::new(Stats::default());
-        let (commands, command_rx) = mpsc::channel(64);
+        // 64 with 32 slots, as before; each slot over 32 adds one, so a
+        // burst of admitted requests fits as it did (CR-1c).
+        let (commands, command_rx) = mpsc::channel(32 + config.peer_slots());
         let (shutdown, shutdown_rx) = watch::channel(false);
         let task = tokio::spawn(actor::run(
             config,

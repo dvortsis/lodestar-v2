@@ -455,7 +455,16 @@ impl Runtime {
         let mut dht = None;
         let mut peer_requests = None;
         if let Some(base) = config.dht.clone() {
-            let (tx, rx) = mpsc::channel(lodestar_dht::node::PEER_REQUEST_CAPACITY);
+            // One request per DHT slot, as the pool try_sends to it. With
+            // `dht.preset_slots` on (CR-1c) the node's count follows the
+            // intensity `Assign` gives it, not this file's, so room for
+            // the largest.
+            let slots = if base.preset_slots {
+                lodestar_dht::node::MAX_PEER_SLOTS
+            } else {
+                lodestar_dht::node::PEER_REQUEST_CAPACITY
+            };
+            let (tx, rx) = mpsc::channel(slots);
             peer_requests = Some(tx);
             dht = Some(super::dht::spawn(
                 base,

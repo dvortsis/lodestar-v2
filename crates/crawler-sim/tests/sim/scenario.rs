@@ -136,15 +136,19 @@ pub struct Switches {
     pub target_prefixes: bool,
     /// CR-LOOKUP-END: `dht.lookup_end`.
     pub lookup_end: bool,
+    /// CR-1c: `dht.preset_slots`.
+    pub preset_slots: bool,
 }
 
 impl Switches {
     /// Writes the switches into the real configs the run starts with.
     pub fn apply(&self, dht: &mut Config, pool: &mut PoolConfig) {
+        dht.preset_slots = self.preset_slots;
         if self.coordinated_admission {
-            // As the pipeline wires it (`crates/pipeline/src/lib.rs`).
+            // As the pipeline wires it (`crates/pipeline/src/lib.rs`): one
+            // permit per DHT slot (32, or the preset's with CR-1c).
             pool.coordinated_admission = true;
-            pool.finder_capacity = lodestar_dht::node::PEER_REQUEST_CAPACITY;
+            pool.finder_capacity = dht.peer_slots();
         }
         dht.responder_hints = self.responder_hints;
         if self.hint_first {
@@ -167,6 +171,7 @@ impl Switches {
             (self.streaming_peers, "streaming_peers=true"),
             (self.target_prefixes, "target_prefixes=true"),
             (self.lookup_end, "lookup_end=true"),
+            (self.preset_slots, "preset_slots=true"),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))
