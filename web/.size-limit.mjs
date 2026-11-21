@@ -1601,7 +1601,8 @@ export default [
 	// (40,617 B), rounded up to 0.1 kB.
 	// X-ui-guards (runner §2.26): 40,600 B on main → 40,753 B with Bold icons, rounded up at 0.01 kB. A reshuffle:
 	// the shared search glyphs moved here from the cards and the live banner, whose limits fall with it.
-	entry('Search results (lazy)', resultsFirst, '40.76 KB'),
+	// X-labels (runner §2.26): 40,755 → 40,821 B, the composition text in lower case ("82% video").
+	entry('Search results (lazy)', resultsFirst, '40.83 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
@@ -1613,7 +1614,8 @@ export default [
 	entry('Search index-state banners (on demand)', indexStateLazy, '4.1 KB'),
 	entry('Search Block settle (on demand)', settleLazy, '0.6 KB'),
 	// runner §2.26, SRC-17: the Source facet and Show unverified (16,800 B → 17,696 B, the measured 831 B over rounded up to 64 B).
-	entry('Facet rail (lazy)', facetsLazy, '17696 B'),
+	// X-labels (runner §2.26): 17,635 → 18,748 B, the value names (codecs, HDR, languages, types).
+	entry('Facet rail (lazy)', facetsLazy, '18.75 KB'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
@@ -1626,7 +1628,8 @@ export default [
 	// Raised by the runner (§2.26): +21 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, SRC-17: the Unverified badge on a card (8,300 B → 8,364 B; measured 5 B over).
 	// X-ui-guards (runner §2.26): 8,303 → 7,965 B with Bold icons, as the live banner; rounded up at 0.01 kB.
-	entry('Search cards (lazy)', cardsLazy, '7.97 KB'),
+	// X-labels (runner §2.26): 7,963 → 8,007 B, the composition text in lower case.
+	entry('Search cards (lazy)', cardsLazy, '8.01 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
@@ -1634,7 +1637,10 @@ export default [
 	entry('Search assist (on demand)', assistLazy, '6.59 KB'),
 	// zh strings inlined (H-zh); runner §2.26. 1.64 → 1.75 KB, no meaning trimmed further.
 	entry('Natural phrasing (on demand)', naturalLazy, '1.75 KB'),
-	entry('Builder (on demand)', builderLazy, '5.69 KB'),
+	// X-labels (runner §2.26): 5,673 → 8,360 B, the 48 field labels and the value names; the value names are
+	// shared with the Facet rail, which Search has loaded first, so loading them lazily saved nobody
+	// anything and grew five entries.
+	entry('Builder (on demand)', builderLazy, '8.36 KB'),
 	// X-detail-headroom: the settings subscription (L3's visibility revalidation) and its event client
 	// load on demand, from visibility-events.ts, so they are no longer in this first view.
 	// X-detail-headroom: detail.css is split so each entry carries only its own rules: host.css (drawer
@@ -1651,7 +1657,8 @@ export default [
 	// measured, rounded up to the next 0.01 KB.
 	// X-safety-toggles (runner §2.26): 28.14 → 28.15 KB, measured 28,141 B: chunk-hash and gzip
 	// drift, with no change to the drawer's code.
-	entry('Detail drawer (own JS + CSS)', drawerView, '28.15 KB'),
+	// X-labels (runner §2.26): 28,141 → 28,304 B, "DHT" and the importers' names for Found by.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28.31 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1666,13 +1673,14 @@ export default [
 	// ENR-13: the same import (§2.26, runner): 21,904 B -> 21,952 B.
 	// X-auth-early-401 (runner §2.26): the same replay: 21,967 B measured locally, 21,971 B in CI
 	// (its build SHA moves the chunk names), rounded up to the next 0.01 KB.
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.98 KB'),
+	// X-labels (runner §2.26): 21,979 → 22,129 B, as the drawer.
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '22.13 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[
 			...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])
 		].filter((f) => !adultSection.includes(f) && !identifiedSection.includes(f)),
-		'38608 B' // runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		'38.82 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
@@ -1687,7 +1695,9 @@ export default [
 	entry(
 		'Insights stage pages (own JS + CSS)',
 		own('/insights/[stage]', { onDemand: stageLazy }),
-		'39.7 KB'
+		// X-labels (runner §2.26): 39,440 → 40,848 B: the glossary type names (927 B) and the plugin-name table
+		// (287 B), which goes when the API sends plugin names (queued by the runner).
+		'40.85 KB'
 	),
 	entry(
 		'Insights stage charts (uPlot, on demand)',
