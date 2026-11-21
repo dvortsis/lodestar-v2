@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-20T21:50Z",
+    "updated": "2026-11-21T00:36Z",
     "items": [
       {
         "slot": 1,
@@ -10687,12 +10687,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-search-param-errors",
+        "slice": "X-param-echo-cap",
         "role": "build",
         "agent": "session_01MMjhnBLWWDc2xQCuaJPWjK",
         "model": "opus",
-        "since": "2026-11-20T21:48Z",
-        "doing": "clear bounded 400s for search parameters (#992 optionals)",
+        "since": "2026-11-21T00:36Z",
+        "doing": "briefed; follow-up to #1000 (merged 1a2114fe)",
         "status": "running"
       }
     ],
