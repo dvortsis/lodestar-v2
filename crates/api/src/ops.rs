@@ -415,7 +415,11 @@ pub(crate) async fn crawler(State(s): State<ApiState>) -> ApiResult<Json<Crawler
 
 /// Sets the crawler's intensity at once: the same setting as
 /// `crawler.intensity` in `/settings/crawler`, refused the same way when
-/// an environment variable sets it.
+/// an environment variable sets it. With `dht.preset_slots` on, the lookup
+/// slots are sized once, from the intensity the node starts with: running
+/// lookups, the query rate and the outstanding cap follow the new preset at
+/// once (never more lookups running than the slots allow), and the slot
+/// count itself follows only after a restart.
 #[utoipa::path(
     operation_id = "patchCrawler",
     patch,
