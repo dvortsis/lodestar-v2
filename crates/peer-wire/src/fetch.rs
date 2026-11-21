@@ -744,7 +744,9 @@ where
                     bounded(wire.send_extended(id, &request), &mut pace, a.got, deadline).await?;
                 }
                 if size > FIRST_WINDOW {
-                    window_due = Some(Instant::now() + opts.first_window_deadline);
+                    // An option too large for the clock leaves the window
+                    // to the fetch's deadline.
+                    window_due = Instant::now().checked_add(opts.first_window_deadline);
                 }
                 assembly = Some(a);
             }
@@ -1501,34 +1503,77 @@ mod tests {
         );
     }
 
-    /// A peer whose first window takes about 6 s (pieces 1.5 s apart) fails
-    /// it under the default bound, and finishes when a caller gives the
-    /// window more room.
+    /// A peer whose first window takes 6 s (each piece sent 1.5 s after
+    /// its request) fails it at the bound in force, the default or a
+    /// tighter option, and finishes when the option gives it room, with
+    /// or without a reservation hook.
     #[tokio::test(start_paused = true)]
     async fn the_first_window_deadline_is_the_options() {
         let info: Vec<u8> = (0..(FIRST_WINDOW * 2)).map(|i| (i % 251) as u8).collect();
         let key = InfoHash(Sha1::digest(&info).into());
-        for room in [None, Some(Duration::from_secs(10))] {
+        let five = Duration::from_secs(5);
+        let ten = Duration::from_secs(10);
+        // (reserve hook, the option, the bound it must fail at, if any).
+        let cases = [
+            (true, None, Some(FIRST_WINDOW_DEADLINE)),
+            (true, Some(five), Some(five)),
+            (false, Some(five), Some(five)),
+            (true, Some(ten), None),
+            (false, Some(ten), None),
+        ];
+        for (reserve, room, fails_at) in cases {
+            let case = format!("reserve {reserve}, room {room:?}");
             let (ours, theirs) = tokio::io::duplex(1 << 16);
             let steady = Then::Steady { each: 1_500 };
             let peer = tokio::spawn(scripted(theirs, info.clone(), usize::MAX, steady));
             let mut opts = plain(Duration::from_secs(30));
-            opts.reserve = Some(Reserve(Arc::new(|_, _| Box::pin(async {}))));
+            if reserve {
+                opts.reserve = Some(Reserve(Arc::new(|_, _| Box::pin(async {}))));
+            }
             if let Some(room) = room {
                 opts.first_window_deadline = room;
             }
+            let started = Instant::now();
             let got = timeout(
                 Duration::from_secs(30),
                 fetch_on_stream(ours, &key, &opts, false),
             )
             .await
             .expect("it ends before the deadline");
-            match room {
-                None => assert!(matches!(got, Err(Error::FirstWindow)), "{got:?}"),
-                Some(_) => assert_eq!(got.expect("fetched").info, info),
+            let took = started.elapsed();
+            match fails_at {
+                Some(bound) => {
+                    assert!(matches!(got, Err(Error::FirstWindow)), "{case}: {got:?}");
+                    assert!(
+                        took >= bound && took <= bound + Duration::from_millis(100),
+                        "{case}: ended after {took:?}"
+                    );
+                }
+                None => assert_eq!(got.expect(&case).info, info, "{case}"),
             }
             peer.abort();
         }
+    }
+
+    /// An option too large to add to the clock sets no window bound, as for
+    /// a dict of one window, instead of panicking: the stream is left to
+    /// the caller's deadline ([`fetch`] holds the whole fetch to
+    /// `timeout`).
+    #[tokio::test(start_paused = true)]
+    async fn an_absurd_first_window_deadline_does_not_panic() {
+        let info: Vec<u8> = (0..(FIRST_WINDOW * 2)).map(|i| (i % 251) as u8).collect();
+        let key = InfoHash(Sha1::digest(&info).into());
+        let (ours, theirs) = tokio::io::duplex(1 << 16);
+        let peer = tokio::spawn(scripted(theirs, info, 2, Then::Silence));
+        let mut opts = plain(Duration::from_secs(8));
+        opts.first_window_deadline = Duration::MAX;
+        let got = timeout(
+            Duration::from_secs(10),
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await;
+        assert!(got.is_err(), "only the caller's deadline ends it: {got:?}");
+        peer.abort();
     }
 
     /// A real fetch over loopback TCP whose peer never sends its first

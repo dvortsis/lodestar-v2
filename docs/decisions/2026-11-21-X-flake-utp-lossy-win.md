@@ -5,11 +5,11 @@
 ## Root cause
 - **The error is the product's first-window bound, not the test's deadlines.**
   - X-fetch-first-window (2026-11-14) added `FIRST_WINDOW_DEADLINE`, a fixed 4 s: a dict larger than one request window must get its first window (64 KiB) within 4 s of asking. Past that, the fetch fails with `Error::FirstWindow`.
-  - The CI failure ended about 6.4 s into the Require run, which is a handshake plus the 4 s window.
+  - The uTP test binary had been running about 9.5 s when the failure printed. Its other tests run beside this one, so that spans this test's Require run up to its handshake plus the 4 s window.
 - **Why #629's fix no longer covers the test.**
   - X-flake-utp-lossy (#629, 2026-11-08) made the test's loss model drop at most one packet in a row each way, at 15% long-run. It checked uTP's limits (SYN retries, `MAX_TIMEOUTS`) against the test's 10 s connect timeout and 30 s fetch timeout.
   - It came before the 4 s bound existed. The test's 120 KB dict is larger than one window, so its first 64 KiB (about 46 data packets) now has to cross the lossy link within 4 s.
-  - A couple of retransmit timeouts in that window use it up: the RTO is at least 1 s, and it backs off.
+  - A couple of retransmit timeouts in that window use it up. The RTO starts at 1 s (`INITIAL_RTO`), never drops below 500 ms (`MIN_RTO`), and backs off.
 - **What the 4 s defends against** (X-fetch-first-window): a peer that announces a large `metadata_size` holds only one window of the fetch pool's memory budget until it has sent that window. The bound stops a slow or silent peer from holding that unproven claim, and the room it keeps from other fetches, for longer than 4 s.
 
 ## The probe
@@ -41,7 +41,8 @@ In the second and third runs, the bound was raised to 60 s and the time each fet
 
 ## Tests
 - `the_first_window_deadline_defaults_to_the_bound`: the default is 4 s and equals `FIRST_WINDOW_DEADLINE`.
-- `the_first_window_deadline_is_the_options` (paused clock): a peer whose first window takes about 6 s fails with `FirstWindow` under the default, and finishes when the option gives it 10 s. A mutation that ignores the option and keeps the constant fails this test.
+- `the_first_window_deadline_is_the_options` (paused clock): a peer whose first window takes 6 s fails with `FirstWindow` at the bound in force: 4 s under the default, 5 s under a 5 s option, with or without a reservation hook. With 10 s it finishes, also with or without the hook. Three mutations fail this test: ignoring the option (keeping the constant), applying it only when a hook is set (the lossy test has none), and dropping the bound for any value that isn't the default.
+- `an_absurd_first_window_deadline_does_not_panic`: with `Duration::MAX`, `checked_add` overflows to no window bound, as for a dict of one window, and nothing panics. The fetch is then bounded only by the caller's deadline (`fetch` holds the whole fetch to `timeout`). No production caller sets the option.
 - Unchanged and still green:
   - `a_first_window_that_stops_ends_when_due` (the default bound, at 4 s);
   - `a_slow_steady_peer_has_its_first_window_in_time`;
