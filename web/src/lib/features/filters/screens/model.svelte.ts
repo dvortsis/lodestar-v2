@@ -12,7 +12,11 @@ export type Queue = components['schemas']['Queue'];
 
 export interface Pending {
 	title: string;
+	/** What the rule checks, under the title (I5). */
+	description?: string;
 	applyLabel?: string;
+	/** Apply in the danger style: the change loosens child safety. It changes nothing else. */
+	danger?: boolean;
 	shadowDays?: number;
 }
 

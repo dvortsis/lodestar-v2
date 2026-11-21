@@ -77,13 +77,35 @@ describe('ChannelBadges', () => {
 });
 
 describe('PauseToggle', () => {
+	it('is labelled for its on state: checked while the alert is active', () => {
+		render(PauseToggle, { search: saved(), onUpdated: vi.fn() });
+		const toggle = screen.getByRole('switch', { name: 'Active: Lantern Keeper releases' });
+		expect((toggle as HTMLInputElement).checked).toBe(true);
+		expect(screen.getByText('Active')).toBeTruthy();
+	});
+	it('follows !paused, and sends the same bodies as before: off pauses, on resumes', async () => {
+		api.setPaused.mockImplementation(async (_id: number, paused: boolean) => saved({ paused }));
+		const view = render(PauseToggle, {
+			search: saved({ paused: false }),
+			onUpdated: (updated: ReturnType<typeof saved>) => view.rerender({ search: updated })
+		});
+		const toggle = screen.getByRole('switch') as HTMLInputElement;
+		expect(toggle.checked).toBe(true);
+		await fireEvent.click(toggle); // off
+		await waitFor(() => expect(api.setPaused).toHaveBeenLastCalledWith(1, true));
+		await waitFor(() => expect(toggle.checked).toBe(false));
+		await fireEvent.click(toggle); // on
+		await waitFor(() => expect(api.setPaused).toHaveBeenLastCalledWith(1, false));
+		await waitFor(() => expect(toggle.checked).toBe(true));
+		expect(api.setPaused).toHaveBeenCalledTimes(2);
+	});
 	it('names the search, sends once while pending, and shows the server’s value', async () => {
 		let resolve!: (s: ReturnType<typeof saved>) => void;
 		api.setPaused.mockReturnValue(new Promise((r) => (resolve = r)));
 		const onUpdated = vi.fn();
 		render(PauseToggle, { search: saved(), onUpdated });
-		const toggle = screen.getByRole('switch', { name: 'Paused: Lantern Keeper releases' });
-		await fireEvent.click(toggle);
+		const toggle = screen.getByRole('switch', { name: 'Active: Lantern Keeper releases' });
+		await fireEvent.click(toggle); // switching it off pauses
 		expect(toggle.getAttribute('aria-busy')).toBe('true');
 		await fireEvent.click(toggle); // a second flip while waiting
 		expect(api.setPaused).toHaveBeenCalledTimes(1);
@@ -100,8 +122,9 @@ describe('PauseToggle', () => {
 			onUpdated: (updated: ReturnType<typeof saved>) => view.rerender({ search: updated })
 		});
 		const toggle = screen.getByRole('switch');
-		expect((toggle as HTMLInputElement).checked).toBe(true);
+		expect((toggle as HTMLInputElement).checked).toBe(false); // paused: not active
 		await fireEvent.click(toggle);
+		expect(api.setPaused).toHaveBeenCalledWith(1, false);
 		await screen.findByText('Resuming skips torrents indexed while it was paused.');
 	});
 	it('goes back and toasts when the server refuses', async () => {
@@ -109,7 +132,10 @@ describe('PauseToggle', () => {
 		render(PauseToggle, { search: saved(), onUpdated: vi.fn() });
 		const toggle = screen.getByRole('switch') as HTMLInputElement;
 		await fireEvent.click(toggle);
-		await waitFor(() => expect(toggle.checked).toBe(false));
+		expect(toggle.checked).toBe(true);
+		await fireEvent.click(toggle);
+		await waitFor(() => expect(toggle.checked).toBe(true));
+		expect(api.setPaused).toHaveBeenCalledWith(1, true);
 		expect(toasts.items[0]?.kind).toBe('error');
 	});
 });

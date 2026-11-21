@@ -141,7 +141,11 @@ test.describe('the list', () => {
 		await expect(films.getByTestId('alerts-paused-3')).toHaveText('Paused');
 		await expect(films).toContainText('None');
 		await expect(films.getByTestId('alerts-last-3')).toContainText('No alerts yet');
-		await expect(page.getByRole('switch', { name: 'Paused: Films to check' })).toBeChecked();
+		// The switch is labelled for its on state: a paused alert's "Active" is off.
+		await expect(page.getByRole('switch', { name: 'Active: Films to check' })).not.toBeChecked();
+		await expect(
+			page.getByRole('switch', { name: 'Active: Lantern Keeper releases' })
+		).toBeChecked();
 	});
 
 	test('an empty query reads “Every new torrent”', async ({ page, go, mock }) => {
@@ -182,12 +186,15 @@ test.describe('the list', () => {
 			body: { ...LANTERN, paused: (body(request) as { paused: boolean }).paused }
 		}));
 		await go('/alerts');
-		const toggle = page.getByRole('switch', { name: 'Paused: Lantern Keeper releases' });
-		await toggle.check();
+		const toggle = page.getByRole('switch', { name: 'Active: Lantern Keeper releases' });
+		await toggle.uncheck();
 		await expect(page.getByTestId('alerts-paused-1')).toBeVisible();
 		expect(body(mock.calls('patchSavedSearch')[0]!)).toEqual({ paused: true });
-		await toggle.uncheck();
+		await expect(toggle).not.toBeChecked();
+		await toggle.check();
 		await expect(page.getByTestId('alerts-paused-1')).toHaveCount(0);
+		await expect(toggle).toBeChecked();
+		expect(body(mock.calls('patchSavedSearch')[1]!)).toEqual({ paused: false });
 		await expect(page.getByTestId('alerts-resume-help-1')).toHaveText(
 			'Resuming skips torrents indexed while it was paused.'
 		);
@@ -198,10 +205,10 @@ test.describe('the list', () => {
 		listMocks(mock);
 		mock.error('patchSavedSearch', 500, 'internal', 'boom');
 		await go('/alerts');
-		const toggle = page.getByRole('switch', { name: 'Paused: Lantern Keeper releases' });
-		// click, not check(): the toggle may already be back by the time check() looks.
+		const toggle = page.getByRole('switch', { name: 'Active: Lantern Keeper releases' });
+		// click, not uncheck(): the toggle may already be back by the time uncheck() looks.
 		await toggle.click();
-		await expect(toggle).not.toBeChecked();
+		await expect(toggle).toBeChecked();
 		await expect(
 			page.getByText("Couldn't change “Lantern Keeper releases”", { exact: false })
 		).toBeVisible();

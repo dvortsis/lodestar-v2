@@ -280,6 +280,14 @@ function serve(mock: OpenApiMock): State {
 	return s;
 }
 
+/** Packs start collapsed (X-safety-toggles): open both packs' panels. */
+async function openPacks(page: Page) {
+	for (const id of ['malware', 'spam']) {
+		const toggle = page.getByTestId(`pack-expand-${id}`);
+		await toggle.click();
+		await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+	}
+}
 const dialog = (page: Page) => page.getByTestId('change-dialog');
 const applied = (page: Page) => dialog(page).getByText('The change was applied.');
 
@@ -294,6 +302,7 @@ const sent = (mock: OpenApiMock) =>
 test('view the packs, accept a pending version and set an override', async ({ page, go, mock }) => {
 	serve(mock);
 	await go('/settings/filters');
+	await openPacks(page);
 	// View: both pending versions, with their changelogs, and the corpus status.
 	await expect(page.getByTestId('pack-pending-MW-2')).toContainText('Version 1 to 2');
 	await expect(page.getByTestId('pack-pending-MW-2')).toContainText('music production');
@@ -350,6 +359,7 @@ test('a weakening change asks for the password; a wrong one sends nothing furthe
 }) => {
 	const s = serve(mock);
 	await go('/settings/filters');
+	await openPacks(page);
 	await expect(page.getByTestId('pack-pending-MW-2')).toBeVisible();
 
 	// A lighter override of MW-1: the warning and the password, then the previewed base.

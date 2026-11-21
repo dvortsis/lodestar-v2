@@ -59,7 +59,7 @@ test.describe('keyboard: Settings → Sources', () => {
 		await kbd.tabTo(expand, 40);
 		await kbd.press('Enter');
 		await expect(expand).toHaveAttribute('aria-expanded', 'true');
-		const toggle = page.getByRole('switch', { name: 'Mainline DHT: on' });
+		const toggle = page.getByRole('switch', { name: 'Mainline DHT: enabled' });
 		await kbd.tabTo(toggle, 10);
 		await kbd.press('Space');
 		await expect(page.getByTestId('sources-announce')).toHaveText('Mainline DHT updated.');
@@ -79,7 +79,7 @@ test.describe('keyboard: Settings → Sources', () => {
 		go
 	}) => {
 		await go('/settings/sources');
-		const toggle = page.getByRole('switch', { name: 'Nyaa: on' });
+		const toggle = page.getByRole('switch', { name: 'Nyaa: enabled' });
 		await expect(toggle).toBeEnabled();
 		await toggle.focus();
 		await page.keyboard.press('Space');
@@ -101,7 +101,7 @@ test.describe('keyboard: Settings → Sources', () => {
 	}) => {
 		await go('/settings/sources');
 		const expand = page.getByTestId('source-0-expand');
-		const toggle = page.getByRole('switch', { name: 'Mainline DHT: on' });
+		const toggle = page.getByRole('switch', { name: 'Mainline DHT: enabled' });
 		await expect(toggle).toBeChecked();
 		await kbd.tabTo(expand, 40);
 		await kbd.press('Enter');

@@ -121,8 +121,8 @@ describe('Sources screen', () => {
 	it('names every control with its source', async () => {
 		setup();
 		await screen.findByTestId('source-0');
-		expect(screen.getByRole('switch', { name: 'Mainline DHT: on' })).toBeTruthy();
-		expect(screen.getByRole('switch', { name: 'Nyaa: on' })).toBeTruthy();
+		expect(screen.getByRole('switch', { name: 'Mainline DHT: enabled' })).toBeTruthy();
+		expect(screen.getByRole('switch', { name: 'Nyaa: enabled' })).toBeTruthy();
 		expect(screen.getByRole('combobox', { name: 'Nyaa: priority' })).toBeTruthy();
 	});
 

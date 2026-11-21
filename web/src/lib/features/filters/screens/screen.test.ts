@@ -93,23 +93,133 @@ describe('locked floor', () => {
 	});
 });
 
-describe('what each pack hides', () => {
-	it('loads on demand, and says the unauthorised-copy pack goes by the name', async () => {
+describe('rule and pack names (I5)', () => {
+	it('names each core rule and pack in plain words, with the code beside it and what it checks', async () => {
 		setup(false, {
 			packs: [
 				{ id: 'malware', on: true, rules: [] },
 				{ id: 'unauthorised-copy', on: true, rules: [] }
 			]
 		});
-		const about = await screen.findByTestId('packs-about');
-		expect(screen.queryByTestId('packs-info')).toBeNull();
-		const details = about.closest('details')!;
-		details.open = true;
-		await fireEvent(details, new Event('toggle'));
-		const text = await screen.findByTestId('pack-info-unauthorised-copy');
-		expect(text.textContent).toContain("can't know who holds the rights");
-		expect(text.textContent).toContain('Always allow');
-		expect(screen.getByTestId('pack-info-malware').textContent).toContain('MW-6');
+		const row = await screen.findByTestId('core-CS-4a');
+		expect(row.textContent).toContain('Child terms near sexual terms');
+		expect(row.querySelector('code')?.textContent).toBe('CS-4a');
+		expect(row.textContent).toContain('A word for a child near a sexual term');
+		expect(screen.getByTestId('core-switch-CS-4a').textContent?.trim()).toBe(
+			'Turn off Child terms near sexual terms'
+		);
+		const malware = await screen.findByTestId('pack-malware');
+		expect(malware.textContent).toContain('Malware');
+		expect(malware.textContent).toContain('MW-6');
+		const uc = screen.getByTestId('pack-unauthorised-copy');
+		expect(uc.textContent).toContain('Unauthorised copies');
+		expect(uc.textContent).toContain("can't know who holds the rights");
+		expect(uc.textContent).toContain('Always allow');
+		// The separate "What each pack hides" door is gone: each pack says it.
+		expect(screen.queryByTestId('packs-about')).toBeNull();
+	});
+	it('shows a code it has no words for alone, never an empty label', async () => {
+		setup(false, {
+			core: [{ id: 'CS-9z', on: true, floor: false, action: 'quarantine' }],
+			packs: [{ id: 'later-pack', on: true, rules: [] }]
+		});
+		const row = await screen.findByTestId('core-CS-9z');
+		expect(row.querySelector('code')?.textContent).toBe('CS-9z');
+		expect(screen.queryByTestId('rule-name-CS-9z')).toBeNull();
+		expect(screen.getByTestId('core-switch-CS-9z').textContent?.trim()).toBe('Turn off CS-9z');
+		const pack = await screen.findByTestId('pack-later-pack');
+		expect(pack.querySelector('code')?.textContent).toBe('later-pack');
+		expect(screen.queryByTestId('rule-name-later-pack')).toBeNull();
+	});
+	it('titles the dialog with the rule’s name and says what it checks', async () => {
+		setup();
+		job(weakening());
+		await fireEvent.click(await screen.findByTestId('core-switch-CS-4a'));
+		const dialog = await screen.findByRole('dialog');
+		expect(dialog.getAttribute('aria-labelledby')).toBeTruthy();
+		const title = document.getElementById(dialog.getAttribute('aria-labelledby')!);
+		expect(title?.textContent).toBe('Change Child terms near sexual terms');
+		const described = document.getElementById(dialog.getAttribute('aria-describedby')!);
+		expect(described?.textContent).toContain('A word for a child near a sexual term');
+	});
+});
+
+describe('danger style for loosening child safety', () => {
+	it('turning a core rule off is a danger button; turning one on and pack switches are not', async () => {
+		setup(false, {
+			core: [
+				{ id: 'CS-1a', on: true, floor: true, action: 'drop' },
+				{ id: 'CS-4a', on: true, floor: false, action: 'quarantine' },
+				{ id: 'CS-2a', on: false, floor: false, action: 'quarantine' }
+			]
+		});
+		expect((await screen.findByTestId('core-switch-CS-4a')).className).toContain('btn-error');
+		expect(screen.getByTestId('core-switch-CS-2a').className).not.toContain('btn-error');
+		expect((await screen.findByTestId('pack-switch-malware')).className).not.toContain('btn-error');
+		expect(screen.getByTestId('pending-remove-file:/a').className).toContain('btn-error');
+	});
+	const apply: [string, string, boolean][] = [
+		['core off', 'core-switch-CS-4a', true],
+		['floor removal', 'pending-remove-file:/a', true],
+		['pack off', 'pack-switch-malware', false],
+		['rule disable', 'rule-toggle-5', false]
+	];
+	for (const [name, id, danger] of apply)
+		it(`${name}: Apply is ${danger ? '' : 'not '}in the danger style, and the flow is the same`, async () => {
+			setup();
+			job(weakening());
+			await fireEvent.click(await screen.findByTestId(id));
+			await screen.findByTestId('change-password');
+			const button = screen.getByTestId('change-apply');
+			expect(button.className.includes('btn-error')).toBe(danger);
+			expect(button.className.includes('btn-primary')).toBe(!danger);
+			// Still a weakening change: the password before any apply.
+			expect(net.to('/filters/apply')).toHaveLength(0);
+		});
+	it('Release and False positive on a child-safety hold are danger; on a pack hold and Confirm, not', async () => {
+		setup();
+		const PK = 'c'.repeat(40);
+		net.on('GET /filters/queue', {
+			body: {
+				...queue,
+				quarantine: [
+					queue.quarantine[0],
+					{ ...queue.quarantine[0], hash: PK, rule: 'MW-4', sealed: false, name: null }
+				]
+			}
+		});
+		const release = await screen.findByTestId(`queue-release-${H}`);
+		expect(release.className).toContain('btn-error');
+		expect(screen.getByTestId(`queue-fp-${H}`).className).toContain('btn-error');
+		// Confirming abuse strengthens: the ordinary style.
+		expect(screen.getByTestId(`queue-confirm-${H}`).className).not.toContain('btn-error');
+		const pack = await screen.findByTestId(`queue-release-${PK}`);
+		expect(pack.className).not.toContain('btn-error');
+		expect(screen.getByTestId(`queue-fp-${PK}`).className).not.toContain('btn-error');
+	});
+	const queueApply: [string, string, boolean][] = [
+		['release of a CS hold', `queue-release-${H}`, true],
+		['false positive on a CS hold', `queue-fp-${H}`, true],
+		['confirm', `queue-confirm-${H}`, false]
+	];
+	for (const [name, id, danger] of queueApply)
+		it(`${name}: Apply is ${danger ? '' : 'not '}in the danger style, and the password still comes first`, async () => {
+			setup();
+			job(weakening());
+			await fireEvent.click(await screen.findByTestId(id));
+			await screen.findByTestId('change-password');
+			expect(screen.getByTestId('change-apply').className.includes('btn-error')).toBe(danger);
+			expect(net.to('/filters/apply')).toHaveLength(0);
+		});
+	it('turning a core rule back on keeps the ordinary style', async () => {
+		setup(false, {
+			core: [{ id: 'CS-2a', on: false, floor: false, action: 'quarantine' }]
+		});
+		job(strengthening());
+		await fireEvent.click(await screen.findByTestId('core-switch-CS-2a'));
+		const button = await screen.findByTestId('change-apply');
+		expect(button.className).toContain('btn-primary');
+		expect(button.textContent?.trim()).toBe('Turn on Minor age near sexual terms');
 	});
 });
 

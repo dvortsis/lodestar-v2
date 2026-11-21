@@ -5,6 +5,8 @@
 import { expectNoA11yViolations } from './a11y';
 import type { components } from '../src/lib/api/schema';
 import type { OpenApiMock } from './mock/openapi-mock';
+import type { Page } from '@playwright/test';
+import type { KeyboardOnly } from './support/keyboard';
 import { expect, test } from './support/test';
 
 const preview = {
@@ -144,6 +146,15 @@ function serve(mock: OpenApiMock, assessment: typeof weakening | typeof strength
 	mock.on('applyFilterChange', { applied: true, assessment, version: 5 });
 }
 
+/** Packs start collapsed: open one from its disclosure button, by keyboard. */
+async function openPack(page: Page, kbd: KeyboardOnly, id: string) {
+	const toggle = page.getByTestId(`pack-expand-${id}`);
+	await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+	await kbd.tabTo(toggle, 80);
+	await kbd.press('Enter');
+	await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
+
 test('a weakening version asks for the password, which goes with the previewed versions', async ({
 	page,
 	go,
@@ -152,6 +163,11 @@ test('a weakening version asks for the password, which goes with the previewed v
 }) => {
 	serve(mock, weakening);
 	await go('/settings/filters');
+	// Closed, the pack still says a version is waiting.
+	await expect(page.getByTestId('pack-waiting-malware')).toBeVisible();
+	await expect(page.getByTestId('pack-pending-MW-2')).toBeHidden();
+	await expectNoA11yViolations(page);
+	await openPack(page, kbd, 'malware');
 	await expect(page.getByTestId('pack-pending-MW-2')).toContainText('Version 1 to 2');
 	// The changelog is text: the tag is shown, not run.
 	await expect(page.getByTestId('pack-pending-MW-2')).toContainText('<b>more</b>');
@@ -184,6 +200,7 @@ test('a weakening version asks for the password, which goes with the previewed v
 test('Esc on the acceptance sends nothing and returns focus', async ({ page, go, mock, kbd }) => {
 	serve(mock, weakening);
 	await go('/settings/filters');
+	await openPack(page, kbd, 'malware');
 	const accept = page.getByTestId('pack-accept-MW-2');
 	await kbd.tabTo(accept, 80);
 	await kbd.press('Enter');
@@ -197,6 +214,7 @@ test('Esc on the acceptance sends nothing and returns focus', async ({ page, go,
 test('a strengthening version is accepted without a password', async ({ page, go, mock, kbd }) => {
 	serve(mock, strengthening);
 	await go('/settings/filters');
+	await openPack(page, kbd, 'malware');
 	await kbd.tabTo(page.getByTestId('pack-accept-MW-2'), 80);
 	await kbd.press('Enter');
 	await expect(page.getByTestId('pack-impact-MW-2')).toBeVisible();
@@ -293,6 +311,7 @@ test('overrides and corpus states have no axe violations; Quarantine is not offe
 		}
 	});
 	await go('/settings/filters');
+	await openPack(page, kbd, 'malware');
 	await expect(page.getByTestId('pack-paused-MW-1')).toBeVisible();
 	await expect(page.getByTestId('pack-changed-MW-2')).toBeVisible();
 	await expect(page.getByTestId('pack-override-MW-3')).toContainText("can't be read");

@@ -50,7 +50,7 @@ test.describe('Settings → Sources layout', () => {
 			await expect(page.getByRole('combobox', { name: 'Nyaa: priority' })).toBeVisible();
 
 			// The switch opens the same consent dialog as before, and sends nothing.
-			const toggle = page.getByRole('switch', { name: 'Nyaa: on' });
+			const toggle = page.getByRole('switch', { name: 'Nyaa: enabled' });
 			await toggle.click();
 			const dialog = page.getByRole('dialog', { name: 'Nyaa connects to outside services.' });
 			await expect(dialog).toBeVisible();
