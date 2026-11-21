@@ -13466,7 +13466,7 @@ export interface operations {
                     "text/event-stream": components["schemas"]["Event"];
                 };
             };
-            /** @description An unknown topic (`unknown_topic`, `field: "topics"`). */
+            /** @description `unknown_topic`: an unknown or empty topic; or `repeated_parameter`: `topics` sent more than once. Either with `field: "topics"`. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -13546,7 +13546,7 @@ export interface operations {
                     "text/plain": string;
                 };
             };
-            /** @description A bad parameter, as `/search`'s, or `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`); `ast` or `hashes` in the query string is a `bad_parameter` (POST them). */
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type), `ast_needs_post` (any `ast`; POST it), `hashes_need_post` (any `hashes`; POST them), `query_syntax`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused` or `hidden_unused` (`hidden=true` with `bitmagnet`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -13615,7 +13615,7 @@ export interface operations {
                     "text/plain": string;
                 };
             };
-            /** @description As `GET /export`'s, or `too_many_hashes`, `bad_hash`. */
+            /** @description `bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`), `too_many_hashes` or `bad_hash`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -13693,6 +13693,15 @@ export interface operations {
                     "application/json": components["schemas"]["FacetsResponse"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (`tz`, `hidden` or a `limit.<facet>` that isn't a number), `ast_needs_post` (any `ast`; POST it), `query_syntax`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz` or `bad_cursor` (`lease`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -13715,6 +13724,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FacetsResponse"];
+                };
+            };
+            /** @description `bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz` or `bad_cursor` (`lease`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -14819,7 +14837,7 @@ export interface operations {
                     "application/json": components["schemas"]["LogHistory"];
                 };
             };
-            /** @description A bad parameter (`bad_parameter`, `unknown_component`) or a cursor from other filters (`bad_cursor`), with `field`. */
+            /** @description With `field`: `repeated_parameter` (a parameter sent more than once), `bad_parameter`, `unknown_component`, or `bad_cursor` (a cursor from other filters). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -14883,7 +14901,7 @@ export interface operations {
                     "application/zip": string;
                 };
             };
-            /** @description A bad parameter (`bad_parameter`). */
+            /** @description With `field`: `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`format` or `redact`). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -15080,7 +15098,7 @@ export interface operations {
                     "text/plain; charset=utf-8": string;
                 };
             };
-            /** @description A bad parameter (`bad_parameter`). */
+            /** @description With `field`: `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`format` or `redact`). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -15162,7 +15180,7 @@ export interface operations {
                     "text/event-stream": components["schemas"]["LogFrame"];
                 };
             };
-            /** @description A bad filter (`bad_parameter`, `unknown_component`), with `field`. */
+            /** @description With `field`: `repeated_parameter` (a parameter sent more than once), or a bad filter (`bad_parameter`, `unknown_component`). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -15592,6 +15610,15 @@ export interface operations {
                     "application/json": components["schemas"]["SearchResponse"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type), `ast_needs_post` (any `ast`; POST it), `query_syntax`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep` or `bad_cursor`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -15614,6 +15641,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            /** @description `bad_json` or `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep` or `bad_cursor`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
