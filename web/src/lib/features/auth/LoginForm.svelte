@@ -11,7 +11,7 @@
 	import FormAlert from './FormAlert.svelte';
 	import { toNext, toSetup } from './nav';
 	import { checkAuth } from './gate';
-	import { setSession } from './session.svelte';
+	import { setSession, signedIn } from './session.svelte';
 
 	interface Props {
 		next: string;
@@ -51,7 +51,7 @@
 		const ok = await form.submit(() => api.post('/login', { body: { password } }));
 		if (ok) {
 			password = '';
-			setSession('signed_in');
+			signedIn();
 			const status = await checkAuth();
 			if (status?.notice_required && onnotice) onnotice();
 			else await toNext(next);

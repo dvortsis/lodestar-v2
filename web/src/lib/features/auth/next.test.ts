@@ -74,3 +74,23 @@ describe('loginUrl', () => {
 		expect(safeNext(url.searchParams.get('next'), O)).toBe('/search?q=ubuntu%2024.04&sort=size');
 	});
 });
+
+describe('the Settings return after a session ends (X-session-draft-keep)', () => {
+	it('returns to the same screen, with its field link', () => {
+		const next = '/settings/crawler#crawler.intensity';
+		const url = new URL(loginUrl(next), O);
+		expect(safeNext(url.searchParams.get('next'), O)).toBe(next);
+		expect(safeNext('/settings/notifications?changed=1', O)).toBe(
+			'/settings/notifications?changed=1'
+		);
+	});
+
+	it.each([
+		'//evil.example/settings/crawler',
+		'https://evil.example/settings/crawler',
+		'/settings/../login',
+		'/settings/../api/v1/settings'
+	])('never leaves the app for %s', (raw) => {
+		expect(safeNext(raw, O)).toBe('/');
+	});
+});

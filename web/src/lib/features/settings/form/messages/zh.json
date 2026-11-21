@@ -1,0 +1,13 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"settings_form_signed_out_title": "你已退出登录",
+	"settings_form_notice_title": "接受法律声明后才能保存",
+	"settings_form_signed_out_body": "你的更改还没有保存（{count}）。回来后再保存它们。在此期间，此浏览器标签页会保留这些更改。",
+	"settings_form_signed_out_lost": "你的更改还没有保存（{count}）。离开期间无法保留它们，因此它们会丢失。可以继续编辑并记下它们，或者现在继续。",
+	"settings_form_secrets_not_kept": "密码、密钥、私密链接和下载客户端条目不会被保留。你需要再次输入它们。",
+	"settings_form_sign_in": "登录",
+	"settings_form_continue": "继续",
+	"settings_form_kept_body": "你重新登录后，你的更改已恢复，但还没有保存。请检查后再保存。",
+	"settings_form_kept_dropped_one": "{count} 项更改已不再适用，已被排除。",
+	"settings_form_kept_dropped_many": "{count} 项更改已不再适用，已被排除。"
+}

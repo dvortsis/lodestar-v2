@@ -17,6 +17,7 @@ import LoginForm from './LoginForm.svelte';
 import NoticeGate from './NoticeGate.svelte';
 import SetupForm from './SetupForm.svelte';
 import { resetNoticeCache } from './notice';
+import { SIGN_IN_KEY } from './session.svelte';
 
 const NOTICE_URL = '/api/v1/legal/notice';
 const NOTICE = {
@@ -38,6 +39,7 @@ let notices: Reply[];
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
 	vi.clearAllMocks();
+	sessionStorage.clear();
 	resetNoticeCache();
 	replies = [];
 	notices = [];
@@ -75,6 +77,17 @@ describe('LoginForm', () => {
 		await waitFor(() => expect(nav.toNext).toHaveBeenCalledWith('/search?q=a'));
 		expect(calls()[0]![0]).toBe('/api/v1/login');
 		expect(sentBody()).toEqual({ password: 'correct horse' });
+	});
+
+	it('lifts the Settings draft block a Sign out set (X-session-draft-keep)', async () => {
+		sessionStorage.setItem(SIGN_IN_KEY, 'signedout');
+		render(LoginForm, { next: '/settings/crawler' });
+		await fireEvent.input(password(), { target: { value: 'correct horse' } });
+		await fireEvent.click(submit());
+		await waitFor(() => expect(nav.toNext).toHaveBeenCalledWith('/settings/crawler'), {
+			timeout: 10_000
+		});
+		expect(sessionStorage.getItem(SIGN_IN_KEY)).toBeNull();
 	});
 
 	it('asks for a password before sending anything', async () => {
@@ -210,6 +223,14 @@ describe('SetupForm', () => {
 			password: 'correct horse battery',
 			notice_version: 2
 		});
+	});
+
+	it('lifts the Settings draft block a re-claim set (X-session-draft-keep)', async () => {
+		sessionStorage.setItem(SIGN_IN_KEY, 'setup');
+		await toPasswordStep();
+		await fill('correct horse battery');
+		await waitFor(() => expect(nav.toWelcome).toHaveBeenCalledOnce(), { timeout: 10_000 });
+		expect(sessionStorage.getItem(SIGN_IN_KEY)).toBeNull();
 	});
 
 	it('opens on the notice, rendered and scrollable, as the first step', async () => {
