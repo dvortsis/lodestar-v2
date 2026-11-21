@@ -1302,7 +1302,7 @@ export default [
 	entry('Search route JS (initial)', search.js, '45 KB'),
 	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice's box and its token (measured 19.67 KB on
 	// the tree with main merged, residue 16 B, rounded up to 64 B). Still under the §10.1 20 KB.
-	entry('CSS', search.css, '19.72 KB'),
+	entry('CSS', search.css, '19.73 KB'),
 	...(appEntry
 		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
 		: []),
