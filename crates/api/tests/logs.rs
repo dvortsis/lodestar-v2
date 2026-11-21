@@ -761,12 +761,12 @@ async fn every_logs_route_names_a_repeated_parameter() {
             headers.get(header::CONTENT_LENGTH),
             "HEAD {twice}"
         );
+        // Once, or beside an unknown repeated one, it's read as before. Only
+        // the status is read: `/logs/stream` answers with an open stream.
         for q in ["level=warn", "level=warn&zz=1&zz=2"] {
             let uri = format!("{path}?{q}");
-            let (_, _, body) = call(&f.app, get(&uri, &c)).await;
-            let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-            assert_ne!(body["error"]["code"], "repeated_parameter", "{uri}: {body}");
-            assert_ne!(body["error"]["code"], "bad_parameter", "{uri}: {body}");
+            let status = f.app.clone().oneshot(get(&uri, &c)).await.unwrap().status();
+            assert_ne!(status, StatusCode::BAD_REQUEST, "{uri}");
         }
     }
 }
