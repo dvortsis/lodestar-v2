@@ -224,6 +224,27 @@ async fn any_ast_on_get_is_ast_needs_post() {
             assert_eq!(error(&body)["field"], "ast", "{u}: {body}");
         }
     }
+    // HEAD reads the query as GET does, and a name is decoded before it's
+    // compared (`%61st` is `ast`).
+    for (method, query) in [("HEAD", "ast=x"), ("GET", "%61st=x")] {
+        let u = uri("/search", query);
+        let (status, len, _) = call(&f.app, request(method, &u, &c)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {u}");
+        if method == "GET" {
+            let (_, _, body) = call(&f.app, request(method, &u, &c)).await;
+            assert_eq!(error(&body)["code"], "ast_needs_post", "{u}: {body}");
+        } else {
+            let (_, get_len, _) = call(&f.app, request("GET", &u, &c)).await;
+            assert_eq!(len, get_len, "HEAD {u}");
+        }
+    }
+    // POST reads its body, never the URL's query: an `ast` there is ignored.
+    let (_, _, parsed) = call(&f.app, request("GET", &uri("/parse", "q=movie"), &c)).await;
+    let parsed: Value = serde_json::from_str(&parsed).unwrap();
+    let mut req = request("POST", &uri("/search", "ast=x"), &c);
+    *req.body_mut() = Body::from(json!({ "ast": parsed["ast"] }).to_string());
+    let (status, _, body) = call(&f.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]

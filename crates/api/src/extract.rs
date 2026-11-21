@@ -302,6 +302,8 @@ pub fn same_origin_json(headers: &HeaderMap) -> ApiResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::{bad_field, field_names};
+
     #[test]
     fn field_names_are_the_structs_own_and_flatten_has_none() {
         use std::collections::BTreeMap;
@@ -330,8 +332,6 @@ mod tests {
         assert!(field_names::<Flattened>().is_empty());
         assert!(field_names::<BTreeMap<String, String>>().is_empty());
     }
-
-    use super::{bad_field, field_names};
 
     #[test]
     fn a_bad_field_is_its_path_capped_and_escaped() {

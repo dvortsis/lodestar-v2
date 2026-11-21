@@ -19,7 +19,7 @@ Every route under `crates/api` that reads its query, and what a known parameter 
 | Torznab (`/torznab/api`) | its own parser (`torznab/query.rs`) | Torznab error 201, "a parameter is repeated" | **unchanged**: Torznab clients read Torznab's XML error codes, not the JSON envelope |
 | The auth guard's `apikey` and `token` | `auth/guard.rs` | two different values are refused as a bad credential; the same one twice is accepted | **unchanged**: deliberate credential logic, and outside this slice's owns |
 
-No route deliberately depends on a repeated known parameter: none reads a list from repeats (`/export`'s `hashes` and `fields` are comma lists).
+No route deliberately depends on a repeated known parameter: none reads a list from repeats (`/export`'s `fields` is a comma list, and its `hashes` is a JSON array, sent only by POST).
 
 ## The shared check
 
