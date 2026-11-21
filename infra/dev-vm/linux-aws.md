@@ -82,7 +82,7 @@ All calls go through the AWS connector's `run_script` as `lodestar-claude-testvm
    - The connector gives up after 60 s, so keep each call under 45 s.
 7. **Teardown:**
    - `TerminateInstances`, then wait for `terminated`.
-   - `DescribeVolumes` with `tag:Project=Lodestar` must show none of the lane's volumes.
+   - `DescribeVolumes` with `tag:Purpose=X-test-vm` must not list the lane's volume. Never filter by `Project`: the owner's fleet volumes share it.
    - Report the instance hours. `c6a.xlarge` Linux costs about $0.15/h, plus about $0.02/h for the volume and address.
 
 ## Pitfalls

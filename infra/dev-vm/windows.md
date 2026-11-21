@@ -75,10 +75,11 @@ A new session, started after the swap. First check `GetCallerIdentity`: the ARN 
      - run `smoke.ps1` as administrator under PowerShell 7;
      - Edge won't start under SYSTEM, which Run Command uses, so browser suites use Playwright's own Chromium;
      - time with Python's `perf_counter`, never `monotonic`, which ticks every 15.6 ms on Windows.
+     - building Lodestar's tests on `c6a.xlarge` (8 GiB) can run out of memory: two `rustc` processes of about 5.6 GB each with the default 1.9 GB pagefile hung Windows and dropped SSM (2026-11-20Z). Set a 16 GB pagefile and reboot first, build with `cargo test -j1`, and time nothing while it builds (stops took 18–40 s instead of 0.4 s).
 6. **Report each finding to the runner before writing any fix.**
 7. **Teardown:**
    - `TerminateInstances`, then wait for `terminated`.
-   - Check that `DescribeVolumes` with `tag:Project=Lodestar` shows nothing left.
+   - Check that `DescribeVolumes` with `tag:Purpose=X-test-vm` no longer lists your volume. Never filter by `Project`: the owner's fleet volumes share it, and another lane's volume may be listed.
    - Check `ce:GetCostAndUsage` for the day's EC2 cost.
    - Tell the runner and the owner.
 
