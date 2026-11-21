@@ -47,14 +47,15 @@ test.describe('keyboard: settings save on /settings/crawler', () => {
 		await expect(dialog).toHaveCount(0);
 		await expect(page).toHaveURL(/\/settings\/crawler/);
 		await expect(page.getByRole('radio', { name: 'low' })).toBeChecked();
+		await expect(leave).toBeFocused();
 		expect(backend.patches).toHaveLength(0);
 
 		await shiftTabTo(kbd, leave);
 		await kbd.press('Enter');
 		await expect(dialog.getByRole('button', { name: 'Save changes' })).toBeFocused();
 		await kbd.press('Enter');
-		await expect(page).not.toHaveURL(/\/settings\/crawler/);
-		expect(backend.patches).toHaveLength(1);
+		await expect(page).toHaveURL(/\/settings\/appearance/);
+		expect(backend.patches).toEqual([{ crawler: { if_revision: 3, intensity: 'low' } }]);
 	});
 
 	test('a field menu opens from the keyboard and Esc returns focus to its button', async ({

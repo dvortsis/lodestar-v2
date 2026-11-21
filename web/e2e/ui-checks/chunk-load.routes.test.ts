@@ -23,13 +23,18 @@ const expect = baseExpect.configure({ timeout: 10_000 });
 async function blockChunk(page: Page, marker: string) {
 	const gate = { blocked: true, hit: 0 };
 	await page.route('**/_app/immutable/**/*.js', async (route) => {
-		const response = await route.fetch();
-		const text = await response.text();
-		if (gate.blocked && text.includes(marker)) {
-			gate.hit++;
-			await route.abort('connectionrefused');
-		} else {
-			await route.fulfill({ response, body: text });
+		try {
+			const response = await route.fetch();
+			const text = await response.text();
+			if (gate.blocked && text.includes(marker)) {
+				gate.hit++;
+				await route.abort('connectionrefused');
+			} else {
+				await route.fulfill({ response, body: text });
+			}
+		} catch {
+			// The page closed or navigated away while the request was in flight (a Reload or
+			// the end of the test); there is nothing left to answer.
 		}
 	});
 	return gate;
@@ -62,6 +67,7 @@ test.describe('a lazy chunk fails to load', () => {
 		await go('/insights/discover?range=30d');
 		const failed = page.getByTestId('insights-load-error');
 		await expect(failed).toBeVisible();
+		await expect(failed).toHaveAttribute('role', 'alert');
 		expect(gate.hit).toBeGreaterThan(0);
 		gate.blocked = false;
 		await failed.getByRole('button').click();
@@ -98,10 +104,20 @@ test.describe('a lazy chunk fails to load', () => {
 		on('listCompanions', { companions: [] });
 		const gate = await blockChunk(page, 'id="companions-heading"');
 		await go('/settings/companions');
+		await expect(
+			page.getByText(
+				"Part of this page couldn't load. Check your connection, then reload the page."
+			)
+		).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Reload' })).toBeVisible();
 		expect(gate.hit).toBeGreaterThan(0);
 		gate.blocked = false;
 		await page.getByRole('button', { name: 'Reload' }).click();
 		await expect(page.locator('#companions-heading')).toBeVisible();
+		await expect(
+			page.getByText(
+				"Part of this page couldn't load. Check your connection, then reload the page."
+			)
+		).toHaveCount(0);
 	});
 });

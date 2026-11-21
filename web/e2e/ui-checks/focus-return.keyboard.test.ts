@@ -56,8 +56,10 @@ interface Case {
 	trigger: (page: Page) => Locator;
 	/** How the dialog is open and settled. */
 	dialog: (page: Page) => Promise<unknown>;
-	/** The Cancel button that answers it, when there is one. */
-	cancel?: (page: Page) => Locator;
+	/** The Cancel button that answers it. */
+	cancel: (page: Page) => Locator;
+	/** Esc is already covered for this dialog by another spec. */
+	escCovered?: boolean;
 }
 
 const CASES: Case[] = [
@@ -67,7 +69,8 @@ const CASES: Case[] = [
 		mocks: (mock) => mock.on('listSavedSearches', [saved]),
 		trigger: (page) => page.getByTestId('alerts-new'),
 		dialog: (page) => dialogSettled(page),
-		cancel: (page) => page.getByRole('dialog').getByRole('button', { name: 'Cancel' })
+		cancel: (page) => page.getByRole('dialog').getByRole('button', { name: 'Cancel' }),
+		escCovered: true // alerts.keyboard.test.ts: "Escape closes the save dialog ..."
 	},
 	{
 		name: 'Settings → Companions, the update offer',
@@ -97,9 +100,8 @@ const CASES: Case[] = [
 
 for (const c of CASES) {
 	test.describe(`focus returns: ${c.name}`, () => {
-		for (const how of ['Esc', 'Cancel'] as const) {
+		for (const how of c.escCovered ? (['Cancel'] as const) : (['Esc', 'Cancel'] as const)) {
 			test(`closed with ${how}`, async ({ page, go, mock, kbd }) => {
-				test.skip(how === 'Cancel' && !c.cancel, 'this dialog has no Cancel button');
 				await liveEvents(page);
 				c.mocks(mock);
 				await go(c.path);
@@ -110,7 +112,7 @@ for (const c of CASES) {
 				await c.dialog(page);
 				if (how === 'Esc') await kbd.press('Escape');
 				else {
-					await kbd.tabTo(c.cancel!(page), 20);
+					await kbd.tabTo(c.cancel(page), 20);
 					await kbd.press('Enter');
 				}
 				await expect(page.getByRole('dialog')).toHaveCount(0);
