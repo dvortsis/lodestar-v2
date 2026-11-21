@@ -1642,7 +1642,9 @@ export default [
 	// runner §2.26, SRC-17: the Unverified badge on a card (8,300 B → 8,364 B; measured 5 B over).
 	// X-ui-guards (runner §2.26): 8,303 → 7,965 B with Bold icons, as the live banner; rounded up at 0.01 kB.
 	// X-labels (runner §2.26): 7,963 → 8,007 B, the composition text in lower case.
-	entry('Search cards (lazy)', cardsLazy, '8.01 KB'),
+	// X-facet-group-case (runner §2.18 port): main measures up to 8,012 B (build wobble;
+	// X-web-build-determinism).
+	entry('Search cards (lazy)', cardsLazy, '8.02 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
