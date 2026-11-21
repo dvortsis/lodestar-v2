@@ -11,9 +11,6 @@
 .as-actions {
 	@apply flex gap-2;
 }
-.as-h1 {
-	@apply text-title font-semibold;
-}
 .as-h2 {
 	@apply text-body-lg font-semibold;
 }

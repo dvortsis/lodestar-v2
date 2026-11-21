@@ -12,6 +12,8 @@
 	import { registerSearchCommands } from '$lib/features/search/query/commands';
 	import { onFirstInteraction } from '$lib/features/search/query/engaged';
 	import { checkFirstRun } from '$lib/features/auth/first-check';
+	import { FOCUS_RING } from '$lib/ui/classes';
+	import { PAGE_FRAME, PAGE_FRAME_BODY, PAGE_H1 } from '$lib/ui/layout/classes';
 
 	let bar = $state<ReturnType<typeof QueryBar>>();
 
@@ -113,29 +115,32 @@
 	});
 </script>
 
-<div class="flex flex-col gap-2 pb-4">
-	<!-- The shell's skip link's classes: visible on focus, and no new utilities in the global sheet. -->
-	<a
-		href="#results"
-		class="sr-only rounded-field bg-primary px-4 py-2 text-primary-content focus:not-sr-only focus:fixed focus:start-2 focus:top-2 focus:z-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:outline-solid"
-		data-testid="skip-to-results"
-		onclick={skipToResults}>{m.search_page_skip_results()}</a
-	>
-	<h1 class="mt-4 px-4 text-display font-semibold">{m.search_page_title()}</h1>
-	<QueryBar bind:this={bar} />
-	<div class="search-grid px-4">
-		<!-- S-search-2: the facet rail. -->
-		<div id="search-rail">
-			{#if Facets}<Facets />{/if}
-		</div>
-		<!-- S-search-3: the results toolbar; S-search-2: the results list. -->
-		<div id="results">
-			{#if Toolbar}<Toolbar />{/if}
-			{#if Results}<Results focusBar={() => bar?.focusEnd()} />{/if}
-		</div>
-		<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->
-		<div id="search-drawer">
-			{#if Host}<Host />{/if}
+<!-- The page frame (ui/layout), as plain classes: the first view is on a byte budget. -->
+<div class={PAGE_FRAME} data-page-frame="">
+	<div class={PAGE_FRAME_BODY}>
+		<!-- The shell's skip link's classes: visible on focus, and no new utilities in the global sheet. -->
+		<a
+			href="#results"
+			class="sr-only rounded-field bg-primary px-4 py-2 text-primary-content focus:not-sr-only focus:fixed focus:start-2 focus:top-2 focus:z-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:outline-solid"
+			data-testid="skip-to-results"
+			onclick={skipToResults}>{m.search_page_skip_results()}</a
+		>
+		<header><h1 class="{PAGE_H1} {FOCUS_RING}" tabindex="-1">{m.search_page_title()}</h1></header>
+		<QueryBar bind:this={bar} />
+		<div class="search-grid">
+			<!-- S-search-2: the facet rail. -->
+			<div id="search-rail">
+				{#if Facets}<Facets />{/if}
+			</div>
+			<!-- S-search-3: the results toolbar; S-search-2: the results list. -->
+			<div id="results">
+				{#if Toolbar}<Toolbar />{/if}
+				{#if Results}<Results focusBar={() => bar?.focusEnd()} />{/if}
+			</div>
+			<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->
+			<div id="search-drawer">
+				{#if Host}<Host />{/if}
+			</div>
 		</div>
 	</div>
 </div>

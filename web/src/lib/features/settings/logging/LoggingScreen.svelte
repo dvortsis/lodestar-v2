@@ -4,6 +4,7 @@
 	// form engine. What the server has on now (`GET /logs/catalog`) drives the banners, the event
 	// list and the data kinds, which load on demand with the dialogs and the privacy requests.
 	import { setContext } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -81,9 +82,7 @@
 	});
 </script>
 
-<h1 id="logging-title" tabindex="-1" class="text-title font-semibold">
-	{m.settings_logging_title()}
-</h1>
+<PageHeader id="logging-title" title={m.settings_logging_title()} />
 <p class="text-muted-text">{m.settings_logging_purpose()}</p>
 <a class="self-start underline" href={resolve('/logs')}>{m.settings_logging_open_live()}</a>
 {#if parts && catalog}

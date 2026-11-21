@@ -2,6 +2,7 @@
 	// Settings → Preferences → Appearance (§10.10.8, §10.18). Preferences apply at once and can be
 	// undone; there is no Save. The theme picker and the custom theme editor load when opened.
 	import { onMount, tick, type Component, type ComponentProps } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { ApiError, api } from '$lib/api/client';
 	import { themeLabel } from '$lib/format/label-theme';
 	import { m } from '$lib/paraglide/messages.js';
@@ -263,7 +264,7 @@
 </script>
 
 <div class="as-root" data-testid="appearance-screen" aria-busy={status === 'loading'}>
-	<h1 class="as-h1">{m.appearance_title()}</h1>
+	<PageHeader title={m.appearance_title()} />
 	<p class="as-text">{m.appearance_lead()}</p>
 	{#if status === 'failed'}
 		<Banner kind="error">{m.appearance_load_failed()}</Banner>

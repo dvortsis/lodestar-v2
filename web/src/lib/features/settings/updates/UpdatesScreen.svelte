@@ -4,6 +4,7 @@
 	// screen with an error, and a control's position is put back to the server's value afterwards.
 	// Release notes and history load right after the first paint (Releases.svelte). Roll back sits in the Danger zone at the end (S-updates-4).
 	import { onDestroy, onMount, tick, type Component } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -387,7 +388,7 @@
 	</label>
 {/snippet}
 
-<h1 class="text-title font-semibold">{m.settings_updates_title()}</h1>
+<PageHeader title={m.settings_updates_title()} />
 <p class="text-muted-text">{m.settings_updates_purpose()}</p>
 
 {#if store.loading && status === undefined && settings === undefined}

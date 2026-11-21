@@ -4,6 +4,7 @@
 	// dialog (PasswordDialog.svelte, loaded on use). The key manager and the proxy section load right
 	// after the first paint (`.size-limit.mjs` gates them apart from it).
 	import { onDestroy } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import ChangePassword from './ChangePassword.svelte';
 	import Cookies from './Cookies.svelte';
@@ -15,7 +16,7 @@
 	onDestroy(dismissPasswordDialogs);
 </script>
 
-<h1 class="text-title font-semibold">{m.settings_security_title()}</h1>
+<PageHeader title={m.settings_security_title()} />
 <p class="text-muted-text">{m.settings_security_purpose()}</p>
 <div class="flex flex-col gap-8">
 	<ChangePassword />

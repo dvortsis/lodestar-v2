@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, type Component } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 
@@ -16,7 +17,7 @@
 </script>
 
 <svelte:head><title>{m.settings_shell_title()} · Lodestar</title></svelte:head>
-<h1 class="text-title font-semibold">{m.settings_shell_overview()}</h1>
+<PageHeader title={m.settings_shell_overview()} />
 <p class="mb-4">{m.settings_shell_overview_purpose()}</p>
 {#if Overview}
 	<Overview />

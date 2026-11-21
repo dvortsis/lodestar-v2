@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import type { Component } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import type { About } from './screens';
 	// Loaded bodies, so a return visit renders at once instead of showing the loading line again.
 	const bodies = new WeakMap<object, Component>();
@@ -102,17 +103,17 @@
 		<Body />
 	{:else}
 		{#await loadBody(screen)}
-			<h1 class="text-title font-semibold">{screen.title()}</h1>
+			<PageHeader title={screen.title()} />
 			<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
 		{:then Loaded}
 			<Loaded />
 		{:catch}
-			<h1 class="text-title font-semibold">{screen.title()}</h1>
+			<PageHeader title={screen.title()} />
 			{@render chunkFailed()}
 		{/await}
 	{/if}
 {:else}
-	<h1 class="text-title font-semibold">{screen?.title() ?? m.settings_shell_title()}</h1>
+	<PageHeader title={screen?.title() ?? m.settings_shell_title()} />
 	{#if !screen}
 		<p>{m.settings_shell_unavailable()}</p>
 	{:else}

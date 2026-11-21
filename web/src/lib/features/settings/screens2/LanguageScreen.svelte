@@ -3,6 +3,7 @@
 	// shown by LanguageForm. The rest of `preferences` belongs to Appearance and Keyboard. This
 	// body stays small: the form and the engine load with it, as the shell's section form does.
 	import type { Component, ComponentProps } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -44,7 +45,7 @@
 	});
 </script>
 
-<h1 class="text-title font-semibold">{m.settings_screen_language_title()}</h1>
+<PageHeader title={m.settings_screen_language_title()} />
 <p class="text-muted-text">{m.settings_screen_language_purpose()}</p>
 {#if failed}
 	<Banner kind="error"

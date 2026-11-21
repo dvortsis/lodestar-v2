@@ -6,6 +6,7 @@
 	// counts and asks for the password there. This screen shows the server's last answer and
 	// reloads it once a change applied.
 	import { onDestroy, onMount, type Component } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { formatCount, formatDateTime, formatPercent } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -34,7 +35,6 @@
 	let Dialog = $state<Component<Record<string, unknown>>>();
 	let pending = $state({ title: '', applyLabel: '' });
 	let problem = $state('');
-	let heading = $state<HTMLElement>();
 	let ctl: AbortController | undefined;
 	let creating: Promise<ChangeFlow> | undefined;
 	let destroyed = false;
@@ -78,7 +78,8 @@
 	function keepFocus() {
 		requestAnimationFrame(() =>
 			requestAnimationFrame(() => {
-				if (!document.activeElement || document.activeElement === document.body) heading?.focus();
+				if (!document.activeElement || document.activeElement === document.body)
+					document.getElementById('blocklists-title')?.focus();
 			})
 		);
 	}
@@ -97,7 +98,7 @@
 	});
 </script>
 
-<h1 class="text-title font-semibold" tabindex="-1" bind:this={heading}>{m.blocklists_title()}</h1>
+<PageHeader id="blocklists-title" title={m.blocklists_title()} />
 <p class="text-muted-text">{m.blocklists_purpose()}</p>
 
 {#if problem}

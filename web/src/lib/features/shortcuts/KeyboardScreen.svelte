@@ -5,6 +5,7 @@
 	// stale revision reloads and lays only this change over the newer values, so it never overwrites
 	// what another tab or device saved.
 	import { onMount, tick } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { ApiError, api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -224,7 +225,7 @@
 </script>
 
 <div class="sc-screen" data-testid="keyboard-screen" aria-busy={status === 'loading'}>
-	<h1 class="sc-h1">{m.shortcuts_screen_title()}</h1>
+	<PageHeader title={m.shortcuts_screen_title()} />
 	<p class="sc-text">{m.shortcuts_screen_lead()}</p>
 	{#if status === 'failed'}
 		<Banner kind="error">{m.shortcuts_load_failed()}</Banner>

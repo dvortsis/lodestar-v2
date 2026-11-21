@@ -6,6 +6,7 @@
 	// dialogs (SRC-15b) load on first use; until a dialog's chunk arrives the screen stays as it is.
 	// The screen shows the server's last answer and replaces a row with the PATCH's reply.
 	import { onDestroy, onMount, tick } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconCaret from '~icons/ph/caret-right-bold';
@@ -141,7 +142,7 @@
 	});
 </script>
 
-<h1 class="text-title font-semibold" tabindex="-1">{m.sources_title()}</h1>
+<PageHeader title={m.sources_title()} />
 <p class="text-muted-text">{m.sources_purpose()}</p>
 <p class="sr-only" role="status" data-testid="sources-announce">{announce}</p>
 

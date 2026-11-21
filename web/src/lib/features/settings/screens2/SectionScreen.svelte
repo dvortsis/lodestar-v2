@@ -4,6 +4,7 @@
 	// the screen's own form (`children`), because each adds its tests, clients or dialogs to the
 	// engine's fields. A load failure shows the shell's usual banner.
 	import type { Snippet } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Lazy from './Lazy.svelte';
 	import { loadSettingsIndex } from '../form/schema';
@@ -40,7 +41,7 @@
 	});
 </script>
 
-<h1 class="text-title font-semibold">{title}</h1>
+<PageHeader {title} />
 <p class="text-muted-text">{purpose}</p>
 {#if failed}
 	<Lazy load={() => import('./LoadFailed.svelte')} props={{ onretry: () => attempt++ }} />

@@ -3,6 +3,7 @@
 	// and ETA, and pause, resume and cancel. Every state shown is the server's: a control sends its
 	// request and the job's row becomes what the server answers, never a guess made first.
 	import { onMount, tick } from 'svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { ApiError, api, isAbort } from '$lib/api/client';
 	import { formatCount, formatDateTime, formatPercent, formatSpan } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -194,7 +195,7 @@
 	});
 </script>
 
-<h1 id="jobs-title" tabindex="-1" class="text-title font-semibold">{m.jobs_title()}</h1>
+<PageHeader id="jobs-title" title={m.jobs_title()} />
 <p class="text-muted-text">{m.jobs_purpose()}</p>
 
 <p class="sr-only" role="status" data-testid="jobs-announce">{announcement}</p>

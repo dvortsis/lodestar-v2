@@ -1,4 +1,6 @@
 <script lang="ts">
+	import PageFrame from '$lib/ui/layout/PageFrame.svelte';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	// /compare?h=a,b,c (§10.3, §10.6). One POST /compare per list; the server computes every
 	// difference, scale and file lists, so removing a column asks again and nothing is recomputed here.
 	import { tick, untrack, type Component } from 'svelte';
@@ -186,8 +188,8 @@
 	}
 </script>
 
-<div class="cmp-page">
-	<h1 class="cmp-h1" id="compare-heading" tabindex="-1">{m.compare_title()}</h1>
+<PageFrame>
+	<PageHeader id="compare-heading" title={m.compare_title()} />
 
 	{#if manual !== undefined}
 		<div class="cmp-manual" role="group" aria-label={m.compare_manual_label()}>
@@ -260,26 +262,9 @@
 			</div>
 		{/if}
 	</div>
-</div>
+</PageFrame>
 
 <style>
-	.cmp-page {
-		padding: calc(var(--spacing) * 4);
-		display: flex;
-		flex-direction: column;
-		gap: calc(var(--spacing) * 4);
-	}
-	.cmp-h1 {
-		font-size: var(--text-display);
-		line-height: var(--text-display--line-height);
-		letter-spacing: var(--text-display--letter-spacing);
-		font-weight: var(--font-weight-semibold);
-	}
-	.cmp-h1:focus-visible {
-		outline-width: var(--focus-ring-width);
-		outline-style: solid;
-		outline-color: var(--color-primary);
-	}
 	.cmp-manual {
 		display: flex;
 		flex-direction: column;

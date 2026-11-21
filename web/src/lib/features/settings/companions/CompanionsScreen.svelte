@@ -4,6 +4,7 @@
 	// refused request leaves the last list on screen with a sentence in plain words.
 	import { onDestroy, onMount } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
+	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
@@ -61,6 +62,7 @@
 	}
 </script>
 
+<PageHeader title={m.settings_companions_title()} />
 <section class="flex flex-col gap-4" aria-labelledby="companions-heading">
 	<h2 id="companions-heading" class="text-small font-semibold">
 		{m.settings_companions_heading()}
