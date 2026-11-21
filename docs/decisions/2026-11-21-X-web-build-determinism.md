@@ -1,4 +1,4 @@
-# X-web-build-determinism decisions (#PR)
+# X-web-build-determinism decisions (#1038)
 
 Runner brief, 2026-11-21Z: size-limit numbers moved by 5–20 B gzip on routes a PR didn't touch, so limits set at their measured size flaked (#1028, #1031, #1033).
 
@@ -38,7 +38,9 @@ Runner brief, 2026-11-21Z: size-limit numbers moved by 5–20 B gzip on routes a
 **The limits are not exact shipped bytes.** size-limit measures a build whose chunk names differ from the shipped build's. On main d42b71c6, the measured size sits between **−18 and +32 B** of the same tree built with content-hash names (table below). Read a limit as a budget on that measurement, not as the byte count users download.
 
 Same tree, main d42b71c6, `LODESTAR_BUILD_VERSION=0000000`.
-- **Over its current limit:** one entry, Settings messages (on demand), 4,247 → 4,259 B against 4.25 kB. It needs 4.26 kB in `web/.size-limit.mjs`. That file belongs to #1033, so the runner lands the number.
+- **Over its current limit:** one entry, Settings messages (on demand), 4,247 → 4,259 B against 4.25 kB. It goes to 4.26 kB in `web/.size-limit.mjs` (runner, §2.26), with a comment naming the offset. This slice took the file into its owns after #1033 merged.
+- **Search cards (lazy)** goes back from #1033's stopgap 8.02 kB to 8.01 kB (runner): 7,998 B with stable names, 7,992 B with content hashes. No other entry changes.
+- **Re-measured after merging main (d6c83c56)** with the CI steps (`npm run build`, then `LODESTAR_BUILD_VERSION=0000000 npx vite build` with and without `LODESTAR_STABLE_NAMES=1`, then `npx size-limit`). The numbers match the table: Settings messages 4,247 / 4,259 B and Search cards 7,992 / 7,998 B (content-hash / stable names).
 - **Once stable,** limits can sit at their measured size. Only a change to an entry's own chunks moves it.
 
 | Entry | Content-hash names | Module-set names | Change | Limit now |
