@@ -79,7 +79,7 @@ test('discover: unique harvested is ≈, unmeasured series are not available', a
 	await expect(page.getByTestId('insights-stage-harvested-value').first()).toHaveText(/^≈\s8,765$/);
 	await expect(page.getByTestId('insights-stage-bep51-na')).toHaveText('Not available yet');
 	await expect(page.getByTestId('insights-table-by-ip-family-na')).toBeVisible();
-	await expect(page.getByTestId('insights-table-by-source')).toContainText('dht');
+	await expect(page.getByTestId('insights-table-by-source')).toContainText('DHT'); // the source by name (X-labels), not its plugin id
 	await expect(page.getByRole('link', { name: 'Download CSV' }).first()).toBeVisible();
 });
 
