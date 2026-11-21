@@ -252,8 +252,11 @@ impl Section for Preferences {
         if check_shortcuts(&keys).is_ok() {
             return None;
         }
+        // Only a repair that leaves a valid map: what it can't fix is ignored
+        // whole, as any invalid saved value is, and logged as that.
         let repaired = repair_shortcuts(&keys);
-        (repaired != keys).then(|| serde_json::to_value(repaired).expect("a map of strings"))
+        (repaired != keys && check_shortcuts(&repaired).is_ok())
+            .then(|| serde_json::to_value(repaired).expect("a map of strings"))
     }
 
     fn check(&self, field: &str) -> Result<(), String> {
@@ -283,7 +286,9 @@ impl Section for Preferences {
 /// remap took, so a remap that now shares a key with a restored default is
 /// dropped too, until nothing changes. The other remaps are kept. Whatever
 /// is still wrong is left to the check, which then ignores the field as for
-/// any invalid saved value. At most [`MAX_SHORTCUTS`] rounds.
+/// any invalid saved value. A round only follows one that restored a
+/// default, so there are at most `DEFAULT_SHORTCUTS.len() + 1` of them,
+/// each linear in the map, whatever its size.
 fn repair_shortcuts(keys: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut keys = keys.clone();
     keys.retain(|_, key| shortcut_key(key));
@@ -473,8 +478,8 @@ mod tests {
             );
         }
         assert!(refused > 2_000, "{refused}");
-        // Unicode 18's new marks, and nothing like a whole plane.
-        assert!(newer.len() < 500, "{}: {newer:?}", newer.len());
+        // Unicode 18's 37 new marks, and nothing like a block.
+        assert!(newer.len() < 100, "{}: {newer:?}", newer.len());
         for c in [
             '\u{0941}',  // Devanagari vowel sign U (Mn), passed before
             '\u{093e}',  // Devanagari vowel sign AA (Mc)

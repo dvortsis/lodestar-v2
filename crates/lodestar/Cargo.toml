@@ -59,8 +59,9 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 utoipa = { version = "5.5.0", default-features = false, features = ["macros"] }
 
 # Shortcut keys can't be a lone combining mark (`settings::preferences`);
-# filter and search already use it.
-unicode-normalization = "0.1.24"
+# filter and search already use it. 0.1.26 is Unicode 18, which the
+# exhaustive test there relies on.
+unicode-normalization = "0.1.26"
 
 # PUID/PGID privilege drop (src/privdrop.rs): safe wrappers for the set*id
 # and *at syscalls, since the workspace forbids `unsafe` (and so libc). It is

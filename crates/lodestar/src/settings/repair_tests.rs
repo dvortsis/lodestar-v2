@@ -110,11 +110,19 @@ fn remaps_that_still_hold_load_untouched() {
 fn what_repair_cannot_fix_is_ignored_as_before() {
     // Two remaps sharing a key were never valid: nothing is restored by a
     // drop, so the field is ignored whole, as any invalid saved value is.
-    let saved = json!({ "a.b": "q", "c.d": "q" }).to_string();
-    let (p, log, _) = start_with(&[("settings.preferences.shortcut_keys", &saved)]);
-    assert!(p.shortcut_keys.is_empty());
-    assert!(log.contains("field=shortcut_keys reason=invalid"), "{log}");
-    assert!(!log.contains("invalid_entries"), "{log}");
+    // Nor is one that a repair changes but can't make valid: it's ignored
+    // whole, and logged once, as that.
+    for saved in [
+        json!({ "a.b": "q", "c.d": "q" }),
+        json!({ "results.next": "\u{0941}", "a.b": "q", "c.d": "q" }),
+    ] {
+        let saved = saved.to_string();
+        let (p, log, _) = start_with(&[("settings.preferences.shortcut_keys", &saved)]);
+        assert!(p.shortcut_keys.is_empty(), "{saved}");
+        assert!(log.contains("field=shortcut_keys reason=invalid"), "{log}");
+        assert!(!log.contains("invalid_entries"), "{log}");
+        assert_eq!(log.matches("field=shortcut_keys").count(), 1, "{log}");
+    }
     // Nor is a value of the wrong shape repaired.
     for v in [json!("j"), json!(["j"]), json!({ "a.b": 1 })] {
         assert!(
