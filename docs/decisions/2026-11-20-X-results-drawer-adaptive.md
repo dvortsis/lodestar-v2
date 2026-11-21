@@ -51,6 +51,13 @@ Slice X-results-drawer-adaptive (Track U step 3): UI review findings I1 and I3, 
   - On `main`'s code, 10 of its 13 tests fail.
 - **Baselines are generated in CI** with the repo's marker-file workflow (`web/e2e/README.md`). The refreshed 768 and 1024 px search baselines come from that run too, along with any other baseline that shows a result row, such as Discover. None were made in this container.
 
+## Edits outside this slice's owns (runner-approved)
+
+- `web/src/lib/theme/tokens.css` and `docs/design-tokens.md`: the `--results-min-width-drawer` token (above).
+- `web/.size-limit.mjs`: the "CSS" raise (above).
+- `web/e2e/soak-followups.routes.test.ts`: one assertion. L4's test expected the drawer to overlay at 1366 px, which §2.66 item 1 replaces; it now expects it in flow. Its other checks are unchanged and pass for both stored widths: the drawer fits the window, Close is in view, and it's in flow at 1920 px.
+- `web/e2e/.update-snapshots`: the repo's baseline marker, removed again once CI commits the baselines.
+
 ## Not here
 
 - Group versions (GS-5) and "Identified as" (ENR-13: text, IDs and links only) are unchanged.
