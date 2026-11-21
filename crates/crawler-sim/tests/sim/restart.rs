@@ -94,19 +94,19 @@ impl Drop for Dirs {
 /// ceiling, which is later than `at + wait` anyway.
 ///
 /// `escalate` is the query timeout with `dht.sample_backoff_escalate` on,
-/// `None` with it off (the model as it was). With it on, a failure (no reply,
-/// or an error other than a 204) cools for the ceiling only when `prev`,
-/// the node's sample before this one, failed too and this one was sent
-/// within a ceiling of it: the sampler then still held the streak, which
-/// it keeps for a ceiling after the earlier failure's cooldown ended, and
-/// that cooldown ended after `prev`'s send. Otherwise it cools for the
-/// first failure's backoff. That's a lower bound too: the sampler can
-/// only have escalated where this says it didn't (a late answer the model
-/// reads as answered), never the other way. A dropped streak (a full
-/// table, or a cooldown moved to the spill filter) would break that, and
-/// the restart scenario's 2,000 nodes never fill the 200,000-entry table.
-/// And an unanswered sample sent less than the query timeout before the
-/// stop can't have timed out, so it was sealed: the stop plus the ceiling.
+/// `None` with it off (the model as it was). With it on, a failure (no
+/// reply, or an error other than a 204) cools for the ceiling only when
+/// `prev`, the node's sample before this one, failed too and this one was
+/// sent within a ceiling of it: the sampler then still held the streak,
+/// which lasts until the earlier failure plus the ceiling, and that
+/// failure came after `prev`'s send. Otherwise it cools for the first
+/// failure's backoff. That's a lower bound too: the sampler can only have
+/// escalated where this says it didn't (a late answer the model reads as
+/// answered), never the other way. Nothing drops a streak early: a full
+/// table keeps it (split off) or moves it to the spill filter as a
+/// cooldown to its end (split on), and an abort keeps it. And an
+/// unanswered sample sent less than the query timeout before the stop
+/// can't have timed out, so it was sealed: the stop plus the ceiling.
 /// (With escalation off, the send plus the ceiling is close to that.)
 fn earliest_resample(
     ask: &SampleAsk,

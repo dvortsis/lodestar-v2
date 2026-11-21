@@ -84,25 +84,6 @@ fn a_first_failure_cools_briefly_and_a_second_in_a_row_in_full() {
 }
 
 #[test]
-fn the_streak_holds_through_a_full_backoff() {
-    let mut s = on();
-    let mut t = Instant::now();
-    let a = wide(1);
-    sample(&mut s, a, 1, t);
-    s.fail(a, 1, FULL, t);
-    t += FIRST_FAILURE_BACKOFF;
-    s.prune(t);
-    for token in 2..6 {
-        sample(&mut s, a, token, t);
-        assert!(s.fail(a, token, FULL, t));
-        assert_eq!(eligible_at(&s, a, t), t + FULL, "failure {token}");
-        t += FULL;
-        s.prune(t);
-        assert_eq!(s.struck(), 1);
-    }
-}
-
-#[test]
 fn an_answer_ends_the_streak() {
     let mut s = on();
     let t0 = Instant::now();
@@ -181,20 +162,47 @@ fn a_failure_shorter_than_the_first_backoff_isnt_lengthened() {
     assert_eq!(eligible_at(&s, a, t0), t0 + MIN_INTERVAL);
 }
 
+/// A failure within a streak cools in full and ends it: a node that never
+/// answers is sampled at most twice per full backoff, never more often.
 #[test]
-fn a_streak_is_forgotten_a_full_backoff_after_its_cooldown() {
+fn a_streak_ends_with_its_full_backoff() {
+    let mut s = on();
+    let mut t = Instant::now();
+    let a = wide(1);
+    for round in 0..4u64 {
+        sample(&mut s, a, 2 * round + 1, t);
+        s.fail(a, 2 * round + 1, FULL, t);
+        assert_eq!(
+            eligible_at(&s, a, t),
+            t + FIRST_FAILURE_BACKOFF,
+            "round {round}"
+        );
+        t += FIRST_FAILURE_BACKOFF;
+        s.prune(t);
+        sample(&mut s, a, 2 * round + 2, t);
+        s.fail(a, 2 * round + 2, FULL, t);
+        assert_eq!(eligible_at(&s, a, t), t + FULL, "round {round}");
+        t += FULL;
+        s.prune(t);
+        assert_eq!((s.known(), s.struck()), (0, 0), "round {round}");
+    }
+}
+
+/// A streak lasts until the failure plus the full backoff: when the
+/// switch-off cooldown would have ended.
+#[test]
+fn a_streak_lasts_as_long_as_the_cooldown_it_replaces() {
     let mut s = on();
     let t0 = Instant::now();
     let a = wide(1);
     sample(&mut s, a, 1, t0);
     s.fail(a, 1, FULL, t0);
-    let end = t0 + FIRST_FAILURE_BACKOFF;
-    s.prune(end);
-    s.prune(end + FULL - NS);
+    s.prune(t0 + FIRST_FAILURE_BACKOFF);
+    s.prune(t0 + FULL - NS);
     assert_eq!(s.struck(), 1);
-    s.prune(end + FULL);
+    s.prune(t0 + FULL);
     assert_eq!((s.known(), s.struck()), (0, 0));
-    let t1 = end + FULL;
+    let t1 = t0 + FULL;
     sample(&mut s, a, 2, t1);
     s.fail(a, 2, FULL, t1);
     assert_eq!(eligible_at(&s, a, t1), t1 + FIRST_FAILURE_BACKOFF);
@@ -211,13 +219,16 @@ fn the_streak_carries_into_a_sample_before_the_prune() {
     s.fail(a, 1, FULL, t0);
     let t1 = t0 + FIRST_FAILURE_BACKOFF;
     sample(&mut s, a, 2, t1);
-    assert_eq!((s.known(), s.cooling(), s.inflight()), (1, 0, 1));
+    assert_eq!(
+        (s.known(), s.cooling(), s.struck(), s.inflight()),
+        (1, 0, 0, 1)
+    );
     s.fail(a, 2, FULL, t1);
     assert_eq!(eligible_at(&s, a, t1), t1 + FULL);
 }
 
 #[test]
-fn stale_and_aborted_samples_dont_touch_the_streak() {
+fn stale_samples_dont_touch_the_streak_and_an_abort_keeps_it() {
     let mut s = on();
     let t0 = Instant::now();
     let a = wide(1);
@@ -227,42 +238,82 @@ fn stale_and_aborted_samples_dont_touch_the_streak() {
     assert!(s.fail(a, 1, FULL, t0));
     assert!(!s.fail(a, 1, FULL, t0), "already completed");
     assert_eq!(eligible_at(&s, a, t0), t0 + FIRST_FAILURE_BACKOFF);
-    // Aborting a sample (it was never sent) drops the record and with it
-    // the streak, as with the switch off.
+    // A sample that wasn't sent leaves the streak as it was.
     let t1 = t0 + FIRST_FAILURE_BACKOFF;
     sample(&mut s, a, 3, t1);
     assert!(s.abort(a, 3));
+    assert_eq!((s.known(), s.struck(), s.inflight()), (1, 1, 0));
+    sample(&mut s, a, 4, t1);
+    s.fail(a, 4, FULL, t1);
+    assert_eq!(eligible_at(&s, a, t1), t1 + FULL);
+    // Without a streak an abort drops the record, as with the switch off.
+    let t2 = t1 + FULL;
+    s.prune(t2);
+    sample(&mut s, a, 5, t2);
+    assert!(s.abort(a, 5));
     assert_eq!(s.known(), 0);
 }
 
-/// A remembered streak restricts no one: a full table drops it, soonest
-/// forgotten first, before refusing a new node, with the split off too.
+/// Split off, a streak holds its table place until its `forget`, as the
+/// switch-off cooldown would: a full table of streaks refuses newcomers
+/// as a full table of cooldowns does, and no streak is dropped.
 #[test]
-fn a_full_table_drops_a_streak_before_refusing_anyone() {
+fn split_off_a_full_table_keeps_its_streaks() {
     let mut s = Sampler::with_capacity(2).with_escalation(true);
     let t0 = Instant::now();
     sample(&mut s, wide(1), 1, t0);
     s.fail(wide(1), 1, FULL, t0);
-    let t1 = t0 + Duration::from_secs(1);
-    sample(&mut s, wide(2), 2, t1);
-    s.fail(wide(2), 2, FULL, t1);
-    let t2 = t1 + FIRST_FAILURE_BACKOFF;
-    s.prune(t2);
+    sample(&mut s, wide(2), 2, t0);
+    s.fail(wide(2), 2, FULL, t0);
+    let t1 = t0 + FIRST_FAILURE_BACKOFF;
+    s.prune(t1);
     assert_eq!((s.known(), s.struck()), (2, 2));
-    assert!(!s.saturated(), "a streak isn't a restriction");
-    sample(&mut s, wide(3), 3, t2);
-    assert_eq!((s.known(), s.struck()), (2, 1));
-    // wide(1)'s streak, the sooner forgotten, went: its next failure is a
-    // first one again. wide(2) still escalates.
-    s.complete(wide(3), 3, Duration::from_secs(300), t2);
-    let t3 = t2 + Duration::from_secs(300);
-    s.prune(t3);
-    sample(&mut s, wide(2), 4, t3);
-    s.fail(wide(2), 4, FULL, t3);
-    assert_eq!(eligible_at(&s, wide(2), t3), t3 + FULL);
-    sample(&mut s, wide(1), 5, t3);
-    s.fail(wide(1), 5, FULL, t3);
-    assert_eq!(eligible_at(&s, wide(1), t3), t3 + FIRST_FAILURE_BACKOFF);
+    assert!(s.saturated());
+    assert!(s.offer(node(wide(3)), t1));
+    assert_eq!(s.next(t1), None);
+    assert_eq!(s.struck(), 2);
+    // Both still escalate (reserved directly: a full table's `next` hands
+    // out no one, and a node's own record makes its place).
+    for (a, t) in [(wide(1), 3), (wide(2), 4)] {
+        assert!(s.reserve(a, t, t1));
+        s.fail(a, t, FULL, t1);
+        assert_eq!(eligible_at(&s, a, t1), t1 + FULL);
+    }
+}
+
+/// Split on, a full table moves a streak to the filter as the cooldown it
+/// stands in for, to its `forget`: never sooner than the switch-off end,
+/// in that order among the cooldowns, so a node that keeps failing is
+/// never sampled more than twice per full backoff (the reviewer's case:
+/// the short cooldowns aren't what moves first).
+#[test]
+fn split_on_a_streak_moves_as_its_switch_off_cooldown() {
+    let mut s = Sampler::split_with_capacity(2).with_escalation(true);
+    let t0 = Instant::now();
+    // A plain cooldown that ends sooner than the streak's switch-off end...
+    sample(&mut s, wide(1), 1, t0);
+    s.complete(wide(1), 1, Duration::from_secs(3600), t0);
+    // ...and a dead node's first failure, whose short cooldown ends first.
+    sample(&mut s, wide(2), 2, t0);
+    s.fail(wide(2), 2, FULL, t0);
+    // A newcomer: the plain cooldown moves, not the streak.
+    sample(&mut s, wide(3), 3, t0);
+    assert!(matches!(
+        s.states.get(&wide(2)),
+        Some(State::Cooling { struck: true, .. })
+    ));
+    s.complete(wide(3), 3, FULL, t0);
+    // Another: now the streak is the soonest by its switch-off end, and it
+    // moves to the filter until then.
+    sample(&mut s, wide(4), 4, t0);
+    assert!(!s.states.contains_key(&wide(2)));
+    let t1 = t0 + FIRST_FAILURE_BACKOFF;
+    s.prune(t1);
+    assert!(!s.offer(node(wide(2)), t1), "spilled to its switch-off end");
+    assert!(!s.offer(node(wide(2)), t0 + FULL - NS));
+    // The filter keeps it to the end of that minute at most.
+    let after = t0 + FULL + Duration::from_secs(60);
+    assert!(!s.spilled(&wide(2), after));
 }
 
 /// The snapshot lists a short cooldown as it is and never a streak, and
@@ -294,9 +345,30 @@ fn the_snapshot_lists_cooldowns_not_streaks() {
     );
 }
 
-/// The memory per entry: the streak is a flag in the table's record, and
-/// a remembered one moves from the expiry index to an index of the same
-/// size, so it adds nothing per node beyond the record's own growth.
+/// A restored restriction replaces a streak (it can't happen: seeding
+/// comes before sampling), and the indexes stay exact.
+#[test]
+fn a_restore_replaces_a_streak() {
+    for prune in [false, true] {
+        let mut s = on();
+        let t0 = Instant::now();
+        sample(&mut s, wide(1), 1, t0);
+        s.fail(wide(1), 1, FULL, t0);
+        let t1 = t0 + FIRST_FAILURE_BACKOFF;
+        if prune {
+            s.prune(t1);
+        }
+        s.restore(wide(1), t1 + FULL);
+        assert_eq!((s.known(), s.cooling(), s.struck()), (1, 1, 0));
+        assert_eq!(eligible_at(&s, wide(1), t1), t1 + FULL);
+        s.prune(t1 + FULL);
+        assert_eq!(s.known(), 0);
+    }
+}
+
+/// The memory per entry: the streak is a flag in the table's record
+/// (which grows from 24 to 32 bytes whatever the switch). A first
+/// failure's record has one more index entry for its 300 s.
 #[test]
 fn a_streak_costs_no_more_than_the_record() {
     assert_eq!(std::mem::size_of::<State>(), 32);
@@ -324,10 +396,12 @@ fn arb_op() -> impl Strategy<Value = Op> {
 }
 
 proptest! {
-    /// Against a model of the rule, under any sequence: each failure's
-    /// cooldown is the first backoff after an answer, a first sample or a
-    /// lapsed streak, and the full backoff after a failure in a row; with
-    /// the switch off always the full backoff. The indexes stay exact.
+    /// Against a model of the rule, under any sequence: a failure cools
+    /// for the first backoff unless it's within a streak (a first
+    /// failure's, until that failure plus the full backoff), when it
+    /// cools in full and ends the streak; an answer ends it too, an abort
+    /// keeps it, and nothing else drops it. With the switch off, always in
+    /// full. The indexes stay exact.
     #[test]
     fn every_failure_cools_as_the_streak_says(
         escalate in any::<bool>(),
@@ -335,13 +409,11 @@ proptest! {
         ops in proptest::collection::vec(arb_op(), 1..400),
     ) {
         let mut s = Sampler::with_capacity(capacity).with_escalation(escalate);
-        let start = Instant::now();
-        let mut now = start;
+        let mut now = Instant::now();
         let mut token = 0u64;
         // In flight: the address, token and when it was reserved.
         let mut flying: Vec<(SocketAddr, u64, Instant)> = vec![];
-        // The model: per node, when its last failure's cooldown ended (so
-        // when the streak lapses: that plus a full backoff).
+        // The model: each node's live streak, by when it ends.
         let mut streak: std::collections::HashMap<SocketAddr, Instant> = Default::default();
         for op in ops {
             match op {
@@ -363,28 +435,18 @@ proptest! {
                 }
                 Op::Fail(i) if !flying.is_empty() => {
                     let (a, t, reserved) = flying.remove(usize::from(i) % flying.len());
-                    // The table may have dropped the streak for room
-                    // (capacity), which only shortens: read what it held,
-                    // and check it never held one past its lapse.
-                    let held = matches!(s.states.get(&a), Some(State::InFlight { struck: true, .. }));
-                    let lapsed = streak.get(&a).is_none_or(|end| reserved >= *end + FULL);
-                    prop_assert!(!(held && lapsed), "a streak held past its lapse");
-                    // With room for every address nothing is dropped, so
-                    // the table holds exactly the model's streak.
-                    if capacity > 12 {
-                        prop_assert_eq!(held, escalate && !lapsed);
-                    }
+                    let live = streak.remove(&a).is_some_and(|end| reserved < end);
                     prop_assert!(s.fail(a, t, FULL, now));
-                    let want = if escalate && !held { FIRST_FAILURE_BACKOFF } else { FULL };
+                    let first = escalate && !live;
+                    let want = if first { FIRST_FAILURE_BACKOFF } else { FULL };
                     prop_assert_eq!(eligible_at(&s, a, now), now + want);
-                    if escalate {
-                        streak.insert(a, now + want);
+                    if first {
+                        streak.insert(a, now + FULL);
                     }
                 }
                 Op::Abort(i) if !flying.is_empty() => {
                     let (a, t, _) = flying.remove(usize::from(i) % flying.len());
                     prop_assert!(s.abort(a, t));
-                    streak.remove(&a);
                 }
                 Op::Advance(k) => {
                     now += [Duration::from_secs(1), FIRST_FAILURE_BACKOFF, FULL, FULL + FULL][usize::from(k)];
@@ -392,22 +454,55 @@ proptest! {
                 }
                 _ => {}
             }
-            // Indexes: every Cooling record is in `expiry`, every Struck
-            // in `struck`, and the counts add up.
-            let cooling = s.states.iter().filter(|(_, st)| matches!(st, State::Cooling { .. })).count();
-            let struck = s.states.iter().filter(|(_, st)| matches!(st, State::Struck { .. })).count();
-            prop_assert_eq!(s.cooling(), cooling);
-            prop_assert_eq!(s.struck(), struck);
+            // Indexes: a plain cooldown is in `expiry` alone; a streak's
+            // short cooldown in `short` and `struck`; a Struck in `struck`.
+            let mut plain = 0;
+            let mut short = 0;
+            let mut struck = 0;
+            for (a, st) in &s.states {
+                match *st {
+                    State::Cooling { until, token: k, struck: false } => {
+                        plain += 1;
+                        prop_assert!(s.expiry.contains(&(until, k, *a)));
+                    }
+                    State::Cooling { until, token: k, struck: true } => {
+                        short += 1;
+                        prop_assert!(s.short.contains(&(until, k, *a)));
+                        prop_assert!(s.struck.contains(&(forget_of(until), k, *a)));
+                    }
+                    State::Struck { forget, token: k } => {
+                        struck += 1;
+                        prop_assert!(s.struck.contains(&(forget, k, *a)));
+                    }
+                    State::InFlight { .. } => {}
+                }
+            }
+            prop_assert_eq!(s.expiry.len(), plain);
+            prop_assert_eq!(s.short.len(), short);
+            prop_assert_eq!(s.struck.len(), short + struck);
             prop_assert_eq!(s.inflight(), flying.len());
             prop_assert!(s.known() <= capacity);
-            for (forget, t, a) in &s.struck {
-                let exact = matches!(s.states.get(a),
-                    Some(State::Struck { forget: f, token: k }) if f == forget && k == t);
-                prop_assert!(exact, "a struck entry without its record");
-            }
             if !escalate {
-                prop_assert_eq!(struck, 0);
+                prop_assert_eq!(short + struck, 0);
             }
         }
     }
+}
+
+/// Split on, a table of nothing but streaks isn't saturated: each can move
+/// to the filter, so a newcomer is admitted.
+#[test]
+fn split_on_a_table_of_streaks_still_admits() {
+    let mut s = Sampler::split_with_capacity(2).with_escalation(true);
+    let t0 = Instant::now();
+    for (i, t) in [(1, 1), (2, 2)] {
+        sample(&mut s, wide(i), t, t0);
+        s.fail(wide(i), t, FULL, t0);
+    }
+    let t1 = t0 + FIRST_FAILURE_BACKOFF;
+    s.prune(t1);
+    assert_eq!((s.known(), s.cooling(), s.struck()), (2, 0, 2));
+    assert!(!s.saturated());
+    sample(&mut s, wide(3), 3, t1);
+    assert_eq!(s.struck(), 1);
 }

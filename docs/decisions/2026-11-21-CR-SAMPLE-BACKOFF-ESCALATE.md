@@ -6,9 +6,10 @@ X-sampler-frontier-starve (#1022) traced the BEP 51 frontier starving to one rul
 - **`dht.sample_backoff_escalate`, environment variable `LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE`, default off.** The runner fixed the name. It's wired as `dht.sampler_cooldown_split` is: a struct field, a default, an env parse and `dht_config()` in `crates/lodestar/src/config.rs`, `Config::sample_backoff_escalate` in `crates/dht`, and the sim's `Switches`. It's not in the Settings UI.
 - **With it on:**
   - **A node's first failed sample in a row** (a timeout, an error reply other than 204, or an inconsistent reply) cools it for `FIRST_FAILURE_BACKOFF`, 300 s.
-  - **Every later failure in a row** cools it for the existing 6 h.
+  - **A failure within the streak** (its second in a row) cools it for the existing 6 h and ends the streak.
   - **An answer ends the streak.** So does a 204, which cools for 6 h at once (see below).
-  - **The streak is remembered** for 6 h after each failure's cooldown ends. A node that keeps failing therefore stays at one sample per 6 h, as today, after its first short backoff.
+  - **The streak lasts until the first failure plus 6 h:** the moment its switch-off cooldown would have ended.
+  - **A node that never answers** is sampled at most twice per 6 h and 5 minutes: once, again 300 s later, then 6 h (`a_streak_ends_with_its_full_backoff`). Today it's sampled once per 6 h.
 - **Rate and outstanding caps, `NODES_PER_REPLY` and every other limit are unchanged.**
 
 ## The first backoff: 300 s, from the sim screen
@@ -37,7 +38,8 @@ Whole-run totals. "Repeats" are samples after the first to nodes that never answ
 What it shows:
 - **300 s holds the frontier best:** about 1,670–1,760 samples a minute throughout, against C's 1,730 without any loss, and A's fall to 860. Each step longer holds less, and 3600 s barely helps within 90 minutes.
 - **The repeat cost is the same at every value:** about one extra sample per never-answering node (about 3,360, nearly all to the 15 % dead). Each such node is asked once more, then sits at 6 h. So the value doesn't trade against repeats, and the shortest allowed one wins.
-- **The runner's bounds hold:** 300 s is the sim's sample interval, never shorter than an answer's cooldown there, and under an hour (`the_first_backoff_is_within_the_runners_bounds`). In the long run a dead node costs one extra sample per streak, not per 6 h, because the streak is remembered across its 6 h cooldowns.
+- **The runner's bounds hold:** 300 s is the sim's sample interval, so it's never shorter than an answer's cooldown there, and it's under an hour (`the_first_backoff_is_within_the_runners_bounds`).
+- **In the long run** a dead node costs one extra sample per 6 h, a full table included (next section). The 90-minute screen sees only the first.
 - **Reproduce:** `cargo test -p lodestar-crawler-sim --test sim sampler_starve -- --ignored --nocapture` (about 90 s; the other values by editing `FIRST_FAILURE_SECS`).
 
 ## A 204 cools for 6 h at once (runner's call under §2.26)
@@ -47,10 +49,29 @@ What it shows:
 - **What it costs:** `sample_failures` still counts a 204, as it did.
 
 ## Bounded state: the streak lives in the sampler's table entry
-- **No new map.** The streak is a flag on the record `crates/dht/src/node/sampler.rs` already keeps per node (`InFlight` and `Cooling`). When a failure's cooldown ends, the record becomes `Struck { forget }`. `Struck` means the node may be sampled and the streak is remembered until `forget`, 6 h later. Struck records sit in an index of their own (`struck`, one entry per record, soonest forgotten first), in place of the expiry entry they had while cooling. So every record is in exactly one of `expiry` and `struck`, or in flight.
-- **Bounded by the existing caps.** A struck record holds a table place and its IP's and block's shares, as the 6 h cooldown it replaces did with the switch off. A full table drops the struck record forgotten soonest before it refuses anyone, with the split on or off. A struck record restricts no one, so dropping it costs that node at most one more short backoff, and the table is never fuller than with the switch off. `saturated()` counts struck records as room. A short cooldown moved to the spill filter (split on) loses its streak in the same way.
-- **Memory per entry:** the record grows from 24 to 32 bytes (`a_streak_costs_no_more_than_the_record`), so 8 bytes more per table entry, about 1.6 MB at the 200,000-entry cap. A struck record's index entry (56 bytes plus the B-tree's overhead) replaces its expiry entry of the same size, so it adds nothing. With the switch off there are no struck records.
-- **Gauges:** `known` counts struck records (they hold table places). `cooling` and `inflight` don't. `inflight` was `known − cooling` and is now `known − cooling − struck`, so with the switch on `dht_sample_inflight` stays the number of samples in flight. With the switch off the gauges are unchanged.
+- **No new map.** The streak is a flag on the record `crates/dht/src/node/sampler.rs` already keeps per node (`InFlight`, `Cooling`). When a first failure's 300 s cooldown ends, the record becomes `Struck { forget }`: the node may be sampled, and the streak is remembered until `forget` (the failure plus 6 h).
+- **Indexes:**
+  - a plain cooldown is in `expiry`, as today;
+  - a first failure's short cooldown is in `short`, by its end;
+  - every streak, cooling or `Struck`, is in `struck`, by its `forget`.
+  - The proptest checks they stay exact.
+- **A streak's table place and shares last exactly as long as the 6 h cooldown it stands in for** (the failure plus 6 h), so the table and the per-IP and per-block shares are never fuller than with the switch off. This answers the self-review:
+  - **Split off:** a full table keeps its streaks and refuses a newcomer, as a full table of 6 h cooldowns does (`split_off_a_full_table_keeps_its_streaks`). Nothing drops a streak for room.
+  - **Split on:** a full table moves a streak to the spill filter as the cooldown it stands in for. It moves with its `forget`, in that order among the plain cooldowns. A short first cooldown is lengthened back to the switch-off one (never shorter), and the streak is forgotten.
+    - So the 300 s cooldowns aren't what moves first. A node that keeps failing under table pressure is sampled at most as often as with the table empty: twice per 6 h and 5 minutes. That holds whether or not its streak is in the filter (`split_on_a_streak_moves_as_its_switch_off_cooldown`).
+    - `saturated()` counts streaks as movable (`split_on_a_table_of_streaks_still_admits`).
+  - **Abort:** a reserved sample that's never sent keeps the streak it carried (the in-flight record holds its `forget`).
+  - **The one thing that resets a streak is a restart** (below).
+- **Memory per entry:**
+  - **The record grows from 24 to 32 bytes, with the switch on or off** (`a_streak_costs_no_more_than_the_record`). That's 8 bytes more per table entry, about 1.6 MB at the 200,000-entry cap.
+  - **A streak's `struck` entry** (56 bytes plus the B-tree's overhead) replaces the `expiry` entry its 6 h cooldown would have had.
+  - **For a first failure's 300 s only,** the record has one more entry, in `short`.
+  - With the switch off, both new indexes stay empty.
+- **Gauges:**
+  - `known` counts `Struck` records, since they hold table places.
+  - `cooling` counts short cooldowns, but not `Struck` records.
+  - `inflight` is `known − cooling − struck`, so it stays the number of samples in flight.
+  - With the switch off, all three are unchanged.
 
 ## Never shorter, except behind this switch
 X-sampler-cooldown-split's "Never shorter" rule stands for everything else: a cooldown, once set, is never shortened, and no spill, seal, restore or capacity path shortens one. **This switch is the one deliberate exception, and only for the length a node's first failure in a row is given.** It doesn't shorten a cooldown already set. It sets a shorter one, because one lost datagram isn't evidence that a node is dead. A second failure in a row gets the full 6 h, as today. That's why it needs its own switch, default off, and doesn't ride on `dht.sampler_cooldown_split`.
@@ -61,7 +82,8 @@ X-sampler-cooldown-split's "Never shorter" rule stands for everything else: a co
   - A failure cools for 300 s, unless the node's previous leg-1 sample failed too and was sent within 6 h of it. Then the sampler still held the streak, so 6 h.
   - A 204 cools for 6 h. The network now records whether a reply was a 204 (`SampleAsk::unknown`).
   - An unanswered sample sent less than a query timeout before the stop can't have timed out, so it was sealed: the stop plus 6 h.
-  - That's still a lower bound. The sampler can only have escalated where the model says it didn't (a late answer the model reads as answered), never the other way. A dropped streak (a full table or a spill move) would break that, and the restart scenario's 2,000 nodes never fill the 200,000-entry table.
+  - That's still a lower bound. The sampler can only have escalated where the model says it didn't (a late answer the model reads as answered), never the other way.
+  - **It holds even with a full table.** Nothing drops a streak early, and a spilled streak restricts the node until the streak would have ended. So a sample after it is a first failure again in the sampler and in the model alike.
   - Unit-tested in `earliest_resample_follows_the_escalation`.
 - **The restart with the switch on** (`restart_with_escalation_honours_the_bound`, no golden) passes every check the golden run asserts. No node was sampled before its bound, sampling resumed 1 s after the start, and every node due during leg 2 was sampled. 596 re-samples came within 6 h of a failure, so the switch was exercised.
 
@@ -74,7 +96,9 @@ X-sampler-cooldown-split's "Never shorter" rule stands for everything else: a co
 | Sampled before expiry | 0 | 0 |
 | Leg 2 stored in its first 60 min | 1,760 | 1,818 |
 
-- **The streak isn't in the snapshot,** so a restart resets it. That costs at worst one extra short backoff per node after a restart: a node whose streak was live is asked once more 300 s after its restored restriction ends, before it escalates again. At the Balanced rate that's well under one restart's worth of samples. It never lets a node be sampled before a restored restriction, so it's acceptable, and it keeps the snapshot format unchanged.
+- **The streak isn't in the snapshot,** so a restart resets it.
+  - **What it costs:** at worst one extra sample per node with a live streak, 300 s after its restored restriction ends, before it escalates again. Those are nodes that failed within the last 6 h.
+  - **Why it's acceptable:** it never lets a node be sampled before a restored restriction, and it keeps the snapshot format unchanged.
 
 ## Not in this PR
 - **The fleet stack's switch pass-through** (`infra/fleet/steps/vm/compose.yaml`, `block-lib.sh`) and the soak tools don't list the new variable. They're outside this slice's paths, so the runner places that (as X-fleet-switch-passthrough did for the others).

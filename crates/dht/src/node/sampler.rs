@@ -7,6 +7,12 @@
 //! [`spill::Spill`], a bounded filter of fingerprints and end minutes that
 //! can only answer "maybe cooling" for longer than the truth, never
 //! shorter.
+//!
+//! With `dht.sample_backoff_escalate` on (CR-SAMPLE-BACKOFF-ESCALATE), a
+//! node's first failed sample in a row cools for [`FIRST_FAILURE_BACKOFF`]
+//! and starts a streak that lasts as long as the full cooldown it replaces,
+//! holding that cooldown's table place and shares; a second failure within
+//! it cools in full.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -60,20 +66,25 @@ const RESTORED: u64 = 1 << 62;
 
 #[derive(Debug, Clone, Copy)]
 enum State {
-    /// `struck`: the node's last sample failed and escalation is on, so a
-    /// failure of this one cools for the full backoff.
-    InFlight { token: u64, struck: bool },
-    /// `struck`: a failure's cooldown (escalation on); when it ends the
-    /// record becomes [`State::Struck`] instead of leaving.
+    /// `streak`: the node's last sample failed and escalation is on, so a
+    /// failure of this one cools for the full backoff; it holds the
+    /// streak's `forget`, which an abort restores.
+    InFlight { token: u64, streak: Option<Instant> },
+    /// `struck`: a first failure's short cooldown (escalation on); when it
+    /// ends the record becomes [`State::Struck`] instead of leaving. It's in
+    /// `short` and `struck`, not `expiry`.
     Cooling {
         until: Instant,
         token: u64,
         struck: bool,
     },
-    /// A failure's cooldown ended: the node may be sampled, and the streak
-    /// is remembered until `forget` (escalation on only). Not a
-    /// restriction: the snapshot doesn't list it, and a full table drops it
-    /// before refusing anyone.
+    /// A first failure's short cooldown ended: the node may be sampled, and
+    /// the streak is remembered until `forget`, the failure plus the full
+    /// backoff, when the switch-off cooldown would have ended (escalation
+    /// on only). Not a restriction, so the snapshot doesn't list it; it
+    /// holds its table place and shares until `forget`, as that cooldown
+    /// would have, and a full split table moves it to the spill filter as a
+    /// cooldown to `forget`.
     Struck { forget: Instant, token: u64 },
 }
 
@@ -100,7 +111,11 @@ pub(crate) struct Sampler {
     split: bool,
     /// `dht.sample_backoff_escalate`.
     escalate: bool,
-    /// One record per [`State::Struck`], soonest `forget` first.
+    /// Streaks (escalation on only): `short` holds each first failure's
+    /// short cooldown by its end; `struck` holds every streak, cooling or
+    /// [`State::Struck`], by its `forget`. A plain cooldown is in `expiry`
+    /// alone.
+    short: BTreeSet<(Instant, u64, SocketAddr)>,
     struck: BTreeSet<(Instant, u64, SocketAddr)>,
     /// Cooldowns moved out of a full table: made at the first move, so
     /// `None` until then and always with the switch off.
@@ -135,6 +150,7 @@ impl Sampler {
             restored_honoured: 0,
             split,
             escalate: false,
+            short: BTreeSet::new(),
             struck: BTreeSet::new(),
             spill: None,
             full: Duration::ZERO,
@@ -188,36 +204,48 @@ impl Sampler {
     /// end soonest into the spill filter (switch on only). False when the
     /// table is still full: the switch is off, nothing is cooling, or the
     /// filter is at its bound. A moved cooldown is never shortened: the
-    /// filter keeps it to the end of its minute.
+    /// filter keeps it to the end of its minute. With escalation on, a
+    /// streak moves as the cooldown it stands in for: to its `forget`, the
+    /// end its switch-off cooldown would have had, in that order among the
+    /// others. That lengthens a short first cooldown back to the switch-off
+    /// one (never shorter), and the streak itself is forgotten.
     fn make_room(&mut self, now: Instant) -> bool {
         while self.states.len() >= self.capacity {
-            // A remembered streak restricts no one: it goes first, soonest
-            // forgotten first (escalation on only; it costs that node at
-            // most one more short cooldown).
-            if let Some((_, token, addr)) = self.struck.pop_first() {
-                self.forget_struck(addr, token);
-                continue;
-            }
             if !self.split {
                 return false;
             }
+            // The soonest of each index, merged by the end each would be
+            // moved with.
+            let mut tries: Vec<(Instant, u64, SocketAddr)> = self
+                .expiry
+                .iter()
+                .take(SPILL_TRIES)
+                .chain(self.struck.iter().take(SPILL_TRIES))
+                .copied()
+                .collect();
+            tries.sort_unstable();
             // The filter's clock starts at its first move.
             let spill = self.spill.get_or_insert_with(|| spill::Spill::new(now));
             // The soonest that fits: a refusal (both its groups full) is
             // rare, so a few tries find room if there is any.
-            let Some(&(until, token, addr)) = self
-                .expiry
+            let Some(&(end, token, addr)) = tries
                 .iter()
                 .take(SPILL_TRIES)
-                .find(|(until, _, addr)| spill.insert(addr, *until, now))
+                .find(|(end, _, addr)| spill.insert(addr, *end, now))
             else {
                 return false;
             };
-            self.expiry.remove(&(until, token, addr));
+            if self.struck.remove(&(end, token, addr)) {
+                if let Some(State::Cooling { until, .. }) = self.states.get(&addr) {
+                    self.short.remove(&(*until, token, addr));
+                }
+                self.states.remove(&addr);
+                self.recount(&addr, true);
+                continue;
+            }
+            self.expiry.remove(&(end, token, addr));
             if matches!(self.states.get(&addr), Some(State::Cooling { token: t, .. }) if *t == token)
             {
-                // A streak moved with it is forgotten, as a restart
-                // forgets it.
                 self.states.remove(&addr);
                 self.recount(&addr, true);
                 // A restored record that moves is honoured: the filter
@@ -226,6 +254,46 @@ impl Sampler {
             }
         }
         true
+    }
+
+    /// Removes a record's index entries (not the record): `expiry` for a
+    /// plain cooldown, `short` and `struck` for a streak. Returns whether
+    /// it was a streak.
+    fn unindex(&mut self, addr: SocketAddr, state: State) -> bool {
+        match state {
+            State::Cooling {
+                until,
+                token,
+                struck: true,
+            } => {
+                self.short.remove(&(until, token, addr));
+                self.struck.remove(&(forget_of(until), token, addr));
+                true
+            }
+            State::Cooling { until, token, .. } => {
+                self.expiry.remove(&(until, token, addr));
+                false
+            }
+            State::Struck { forget, token } => {
+                self.struck.remove(&(forget, token, addr));
+                true
+            }
+            State::InFlight { streak, .. } => streak.is_some(),
+        }
+    }
+
+    /// A record's streak end (`forget`), if it has one.
+    fn streak_of(state: State) -> Option<Instant> {
+        match state {
+            State::Cooling {
+                until,
+                struck: true,
+                ..
+            } => Some(forget_of(until)),
+            State::Struck { forget, .. } => Some(forget),
+            State::InFlight { streak, .. } => streak,
+            State::Cooling { .. } => None,
+        }
     }
 
     fn tracked(&self, addr: &SocketAddr) -> bool {
@@ -330,21 +398,17 @@ impl Sampler {
         }
         let was = self.tracked(&addr);
         // The streak carries into the sample, so its failure escalates.
-        let struck = match self.states.remove(&addr) {
-            Some(State::Cooling {
-                until,
-                token,
-                struck,
-            }) => {
-                self.expiry.remove(&(until, token, addr));
+        let streak = match self.states.remove(&addr) {
+            Some(state @ State::Cooling { token, .. }) => {
+                self.unindex(addr, state);
                 self.retire(token);
-                struck
+                Self::streak_of(state)
             }
-            Some(State::Struck { forget, token }) => {
-                self.struck.remove(&(forget, token, addr));
-                true
+            Some(state) => {
+                self.unindex(addr, state);
+                Self::streak_of(state)
             }
-            _ => false,
+            None => None,
         };
         if self.states.len() >= self.capacity {
             self.make_room(now);
@@ -353,19 +417,29 @@ impl Sampler {
             self.recount(&addr, was);
             return false;
         }
-        self.states.insert(addr, State::InFlight { token, struck });
+        self.states.insert(addr, State::InFlight { token, streak });
         self.recount(&addr, was);
         true
     }
 
+    /// A reserved sample wasn't sent: the record goes, as with the switch
+    /// off, except that a streak it carried stays (it's no restriction),
+    /// so a failed send can't reset one.
     pub fn abort(&mut self, addr: SocketAddr, token: u64) -> bool {
-        if matches!(self.states.get(&addr), Some(State::InFlight { token: t, .. }) if *t == token) {
+        let Some(State::InFlight { token: t, streak }) = self.states.get(&addr).copied() else {
+            return false;
+        };
+        if t != token {
+            return false;
+        }
+        if let Some(forget) = streak {
+            self.states.insert(addr, State::Struck { forget, token });
+            self.struck.insert((forget, token, addr));
+        } else {
             self.states.remove(&addr);
             self.recount(&addr, true);
-            true
-        } else {
-            false
         }
+        true
     }
 
     pub fn complete(&mut self, addr: SocketAddr, token: u64, wait: Duration, now: Instant) -> bool {
@@ -406,25 +480,28 @@ impl Sampler {
     /// A sample failed: it timed out, or the reply was an error or
     /// inconsistent. With escalation off it cools for `backoff`, as
     /// [`complete`](Self::complete) does. With escalation on, a node's
-    /// first failure in a row cools for [`FIRST_FAILURE_BACKOFF`] (or
-    /// `backoff`, if that's shorter) and every later one for `backoff`; the
-    /// streak is remembered for `MAX_INTERVAL` after each cooldown ends,
-    /// and an answer ends it.
+    /// first failure in a row cools for [`FIRST_FAILURE_BACKOFF`] (when
+    /// `backoff` is longer) and starts a streak that lasts until the
+    /// failure plus `backoff`, the end of the cooldown it replaces; a
+    /// failure within the streak cools for `backoff` and ends it, as an
+    /// answer does.
     pub fn fail(&mut self, addr: SocketAddr, token: u64, backoff: Duration, now: Instant) -> bool {
         debug_assert!(token & PROOF_TOKEN == 0, "a wire token below PROOF_TOKEN");
-        let Some(State::InFlight { token: t, struck }) = self.states.get(&addr).copied() else {
+        let Some(State::InFlight { token: t, streak }) = self.states.get(&addr).copied() else {
             return false;
         };
         if t != token {
             return false;
         }
+        let struck = streak.is_some();
         let backoff = backoff.clamp(MIN_INTERVAL, MAX_INTERVAL);
-        let wait = if self.escalate && !struck {
-            backoff.min(FIRST_FAILURE_BACKOFF)
+        // A streak's end is derived from its short cooldown's, so only the
+        // full backoff starts one (every caller passes it).
+        if self.escalate && !struck && backoff == MAX_INTERVAL {
+            self.cool(addr, token, now + FIRST_FAILURE_BACKOFF, true);
         } else {
-            backoff
-        };
-        self.cool(addr, token, now + wait, self.escalate);
+            self.cool(addr, token, now + backoff, false);
+        }
         true
     }
 
@@ -437,14 +514,11 @@ impl Sampler {
                 struck,
             },
         );
-        self.expiry.insert((until, token, addr));
-    }
-
-    /// Drops a [`State::Struck`] record whose `struck` entry has left.
-    fn forget_struck(&mut self, addr: SocketAddr, token: u64) {
-        if matches!(self.states.get(&addr), Some(State::Struck { token: t, .. }) if *t == token) {
-            self.states.remove(&addr);
-            self.recount(&addr, true);
+        if struck {
+            self.short.insert((until, token, addr));
+            self.struck.insert((forget_of(until), token, addr));
+        } else {
+            self.expiry.insert((until, token, addr));
         }
     }
 
@@ -460,24 +534,27 @@ impl Sampler {
                 break;
             }
             self.expiry.pop_first();
-            match self.states.get(&addr) {
-                // A failure's cooldown ended: remember the streak for a
-                // backoff's length, so a failure soon after escalates.
-                Some(State::Cooling {
-                    token: t,
-                    struck: true,
-                    ..
-                }) if *t == token => {
-                    let forget = until + MAX_INTERVAL;
-                    self.states.insert(addr, State::Struck { forget, token });
-                    self.struck.insert((forget, token, addr));
-                }
-                Some(State::Cooling { token: t, .. }) if *t == token => {
-                    self.states.remove(&addr);
-                    self.recount(&addr, true);
-                    self.retire(token);
-                }
-                _ => {}
+            if matches!(self.states.get(&addr), Some(State::Cooling { token: t, .. }) if *t == token)
+            {
+                self.states.remove(&addr);
+                self.recount(&addr, true);
+                self.retire(token);
+            }
+        }
+        // A first failure's short cooldown ended: the node may be sampled,
+        // and the streak stays until its `forget`.
+        for _ in 0..RECLAIM_PER_TICK {
+            let Some(&(until, token, addr)) = self.short.first() else {
+                break;
+            };
+            if until > now {
+                break;
+            }
+            self.short.pop_first();
+            if matches!(self.states.get(&addr), Some(State::Cooling { token: t, struck: true, .. }) if *t == token)
+            {
+                let forget = forget_of(until);
+                self.states.insert(addr, State::Struck { forget, token });
             }
         }
         for _ in 0..RECLAIM_PER_TICK {
@@ -488,7 +565,11 @@ impl Sampler {
                 break;
             }
             self.struck.pop_first();
-            self.forget_struck(addr, token);
+            if matches!(self.states.get(&addr), Some(State::Struck { token: t, .. }) if *t == token)
+            {
+                self.states.remove(&addr);
+                self.recount(&addr, true);
+            }
         }
     }
 
@@ -520,14 +601,12 @@ impl Sampler {
             }
             // Can't happen either (nothing was sampled yet); the
             // restriction replaces the streak.
-            Some(State::Struck { forget, token }) => {
-                self.struck.remove(&(forget, token, addr));
+            Some(state @ State::Struck { .. }) => {
+                self.unindex(addr, state);
             }
             Some(State::Cooling { until: u, .. }) if u >= until => return,
-            Some(State::Cooling {
-                until: u, token, ..
-            }) => {
-                self.expiry.remove(&(u, token, addr));
+            Some(state @ State::Cooling { token, .. }) => {
+                self.unindex(addr, state);
                 if token & (PROOF_TOKEN | RESTORED) == PROOF_TOKEN | RESTORED {
                     self.restored_live -= 1;
                 }
@@ -607,14 +686,14 @@ impl Sampler {
         self.states.len()
     }
     pub fn cooling(&self) -> usize {
-        self.expiry.len()
+        self.expiry.len() + self.short.len()
     }
     pub fn inflight(&self) -> usize {
         self.known() - self.cooling() - self.struck()
     }
-    /// Remembered streaks whose cooldown ended (escalation on only).
+    /// Remembered streaks whose short cooldown ended (escalation on only).
     pub fn struck(&self) -> usize {
-        self.struck.len()
+        self.struck.len() - self.short.len()
     }
     /// Whether the sampler can't admit anyone: the table is full and,
     /// with the split on, no cooldown can move to the filter. With the
@@ -623,9 +702,8 @@ impl Sampler {
     /// `next` admits no one that tick without this saying so.
     pub fn saturated(&self) -> bool {
         self.known() >= self.capacity
-            && self.struck.is_empty()
             && !(self.split
-                && self.cooling() > 0
+                && !(self.expiry.is_empty() && self.struck.is_empty())
                 && self.spill.as_ref().is_none_or(spill::Spill::has_room))
     }
 
@@ -654,6 +732,12 @@ impl Sampler {
     pub fn spill_counts(&self) -> (usize, usize) {
         self.spill.as_ref().map_or((0, 0), spill::Spill::counts)
     }
+}
+
+/// A streak's `forget`, from its short cooldown's end: the failure plus the
+/// full backoff, when the switch-off cooldown would have ended.
+fn forget_of(until: Instant) -> Instant {
+    until - FIRST_FAILURE_BACKOFF + MAX_INTERVAL
 }
 
 /// A share's count; zero when the key holds nothing.

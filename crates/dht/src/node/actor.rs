@@ -4339,6 +4339,8 @@ mod tests {
         enum Failure {
             Timeout,
             Error(i64),
+            /// A reply under another id than the one asked.
+            Inconsistent,
         }
         // A 204 completes in full; every other failure starts a streak.
         let failure_streaks = |f: Failure| !matches!(f, Failure::Error(error_code::METHOD_UNKNOWN));
@@ -4349,6 +4351,8 @@ mod tests {
             (true, Failure::Error(error_code::SERVER), short, full),
             (true, Failure::Error(error_code::GENERIC), short, full),
             (true, Failure::Error(error_code::METHOD_UNKNOWN), full, full),
+            (true, Failure::Inconsistent, short, full),
+            (false, Failure::Inconsistent, full, full),
             (false, Failure::Timeout, full, full),
             (false, Failure::Error(error_code::SERVER), full, full),
             (
@@ -4391,6 +4395,23 @@ mod tests {
                             }),
                         };
                         a.on_response(&sockets, 0, &msg, None, remote);
+                    }
+                    Failure::Inconsistent => {
+                        let tid_bytes = tid.to_be_bytes();
+                        let response = Response {
+                            id: NodeId([0xEE; 20]),
+                            samples: Some(crate::krpc::Samples::default()),
+                            interval: Some(600),
+                            ..Default::default()
+                        };
+                        let msg = Message {
+                            transaction_id: &tid_bytes,
+                            version: None,
+                            ip: None,
+                            read_only: false,
+                            body: Body::Response(response.clone()),
+                        };
+                        a.on_response(&sockets, 0, &msg, Some(&response), remote);
                     }
                 }
                 let after = Instant::now();
