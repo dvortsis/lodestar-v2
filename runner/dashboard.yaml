@@ -654,6 +654,7 @@ placement:
   - GS-3
   - X-gs3-nits
   - X-search-param-errors
+  - X-param-echo-cap
   - ENR-12
   - UP-2
   - X-watch-env

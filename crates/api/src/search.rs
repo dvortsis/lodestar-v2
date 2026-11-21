@@ -282,30 +282,34 @@ const SEARCH_PARAMS: [&str; 11] = [
     "q", "ast", "sort", "limit", "offset", "hidden", "tz", "cursor", "collapse", "exact", "explain",
 ];
 
-/// The first of [`SEARCH_PARAMS`] that `query` sends more than once.
-fn repeated(query: &str) -> Option<&'static str> {
-    let mut seen = [false; SEARCH_PARAMS.len()];
-    for (key, _) in form_urlencoded::parse(query.as_bytes()) {
-        if let Some(i) = SEARCH_PARAMS.iter().position(|p| *p == key) {
-            if seen[i] {
-                return Some(SEARCH_PARAMS[i]);
-            }
-            seen[i] = true;
-        }
-    }
-    None
+/// The first parameter `is_param` accepts that `query` sends more than
+/// once, read with the same decoder the query extractor uses (so a
+/// percent-encoded name or `+` for a space counts as it would there).
+pub(crate) fn repeated_param(query: &str, is_param: impl Fn(&str) -> bool) -> Option<String> {
+    let mut seen = std::collections::HashSet::new();
+    form_urlencoded::parse(query.as_bytes())
+        .map(|(key, _)| key)
+        .filter(|key| is_param(key))
+        .find(|key| !seen.insert(key.clone()))
+        .map(|key| key.into_owned())
 }
 
-/// Refuses a `GET /search` query that repeats a parameter, naming it, before
+/// The first of [`SEARCH_PARAMS`] that `query` sends more than once.
+fn repeated(query: &str) -> Option<String> {
+    repeated_param(query, |key| SEARCH_PARAMS.contains(&key))
+}
+
+/// Refuses a `/search` query that repeats a parameter, naming it, before
 /// the extractor would refuse it as a generic "wrong type or value".
 async fn single_valued(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    // POST reads its body, never the URL's query.
-    let get = req.method() == axum::http::Method::GET;
-    if let Some(name) = req.uri().query().filter(|_| get).and_then(repeated) {
+    // POST reads its body, never the URL's query; GET and HEAD (which
+    // `get()` also serves) read the query.
+    let reads_query = req.method() != axum::http::Method::POST;
+    if let Some(name) = req.uri().query().filter(|_| reads_query).and_then(repeated) {
         return ApiError::bad_request(
             "repeated_parameter",
             format!("{name} was sent more than once: send it once."),
@@ -319,16 +323,23 @@ async fn single_valued(
 /// The longest a value is echoed back in an error, in characters.
 const ECHO_MAX: usize = 64;
 
-/// A request value as an error message shows it: quoted, at most
-/// [`ECHO_MAX`] characters (cut on a character boundary and marked with
-/// "…"), with control and other unprintable characters escaped, so an
-/// error can neither grow with the request nor carry them.
-fn echo(value: &str) -> String {
-    let mut shown: String = value.chars().take(ECHO_MAX).collect();
+/// A request value as an error shows it, unquoted: at most [`ECHO_MAX`]
+/// characters (cut on a character boundary and marked with "…"), with
+/// control and other unprintable characters escaped (`str`'s `Debug`), so
+/// an error can neither grow with the request nor carry them. For a
+/// `field`, which isn't quoted; a message uses [`echo`].
+pub(crate) fn shown(value: &str) -> String {
+    let quoted = echo(value);
+    quoted[1..quoted.len() - 1].to_owned()
+}
+
+/// [`shown`], quoted, for an error message.
+pub(crate) fn echo(value: &str) -> String {
+    let mut cut: String = value.chars().take(ECHO_MAX).collect();
     if value.chars().nth(ECHO_MAX).is_some() {
-        shown.push('…');
+        cut.push('…');
     }
-    format!("{shown:?}")
+    format!("{cut:?}")
 }
 
 /// `collapse`: `group` or `none` (the default), parsed through
@@ -1416,12 +1427,40 @@ mod tests {
 
     #[test]
     fn repeated_names_the_first_parameter_sent_twice() {
-        assert_eq!(repeated("q=a&sort=size"), None);
-        assert_eq!(repeated("q=a&sort=size&sort=-size"), Some("sort"));
-        assert_eq!(repeated("tz=1&q=a&tz=2&q=b"), Some("tz"));
+        let r = |q: &str| repeated(q);
+        assert_eq!(r("q=a&sort=size"), None);
+        assert_eq!(r("q=a&sort=size&sort=-size").as_deref(), Some("sort"));
+        assert_eq!(r("tz=1&q=a&tz=2&q=b").as_deref(), Some("tz"));
         // Percent-encoded names count; unknown names are left alone.
-        assert_eq!(repeated("c%6Fllapse=group&collapse=none"), Some("collapse"));
-        assert_eq!(repeated("x=1&x=2"), None);
+        assert_eq!(
+            r("c%6Fllapse=group&collapse=none").as_deref(),
+            Some("collapse")
+        );
+        assert_eq!(r("x=1&x=2"), None);
+        // No `=`, or an empty value, is still the parameter, sent twice.
+        assert_eq!(r("sort&sort").as_deref(), Some("sort"));
+        assert_eq!(r("sort=&sort=x").as_deref(), Some("sort"));
+        // `+` is a space, as the extractor reads it: `so rt` is no
+        // parameter, and `sort+` isn't `sort`.
+        assert_eq!(r("so+rt=a&so+rt=b"), None);
+        assert_eq!(r("sort+=a&sort=b"), None);
+    }
+
+    #[test]
+    fn echo_cuts_at_exactly_64_characters() {
+        let x = |n: usize| "x".repeat(n);
+        // 64 characters echo whole; 65 are cut to 64 and marked.
+        assert_eq!(echo(&x(64)), format!("\"{}\"", x(64)));
+        assert_eq!(echo(&x(65)), format!("\"{}…\"", x(64)));
+        assert_eq!(echo(&x(66)), format!("\"{}…\"", x(64)));
+        // A multi-byte character as the 64th is kept whole; as the 65th it
+        // is the one cut, never split.
+        assert_eq!(echo(&format!("{}é", x(63))), format!("\"{}é\"", x(63)));
+        assert_eq!(echo(&format!("{}é", x(64))), format!("\"{}…\"", x(64)));
+        assert_eq!(echo(&format!("{}éé", x(63))), format!("\"{}é…\"", x(63)));
+        // `shown` is the same without the quotes, for a `field`.
+        assert_eq!(shown(&x(65)), format!("{}…", x(64)));
+        assert_eq!(shown("a\nb"), "a\\nb");
     }
 
     #[test]

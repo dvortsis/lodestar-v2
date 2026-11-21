@@ -12,11 +12,12 @@
 //! to it through [`SessionAdmit`] and [`SessionEnd`], so the fetch pool's
 //! crate needn't depend on this one (the pipeline adapts the two).
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use tokio::sync::{mpsc, oneshot};
 
 use super::Stats;
+use super::limits::{Network, source};
 use super::transport::Set;
 
 /// Endpoints per batch. Candidate default (§2.19), from the spec.
@@ -27,6 +28,18 @@ pub const STREAM_QUEUE: usize = 2;
 /// Distinct endpoints a session remembers; once full, further endpoints
 /// for that session are ignored. Candidate default (§2.19), from the spec.
 pub const STREAM_SEEN: usize = 32;
+/// Distinct endpoints one source (a responder's IPv4 /24 or IPv6 /48, as
+/// [`source`] keys it) may add to a session, so at least four sources
+/// share [`STREAM_SEEN`].
+pub const STREAM_SOURCE_SHARE: usize = STREAM_SEEN / 4;
+
+/// The share a reply from `ip` counts against; `None` for loopback, which
+/// has no share (as in [`super::limits`]): no packet from off the host
+/// carries a loopback source, and a local test network runs many nodes
+/// on it.
+pub(crate) fn stream_source(ip: IpAddr) -> Option<Network> {
+    (!ip.to_canonical().is_loopback()).then(|| source(ip))
+}
 
 /// How a streamed lookup ended, as the actor reports it. It carries no
 /// peers: they went out as batches. The caller reads a dropped terminal
@@ -121,6 +134,9 @@ pub(crate) struct Stream {
     end: Box<dyn SessionEnd>,
     pending: Vec<SocketAddr>,
     seen: Set<SocketAddr>,
+    /// Per source, the endpoints of `seen` it added; at most
+    /// [`STREAM_SEEN`] entries, as each holds at least one.
+    shares: Vec<(Network, usize)>,
     /// A batch has gone out; [`Stream::first_sent`] reports it once.
     sent: bool,
     first_reported: bool,
@@ -136,6 +152,7 @@ impl Stream {
             end,
             pending: Vec::with_capacity(STREAM_BATCH),
             seen: Set::default(),
+            shares: Vec::new(),
             sent: false,
             first_reported: false,
         })
@@ -154,9 +171,13 @@ impl Stream {
     }
 
     /// Takes a reply's peers, already normalized and checked against the
-    /// public-endpoint policy. New ones are batched and sent if there's
-    /// room; past the pending batch they're dropped and counted.
-    pub(crate) fn offer(&mut self, peers: &[SocketAddr], stats: &Stats) {
+    /// public-endpoint policy, from a responder in `from` (its
+    /// [`stream_source`]). New ones are batched and sent if there's room;
+    /// past the pending batch they're dropped and counted, and stay unseen,
+    /// so a later reply can still bring them. A source adds at most
+    /// [`STREAM_SOURCE_SHARE`] of the session's [`STREAM_SEEN`]; the rest
+    /// of its peers are ignored.
+    pub(crate) fn offer(&mut self, from: Option<Network>, peers: &[SocketAddr], stats: &Stats) {
         if self.is_closed() {
             return;
         }
@@ -164,21 +185,38 @@ impl Stream {
             if self.seen.contains(&p) {
                 continue;
             }
+            if from.is_some_and(|net| self.share(net) >= STREAM_SOURCE_SHARE) {
+                continue;
+            }
             if self.seen.len() >= STREAM_SEEN {
                 Stats::inc(&stats.peer_stream_seen_full);
                 continue;
             }
-            self.seen.insert(p);
             if self.pending.len() >= STREAM_BATCH {
                 self.flush(stats);
             }
             if self.pending.len() >= STREAM_BATCH {
                 Stats::inc(&stats.peer_stream_backpressure);
-            } else {
-                self.pending.push(p);
+                continue;
             }
+            self.seen.insert(p);
+            if let Some(net) = from {
+                match self.shares.iter_mut().find(|(n, _)| *n == net) {
+                    Some((_, held)) => *held += 1,
+                    None => self.shares.push((net, 1)),
+                }
+            }
+            self.pending.push(p);
         }
         self.flush(stats);
+    }
+
+    /// The endpoints source `net` has added.
+    fn share(&self, net: Network) -> usize {
+        self.shares
+            .iter()
+            .find(|(n, _)| *n == net)
+            .map_or(0, |(_, held)| *held)
     }
 
     /// Sends the pending batch if the channel has room. Never waits.
@@ -247,12 +285,13 @@ mod tests {
         let (mut s, mut session) = session();
         let peers: Vec<_> = (0..30).map(peer).collect();
         // Two batches fill the channel, the third waits, the rest drop.
-        s.offer(&peers, &stats);
-        assert_eq!(s.buffered(), (STREAM_BATCH, 30));
+        s.offer(None, &peers, &stats);
+        // The dropped ones stay unseen.
+        assert_eq!(s.buffered(), (STREAM_BATCH, 3 * STREAM_BATCH));
         assert_eq!(stats.peer_stream_batches.load(Ordering::Relaxed), 2);
         assert_eq!(stats.peer_stream_backpressure.load(Ordering::Relaxed), 6);
         // Duplicates aren't new.
-        s.offer(&peers[..4], &stats);
+        s.offer(None, &peers[..4], &stats);
         assert_eq!(stats.peer_stream_backpressure.load(Ordering::Relaxed), 6);
         let first = session.batches.try_recv().unwrap();
         assert_eq!(first, peers[..8]);
@@ -268,7 +307,7 @@ mod tests {
         let stats = Stats::default();
         let (mut s, mut session) = session();
         for chunk in (0..40).map(peer).collect::<Vec<_>>().chunks(4) {
-            s.offer(chunk, &stats);
+            s.offer(None, chunk, &stats);
             while session.batches.try_recv().is_ok() {}
         }
         assert_eq!(s.buffered().1, STREAM_SEEN);
@@ -280,7 +319,7 @@ mod tests {
     fn termination_flushes_once_counts_discards_and_closes_before_the_terminal() {
         let stats = Stats::default();
         let (mut s, mut session) = session();
-        s.offer(&(0..24).map(peer).collect::<Vec<_>>(), &stats);
+        s.offer(None, &(0..24).map(peer).collect::<Vec<_>>(), &stats);
         assert_eq!(s.buffered().0, STREAM_BATCH);
         s.finish(LookupEnd::Complete, &stats);
         assert_eq!(stats.peer_stream_backpressure.load(Ordering::Relaxed), 8);
@@ -298,7 +337,7 @@ mod tests {
     fn a_closed_caller_is_cancelled_even_with_a_full_channel() {
         let stats = Stats::default();
         let (mut s, session) = session();
-        s.offer(&(0..24).map(peer).collect::<Vec<_>>(), &stats);
+        s.offer(None, &(0..24).map(peer).collect::<Vec<_>>(), &stats);
         drop(session);
         assert!(s.is_closed());
         s.finish(LookupEnd::Complete, &stats);
@@ -308,6 +347,111 @@ mod tests {
         );
         // Discards to a caller that went aren't backpressure.
         assert_eq!(stats.peer_stream_backpressure.load(Ordering::Relaxed), 0);
+    }
+
+    fn net(b: u8) -> Option<Network> {
+        Some(Network(4, u64::from(b)))
+    }
+
+    /// Drains whatever batches are queued.
+    fn drain(session: &mut LookupSession) -> Vec<SocketAddr> {
+        let mut got = Vec::new();
+        while let Ok(batch) = session.batches.try_recv() {
+            got.extend(batch);
+        }
+        got
+    }
+
+    /// X-sec-S1-18: the key a reply's share is counted against.
+    #[test]
+    fn stream_source_keys_by_source_and_exempts_loopback() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+        let v4 = |a, b, c, d| stream_source(IpAddr::V4(Ipv4Addr::new(a, b, c, d)));
+        let v6 = |s: &str| stream_source(s.parse::<Ipv6Addr>().unwrap().into());
+        assert_eq!(v4(127, 0, 0, 1), None);
+        assert_eq!(v4(127, 9, 9, 9), None);
+        assert_eq!(v6("::1"), None);
+        assert_eq!(v6("::ffff:127.0.0.1"), None);
+        // A mapped address is its IPv4 source; a /24 is one source.
+        assert!(v4(203, 0, 113, 7).is_some());
+        assert_eq!(v6("::ffff:203.0.113.7"), v4(203, 0, 113, 7));
+        assert_eq!(v4(203, 0, 113, 7), v4(203, 0, 113, 200));
+        assert_ne!(v4(203, 0, 113, 7), v4(203, 0, 114, 7));
+        // An IPv6 source is its /48: two /64s of one site are one.
+        assert!(v6("2001:db8:1:1::1").is_some());
+        assert_eq!(v6("2001:db8:1:1::1"), v6("2001:db8:1:2::1"));
+        assert_ne!(v6("2001:db8:1:1::1"), v6("2001:db8:2:1::1"));
+    }
+
+    /// X-sec-S1-18: each source adds at most its share of the session.
+    #[test]
+    fn a_source_adds_at_most_its_share() {
+        let stats = Stats::default();
+        let (mut s, mut session) = session();
+        s.offer(net(1), &(0..32).map(peer).collect::<Vec<_>>(), &stats);
+        assert_eq!(s.buffered().1, STREAM_SOURCE_SHARE);
+        // A second reply from the same source adds nothing new.
+        s.offer(net(1), &(32..40).map(peer).collect::<Vec<_>>(), &stats);
+        assert_eq!(drain(&mut session), (0..8).map(peer).collect::<Vec<_>>());
+        // Other sources still get in, up to the session's cap.
+        for b in 2..=4 {
+            let first = 100 * u16::from(b);
+            s.offer(
+                net(b),
+                &(first..first + 20).map(peer).collect::<Vec<_>>(),
+                &stats,
+            );
+            assert_eq!(drain(&mut session).len(), STREAM_SOURCE_SHARE);
+        }
+        assert_eq!(s.buffered().1, STREAM_SEEN);
+        // No share for loopback (`None`), but the session cap holds.
+        s.offer(None, &(900..910).map(peer).collect::<Vec<_>>(), &stats);
+        assert_eq!(s.buffered().1, STREAM_SEEN);
+        assert_eq!(stats.peer_stream_seen_full.load(Ordering::Relaxed), 10);
+    }
+
+    /// X-sec-S1-18: a peer dropped while the channel is full isn't seen,
+    /// so a later reply delivers it.
+    #[test]
+    fn a_peer_dropped_for_backpressure_can_come_again() {
+        let stats = Stats::default();
+        let (mut s, mut session) = session();
+        let peers: Vec<_> = (0..30).map(peer).collect();
+        s.offer(None, &peers, &stats);
+        assert_eq!(stats.peer_stream_backpressure.load(Ordering::Relaxed), 6);
+        assert_eq!(drain(&mut session), peers[..16]);
+        s.offer(None, &peers[24..], &stats);
+        let got = drain(&mut session);
+        assert_eq!(got, peers[16..]);
+    }
+
+    proptest::proptest! {
+        /// Whatever the replies, the session sees at most [`STREAM_SEEN`]
+        /// peers, each source at most its share, and every peer the caller
+        /// gets is distinct.
+        #[test]
+        fn shares_and_the_seen_cap_hold(
+            replies in proptest::collection::vec((0u8..6, proptest::collection::vec(0u16..60, 0..40), proptest::bool::ANY), 0..30),
+        ) {
+            let stats = Stats::default();
+            let (mut s, mut session) = session();
+            let mut got = Vec::new();
+            for (b, ports, read) in replies {
+                let from = if b == 0 { None } else { net(b) };
+                s.offer(from, &ports.iter().map(|p| peer(*p)).collect::<Vec<_>>(), &stats);
+                if read {
+                    got.extend(drain(&mut session));
+                }
+                proptest::prop_assert!(s.buffered().1 <= STREAM_SEEN);
+                proptest::prop_assert!(s.shares.iter().all(|(_, held)| *held <= STREAM_SOURCE_SHARE));
+                proptest::prop_assert!(s.shares.iter().map(|(_, held)| held).sum::<usize>() <= s.buffered().1);
+            }
+            got.extend(drain(&mut session));
+            let n = got.len();
+            got.sort_unstable();
+            got.dedup();
+            proptest::prop_assert_eq!(got.len(), n);
+        }
     }
 
     #[test]

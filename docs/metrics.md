@@ -764,7 +764,7 @@ These series count only with `dht.streaming_peers` on ([the decision](decisions/
 | Series | Meaning |
 |---|---|
 | `dht_peer_stream_batches_total` | Batches the DHT sent to streaming lookups. |
-| `dht_peer_stream_backpressure_total` | Peers dropped because the caller's batches were full: past the held-back batch, and any held back when the lookup ended. This is a measured loss, not an error. |
+| `dht_peer_stream_backpressure_total` | Peers dropped at the moment the caller's batches were full: past the held-back batch, and any held back when the lookup ended. A peer dropped past the held-back batch isn't marked seen, so a later reply may offer it again, and it can be counted more than once. Not an error. |
 | `dht_peer_stream_seen_full_total` | Peers ignored because the lookup had already seen 32 distinct ones. |
 | `dht_peer_stream_terminals_total{kind}` | Streaming lookups the DHT ended: `complete`, `deadline` (the 25 s request deadline) or `cancelled` (the pool had let go). |
 | `dht_peer_stream_first_batch_seconds_total` | Time from a streaming request's start to its first batch. |

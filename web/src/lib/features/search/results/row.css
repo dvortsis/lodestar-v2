@@ -64,7 +64,13 @@
 .rr-via {
 	flex: none;
 }
+/* A fact that doesn't fit the row drops whole instead of clipping mid-word (review I3, L5): the
+   line wraps, and only its first line (1lh, so it follows a user's text-spacing line height) shows.
+   The tiers below drop the least useful facts first, by the row's own width (§10.15). Dropped
+   facts stay in the accessibility tree and are all in the drawer. */
 .rr-facts {
+	flex-wrap: wrap;
+	height: 1lh;
 	gap: calc(var(--spacing) * 4);
 	font-variant-numeric: tabular-nums;
 }
@@ -145,26 +151,35 @@
 	align-items: center;
 	gap: var(--spacing);
 }
-/* Prioritize decision facts by the actual row width, including Discover's
-   narrow panels. Density remains the user's choice. */
+/* Discover's Newest list is about recency: the discovered time leads its facts (review I3). Tied
+   to the section's heading id in DiscoverPage.svelte; e2e/search-results-adaptive checks it. */
+[aria-labelledby='discover-newest-h'] .rr-discovered {
+	order: -4;
+}
+
+/* By the row's own width (its content box), not the viewport's (§10.15), in §10.4's order: the
+   composition fact goes first, then the file count (both are in the drawer and Table mode); at
+   480 px and under, all but size, availability, discovered and a feature's own fact. Past that,
+   facts drop from the end of the line. Density stays the user's choice. */
+@container result-row (max-width: 720px) {
+	.rr-comp {
+		display: none;
+	}
+}
+@container result-row (max-width: 600px) {
+	.rr-files {
+		display: none;
+	}
+}
 @container result-row (max-width: 480px) {
 	.rr-raw,
-	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-extra),
+	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-discovered):not(.rr-extra),
 	.rr-leechers,
 	.rr-action-label {
 		display: none;
 	}
 	.rr-facts {
 		gap: calc(var(--spacing) * 2);
-	}
-	.rr-size {
-		order: -2;
-	}
-	.rr-extra {
-		order: -3;
-	}
-	.rr-swarm {
-		order: -1;
 	}
 	.rr-action {
 		padding-inline: var(--spacing);

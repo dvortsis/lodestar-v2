@@ -15,7 +15,7 @@ use crate::compact::{NodeId, NodeInfo};
 use crate::routing::K;
 
 mod values;
-pub(crate) use values::{MAX_VALUES, Values};
+pub(crate) use values::{MAX_VALUES, SentBy, Values};
 
 pub(crate) const ALPHA: usize = 3;
 /// Candidates kept per lookup; the far tail is never queried anyway.
