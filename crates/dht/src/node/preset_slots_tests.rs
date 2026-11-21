@@ -248,7 +248,10 @@ async fn no_tick_passes_the_rate_or_the_outstanding_cap() {
             assert!(a.pending.len() <= intensity.max_outstanding());
             let sent = a.stats.snapshot().queries_out as f64;
             let t = start.elapsed().as_secs_f64();
-            assert!(sent <= rate + rate * t + 1.0, "{intensity:?}: {sent} by {t} s");
+            assert!(
+                sent <= rate + rate * t + 1.0,
+                "{intensity:?}: {sent} by {t} s"
+            );
             for r in a.peer_requests.values() {
                 assert!(r.sent <= MAX_PEER_QUERIES);
                 assert!(r.started.elapsed() <= LOOKUP_DEADLINE + Duration::from_millis(100));
@@ -267,10 +270,13 @@ async fn the_query_cap_holds_beside_a_full_set() {
     let slots = Intensity::Balanced.peer_slots();
     let (mut a, s) = actor(Intensity::Balanced, true, Duration::from_secs(60));
     let mut next = 0x8000_0000u32;
-    table(&mut a, (0..8).map(|_| {
-        next -= 0x0100_0000;
-        node(next)
-    }));
+    table(
+        &mut a,
+        (0..8).map(|_| {
+            next -= 0x0100_0000;
+            node(next)
+        }),
+    );
     let first = admit(&mut a, 0, None).expect("admitted");
     a.maintain(&s);
     let owner = *a.peer_requests.keys().next().expect("running");
@@ -329,4 +335,83 @@ async fn the_query_cap_holds_beside_a_full_set() {
     }
     assert_eq!(ended(&a, LedgerEnd::QueryCap), 1);
     drop(first);
+}
+
+/// A live change from Aggressive to Low keeps the 256 slots but not the
+/// network: from the change on, no query goes out while Low's outstanding
+/// cap is reached, so the queries already in flight only drain, and once
+/// they've had their timeout the count stays within Low's cap. The rate
+/// falls to Low's at once.
+#[tokio::test(start_paused = true)]
+async fn a_live_change_to_low_holds_lows_caps_with_256_slots() {
+    let timeout = Duration::from_millis(500);
+    let (mut a, s) = actor(Intensity::Aggressive, true, timeout);
+    table(&mut a, (1..=4096).map(node));
+    let slots = Intensity::Aggressive.peer_slots();
+    let _held: Vec<_> = (0..slots)
+        .map(|i| admit(&mut a, i, None).expect("admitted"))
+        .collect();
+    a.maintain(&s);
+    assert_eq!(a.active_get_peers, slots);
+    let cap = Intensity::Low.max_outstanding();
+    assert!(a.pending.len() > cap, "Aggressive filled past Low's cap");
+
+    a.on_command(Command::SetIntensity(Intensity::Low));
+    let changed = Instant::now();
+    let sent_at_change = a.stats.snapshot().queries_out;
+    let mut last = a.pending.len();
+    for _ in 0..200 {
+        tokio::time::advance(Duration::from_millis(100)).await;
+        a.maintain(&s);
+        let now = a.pending.len();
+        if last >= cap {
+            assert!(
+                now <= last,
+                "no query out while at Low's cap: {last} -> {now}"
+            );
+        }
+        if changed.elapsed() > timeout + Duration::from_millis(100) {
+            assert!(now <= cap, "within Low's cap once drained: {now}");
+        }
+        assert!(a.active_get_peers <= slots);
+        let rate = f64::from(Intensity::Low.queries_per_sec());
+        let sent = (a.stats.snapshot().queries_out - sent_at_change) as f64;
+        assert!(sent <= rate + rate * changed.elapsed().as_secs_f64() + 1.0);
+        last = now;
+    }
+}
+
+/// The state the slots can hold at Aggressive, from each structure's size
+/// and its cap: per request, its record, its values (64) and their
+/// sources, its per-source vouching (a source per query, 64 queries, 4
+/// values each), and per address family a lookup with its 64 candidates
+/// (a candidate is a node, its 20-byte distance, a state and an optional
+/// box: at most a node plus 40 bytes), its own values, and 3 queries in
+/// flight with their address entries; plus its queue entry. Hash-map
+/// entries are counted twice over for their table's spare room.
+#[test]
+fn the_slot_state_at_aggressive_is_bounded() {
+    use std::mem::size_of;
+    let addr = size_of::<SocketAddr>();
+    let values = MAX_VALUES * addr + MAX_VALUES * (size_of::<crate::node::limits::Network>() + 24);
+    let sent_by = MAX_PEER_QUERIES
+        * (size_of::<crate::node::limits::Network>()
+            + 24
+            + (ENOUGH_VALUES / VALUE_RESPONDERS) * addr);
+    let candidate = size_of::<NodeInfo>() + 40;
+    let in_flight = crate::node::lookup::ALPHA
+        * 2
+        * (size_of::<u64>() + size_of::<Pending>() + size_of::<SocketAddr>() + size_of::<u32>());
+    let leg = 2 * (size_of::<u32>() + size_of::<Lookup>()) + 64 * candidate + values + in_flight;
+    let request = 2 * (size_of::<u32>() + size_of::<PeerRequest>())
+        + values
+        + sent_by
+        + size_of::<QueuedLookup>();
+    let per_slot = request + 2 * leg;
+    let total = MAX_PEER_SLOTS * per_slot;
+    println!("per slot {per_slot} B; at Aggressive's {MAX_PEER_SLOTS} slots {total} B");
+    // Recorded in docs/decisions/2026-11-21-CR-1c.md; a change here
+    // updates it.
+    assert!(per_slot < 48 * 1024, "{per_slot}");
+    assert!(total < 12 * 1024 * 1024, "{total}");
 }

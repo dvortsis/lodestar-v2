@@ -2069,8 +2069,7 @@ impl Actor {
             let slot = secure_id::slot(id);
             let fresh = used & (1 << slot) == 0;
             used |= 1 << slot;
-            secure_id::is_valid(id, &ip)
-                && self.shard.is_none_or(|s| fresh && s.has_slot(slot))
+            secure_id::is_valid(id, &ip) && self.shard.is_none_or(|s| fresh && s.has_slot(slot))
         };
         if secure_id::is_exempt(&ip) || self.ids.iter().all(fits) {
             return;
