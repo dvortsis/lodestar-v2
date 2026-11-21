@@ -241,8 +241,11 @@ async fn any_ast_on_get_is_ast_needs_post() {
     // POST reads its body, never the URL's query: an `ast` there is ignored.
     let (_, _, parsed) = call(&f.app, request("GET", &uri("/parse", "q=movie"), &c)).await;
     let parsed: Value = serde_json::from_str(&parsed).unwrap();
-    let mut req = request("POST", &uri("/search", "ast=x"), &c);
-    *req.body_mut() = Body::from(json!({ "ast": parsed["ast"] }).to_string());
+    let req = Request::post(uri("/search", "ast=x"))
+        .header(header::COOKIE, &c)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "ast": parsed["ast"] }).to_string()))
+        .unwrap();
     let (status, _, body) = call(&f.app, req).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }
