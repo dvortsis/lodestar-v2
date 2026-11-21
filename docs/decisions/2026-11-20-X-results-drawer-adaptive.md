@@ -42,7 +42,7 @@ Slice X-results-drawer-adaptive (Track U step 3): UI review findings I1 and I3, 
 
 - **"CSS" from 19.72 KB to 19.73 KB** (runner, §2.26, 2026-11-20). This covers only the new token: 5 B gzipped, taking the global sheet from 19,717 B to 19,722 B, 2 B over the old limit. The built sheet is otherwise byte-identical to `main`'s.
   - The raise was made after X-session-draft-keep (#999), which was editing `web/.size-limit.mjs`, merged.
-- **"Search results (lazy)" from 40.61 KB to 40.62 KB** (runner, §2.26, 2026-11-21, pending its confirmation of the measured numbers).
+- **"Search results (lazy)" from 40.61 KB to 40.62 KB** (runner, §2.26, 2026-11-21).
   - The two tiers and the `rr-files` class take the entry to 40,617 B, 7 B over. `main` measures 40,556 B.
   - The raise is the overage rounded up to 0.1 kB.
 - Every other `size-limit` entry passes unchanged.
