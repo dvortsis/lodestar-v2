@@ -847,6 +847,7 @@ placement:
   - X-filter-budget-manyfile-perf
   - X-filter-split-reuse
   - X-filter-budget-remeasure
+  - X-filter-dicp-doc
   - X-filter12-fix
   - X-fixed-sleep-nits
   - X-cluster06-fix
