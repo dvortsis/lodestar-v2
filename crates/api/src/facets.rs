@@ -27,8 +27,8 @@ use crate::dto::facets::{
 use crate::error::{ApiError, ApiResult, internal};
 use crate::extract::{Json, Query, same_origin_json};
 use crate::search::{
-    Visibility, base_query, client_of, fingerprint, open_cursor, request_ast, scope_of,
-    search_error, sort_param, tz_param, unix_now,
+    Visibility, base_query, client_of, echo, fingerprint, open_cursor, repeated_param, request_ast,
+    scope_of, search_error, shown, sort_param, tz_param, unix_now,
 };
 use crate::torrents::{Catalogue, Viewer, plugin_names};
 use crate::{ApiState, auth};
@@ -45,7 +45,14 @@ pub const BUDGET: Duration = Duration::from_secs(5);
 const FIRST_RUN: &str = "first_run_at";
 
 pub fn routes() -> Router<ApiState> {
-    auth::protected(Router::new().route("/facets", get(facets_get).post(facets_post)))
+    auth::protected(
+        Router::new().route(
+            "/facets",
+            get(facets_get)
+                .post(facets_post)
+                .layer(axum::middleware::from_fn(single_valued)),
+        ),
+    )
 }
 
 /// Facets for query text. To send an AST, POST it.
@@ -94,12 +101,48 @@ pub(crate) async fn facets_post(
     run_facets(s, viewer, &headers, p).await
 }
 
-fn bad_parameter(field: String) -> ApiError {
+/// `field` is the parameter's name as sent, so it's shown capped and
+/// escaped (`limit.<anything>`).
+fn bad_parameter(field: &str) -> ApiError {
     ApiError::bad_request(
         "bad_parameter",
         "A query parameter has the wrong type or value.",
     )
-    .field(field)
+    .field(shown(field))
+}
+
+/// The parameters `GET /facets` reads, each at most once: `/search`'s
+/// that it takes, `lease`, and one `limit.<facet>` per facet. Not `ast`:
+/// any `ast` on GET gets the more useful `ast_needs_post`.
+fn facets_param(key: &str) -> bool {
+    matches!(key, "q" | "sort" | "lease" | "tz" | "hidden") || key.starts_with("limit.")
+}
+
+/// Refuses a `/facets` query that repeats a parameter, naming it, as
+/// `/search` does (still `bad_parameter` here: the code is unchanged).
+/// Without this the map extractor would keep the last value silently.
+async fn single_valued(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    // POST reads its body, never the URL's query; GET and HEAD read it.
+    let reads_query = req.method() != axum::http::Method::POST;
+    let repeated = req
+        .uri()
+        .query()
+        .filter(|_| reads_query)
+        .and_then(|q| repeated_param(q, facets_param));
+    if let Some(name) = repeated {
+        let name = shown(&name);
+        return ApiError::bad_request(
+            "bad_parameter",
+            format!("{name} was sent more than once: send it once."),
+        )
+        .field(name)
+        .into_response();
+    }
+    next.run(req).await
 }
 
 /// `GET`'s parameters as a request; other parameters are ignored, as
@@ -116,17 +159,17 @@ fn from_params(p: BTreeMap<String, String>) -> ApiResult<FacetsRequest> {
             "q" => r.q = Some(v),
             "sort" => r.sort = Some(v),
             "lease" => r.lease = Some(v),
-            "tz" => r.tz = Some(v.parse().map_err(|_| bad_parameter(k))?),
+            "tz" => r.tz = Some(v.parse().map_err(|_| bad_parameter(&k))?),
             "hidden" => {
                 r.hidden = Some(match v.as_str() {
                     "true" | "1" => true,
                     "false" | "0" => false,
-                    _ => return Err(bad_parameter(k)),
+                    _ => return Err(bad_parameter(&k)),
                 })
             }
             _ => {
                 if let Some(name) = k.strip_prefix("limit.") {
-                    let n = v.parse().map_err(|_| bad_parameter(k.clone()))?;
+                    let n = v.parse().map_err(|_| bad_parameter(&k))?;
                     r.limits.insert(name.to_owned(), n);
                 }
             }
@@ -140,12 +183,14 @@ fn limits(given: &BTreeMap<String, usize>) -> ApiResult<BTreeMap<Facet, usize>> 
     given
         .iter()
         .map(|(name, n)| {
-            let field = format!("limit.{name}");
+            // Capped as a whole, as every other error naming this parameter.
+            let field = shown(&format!("limit.{name}"));
             let Some(f) = Facet::from_name(name) else {
                 return Err(ApiError::bad_request(
                     "unknown_facet",
                     format!(
-                        "There's no facet {name:?}: use one of {}.",
+                        "There's no facet {}: use one of {}.",
+                        echo(name),
                         Facet::ALL.map(Facet::name).join(", ")
                     ),
                 )

@@ -443,6 +443,13 @@ async fn a_repeated_parameter_is_named() {
         .unwrap();
     let (status, _, body) = call(&f.app, anon).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    // HEAD, which `get()` also serves, reads the query too.
+    let head = Request::head("/api/v1/search?sort=a&sort=b")
+        .header(header::COOKIE, &c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = call(&f.app, head).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     // POST reads its body, not the URL's query.
     let (status, _, body) = call(
         &f.app,

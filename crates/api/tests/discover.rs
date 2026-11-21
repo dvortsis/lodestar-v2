@@ -464,3 +464,30 @@ async fn adult_follows_the_setting() {
     assert_eq!(body["newest"]["notices"], json!([]));
     assert_eq!(body["newest"]["total"], 1);
 }
+
+#[tokio::test]
+async fn an_unknown_type_is_echoed_short_and_printable() {
+    let all = catalogue();
+    let f = fixture(&all, true);
+    let c = session(&f).await;
+    let c = Some(c.as_str());
+    let long = "z".repeat(10_240);
+    let (status, body) = json_of(&f.app, get(&format!("/api/v1/discover?type={long}"), c)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "unknown_type");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!("\"{}…\"", "z".repeat(64))),
+        "{message}"
+    );
+    assert!(message.len() < 400, "{} bytes", message.len());
+    // %0A is a newline, %E2%80%AE a right-to-left override.
+    let (status, body) = json_of(&f.app, get("/api/v1/discover?type=a%0A%E2%80%AEb", c)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        !message.chars().any(|c| c.is_control() || c == '\u{202e}'),
+        "{message:?}"
+    );
+    assert!(message.contains(r#""a\n\u{202e}b""#), "{message}");
+}

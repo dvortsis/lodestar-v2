@@ -689,3 +689,103 @@ async fn search_disabled() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["code"], json!("search_disabled"));
 }
+
+fn encode(s: &str) -> String {
+    form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+#[tokio::test]
+async fn a_repeated_parameter_is_named() {
+    let f = fixture(8);
+    let cookie = session(&f).await;
+    let c = Some(cookie.as_str());
+    for (uri, name) in [
+        ("/api/v1/facets?q=movie&sort=size&sort=-size", "sort"),
+        ("/api/v1/facets?q=a&q=b", "q"),
+        ("/api/v1/facets?limit.ext=2&limit.ext=3", "limit.ext"),
+        ("/api/v1/facets?tz&tz=0", "tz"),
+    ] {
+        let (status, body) = json_of(&f.app, get(uri, c)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        let e = &body["error"];
+        assert_eq!(e["code"], "bad_parameter", "{uri}: {body}");
+        assert_eq!(e["field"], name, "{uri}: {body}");
+        assert_eq!(
+            e["message"],
+            format!("{name} was sent more than once: send it once."),
+            "{uri}"
+        );
+    }
+    // A repeated `ast` is still the clearer ast_needs_post.
+    let (status, body) = json_of(&f.app, get("/api/v1/facets?ast=x&ast=y", c)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "ast_needs_post", "{body}");
+    // Signed out, it's a 401 first: the parameters aren't read.
+    let (status, _) = json_of(&f.app, get("/api/v1/facets?sort=a&sort=b", None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // HEAD reads the query too; POST reads only its body.
+    let head = Request::head("/api/v1/facets?sort=a&sort=b")
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = call(&f.app, head).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, body) = json_of(
+        &f.app,
+        post("/api/v1/facets?q=a&q=b", c, json!({ "q": "movie" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Unknown parameters stay ignored, repeated or not.
+    let (status, body) = json_of(&f.app, get("/api/v1/facets?x=1&x=2", c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn an_unknown_facet_is_echoed_short_and_printable() {
+    let f = fixture(8);
+    let c = session(&f).await;
+    let c = Some(c.as_str());
+    // A long name: cut at 64 characters and marked, in the message and
+    // the field alike.
+    let long = "z".repeat(10_240);
+    let (status, body) = json_of(&f.app, get(&format!("/api/v1/facets?limit.{long}=3"), c)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let e = &body["error"];
+    assert_eq!(e["code"], "unknown_facet");
+    let cut = format!("{}…", "z".repeat(64));
+    // The field is the whole parameter, capped as every error caps it.
+    assert_eq!(e["field"], format!("limit.{}…", "z".repeat(58)));
+    assert!(
+        e["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("\"{cut}\"")),
+        "{body}"
+    );
+    // Control and bidi characters come back escaped, never raw.
+    let raw = "a\n\u{1b}[31m\u{202e}b";
+    let (status, body) = json_of(
+        &f.app,
+        get(
+            &format!("/api/v1/facets?{}=3", encode(&format!("limit.{raw}"))),
+            c,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let e = &body["error"];
+    for text in [e["field"].as_str().unwrap(), e["message"].as_str().unwrap()] {
+        assert!(
+            !text.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "{text:?}"
+        );
+        assert!(text.contains(r"a\n\u{1b}[31m\u{202e}b"), "{text}");
+    }
+    // A bad value for a long `limit.` name: its field is capped too.
+    let (status, body) =
+        json_of(&f.app, get(&format!("/api/v1/facets?limit.{long}=many"), c)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "bad_parameter");
+    assert_eq!(body["error"]["field"], format!("limit.{}…", "z".repeat(58)));
+}
