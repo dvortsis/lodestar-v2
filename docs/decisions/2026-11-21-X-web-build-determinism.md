@@ -20,7 +20,7 @@ Runner brief, 2026-11-21Z: size-limit numbers moved by 5–20 B gzip on routes a
   - A name now changes only when the chunk's make-up does.
   - With it, the same probe moves **1 entry**: Settings FiltersScreen (first view), +3 B, the screen that shows the changed message.
 - **The names look like rolldown's.** They are 8 base64url characters, and the first is B, C or D about 78% of the time, as in rolldown's own names. Each reference then costs gzip about what a real one does.
-  - With uniformly random names, the settings first views measured up to +88 B over the shipped size. With rolldown-like names, the offset is −18 to +32 B.
+  - With uniformly random names, the settings first views measured up to +88 B over the content-hash build. With rolldown-like names, the offset is −18 to +32 B.
 - **Measurement build only.** CI's size step sets the variable, and nothing else does. The shipped build (`npm run build` in e2e.yml and release.yml) keeps content hashes, which cache-busting needs: a file under `_app/immutable/` must change its name when its bytes change.
   - Server and worker builds keep their names.
   - If SvelteKit's entry pattern ever changes, the plugin throws rather than silently doing nothing.
@@ -29,13 +29,14 @@ Runner brief, 2026-11-21Z: size-limit numbers moved by 5–20 B gzip on routes a
   - Hash-free names (`[name].js`) collide and would break caching in the shipped build.
   - Normalising names inside the size check would need `web/.size-limit.mjs`, which #1033 owns.
 
-## CI guard
-- **`web/scripts/check-build-stable.mjs`** hashes every file in `build/` and `.svelte-kit/output/client/` (`save`), and after a rebuild names each file that differs or exists in only one build (`compare`). Unit tests: `check-build-stable.test.ts`.
-- **web.yml's two builds are now both the measurement build,** compared before `npx size-limit` runs. It's the same two builds the job already ran, so CI time is unchanged.
-  - The first used to build with the commit's version, and was never measured. The shipped config is still built and tested by e2e.yml (Lighthouse, Playwright) and release.yml.
-- **Checked:** the guard passes on two builds of one tree (1,192 files). It fails, naming 9 files, when the second build changes only the version string.
+## No build-twice guard (runner, §2.26)
+- **The runner dropped the guard the brief asked for.** Determinism was checked by hand instead, as listed above: 3 clean builds, the CI flow 3 times, and 1, 2 and 4 CPUs. All came out byte-identical.
+- **Why:** a guard would add about 1.5 minutes to every push and protects against nothing observed. If nondeterminism ever appears, it will show as a size entry that moves with no change in its own chunks.
+- **web.yml:** only the measurement build changes, gaining `LODESTAR_STABLE_NAMES=1`. The first build (`npm run build`, the commit's version) keeps the shipped config.
 
 ## Sizes: content-hash names → module-set names
+**The limits are not exact shipped bytes.** size-limit measures a build whose chunk names differ from the shipped build's. On main d42b71c6, the measured size sits between **−18 and +32 B** of the same tree built with content-hash names (table below). Read a limit as a budget on that measurement, not as the byte count users download.
+
 Same tree, main d42b71c6, `LODESTAR_BUILD_VERSION=0000000`.
 - **Over its current limit:** one entry, Settings messages (on demand), 4,247 → 4,259 B against 4.25 kB. It needs 4.26 kB in `web/.size-limit.mjs`. That file belongs to #1033, so the runner lands the number.
 - **Once stable,** limits can sit at their measured size. Only a change to an entry's own chunks moves it.
@@ -159,4 +160,4 @@ Same tree, main d42b71c6, `LODESTAR_BUILD_VERSION=0000000`.
 | Blocklist wizard step (on demand) | 7,720 | 7,717 | -3 | 8,300 |
 
 ## Left alone
-- **`chunk-graph.json` key order** (`web/scripts/first-load.mjs`, outside this slice's owns). It's diagnostic and the guard doesn't read it. Sorting its keys would make it stable too.
+- **`chunk-graph.json` key order** (`web/scripts/first-load.mjs`). It's diagnostic and unmeasured, and the runner chose to leave it.
