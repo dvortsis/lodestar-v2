@@ -1651,8 +1651,9 @@ export default [
 	// 21,795 B, residue 19 B, rounded up to 64 B).
 	// ENR-8: one dynamic import for the adult-enrichment section (§2.26, runner).
 	// ENR-13: the same import (§2.26, runner): 21,904 B -> 21,952 B.
-	// X-auth-early-401 (runner §2.26): the same replay: 21,967 B measured, rounded up to 0.01 KB.
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.97 KB'),
+	// X-auth-early-401 (runner §2.26): the same replay: 21,967 B measured locally, 21,971 B in CI
+	// (its build SHA moves the chunk names), rounded up to the next 0.01 KB.
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '21.98 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[
