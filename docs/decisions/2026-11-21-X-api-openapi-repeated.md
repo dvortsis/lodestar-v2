@@ -1,4 +1,4 @@
-# X-api-openapi-repeated decisions (#PR)
+# X-api-openapi-repeated decisions (#1021)
 
 Slice session, 2026-11-21. These are X-api-repeated-params' follow-ups (#1010, `docs/decisions/2026-11-21-X-api-repeated-params.md`, "Follow-ups"):
 - the OpenAPI 400 descriptions now name `repeated_parameter` where a route can answer it;
