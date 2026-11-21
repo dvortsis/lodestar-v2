@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T21:47Z",
+    "updated": "2026-11-21T22:08Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
         "model": "opus",
         "since": "2026-11-21T18:36Z",
-        "doing": "PR #1033 open; fresh review (security-sensitive) running"
+        "doing": "PR #1033 review CHANGES (S1-20 blocking, label rule tightened; 1M bench asked)"
       },
       {
         "slot": 2,
@@ -10671,16 +10671,16 @@
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
         "since": "2026-11-21T21:47Z",
-        "doing": "#1030 merged; brief sent; find why identical web builds differ by 5-20 B"
+        "doing": "cause found (hash names), measurement-only stable names approved; waits for #1033"
       },
       {
         "slot": 3,
-        "slice": "X-outputs-e2e-race",
+        "slice": "X-grid-two-col-large",
         "role": "helper",
         "agent": "session_01MMjhnD5iaW7CGjAAtXeVfE",
         "model": "sonnet",
-        "since": "2026-11-21T21:15Z",
-        "doing": "#1031 merged; brief sent; reproduce the bitmagnet /jobs race, fix the test"
+        "since": "2026-11-21T22:08Z",
+        "doing": "#1032 merged; brief sent; restore two columns on large: for three settings screens"
       },
       {
         "slot": 4,
