@@ -72,7 +72,8 @@ export const releaseSourceLabel = (value: string): string => word(RELEASE_SOURCE
 const languageNames = new Map<string, Intl.DisplayNames | null>();
 /** An ISO 639-1 code in the UI language (`fr` → "French", 法语), or the code when it has no name. */
 export function languageLabel(code: string, locale: string): string {
-	if (code === 'multi') return m.label_language_multi();
+	if (code === 'multi')
+		return m.label_language_multi({}, { locale: locale.startsWith('zh') ? 'zh' : 'en' });
 	let names = languageNames.get(locale);
 	if (names === undefined) {
 		try {
@@ -113,7 +114,12 @@ export function valueLabel(field: string, value: string, locale: string): string
 		case 'group':
 			return groupLabel(value);
 		default:
-			return value;
+			// A flag's `yes` and `no` read as the facet rail says them; other values as sent.
+			return value === 'yes'
+				? m.search_facets_yes()
+				: value === 'no'
+					? m.search_facets_no()
+					: value;
 	}
 }
 

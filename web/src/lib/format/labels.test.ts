@@ -35,34 +35,93 @@ function parserValues(name: string): string[] {
 	return values;
 }
 
-/** Every plugin manifest in `crates/sources-plugins`: its id and its name. */
-function manifests(): [string, string][] {
-	const dir = 'sources-plugins/src/';
-	const found: [string, string][] = [];
-	for (const file of readdirSync(crates + dir).filter((f) => f.endsWith('.rs'))) {
-		const source = read(dir + file);
-		const consts = new Map(
-			[...source.matchAll(/const (\w+): &str = "([^"]+)";/g)].map((x) => [x[1]!, x[2]!])
-		);
-		for (const x of source.matchAll(/\bid: (\w+|"[^"]+"),\s*\n\s*name: "([^"]+)"/g)) {
-			const id = x[1]!.startsWith('"') ? x[1]!.slice(1, -1) : consts.get(x[1]!);
-			expect(id, `${file}: the manifest's id ${x[1]}`).toBeDefined();
-			found.push([id!, x[2]!]);
-		}
+/** Every `.rs` file under a directory of `crates/`, recursively. */
+function rustFiles(dir: string): string[] {
+	return readdirSync(crates + dir, { withFileTypes: true }).flatMap((e) =>
+		e.isDirectory()
+			? rustFiles(`${dir}${e.name}/`)
+			: e.name.endsWith('.rs')
+				? [`${dir}${e.name}`]
+				: []
+	);
+}
+
+/** The text between `{` at `open` and its matching `}`. */
+function braced(source: string, open: number): string {
+	let depth = 0;
+	for (let i = open; i < source.length; i++) {
+		if (source[i] === '{') depth++;
+		else if (source[i] === '}' && --depth === 0) return source.slice(open + 1, i);
 	}
+	throw new Error(`unbalanced braces at ${open}`);
+}
+
+/**
+ * Every plugin manifest in `crates/sources-plugins` (subdirectories too), outside test modules: its
+ * id and its name. Every construction must parse, whatever order its fields are in, and its id and
+ * name may be a string, a `const` or a path to one; only a copy (`Manifest { …, ..MANIFEST }`) that
+ * sets no id is left out. Anything it can't read fails here rather than passing unchecked.
+ */
+function manifests(): [string, string][] {
+	const files = rustFiles('sources-plugins/src/').map((f) => {
+		const all = read(f);
+		const test = all.indexOf('#[cfg(test)]');
+		return [f, test < 0 ? all : all.slice(0, test)] as const;
+	});
+	// Each file's `const NAME: &str = "…"`, for ids and names given as constants; a path
+	// (`nyaa::ID`) is read in the module it names.
+	const consts = new Map(
+		files.map(([f, source]) => [
+			f,
+			new Map(
+				[...source.matchAll(/const (\w+): &(?:'static )?str = "([^"]+)";/g)].map((x) => [
+					x[1]!,
+					x[2]!
+				])
+			)
+		])
+	);
+	const value = (raw: string | undefined, file: string, what: string): string => {
+		const where = `${file}: a manifest's ${what}`;
+		expect(raw, where).toBeDefined();
+		const v = raw!.trim();
+		if (/^"[^"]*"$/.test(v)) return v.slice(1, -1);
+		const path = v.split('::');
+		const name = path.at(-1)!;
+		const module = path.at(-2);
+		const home = module ? files.find(([f]) => f.endsWith(`/${module}.rs`))?.[0] : file;
+		const hit = home ? consts.get(home)?.get(name) : undefined;
+		expect(hit, `${where}: ${v} isn't a string or a const it can find`).toBeDefined();
+		return hit!;
+	};
+	const found: [string, string][] = [];
+	let constructions = 0;
+	for (const [file, source] of files)
+		for (const x of source.matchAll(/[=(]\s*(?:\w+::)*Manifest\s*\{/g)) {
+			constructions++;
+			const body = braced(source, x.index! + x[0].length - 1);
+			const field = (k: string) => new RegExp(`(?:^|[\\s,{])${k}:\\s*([^,\\n]+),`).exec(body)?.[1];
+			if (body.includes('..') && field('id') === undefined) {
+				constructions--; // a copy of a manifest already counted
+				continue;
+			}
+			found.push([value(field('id'), file, 'id'), value(field('name'), file, 'name')]);
+		}
+	expect(found.length, 'every manifest construction was read').toBe(constructions);
+	expect(found.length).toBeGreaterThan(15);
 	return found;
 }
 
 /** The query fields the Builder lists (`crates/search/src/query.rs` FIELDS), aliases left out. */
 function queryFields(): string[] {
 	const source = read('search/src/query.rs');
-	const table = source.slice(
-		source.indexOf('const FIELDS'),
-		source.indexOf('];', source.indexOf('const FIELDS'))
-	);
-	const rows = [...table.matchAll(/\("([a-z0-9_]+)", (FieldKind::[^)]*\)?)\)/g)].map(
+	const start = source.indexOf('const FIELDS');
+	const table = source.slice(start, source.indexOf('];', start));
+	const rows = [...table.matchAll(/\("([^"]+)", (FieldKind::[^)]*\)?)\)/g)].map(
 		(x) => [x[1]!, x[2]!] as const
 	);
+	// Every row of the table was read: a row the pattern misses fails here.
+	expect(rows.length, 'every FIELDS row was read').toBe(table.match(/^\s*\("/gm)?.length ?? 0);
 	expect(rows.length).toBeGreaterThan(40);
 	// A later name for a kind already listed is an alias (`age` for `discovered`), as the catalogue reads it.
 	return rows
@@ -105,9 +164,11 @@ describe('languages', () => {
 		expect(languageLabel('zh', 'en')).toBe('Chinese');
 		expect(languageLabel('fr', 'zh')).toBe('法语');
 	});
-	it('names multi-language releases', () => {
+	it('names multi-language releases in the locale it is given, not the current one', () => {
 		expect(languageLabel('multi', 'en')).toBe('Multiple languages');
+		expect(languageLabel('multi', 'zh')).toBe('多种语言');
 		setLocale('zh', { reload: false });
+		expect(languageLabel('multi', 'en')).toBe('Multiple languages');
 		expect(languageLabel('multi', 'zh')).toBe('多种语言');
 	});
 	it('falls back to the code for a code with no name or a malformed one', () => {
@@ -172,6 +233,10 @@ describe('types, groups and fields', () => {
 		expect(valueLabel('type', 'tv', 'en')).toBe('TV');
 		expect(valueLabel('res', '2160p', 'en')).toBe('2160p');
 		expect(valueLabel('ext', 'mkv', 'en')).toBe('mkv');
+		// A flag's yes and no read as the facet rail says them (Builder value lists).
+		expect(valueLabel('verified', 'yes', 'en')).toBe('Yes');
+		expect(valueLabel('private', 'no', 'en')).toBe('No');
+		expect(valueLabel('network', 'bt', 'en')).toBe('bt');
 	});
 });
 
