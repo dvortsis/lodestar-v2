@@ -344,6 +344,10 @@ placement:
 - ws: ws-web
   match:
   - X-ui-guards
+  - X-facet-exclude-fill
+  - X-grid-two-col-large
+  - X-snapshot-stale-outputs
+  - X-safety-undo-danger
   - X-ui-plan-r5
   - X-page-frame
   - X-ctl-geometry
@@ -466,12 +470,8 @@ placement:
   - X-fleet-switch-passthrough
   - X-metrics-prefix-doc
   - X-testvm-teardown-by-id
-  - X-importer-schema-limit
   - X-api-openapi-400s
   - X-testvm-delete-on-termination
-  - X-facet-exclude-fill
-  - X-grid-two-col-large
-  - X-snapshot-stale-outputs
   - X-fleet-stacked-arms
   - X-prefs-invisible-share
   - X-api-openapi-repeated
@@ -589,6 +589,8 @@ placement:
   - CR-COL-5
   - CR-COL-6
   - X-sampler-frontier-starve
+  - CR-SAMPLE-BACKOFF-ESCALATE
+  - X-sample-cooling-metric
   - CR-UTP-FIRST-WINDOW
 - ws: ws-cr-live
   match:
@@ -841,6 +843,7 @@ placement:
   - X-ci-advisories
   - X-fixed-sleep-asserts
   - X-rusqlite-041
+  - X-importer-schema-limit
   - X-filter01-fix
   - X-filter01-rejudge
   - X-filter03-fix
@@ -1863,7 +1866,7 @@ owner_queue:
   when: Before CR-AB-LC starts on the experiment host
 - n: 33
   type: decision
-  action: 'Grant the test-VM user ec2:DeleteVolume on volumes tagged Purpose=X-test-vm whose LaunchedBy is its own UserId (infra/dev-vm/aws-claude-testvm.json)? Today it has none, so a test volume that survives teardown waits for you to delete it, and costs about $0.02/h until then. The runner recommends yes, scoped exactly like its existing terminate permission'
+  action: 'Grant the test-VM user ec2:DeleteVolume on its own test volumes (infra/dev-vm/aws-claude-testvm.json)? Today it has none, so a test volume that survives teardown waits for you to delete it, and a 100 GiB volume costs about $0.011/h (about $8 a month) until then. The runner recommends yes, scoped like the existing terminate permission (ManageOnlyOwnLodestarTestInstances): Project=Lodestar, Environment=Test, Purpose=X-test-vm and LaunchedBy=its own UserId'
   unblocks: Test lanes that clean up their own leftover volume
   when: Any time; IAM changes are yours
 
