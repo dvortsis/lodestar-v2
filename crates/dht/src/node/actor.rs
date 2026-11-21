@@ -69,10 +69,11 @@ const MAX_PEER_QUERIES: usize = 64;
 /// CR-LOOKUP-END: distinct, validated values that end a peer request early
 /// (with [`VALUE_RESPONDERS`]); see docs/decisions/2026-11-20-CR-LOOKUP-END.md.
 const ENOUGH_VALUES: usize = 8;
-/// CR-LOOKUP-END: the distinct sources (an IPv4 /24 or an IPv6 /48, as
-/// [`source`] keys them: one operator's usual allocation) that must each
-/// send their share of [`ENOUGH_VALUES`] before a request ends on values
-/// (see [`Actor::has_enough_values`]), and that a leg's closest set must
+/// CR-LOOKUP-END: the fewest distinct sources (an IPv4 /24 or an IPv6
+/// /48, as [`source`] keys them: one operator's usual allocation) whose
+/// values can end a request, since each counts for at most
+/// `ENOUGH_VALUES / VALUE_RESPONDERS` of them (see
+/// [`Actor::has_enough_values`]); and the sources a leg's closest set must
 /// span before it converges early. One responder, however many addresses
 /// it answers from in a network, can't end a lookup on its own.
 const VALUE_RESPONDERS: usize = 2;
@@ -1931,9 +1932,10 @@ impl Actor {
     /// holds [`ENOUGH_VALUES`] distinct values, and the sources that sent
     /// them vouch for [`ENOUGH_VALUES`] between them, each for at most
     /// `ENOUGH_VALUES / VALUE_RESPONDERS` distinct values it sent
-    /// ([`SentBy`]). So at least [`VALUE_RESPONDERS`] sources must each
-    /// send that many (4 apiece today), repeats of each other's included.
-    /// Always false with the switch off.
+    /// ([`SentBy`]), repeats of each other's included. So it takes at
+    /// least [`VALUE_RESPONDERS`] sources, since each counts for at most
+    /// 4 today: 4 + 4 ends a request, and so does 3 + 3 + 2. Always false
+    /// with the switch off.
     fn has_enough_values(&self, owner: u32) -> bool {
         self.cfg.lookup_end
             && self.peer_requests.get(&owner).is_some_and(|r| {

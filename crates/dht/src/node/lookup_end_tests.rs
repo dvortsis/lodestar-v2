@@ -427,8 +427,9 @@ async fn each_network_must_send_its_share_to_end_a_request() {
     }
 }
 
-/// X-sec-S1-18: one source (here several addresses in one /24) repeating
-/// a value across replies vouches for it once.
+/// X-sec-S1-18: one source (here one address in one /24, answering for
+/// several node ids on different ports) repeating a value across replies
+/// vouches for it once.
 #[tokio::test(start_paused = true)]
 async fn a_value_repeated_across_one_sources_replies_counts_once() {
     let (mut a, s) = actor(true);
@@ -450,6 +451,30 @@ async fn a_value_repeated_across_one_sources_replies_counts_once() {
         9,
         "ends on convergence instead"
     );
+}
+
+/// X-sec-S1-18: partial shares from three sources add up: 3 + 3 + 2 ends
+/// a request, 3 + 3 + 1 doesn't.
+#[tokio::test(start_paused = true)]
+async fn partial_shares_from_three_sources_add_up() {
+    for (third, ends) in [(2u16, true), (1, false)] {
+        let (mut a, s) = actor(true);
+        let n: Vec<_> = (0..4u8)
+            .map(|i| at(0x10 * (i + 1), i, 11 + u16::from(i)))
+            .collect();
+        table(&mut a, &n);
+        let mut rx = request(&mut a, &s);
+        answer(&mut a, &s, &n[0], peers(0, 3), &[]);
+        answer(&mut a, &s, &n[1], peers(3, 3), &[]);
+        assert_eq!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+        answer(&mut a, &s, &n[2], peers(6, third), &[]);
+        assert_eq!(rx.try_recv().is_ok(), ends, "3 + 3 + {third}");
+        assert_eq!(
+            ended(&a, LedgerEnd::EnoughValues),
+            u64::from(ends),
+            "3 + 3 + {third}"
+        );
+    }
 }
 
 /// Each new end releases the request's permit exactly once, as
