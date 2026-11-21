@@ -331,7 +331,7 @@ mod tests {
         assert!(field_names::<BTreeMap<String, String>>().is_empty());
     }
 
-    use super::bad_field;
+    use super::{bad_field, field_names};
 
     #[test]
     fn a_bad_field_is_its_path_capped_and_escaped() {
