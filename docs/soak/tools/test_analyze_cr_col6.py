@@ -74,6 +74,30 @@ class Stage3Sim(cr.Sim):
         return lines + out
 
 
+class HourlySim(Stage3Sim):
+    """A split segment of four window hours whose stored rate differs by hour, so rule 6.4's
+    worst hours have one right order: per minute, hour 0 120, hour 1 60, hour 2 150, hour 3 90."""
+
+    RATES = (120.0, 60.0, 150.0, 90.0)
+
+    def __init__(self, *args, **kw):
+        super().__init__(*args, hours=4, **kw)
+
+    def searchable(self, e):
+        open_e = self.warm_min * 60  # the window opens after the warmup; before it, hour 0's rate
+        total, t = 0.0, 0.0
+        for k, rate in enumerate((self.RATES[0],) + self.RATES):
+            end = open_e if k == 0 else open_e + k * self.hour_s
+            if k == len(self.RATES):
+                end = math.inf
+            span = max(0.0, min(e, end) - t)
+            total += span / 60 * rate
+            t = end
+            if e <= end:
+                break
+        return total
+
+
 class Base(cr.Base):
     def run_sim(self, sim, winners=(ADM,)):
         self.n += 1
@@ -235,6 +259,15 @@ class SamplerSplitTests(Base):
         self.assertEqual(report["sampler_split"]["spill_check"], "not_exercised")
         self.assertIsNotNone(report["sampler_split"]["table_filled_after_seconds"])
 
+    def test_a_table_full_at_the_last_two_scrapes_without_spill_voids(self):
+        sim = Stage3Sim("split")
+        last = sim.warm_min * 60 + sim.hours * sim.hour_s
+        sim.table = lambda e: collect.SAMPLER_TABLE if e >= last - sim.sample else 150_000
+        sim.spill = lambda e: 0
+        report = self.run_sim(sim)
+        self.assertEqual(report["verdict_reasons"], ["spill_slots_used_once_table_fills"])
+        self.assertEqual(report["sampler_split"]["spill_check"], "table_full_without_spill")
+
     def test_spill_slots_alone_show_the_table_filled(self):
         sim = Stage3Sim("split")
         sim.table = lambda e: collect.SAMPLER_TABLE - 3  # read just below at every scrape
@@ -251,12 +284,13 @@ class SamplerSplitTests(Base):
     def test_rule_6_4_report_in_both_arms(self):
         for on in (True, False):
             with self.subTest(arm="B" if on else "A"):
-                split = self.run_sim(Stage3Sim("split", on=on))["sampler_split"]
+                split = self.run_sim(HourlySim("split", on=on))["sampler_split"]
                 self.assertGreater(split["sampler_full_seconds"], 0)
                 worst = split["worst_hours_stored_per_min"]
-                self.assertEqual(len(worst), 3)
-                self.assertEqual(sorted(worst, key=lambda h: h["stored_per_min"]), worst)
-                self.assertEqual({"hour", "stored_per_min"}, set(worst[0]))
+                # The three worst of four hours, worst first: hour 1 (60/min), 3 (90), 0 (120).
+                self.assertEqual([h["hour"] for h in worst], [1, 3, 0])
+                for h, want in zip(worst, (60, 90, 120)):  # an hour's edges are scrapes, not exact
+                    self.assertAlmostEqual(h["stored_per_min"], want, delta=2)
         off, on = (self.run_sim(Stage3Sim("split", on=x))["sampler_split"]["sampler_full_seconds"] for x in (False, True))
         self.assertGreater(off, on)  # as written: the split spends less time full
         report = self.run_sim(Stage3Sim("split"))
@@ -268,7 +302,7 @@ class SamplerSplitTests(Base):
 
     def test_missing_split_series_in_either_arm_is_missing_evidence(self):
         for on in (True, False):
-            for dropped in ({S["full_seconds"]}, {S["spill"]}, {"dht_sample_cooling"}):
+            for dropped in ({S["full_seconds"]}, {S["spill"]}, {"dht_sample_cooling"}, {"dht_sample_inflight"}):
                 with self.subTest(arm="B" if on else "A", dropped=sorted(dropped)):
                     sim = Stage3Sim("split", on=on)
                     sim.drop_series = dropped
@@ -373,6 +407,18 @@ class Stage3EffectTests(unittest.TestCase):
         self.assertEqual(len(out["sampler_split_by_arm"]["B"]), 4)
         self.assertNotIn("hint_first_by_arm", out)
         self.assertEqual(out["split_not_exercised_b_segments"], 0)
+
+    def test_some_unexercised_treatment_segments_are_counted_without_a_warning(self):
+        idle = {"spill_check": "not_exercised", "sampler_full_seconds": 0.0, "max_spill_slots": 0,
+                "worst_hours_stored_per_min": []}
+        busy = dict(idle, spill_check="spilled", max_spill_slots=4096)
+        blocks = [s3_block("split", "ABBA", self.WIN[0], sampler_split=busy),
+                  s3_block("split", "BAAB", self.WIN[1], start=12, sampler_split=busy)]
+        for blk in blocks:  # one B segment per block wasn't exercised: 2 of 4
+            next(s for s in blk if s["identity"]["switches"]["sampler_cooldown_split"])["sampler_split"] = idle
+        out = analyze_cr.analyze_effect("split", blocks, sorted(STAGE3_WINNERS))
+        self.assertEqual(out["split_not_exercised_b_segments"], 2)
+        self.assertNotIn("warnings", out)
 
     def test_split_never_exercised_in_any_treatment_segment_warns(self):
         idle = {"spill_check": "not_exercised", "sampler_full_seconds": 0.0, "max_spill_slots": 0,
