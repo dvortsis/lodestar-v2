@@ -48,9 +48,10 @@ const POSITION_VERSION: u8 = 1;
 /// (`SQLITE_LIMIT_SCHEMA`). It counts tables (views among them), indexes
 /// and triggers, including `sqlite_schema` itself, automatic indexes and
 /// the primary-key index of each `WITHOUT ROWID` table. magneticod's
-/// largest schema, v3 with FTS5, counts 18, so this is 14 times that; a
-/// hostile file with more is refused while its schema loads, before the
-/// rest is parsed.
+/// largest schema, v3 with FTS5, counts 18, so this is 14 times that.
+/// For a well-formed schema, the cap bounds parsing: SQLite refuses the
+/// file at the first object over it. For a schema SQLite finds corrupt,
+/// the statement deadline bounds parsing, as it did before the cap.
 const MAX_SCHEMA_OBJECTS: i32 = 256;
 /// The message SQLite sets when a schema passes `SQLITE_LIMIT_SCHEMA`.
 const TOO_MANY_SCHEMA_OBJECTS: &str = "too many schema objects";
@@ -149,6 +150,11 @@ impl fmt::Display for Refusal {
                 f,
                 "the database can't be opened ({why}): make sure magneticod has stopped \
                  cleanly, or import a consistent copy"
+            ),
+            Refusal::Unavailable(why @ "schema_too_large") => write!(
+                f,
+                "the database can't be read ({why}): it has far more tables or indexes than \
+                 a magneticod database has, so it isn't one Lodestar can import"
             ),
             Refusal::Unavailable(why) => write!(
                 f,

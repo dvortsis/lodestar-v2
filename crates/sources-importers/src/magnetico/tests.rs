@@ -1465,7 +1465,24 @@ fn magneticods_schemas_are_far_under_the_schema_cap() {
             (Layout::V3NoSeeders, 18),
         ]
     );
+    assert_eq!(MAX_SCHEMA_OBJECTS, 256);
     assert!(counts[3].1 * 14 <= MAX_SCHEMA_OBJECTS);
+}
+
+#[test]
+fn only_sqlites_schema_limit_message_is_schema_too_large() {
+    let abort = |msg: Option<&str>| {
+        map_err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(4), // SQLITE_ABORT
+            msg.map(str::to_owned),
+        ))
+    };
+    assert_eq!(
+        abort(Some(TOO_MANY_SCHEMA_OBJECTS)),
+        Refusal::Unavailable("schema_too_large")
+    );
+    assert_eq!(abort(Some("other")), Refusal::Unavailable("read_failed"));
+    assert_eq!(abort(None), Refusal::Unavailable("read_failed"));
 }
 
 #[test]
@@ -1488,6 +1505,7 @@ fn a_schema_over_the_cap_is_refused_without_naming_it() {
     assert_eq!(refusal.label(), "source_unavailable");
     let text = refusal.to_string();
     assert!(text.contains("schema_too_large"), "{text}");
+    assert!(text.contains("isn't one Lodestar can import"), "{text}");
     assert!(
         !text.contains("crowd_") && !text.contains("files"),
         "{text}"
