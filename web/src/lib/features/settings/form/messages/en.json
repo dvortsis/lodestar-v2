@@ -8,5 +8,6 @@
 	"settings_form_sign_in": "Sign in",
 	"settings_form_continue": "Continue",
 	"settings_form_kept_body": "Your changes are back after you signed in, but they aren't saved yet. Check them, then save.",
-	"settings_form_kept_dropped": "Some no longer apply and were left out: {count}."
+	"settings_form_kept_dropped_one": "{count} change no longer applies and was left out.",
+	"settings_form_kept_dropped_many": "{count} changes no longer apply and were left out."
 }

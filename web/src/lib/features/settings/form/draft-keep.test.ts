@@ -182,7 +182,8 @@ describe('the kept marker', () => {
 
 	it.each([
 		[0, null],
-		[2, 'Some no longer apply and were left out: 2.']
+		[1, '1 change no longer applies and was left out.'],
+		[2, '2 changes no longer apply and were left out.']
 	])('restores at once with its note (%i left out)', (dropped, says) => {
 		markKept('crawler', location.pathname, Date.now());
 		const e = { id: 'crawler', draft: null, kept: null } as unknown as Engine & {

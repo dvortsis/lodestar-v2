@@ -23,12 +23,14 @@ import {
 	SETTINGS_DRAFTS_PREFIX,
 	setSession,
 	SIGN_IN_KEY,
+	probe,
 	signedIn,
 	signInPending
 } from './session.svelte';
 import { checkAuth } from './gate';
 import * as scope from '$lib/features/settings/form/draft-scope';
 import { writeDraft } from '$lib/features/settings/form/draft-store';
+import { leaveDecision } from '$lib/features/settings/form/leave';
 
 const { DRAFT_PREFIX, KEPT_KEY } = scope;
 const markKept = (id: string, path: string, at: number) =>
@@ -36,6 +38,8 @@ const markKept = (id: string, path: string, at: number) =>
 
 const json = (status: number, body: unknown) =>
 	new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+const authIs = (logged_in: boolean) =>
+	json(200, { logged_in, setup_required: false, notice_required: false });
 const expired = (setup: boolean) =>
 	json(401, { error: { code: 'login_required', message: 'Log in first.' }, setup_required: setup });
 
@@ -273,16 +277,90 @@ describe('Settings drafts across the session (X-session-draft-keep)', () => {
 			vi.fn(async (url: string | URL | Request) =>
 				String(url).includes('/logout')
 					? json(200, { ok: true })
-					: new Promise<Response>((r) => (answer = r))
+					: String(url).endsWith('/auth')
+						? authIs(false) // asked afresh: signed out
+						: new Promise<Response>((r) => (answer = r))
 			)
 		);
 		const late = api.get('/filters');
 		await logout();
 		answer(json(200, []));
 		await late.catch(() => {});
+		await probe(); // the fresh GET /auth the late success started
+		expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).endsWith('/auth'))).toBe(true);
 		expect(signInPending()).toBe('signedout');
 		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(false);
 		expect(sessionStorage.getItem(DRAFT_PREFIX + 'crawler')).toBeNull();
+	});
+
+	it('a success for a request sent after the block lifts it (signed in from another tab)', async () => {
+		seed();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => json(200, { ok: true }))
+		);
+		await logout();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string | URL | Request) =>
+				String(url).endsWith('/auth') ? authIs(true) : json(200, [])
+			)
+		);
+		await api.get('/filters');
+		await probe();
+		expect(signInPending()).toBeNull();
+		expect(writeDraft('crawler', { v: 1, at: 1, sections: {} })).toBe(true);
+	});
+
+	it('a reload with the block stored lifts it when GET /auth finds a live session', async () => {
+		sessionStorage.setItem(SIGN_IN_KEY, 'signedout'); // Signed out here, signed in from another tab
+		setSession('signed_out');
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => authIs(true))
+		);
+		await checkAuth();
+		await probe();
+		expect(signInPending()).toBeNull();
+		// A later expiry is an expiry again: the guard asks and keeps the draft.
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => expired(false))
+		);
+		await expect(api.get('/filters')).rejects.toThrow();
+		expect(signInPending()).toBe('expired');
+		const at = (p: string) => new URL(p, location.origin);
+		expect(
+			leaveDecision({
+				dirty: true,
+				type: 'goto',
+				from: at('/settings/crawler'),
+				to: at('/login?next=%2Fsettings%2Fcrawler'),
+				bypass: false,
+				signIn: signInPending()
+			})
+		).toBe('signin');
+	});
+
+	it('a probe answered after a newer block never lifts it', async () => {
+		sessionStorage.setItem(SIGN_IN_KEY, 'signedout');
+		let answer!: (r: Response) => void;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string | URL | Request) =>
+				String(url).endsWith('/auth')
+					? new Promise<Response>((r) => (answer = r))
+					: json(200, { ok: true })
+			)
+		);
+		setSession('signed_out');
+		setSession('signed_in'); // probes GET /auth at this epoch
+		const asked = probe(); // the same one, in flight
+		await vi.waitFor(() => expect(answer).toBeDefined(), { timeout: 10_000 });
+		await logout(); // a newer block
+		answer(authIs(true));
+		await asked;
+		expect(signInPending()).toBe('signedout');
 	});
 
 	it('drops them all when the instance needs its first-run setup again', async () => {

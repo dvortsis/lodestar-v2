@@ -8,5 +8,6 @@
 	"settings_form_sign_in": "登录",
 	"settings_form_continue": "继续",
 	"settings_form_kept_body": "你重新登录后，你的更改已恢复，但还没有保存。请检查后再保存。",
-	"settings_form_kept_dropped": "部分更改已不再适用，已被排除：{count} 项。"
+	"settings_form_kept_dropped_one": "{count} 项更改已不再适用，已被排除。",
+	"settings_form_kept_dropped_many": "{count} 项更改已不再适用，已被排除。"
 }

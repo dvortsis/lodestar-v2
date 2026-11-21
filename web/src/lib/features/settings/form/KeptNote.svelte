@@ -13,6 +13,8 @@
 <Banner kind="info">
 	<span data-testid="draft-kept"
 		>{m.settings_form_kept_body()}{#if dropped}
-			{m.settings_form_kept_dropped({ count: formatCount(dropped, currentLocale()) })}{/if}</span
+			{(dropped === 1 ? m.settings_form_kept_dropped_one : m.settings_form_kept_dropped_many)({
+				count: formatCount(dropped, currentLocale())
+			})}{/if}</span
 	>
 </Banner>

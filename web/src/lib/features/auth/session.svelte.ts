@@ -33,7 +33,14 @@ function store(): Storage | undefined {
 	}
 }
 
+// The block epoch: bumped each time a Sign out or a re-claim sets the block. Only an answer to a
+// request sent at the current epoch can show the session is live again (`probe`).
+let epoch = 0;
+let probing: Promise<void> | undefined;
+let probedAt = -1;
+
 function setSignIn(reason: SignInReason | null): void {
+	if (reason === 'signedout' || reason === 'setup') epoch++;
 	try {
 		const s = store();
 		if (!s) return;
@@ -48,6 +55,31 @@ function setSignIn(reason: SignInReason | null): void {
 function clearPending(): void {
 	const v = signInPending();
 	if (v === 'expired' || v === 'notice') setSignIn(null);
+}
+
+/**
+ * While drafts are blocked, a request that worked proves nothing by itself: it may answer one sent
+ * before the block. So ask `GET /auth` afresh, at this epoch; a live session there (a sign-in from
+ * another tab, then a reload or this tab's next request) lifts the block, unless a newer block was
+ * set meanwhile.
+ */
+export function probe(): Promise<void> {
+	const v = signInPending();
+	if (v !== 'signedout' && v !== 'setup') return Promise.resolve();
+	if (probing && probedAt === epoch) return probing;
+	const sent = (probedAt = epoch);
+	const p: Promise<void> = api
+		.get('/auth')
+		.then(
+			(a) => {
+				if (sent === epoch && a.logged_in && !a.setup_required) signedIn();
+			},
+			() => {}
+		)
+		.finally(() => {
+			if (probing === p) probing = undefined;
+		});
+	return (probing = p);
 }
 
 /** Why the app is going to sign in, if it is. */
@@ -90,6 +122,7 @@ export function setSession(status: SessionStatus): void {
 		clearSettingsDrafts();
 		setSignIn('setup');
 	}
+	if (status === 'signed_in') void probe();
 	if (session.status === status) return;
 	// The first successful request establishes this tab's existing session. It
 	// must not invalidate and repeat the very request that established it. Actual
@@ -97,7 +130,7 @@ export function setSession(status: SessionStatus): void {
 	const initialConfirmation = session.status === 'unknown' && status === 'signed_in';
 	session.status = status;
 	// Any request that worked ends a pending expiry, but never a Sign out's or a re-claim's
-	// block: a late response to a request sent before them is no sign-in.
+	// block: a late response to a request sent before them is no sign-in (`probe` decides).
 	if (status === 'signed_in') clearPending();
 	if (!initialConfirmation) clearDetailCaches(status === 'signed_in');
 	// Signing in: the account's language, zone and week replace the cached hint (lib/i18n/boot.ts).
