@@ -619,6 +619,239 @@ impl Snapshot {
     }
 }
 
+/// The rules Undo would weaken, going from `before` (the current engine
+/// and `current` set) to `after` (the kept `previous` set): a core rule
+/// or pack rule it switches off, your rule it removes, disables or edits,
+/// a rule it puts an exception back on, a pack rule whose override it
+/// changes, and, as the other changes count them, every rule an override
+/// it puts back could bypass, or every layer an allow entry it puts back
+/// skips. An upper bound, like the override's: what Undo only
+/// strengthens adds nothing.
+fn loosened(
+    before: &Engine,
+    after: &Engine,
+    current: &RuleSet,
+    previous: &RuleSet,
+    snap: &Snapshot,
+    now: i64,
+) -> Weaker {
+    let mut ids: Vec<String> = Vec::new();
+    let mut cs = false;
+    for r in CoreRule::ALL {
+        if before.core.switches.is_on(r) && !after.core.switches.is_on(r) {
+            ids.push(r.id().to_owned());
+            cs = true;
+        }
+    }
+    for r in PackRule::ALL {
+        if before.packs.is_on(r) && !after.packs.is_on(r) {
+            ids.push(r.id().to_owned());
+        }
+    }
+    // Kept as it is now, id and all, or it's weaker or gone.
+    for r in current.rules.iter().filter(|r| r.enabled) {
+        if !previous.rules.contains(r) {
+            ids.push(format!("U-{}", r.id));
+        }
+    }
+    let exception = |e: &ExceptionRow| (e.rule.clone(), e.kind, e.value.clone());
+    let have: HashSet<_> = current.exceptions.iter().map(exception).collect();
+    for e in previous
+        .exceptions
+        .iter()
+        .filter(|e| !have.contains(&exception(e)))
+    {
+        cs |= child_safety(&e.rule);
+        ids.push(e.rule.clone());
+    }
+    // Any pack override Undo puts back, changes or takes away: a lighter
+    // one weakens its rule, and so does removing a heavier one.
+    let value = |set: &'_ RuleSet, rule: &str| {
+        set.pack_overrides
+            .iter()
+            .find(|(r, _)| r == rule)
+            .map(|(_, v)| v.clone())
+    };
+    for (rule, _) in previous
+        .pack_overrides
+        .iter()
+        .chain(&current.pack_overrides)
+    {
+        if value(previous, rule) != value(current, rule) {
+            ids.push(rule.clone());
+        }
+    }
+    let ov = |o: &OverrideRow| (o.kind, o.value.clone(), o.strength, o.scope.clone());
+    let have: HashSet<_> = current.overrides.iter().map(ov).collect();
+    let override_back = previous
+        .overrides
+        .iter()
+        .filter(|o| o.expires_at.is_none_or(|t| t > now))
+        .any(|o| !have.contains(&ov(o)));
+    if override_back {
+        // Every rule that isn't locked could be bypassed (AddOverride),
+        // the child-safety core's included.
+        cs = true;
+        ids.extend(
+            snap.hits
+                .iter()
+                .map(|(r, _, _)| r.clone())
+                .filter(|r| !CoreRule::from_id(r).is_some_and(|c| c.locked())),
+        );
+    }
+    let allow_back = previous
+        .allow
+        .iter()
+        .any(|(_, q)| !current.allow.iter().any(|(_, c)| c == q));
+    if allow_back {
+        // Your rules, the packs and the lists (AddAllow); never the core.
+        ids.extend(snap.hits.iter().map(|(r, _, _)| r.clone()).filter(|r| {
+            matches!(
+                RuleRef::from_id(r),
+                Some(RuleRef::User(_) | RuleRef::Pack(_) | RuleRef::List(_))
+            )
+        }));
+    }
+    ids.sort();
+    ids.dedup();
+    Weaker {
+        rules: ids,
+        child_safety: cs,
+    }
+}
+
+/// What Undo weakens ([`loosened`]).
+struct Weaker {
+    /// The rules whose 30-day figures the preview counts.
+    rules: Vec<String>,
+    /// It switches a child-safety rule off, puts an exception back on one,
+    /// or puts back an override that can bypass them, whatever they
+    /// caught ([`Assessment::loosens_child_safety`]).
+    child_safety: bool,
+}
+
+/// A child-safety rule's code, or a hold by one (`CS-4a+…`): its code
+/// starts `CS-`, as the screen reads it (CS-0a included).
+fn child_safety(rule: &str) -> bool {
+    rule.starts_with("CS-")
+}
+
+/// The rule set kept for one-step Undo ([`FiltersApi::previous_data`]),
+/// read back: what Undo restores, and what its preview judges.
+struct Previous {
+    /// Without pack versions: Undo never restores them.
+    set: RuleSet,
+    /// Each unlocked core rule's switch; a rule the snapshot doesn't name
+    /// is on.
+    core: Vec<(CoreRule, bool)>,
+}
+
+impl Previous {
+    fn parse(data: &[u8]) -> serde_json::Result<Previous> {
+        let v: Value = serde_json::from_slice(data)?;
+        let unhex = |s: &Value| -> Vec<u8> {
+            let s = s.as_str().unwrap_or_default();
+            // By bytes, so a corrupt (non-ASCII) value can't panic.
+            s.as_bytes()
+                .chunks_exact(2)
+                .filter_map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
+                .collect()
+        };
+        let arr = |k: &str| v[k].as_array().cloned().unwrap_or_default();
+        let mut set = RuleSet {
+            rules: arr("rules")
+                .iter()
+                .map(|r| RuleRow {
+                    id: r["id"].as_i64().unwrap_or_default(),
+                    query: r["query"].as_str().unwrap_or_default().to_owned(),
+                    action: r["action"].as_u64().unwrap_or_default() as u8,
+                    enabled: r["enabled"].as_bool().unwrap_or(true),
+                    shadow_until: r["shadow_until"].as_i64(),
+                    unless_query: r["unless"].as_str().map(str::to_owned),
+                })
+                .collect(),
+            pack_switches: arr("packs")
+                .iter()
+                .filter_map(|p| Some((p[0].as_str()?.to_owned(), p[1].as_bool()?)))
+                .collect(),
+            overrides: arr("overrides")
+                .iter()
+                .map(|o| OverrideRow {
+                    id: o["id"].as_i64().unwrap_or_default(),
+                    kind: o["kind"].as_u64().unwrap_or_default() as u8,
+                    value: unhex(&o["value"]),
+                    strength: o["strength"].as_u64().unwrap_or_default() as u8,
+                    scope: o["scope"].as_str().map(str::to_owned),
+                    created_at: o["created_at"].as_i64().unwrap_or_default(),
+                    expires_at: o["expires_at"].as_i64(),
+                    shadow_until: o["shadow_until"].as_i64(),
+                    hits: o["hits"].as_i64().unwrap_or_default(),
+                })
+                .collect(),
+            exceptions: arr("exceptions")
+                .iter()
+                .map(|e| ExceptionRow {
+                    id: e["id"].as_i64().unwrap_or_default(),
+                    rule: e["rule"].as_str().unwrap_or_default().to_owned(),
+                    kind: e["kind"].as_u64().unwrap_or_default() as u8,
+                    value: unhex(&e["value"]),
+                })
+                .collect(),
+            allow: arr("allow")
+                .iter()
+                .filter_map(|a| Some((a[0].as_i64()?, a[1].as_str()?.to_owned())))
+                .collect(),
+            // A snapshot from before RP-2 has none, as that set had none.
+            pack_overrides: arr("pack_overrides")
+                .iter()
+                .filter_map(|o| {
+                    let rule = o["rule"].as_str()?.to_owned();
+                    let value = match o["text"].as_str() {
+                        Some(t) => Ok(t.to_owned()),
+                        None => Err(unhex(&o["hex"])),
+                    };
+                    Some((rule, value))
+                })
+                .collect(),
+            // Never restored: Undo leaves the applied pack versions.
+            ..RuleSet::default()
+        };
+        if v.get("packs_seeded").is_none() {
+            // Taken before RP-0 split SC-2 out of SC-1: SC-2 gets SC-1's
+            // switch and exceptions, as seeding gave it.
+            set.pack_switches = pack_upgrade::copy_sc1_switch(&set.pack_switches);
+            let mut next = set.exceptions.iter().map(|e| e.id).max().unwrap_or(0);
+            let copies: Vec<ExceptionRow> = set
+                .exceptions
+                .iter()
+                .filter(|e| e.rule == PackRule::Sc1.id())
+                .map(|e| {
+                    next += 1;
+                    ExceptionRow {
+                        id: next,
+                        rule: PackRule::Sc2.id().to_owned(),
+                        ..e.clone()
+                    }
+                })
+                .collect();
+            set.exceptions.extend(copies);
+        }
+        let core = CoreRule::ALL
+            .into_iter()
+            .filter(|r| !r.locked())
+            .map(|r| {
+                let on = arr("core")
+                    .iter()
+                    .find(|c| c[0].as_str() == Some(r.id()))
+                    .and_then(|c| c[1].as_bool())
+                    .unwrap_or(true);
+                (r, on)
+            })
+            .collect();
+        Ok(Previous { set, core })
+    }
+}
+
 /// A stored torrent as SP-4's release hook reads it (RP-5).
 struct StoredPayload {
     /// Its first swarm hash, the one ingest records its hits under.
@@ -1109,6 +1342,68 @@ impl FiltersApi {
         self.assess_tracked(change, now, &Progress::default())
     }
 
+    /// What Undo would do: the kept rule set judged against the current
+    /// one, as the other rule-layer changes are. `quarantine` and
+    /// `tombstones` are what it would release now; the 30-day figures
+    /// count the rules it weakens ([`loosened`]), so `core_caught_30d`
+    /// is non-zero when it weakens a child-safety rule that caught
+    /// anything. Undo never touches the floor (locked rules aren't
+    /// restored, and subscriptions aren't in the kept set), so
+    /// `removed_from_floor` stays 0. With nothing kept, or a kept set or
+    /// current set that can't be read, it's the all-zero estimate: the
+    /// preview never fails an Undo.
+    fn undo_preview(
+        &self,
+        snap: &Snapshot,
+        engine: &Engine,
+        sealer: Option<&Sealer>,
+        now: i64,
+        progress: &Progress,
+    ) -> ApiResult<(Preview, bool)> {
+        let fallback = Preview {
+            estimate: true,
+            ..Preview::default()
+        };
+        let read = {
+            let store = self.store();
+            store
+                .previous()
+                .ok()
+                .flatten()
+                .and_then(|data| Previous::parse(&data).ok())
+                .zip(store.rule_set().ok())
+                .zip(store.filter_state().ok())
+        };
+        let Some(((previous, current), state)) = read else {
+            return Ok((fallback, false));
+        };
+        // Both sides as stored: the engine can lag the store after an
+        // apply that failed part-way, and Undo restores against the store.
+        let mut before = Engine::clone(engine);
+        let _ = before.load_rules(&current);
+        for (rule, on) in &state.switches {
+            if let Some(r) = CoreRule::from_id(rule) {
+                let _ = before.core.switches.set(r, *on);
+            }
+        }
+        let mut set = previous.set;
+        // Undo leaves the applied pack versions as they are.
+        set.pack_versions = current.pack_versions.clone();
+        let mut after = Engine::clone(&before);
+        let _ = after.load_rules(&set);
+        for (r, on) in previous.core {
+            let _ = after.core.switches.set(r, on);
+        }
+        let mut p = snap.rejudged(&before, &after, sealer, now, progress)?;
+        let weaker = loosened(&before, &after, &current, &set, snap, now);
+        let bound = snap.for_rules(&weaker.rules);
+        p.stored = bound.stored;
+        p.caught_30d = bound.caught_30d;
+        p.core_caught_30d = bound.core_caught_30d;
+        p.per_day = bound.per_day;
+        Ok((p, weaker.child_safety))
+    }
+
     /// [`FiltersApi::assess`], reporting progress. The store is locked
     /// only while the snapshot is read.
     pub fn assess_tracked(
@@ -1144,6 +1439,8 @@ impl FiltersApi {
                 let stored_on = self.store().core_switch(r.id()).map_err(internal)?;
                 if !on && stored_on {
                     a.weakening = true;
+                    // Every core rule is a child-safety rule.
+                    a.loosens_child_safety = true;
                     a.preview = rules(vec![rule.clone()]);
                 }
             }
@@ -1253,6 +1550,8 @@ impl FiltersApi {
                     now,
                 )?;
                 a.weakening = true;
+                // It can bypass every core rule that isn't locked.
+                a.loosens_child_safety = true;
                 let mut after = Engine::clone(&engine);
                 after.overrides.push(Override {
                     id: u32::MAX,
@@ -1287,6 +1586,7 @@ impl FiltersApi {
             Change::AddException { rule, what } => {
                 let e = exception_entry(rule, what)?;
                 a.weakening = true;
+                a.loosens_child_safety = child_safety(rule);
                 let mut after = Engine::clone(&engine);
                 after.exceptions.push(Exception { id: u32::MAX, ..e });
                 a.preview = snap.rejudged(&engine, &after, sealer, now, progress)?;
@@ -1323,6 +1623,8 @@ impl FiltersApi {
                 let hs: Vec<[u8; 20]> =
                     hashes.iter().map(|h| hex20(h)).collect::<ApiResult<_>>()?;
                 a.weakening = true;
+                // Confirmed abuse material leaves the floor.
+                a.loosens_child_safety = !hs.is_empty();
                 a.preview.tombstones = snap
                     .tombstones
                     .iter()
@@ -1346,6 +1648,7 @@ impl FiltersApi {
                     },
                 )?;
                 a.weakening = true;
+                a.loosens_child_safety = child_safety(&q.rule);
                 let bound = rules(vec![q.rule.clone()]);
                 a.preview = Preview {
                     quarantine: 1,
@@ -1359,6 +1662,13 @@ impl FiltersApi {
                 a.preview.tombstones = snap.tombstones.iter().filter(|t| t.hash == h).count();
                 let rule = self.store().quarantine_rule(&h).map_err(internal)?;
                 let held_by = rule.as_deref().map(|r| r.split('+').next().unwrap_or(r));
+                let tombstoned_by = snap
+                    .tombstones
+                    .iter()
+                    .find(|t| t.hash == h)
+                    .map(|t| &t.rule);
+                a.loosens_child_safety = held_by.is_some_and(child_safety)
+                    || tombstoned_by.is_some_and(|r| child_safety(r));
                 if held_by == Some(CoreRule::Cs0a.id()) {
                     a.warning = Some(TOO_LARGE_RELEASE.to_owned());
                 }
@@ -1438,7 +1748,8 @@ impl FiltersApi {
             }
             Change::Undo => {
                 a.weakening = true;
-                a.preview.estimate = true;
+                (a.preview, a.loosens_child_safety) =
+                    self.undo_preview(&snap, &engine, sealer, now, progress)?;
             }
             Change::RemoveOverride { .. }
             | Change::RemoveException { .. }
@@ -1447,6 +1758,7 @@ impl FiltersApi {
             | Change::Confirm { .. } => {}
         }
         a.confirm |= a.weakening;
+        a.loosens_child_safety |= a.preview.removed_from_floor > 0;
         if a.confirm {
             let adult_hold = match change {
                 Change::Release { hash } | Change::FalsePositive { hash } => {
@@ -1622,101 +1934,11 @@ impl FiltersApi {
             .previous()
             .map_err(internal)?
             .ok_or_else(|| conflict("nothing_to_undo", "There's nothing to undo."))?;
-        let v: Value = serde_json::from_slice(&data).map_err(internal)?;
-        let unhex = |s: &Value| -> Vec<u8> {
-            let s = s.as_str().unwrap_or_default();
-            (0..s.len() / 2)
-                .filter_map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok())
-                .collect()
-        };
-        let arr = |k: &str| v[k].as_array().cloned().unwrap_or_default();
-        let mut set = RuleSet {
-            rules: arr("rules")
-                .iter()
-                .map(|r| RuleRow {
-                    id: r["id"].as_i64().unwrap_or_default(),
-                    query: r["query"].as_str().unwrap_or_default().to_owned(),
-                    action: r["action"].as_u64().unwrap_or_default() as u8,
-                    enabled: r["enabled"].as_bool().unwrap_or(true),
-                    shadow_until: r["shadow_until"].as_i64(),
-                    unless_query: r["unless"].as_str().map(str::to_owned),
-                })
-                .collect(),
-            pack_switches: arr("packs")
-                .iter()
-                .filter_map(|p| Some((p[0].as_str()?.to_owned(), p[1].as_bool()?)))
-                .collect(),
-            overrides: arr("overrides")
-                .iter()
-                .map(|o| OverrideRow {
-                    id: o["id"].as_i64().unwrap_or_default(),
-                    kind: o["kind"].as_u64().unwrap_or_default() as u8,
-                    value: unhex(&o["value"]),
-                    strength: o["strength"].as_u64().unwrap_or_default() as u8,
-                    scope: o["scope"].as_str().map(str::to_owned),
-                    created_at: o["created_at"].as_i64().unwrap_or_default(),
-                    expires_at: o["expires_at"].as_i64(),
-                    shadow_until: o["shadow_until"].as_i64(),
-                    hits: o["hits"].as_i64().unwrap_or_default(),
-                })
-                .collect(),
-            exceptions: arr("exceptions")
-                .iter()
-                .map(|e| ExceptionRow {
-                    id: e["id"].as_i64().unwrap_or_default(),
-                    rule: e["rule"].as_str().unwrap_or_default().to_owned(),
-                    kind: e["kind"].as_u64().unwrap_or_default() as u8,
-                    value: unhex(&e["value"]),
-                })
-                .collect(),
-            allow: arr("allow")
-                .iter()
-                .filter_map(|a| Some((a[0].as_i64()?, a[1].as_str()?.to_owned())))
-                .collect(),
-            // A snapshot from before RP-2 has none, as that set had none.
-            pack_overrides: arr("pack_overrides")
-                .iter()
-                .filter_map(|o| {
-                    let rule = o["rule"].as_str()?.to_owned();
-                    let value = match o["text"].as_str() {
-                        Some(t) => Ok(t.to_owned()),
-                        None => Err(unhex(&o["hex"])),
-                    };
-                    Some((rule, value))
-                })
-                .collect(),
-            // Never restored: Undo leaves the applied pack versions.
-            ..RuleSet::default()
-        };
-        if v.get("packs_seeded").is_none() {
-            // Taken before RP-0 split SC-2 out of SC-1: SC-2 gets SC-1's
-            // switch and exceptions, as seeding gave it.
-            set.pack_switches = pack_upgrade::copy_sc1_switch(&set.pack_switches);
-            let mut next = set.exceptions.iter().map(|e| e.id).max().unwrap_or(0);
-            let copies: Vec<ExceptionRow> = set
-                .exceptions
-                .iter()
-                .filter(|e| e.rule == PackRule::Sc1.id())
-                .map(|e| {
-                    next += 1;
-                    ExceptionRow {
-                        id: next,
-                        rule: PackRule::Sc2.id().to_owned(),
-                        ..e.clone()
-                    }
-                })
-                .collect();
-            set.exceptions.extend(copies);
-        }
+        let Previous { set, core } = Previous::parse(&data).map_err(internal)?;
         // The set being replaced becomes the one Undo goes back to.
         let replaced = self.previous_data(store)?;
         store.replace_rule_set(&set).map_err(internal)?;
-        for r in CoreRule::ALL.iter().filter(|r| !r.locked()) {
-            let on = arr("core")
-                .iter()
-                .find(|c| c[0].as_str() == Some(r.id()))
-                .and_then(|c| c[1].as_bool())
-                .unwrap_or(true);
+        for (r, on) in core {
             store.set_core_switch(r.id(), on).map_err(internal)?;
         }
         store.save_previous(&replaced).map_err(internal)
@@ -4837,5 +5059,434 @@ mod tests {
             jobs.get(first.unwrap()).is_err(),
             "the oldest finished went"
         );
+    }
+
+    /// `n` decisions by `rule` inside the replay window of `now` 1,000.
+    fn hits(api: &FiltersApi, rule: &str, n: u8) {
+        let hashes: Vec<[u8; 20]> = (0..n).map(|i| [0xA0 + i; 20]).collect();
+        let filtered: Vec<lodestar_store::Filtered<'_>> = hashes
+            .iter()
+            .map(|h| lodestar_store::Filtered {
+                hashes: std::slice::from_ref(h),
+                rule,
+                action: Action::Quarantine.code(),
+                held: None,
+                sealed: None,
+                evidence: &[],
+                at: 1_000,
+                expires_at: 0,
+                adult_hold: false,
+            })
+            .collect();
+        api.store()
+            .write(&lodestar_store::WriteBatch {
+                filtered: &filtered,
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    fn applied(api: &FiltersApi, change: Change) -> ApplyResponse {
+        let a = api.assess(&change, 1_000).unwrap();
+        api.apply(&change, a, 1_000).unwrap()
+    }
+
+    fn undo_of(api: &FiltersApi) -> Assessment {
+        let a = api.assess(&Change::Undo, 1_000).unwrap();
+        // Unchanged by the preview (§2.39).
+        assert!(a.weakening && a.confirm);
+        assert!(
+            a.warning
+                .as_deref()
+                .is_some_and(|w| w.starts_with("Undo puts back"))
+        );
+        assert!(a.preview.estimate);
+        // Undo never touches the floor.
+        assert_eq!(a.preview.removed_from_floor, 0);
+        a
+    }
+
+    fn undo_preview_of(api: &FiltersApi) -> Preview {
+        undo_of(api).preview
+    }
+
+    fn loosens(api: &FiltersApi) -> bool {
+        undo_of(api).loosens_child_safety
+    }
+
+    fn core(rule: &str, on: bool) -> Change {
+        Change::CoreSwitch {
+            rule: rule.into(),
+            on,
+        }
+    }
+
+    fn by_hash(hash: [u8; 20]) -> MatchInput {
+        MatchInput {
+            hashes: Some(vec![hex(&hash)]),
+            ..MatchInput::default()
+        }
+    }
+
+    fn memory_api() -> FiltersApi {
+        test_api(Store::open_in_memory(Default::default()).unwrap())
+    }
+
+    /// An Undo that puts back a child-safety rule switched off counts
+    /// that rule's catches (X-safety-undo-danger).
+    #[test]
+    fn undo_that_switches_a_cs_rule_back_off_counts_its_catches() {
+        let api = memory_api();
+        hits(&api, "CS-3a", 2);
+        hits(&api, "CS-4a", 1);
+        apply_change(&api, core("CS-3a", false));
+        apply_change(&api, core("CS-3a", true));
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (2, 2), "{p:?}");
+        assert_eq!(p.per_day, 2.0 / 30.0);
+        assert!(loosens(&api));
+    }
+
+    /// One that puts back an exception to a child-safety rule counts that
+    /// rule's catches.
+    #[test]
+    fn undo_that_puts_back_a_cs_exception_counts_its_catches() {
+        let api = memory_api();
+        hits(&api, "CS-3a", 3);
+        let id = applied(
+            &api,
+            Change::AddException {
+                rule: "CS-3a".into(),
+                what: by_hash([0x11; 20]),
+            },
+        )
+        .id
+        .expect("an exception id");
+        apply_change(&api, Change::RemoveException { id });
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (3, 3), "{p:?}");
+        assert!(loosens(&api));
+    }
+
+    /// One that puts back an override counts every rule it could bypass,
+    /// the unlocked child-safety rules included.
+    #[test]
+    fn undo_that_puts_back_an_override_counts_the_cs_rules_it_bypasses() {
+        let api = memory_api();
+        hits(&api, "CS-4a", 2);
+        hits(&api, "MW-1", 1);
+        let id = applied(
+            &api,
+            Change::AddOverride {
+                what: by_hash([0x12; 20]),
+                neutralize: false,
+                scope: None,
+                expires_days: None,
+                shadow_days: None,
+            },
+        )
+        .id
+        .expect("an override id");
+        apply_change(&api, Change::RemoveOverride { id });
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (2, 3), "{p:?}");
+        assert!(loosens(&api));
+    }
+
+    /// A pack loosened by Undo counts, but not as child safety.
+    #[test]
+    fn undo_that_switches_a_pack_back_off_is_not_child_safety() {
+        let api = memory_api();
+        hits(&api, "MW-1", 2);
+        hits(&api, "CS-3a", 1);
+        apply_change(&api, pack("malware", false));
+        apply_change(&api, pack("malware", true));
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (0, 2), "{p:?}");
+        assert!(!loosens(&api));
+    }
+
+    /// An Undo that only strengthens (it switches a child-safety rule
+    /// back on, takes an exception away) counts nothing.
+    #[test]
+    fn undo_that_only_strengthens_counts_nothing() {
+        let api = memory_api();
+        hits(&api, "CS-3a", 2);
+        hits(&api, "CS-4a", 2);
+        apply_change(&api, core("CS-3a", false));
+        assert!(!loosens(&api));
+        let p = undo_preview_of(&api);
+        assert_eq!(
+            p,
+            Preview {
+                estimate: true,
+                ..Preview::default()
+            }
+        );
+
+        let api = memory_api();
+        hits(&api, "CS-3a", 2);
+        apply_change(
+            &api,
+            Change::AddException {
+                rule: "CS-3a".into(),
+                what: by_hash([0x13; 20]),
+            },
+        );
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d, p.quarantine), (0, 0, 0));
+        assert!(!loosens(&api));
+    }
+
+    /// With nothing kept, or a kept set that can't be read, the preview is
+    /// the all-zero estimate, and assessing never fails.
+    #[test]
+    fn undo_preview_falls_back_to_the_estimate() {
+        let estimate = Preview {
+            estimate: true,
+            ..Preview::default()
+        };
+        let api = memory_api();
+        hits(&api, "CS-3a", 2);
+        assert_eq!(undo_preview_of(&api), estimate, "nothing kept");
+        assert!(!loosens(&api));
+        apply_change(&api, core("CS-3a", false));
+        apply_change(&api, core("CS-3a", true));
+        assert!(loosens(&api), "readable: it would switch CS-3a off");
+        api.store().save_previous(b"{not json").unwrap();
+        assert_eq!(undo_preview_of(&api), estimate, "unreadable");
+        assert!(!loosens(&api));
+        // Apply still refuses it as before.
+        let a = api.assess(&Change::Undo, 1_000).unwrap();
+        assert!(api.apply(&Change::Undo, a, 1_000).is_err());
+    }
+
+    /// The flag doesn't depend on catches: an Undo that switches off a
+    /// child-safety rule that caught nothing still loosens child safety,
+    /// though every count is 0.
+    #[test]
+    fn undo_that_switches_off_a_cs_rule_with_no_catches_still_loosens() {
+        let api = memory_api();
+        hits(&api, "MW-1", 1);
+        apply_change(&api, core("CS-5a", false));
+        apply_change(&api, core("CS-5a", true));
+        let a = undo_of(&api);
+        assert!(a.loosens_child_safety);
+        assert_eq!((a.preview.core_caught_30d, a.preview.caught_30d), (0, 0));
+
+        // An exception put back on a child-safety rule, no catches either.
+        let api = memory_api();
+        let id = applied(
+            &api,
+            Change::AddException {
+                rule: "CS-5a".into(),
+                what: by_hash([0x14; 20]),
+            },
+        )
+        .id
+        .unwrap();
+        apply_change(&api, Change::RemoveException { id });
+        assert!(loosens(&api));
+    }
+
+    /// The flag means the same for the other changes that loosen child
+    /// safety (X-safety-toggles' list), and is false for the rest.
+    #[test]
+    fn the_flag_marks_every_change_that_loosens_child_safety() {
+        let api = memory_api();
+        let flag = |change: Change| api.assess(&change, 1_000).unwrap().loosens_child_safety;
+        assert!(flag(core("CS-4a", false)), "a CS rule off");
+        assert!(!flag(core("CS-4a", true)), "a CS rule on (already on)");
+        assert!(!flag(pack("malware", false)), "a pack off");
+        let exception = |rule: &str| Change::AddException {
+            rule: rule.into(),
+            what: by_hash([0x15; 20]),
+        };
+        assert!(flag(exception("CS-4a")), "an exception to a CS rule");
+        assert!(!flag(exception("MW-1")), "an exception to a pack rule");
+        assert!(
+            flag(Change::AddOverride {
+                what: by_hash([0x16; 20]),
+                neutralize: false,
+                scope: None,
+                expires_days: None,
+                shadow_days: None,
+            }),
+            "an override can bypass the CS core"
+        );
+        assert!(
+            flag(Change::RemoveCs1 {
+                hashes: vec![hex(&[0x17; 20])],
+            }),
+            "confirmed abuse leaves the floor"
+        );
+        assert!(!flag(Change::AddAllow {
+            query: "type:movie".into()
+        }));
+
+        // Release and False positive: by the rule that holds it.
+        for (rule, cs) in [("CS-4a", true), ("MW-4", false)] {
+            let api = memory_api();
+            let hash = [0x18; 20];
+            api.store()
+                .write(&lodestar_store::WriteBatch {
+                    filtered: &[lodestar_store::Filtered {
+                        hashes: std::slice::from_ref(&hash),
+                        rule,
+                        action: Action::Quarantine.code(),
+                        held: Some(lodestar_store::Held::Quarantine),
+                        sealed: None,
+                        evidence: &[],
+                        at: 1_000,
+                        expires_at: 100_000,
+                        adult_hold: false,
+                    }],
+                    ..Default::default()
+                })
+                .unwrap();
+            for change in [
+                Change::Release { hash: hex(&hash) },
+                Change::FalsePositive { hash: hex(&hash) },
+            ] {
+                let a = api.assess(&change, 1_000).unwrap();
+                assert_eq!(a.loosens_child_safety, cs, "{rule}: {change:?}");
+            }
+        }
+    }
+
+    /// An Undo that takes away or disables your rule counts its catches,
+    /// but not as child safety.
+    #[test]
+    fn undo_that_takes_away_your_rule_counts_its_catches() {
+        let api = memory_api();
+        apply_change(
+            &api,
+            Change::AddRule {
+                query: "ext:scr".into(),
+                action: "hide".into(),
+                unless: None,
+                shadow_days: None,
+            },
+        );
+        let id = api.store().rule_set().unwrap().rules[0].id;
+        hits(&api, &format!("U-{id}"), 2);
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (0, 2), "{p:?}");
+        assert!(!loosens(&api));
+
+        // Disabled again by Undo (the kept set has it off).
+        apply_change(
+            &api,
+            Change::UpdateRule {
+                id,
+                query: None,
+                action: None,
+                enabled: Some(false),
+                unless: None,
+                shadow_days: None,
+            },
+        );
+        apply_change(
+            &api,
+            Change::UpdateRule {
+                id,
+                query: None,
+                action: None,
+                enabled: Some(true),
+                unless: None,
+                shadow_days: None,
+            },
+        );
+        assert_eq!(undo_preview_of(&api).caught_30d, 2);
+    }
+
+    /// An Undo that takes away a heavier pack override weakens that rule,
+    /// and one that puts it back doesn't.
+    #[test]
+    fn undo_that_takes_away_a_pack_override_counts_its_rule() {
+        let api = memory_api();
+        hits(&api, "MW-1", 2);
+        apply_change(
+            &api,
+            Change::SetPackOverride {
+                rule: "MW-1".into(),
+                action: "drop".into(),
+                unless: None,
+                base: None,
+            },
+        );
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (0, 2), "{p:?}");
+        assert!(!loosens(&api));
+    }
+
+    /// An Undo that puts back an allow entry counts your rules, the packs
+    /// and the lists, never the core.
+    #[test]
+    fn undo_that_puts_back_an_allow_entry_skips_the_core() {
+        let api = memory_api();
+        hits(&api, "MW-1", 2);
+        hits(&api, "CS-4a", 3);
+        let id = applied(
+            &api,
+            Change::AddAllow {
+                query: "type:movie".into(),
+            },
+        )
+        .id
+        .expect("an allow id");
+        apply_change(&api, Change::RemoveAllow { id });
+        let p = undo_preview_of(&api);
+        assert_eq!((p.core_caught_30d, p.caught_30d), (0, 2), "{p:?}");
+        assert!(!loosens(&api));
+    }
+
+    /// Both sides are read as stored: with the engine lagging the store
+    /// (an apply that failed part-way), an Undo that switches a CS rule
+    /// off still loosens child safety.
+    #[test]
+    fn undo_reads_the_switches_as_stored_when_the_engine_lags() {
+        let api = memory_api();
+        hits(&api, "CS-3a", 2);
+        apply_change(&api, core("CS-3a", false));
+        {
+            let mut store = api.store();
+            // Kept: CS-3a off. Stored now: on. The engine still has it off.
+            let kept = api.previous_data(&store).unwrap();
+            store.save_previous(&kept).unwrap();
+            store.set_core_switch("CS-3a", true).unwrap();
+        }
+        assert!(
+            !api.engine.current().core.switches.is_on(CoreRule::Cs3a),
+            "the engine lags"
+        );
+        let a = undo_of(&api);
+        assert!(a.loosens_child_safety);
+        assert_eq!(a.preview.core_caught_30d, 2);
+    }
+
+    /// A corrupt kept set (non-ASCII where hex belongs) reads without
+    /// panicking, and the preview still answers.
+    #[test]
+    fn a_corrupt_kept_value_does_not_panic() {
+        let data = r#"{"exceptions": [{"id": 1, "rule": "CS-4a", "kind": 0, "value": "é1ab"}],
+            "pack_overrides": [{"rule": "MW-1", "hex": "aé"}]}"#;
+        let p = Previous::parse(data.as_bytes()).unwrap();
+        // "é" is two bytes, so the pairs that follow are "1a" and a lone "b".
+        assert_eq!(p.set.exceptions[0].value, vec![0x1a]);
+        let api = memory_api();
+        api.store().save_previous(data.as_bytes()).unwrap();
+        assert!(api.assess(&Change::Undo, 1_000).is_ok());
+    }
+
+    /// The kept set parses as Undo restores it: unnamed core rules are on,
+    /// locked ones are never listed.
+    #[test]
+    fn previous_reads_core_switches_as_undo_restores_them() {
+        let p = Previous::parse(br#"{"core": [["CS-3a", false], ["CS-1a", false]]}"#).unwrap();
+        assert!(p.core.contains(&(CoreRule::Cs3a, false)));
+        assert!(p.core.contains(&(CoreRule::Cs4a, true)));
+        assert!(p.core.iter().all(|(r, _)| !r.locked()));
+        assert!(Previous::parse(b"[").is_err());
     }
 }

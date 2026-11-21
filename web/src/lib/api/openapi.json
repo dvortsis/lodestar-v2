@@ -10482,6 +10482,10 @@
             "type": "string",
             "description": "For `resolve_held`: the held version's fingerprint (64 hex\ndigits). Send it back as `held` to accept with the password."
           },
+          "loosens_child_safety": {
+            "type": "boolean",
+            "description": "The change loosens child safety: it turns a child-safety core rule\noff or weakens one (an exception to it, or an override that can\nbypass it), takes entries off the locked floor, or releases or marks\nas a false positive a hold by a child-safety rule. For Undo it\ncompares the kept rule set with the current one, whatever those\nrules caught. Style only: `confirm` still decides the password.\nSent only when true."
+          },
           "neutralize": {
             "oneOf": [
               {
