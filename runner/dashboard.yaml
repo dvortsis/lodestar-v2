@@ -349,6 +349,7 @@ placement:
   - X-snapshot-stale-outputs
   - X-safety-undo-danger
   - X-undo-danger-tests
+  - X-web-build-determinism
   - X-ui-plan-r5
   - X-page-frame
   - X-ctl-geometry
