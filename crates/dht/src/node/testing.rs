@@ -20,7 +20,8 @@ use super::{Config, Harvest, Node, NodeHandle, StatsSnapshot};
 /// The sampler's cooldown floor and ceiling, so the simulator's checks
 /// track the sampler's own rules.
 pub use super::sampler::{
-    MAX_INTERVAL as SAMPLE_MAX_INTERVAL, MIN_INTERVAL as SAMPLE_MIN_INTERVAL,
+    FIRST_FAILURE_BACKOFF as SAMPLE_FIRST_FAILURE_BACKOFF, MAX_INTERVAL as SAMPLE_MAX_INTERVAL,
+    MIN_INTERVAL as SAMPLE_MIN_INTERVAL,
 };
 
 /// A datagram the node sent: destination and bytes.

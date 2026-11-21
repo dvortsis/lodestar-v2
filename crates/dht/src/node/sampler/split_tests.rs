@@ -194,6 +194,7 @@ fn a_full_filter_leaves_the_table_full() {
         State::Cooling {
             until: now + past,
             token: 1,
+            struck: false,
         },
     );
     s.expiry.insert((now + past, 1, wide(1)));

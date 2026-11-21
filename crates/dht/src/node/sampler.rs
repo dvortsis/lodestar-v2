@@ -40,6 +40,13 @@ pub(crate) const MAX_PER_V6_ALLOCATION: u32 = 64;
 pub(crate) const UNSUPPORTED_BACKOFF: Duration = Duration::from_secs(6 * 3600);
 pub const MIN_INTERVAL: Duration = Duration::from_secs(60);
 pub const MAX_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+/// CR-SAMPLE-BACKOFF-ESCALATE (`dht.sample_backoff_escalate`): the cooldown
+/// after a node's first failed sample in a row; every later failure in a
+/// row cools for the full backoff. Chosen from the sim screen within the
+/// runner's bounds (the sim's 300 s sample interval to an hour):
+/// `docs/decisions/2026-11-21-CR-SAMPLE-BACKOFF-ESCALATE.md`.
+pub const FIRST_FAILURE_BACKOFF: Duration = Duration::from_secs(FIRST_FAILURE_SECS);
+const FIRST_FAILURE_SECS: u64 = 300;
 /// The largest BEP 51 share a node takes (WK-10e): the fleet planner's
 /// `MAX_DHT_PER_IP`, so a cooldown is at most `MAX_INTERVAL` times this
 /// (48 h).
@@ -53,8 +60,21 @@ const RESTORED: u64 = 1 << 62;
 
 #[derive(Debug, Clone, Copy)]
 enum State {
-    InFlight(u64),
-    Cooling { until: Instant, token: u64 },
+    /// `struck`: the node's last sample failed and escalation is on, so a
+    /// failure of this one cools for the full backoff.
+    InFlight { token: u64, struck: bool },
+    /// `struck`: a failure's cooldown (escalation on); when it ends the
+    /// record becomes [`State::Struck`] instead of leaving.
+    Cooling {
+        until: Instant,
+        token: u64,
+        struck: bool,
+    },
+    /// A failure's cooldown ended: the node may be sampled, and the streak
+    /// is remembered until `forget` (escalation on only). Not a
+    /// restriction: the snapshot doesn't list it, and a full table drops it
+    /// before refusing anyone.
+    Struck { forget: Instant, token: u64 },
 }
 
 #[derive(Debug)]
@@ -78,6 +98,10 @@ pub(crate) struct Sampler {
     restored_honoured: u64,
     /// `dht.sampler_cooldown_split`.
     split: bool,
+    /// `dht.sample_backoff_escalate`.
+    escalate: bool,
+    /// One record per [`State::Struck`], soonest `forget` first.
+    struck: BTreeSet<(Instant, u64, SocketAddr)>,
     /// Cooldowns moved out of a full table: made at the first move, so
     /// `None` until then and always with the switch off.
     spill: Option<spill::Spill>,
@@ -110,10 +134,18 @@ impl Sampler {
             restored_refused: 0,
             restored_honoured: 0,
             split,
+            escalate: false,
+            struck: BTreeSet::new(),
             spill: None,
             full: Duration::ZERO,
             full_checked: None,
         }
+    }
+
+    /// `escalate` is `dht.sample_backoff_escalate`; off is today's
+    /// sampler, which never makes a [`State::Struck`] record.
+    pub fn with_escalation(self, escalate: bool) -> Self {
+        Self { escalate, ..self }
     }
 
     #[cfg(test)]
@@ -138,7 +170,8 @@ impl Sampler {
         match self.states.get(addr) {
             None => true,
             Some(State::Cooling { until, .. }) => *until <= now,
-            Some(State::InFlight(_)) => false,
+            Some(State::Struck { .. }) => true,
+            Some(State::InFlight { .. }) => false,
         }
     }
 
@@ -158,6 +191,13 @@ impl Sampler {
     /// filter keeps it to the end of its minute.
     fn make_room(&mut self, now: Instant) -> bool {
         while self.states.len() >= self.capacity {
+            // A remembered streak restricts no one: it goes first, soonest
+            // forgotten first (escalation on only; it costs that node at
+            // most one more short cooldown).
+            if let Some((_, token, addr)) = self.struck.pop_first() {
+                self.forget_struck(addr, token);
+                continue;
+            }
             if !self.split {
                 return false;
             }
@@ -176,6 +216,8 @@ impl Sampler {
             self.expiry.remove(&(until, token, addr));
             if matches!(self.states.get(&addr), Some(State::Cooling { token: t, .. }) if *t == token)
             {
+                // A streak moved with it is forgotten, as a restart
+                // forgets it.
                 self.states.remove(&addr);
                 self.recount(&addr, true);
                 // A restored record that moves is honoured: the filter
@@ -244,7 +286,7 @@ impl Sampler {
     /// queued (CR-1b counts these as new).
     pub fn offer(&mut self, mut node: NodeInfo, now: Instant) -> bool {
         node.addr = lodestar_network_policy::normalize(node.addr);
-        if matches!(self.states.get(&node.addr), Some(State::Cooling { until, token })
+        if matches!(self.states.get(&node.addr), Some(State::Cooling { until, token, .. })
             if *until > now && token & (PROOF_TOKEN | RESTORED) == PROOF_TOKEN | RESTORED)
         {
             self.restored_refused += 1;
@@ -287,10 +329,23 @@ impl Sampler {
             return false;
         }
         let was = self.tracked(&addr);
-        if let Some(State::Cooling { until, token }) = self.states.remove(&addr) {
-            self.expiry.remove(&(until, token, addr));
-            self.retire(token);
-        }
+        // The streak carries into the sample, so its failure escalates.
+        let struck = match self.states.remove(&addr) {
+            Some(State::Cooling {
+                until,
+                token,
+                struck,
+            }) => {
+                self.expiry.remove(&(until, token, addr));
+                self.retire(token);
+                struck
+            }
+            Some(State::Struck { forget, token }) => {
+                self.struck.remove(&(forget, token, addr));
+                true
+            }
+            _ => false,
+        };
         if self.states.len() >= self.capacity {
             self.make_room(now);
         }
@@ -298,13 +353,13 @@ impl Sampler {
             self.recount(&addr, was);
             return false;
         }
-        self.states.insert(addr, State::InFlight(token));
+        self.states.insert(addr, State::InFlight { token, struck });
         self.recount(&addr, was);
         true
     }
 
     pub fn abort(&mut self, addr: SocketAddr, token: u64) -> bool {
-        if matches!(self.states.get(&addr), Some(State::InFlight(t)) if *t == token) {
+        if matches!(self.states.get(&addr), Some(State::InFlight { token: t, .. }) if *t == token) {
             self.states.remove(&addr);
             self.recount(&addr, true);
             true
@@ -333,7 +388,8 @@ impl Sampler {
         // proof's bit (the actor never hands out one at or past it), which
         // is how a snapshot tells a sample's cooldown from a seal.
         debug_assert!(token & PROOF_TOKEN == 0, "a wire token below PROOF_TOKEN");
-        if !matches!(self.states.get(&addr), Some(State::InFlight(t)) if *t == token) {
+        if !matches!(self.states.get(&addr), Some(State::InFlight { token: t, .. }) if *t == token)
+        {
             return false;
         }
         let scale = scale.clamp(1, MAX_SCALE);
@@ -341,9 +397,55 @@ impl Sampler {
             + wait
                 .clamp(MIN_INTERVAL, MAX_INTERVAL)
                 .saturating_mul(u32::from(scale));
-        self.states.insert(addr, State::Cooling { until, token });
-        self.expiry.insert((until, token, addr));
+        // Any completion ends a streak: an answer resets it, and a full
+        // backoff needs no memory after it.
+        self.cool(addr, token, until, false);
         true
+    }
+
+    /// A sample failed: it timed out, or the reply was an error or
+    /// inconsistent. With escalation off it cools for `backoff`, as
+    /// [`complete`](Self::complete) does. With escalation on, a node's
+    /// first failure in a row cools for [`FIRST_FAILURE_BACKOFF`] (or
+    /// `backoff`, if that's shorter) and every later one for `backoff`; the
+    /// streak is remembered for `MAX_INTERVAL` after each cooldown ends,
+    /// and an answer ends it.
+    pub fn fail(&mut self, addr: SocketAddr, token: u64, backoff: Duration, now: Instant) -> bool {
+        debug_assert!(token & PROOF_TOKEN == 0, "a wire token below PROOF_TOKEN");
+        let Some(State::InFlight { token: t, struck }) = self.states.get(&addr).copied() else {
+            return false;
+        };
+        if t != token {
+            return false;
+        }
+        let backoff = backoff.clamp(MIN_INTERVAL, MAX_INTERVAL);
+        let wait = if self.escalate && !struck {
+            backoff.min(FIRST_FAILURE_BACKOFF)
+        } else {
+            backoff
+        };
+        self.cool(addr, token, now + wait, self.escalate);
+        true
+    }
+
+    fn cool(&mut self, addr: SocketAddr, token: u64, until: Instant, struck: bool) {
+        self.states.insert(
+            addr,
+            State::Cooling {
+                until,
+                token,
+                struck,
+            },
+        );
+        self.expiry.insert((until, token, addr));
+    }
+
+    /// Drops a [`State::Struck`] record whose `struck` entry has left.
+    fn forget_struck(&mut self, addr: SocketAddr, token: u64) {
+        if matches!(self.states.get(&addr), Some(State::Struck { token: t, .. }) if *t == token) {
+            self.states.remove(&addr);
+            self.recount(&addr, true);
+        }
     }
 
     pub fn prune(&mut self, now: Instant) {
@@ -358,12 +460,35 @@ impl Sampler {
                 break;
             }
             self.expiry.pop_first();
-            if matches!(self.states.get(&addr), Some(State::Cooling { token: t, .. }) if *t == token)
-            {
-                self.states.remove(&addr);
-                self.recount(&addr, true);
-                self.retire(token);
+            match self.states.get(&addr) {
+                // A failure's cooldown ended: remember the streak for a
+                // backoff's length, so a failure soon after escalates.
+                Some(State::Cooling {
+                    token: t,
+                    struck: true,
+                    ..
+                }) if *t == token => {
+                    let forget = until + MAX_INTERVAL;
+                    self.states.insert(addr, State::Struck { forget, token });
+                    self.struck.insert((forget, token, addr));
+                }
+                Some(State::Cooling { token: t, .. }) if *t == token => {
+                    self.states.remove(&addr);
+                    self.recount(&addr, true);
+                    self.retire(token);
+                }
+                _ => {}
             }
+        }
+        for _ in 0..RECLAIM_PER_TICK {
+            let Some(&(forget, token, addr)) = self.struck.first() else {
+                break;
+            };
+            if forget > now {
+                break;
+            }
+            self.struck.pop_first();
+            self.forget_struck(addr, token);
         }
     }
 
@@ -390,11 +515,18 @@ impl Sampler {
             // Can't happen (sampling waits for seeding), but if it did, the
             // restored restriction wins: the in-flight sample's completion
             // then fails its token check and can't shorten it.
-            Some(State::InFlight(_)) => {
+            Some(State::InFlight { .. }) => {
                 debug_assert!(false, "a sample was in flight before seeding");
             }
+            // Can't happen either (nothing was sampled yet); the
+            // restriction replaces the streak.
+            Some(State::Struck { forget, token }) => {
+                self.struck.remove(&(forget, token, addr));
+            }
             Some(State::Cooling { until: u, .. }) if u >= until => return,
-            Some(State::Cooling { until: u, token }) => {
+            Some(State::Cooling {
+                until: u, token, ..
+            }) => {
                 self.expiry.remove(&(u, token, addr));
                 if token & (PROOF_TOKEN | RESTORED) == PROOF_TOKEN | RESTORED {
                     self.restored_live -= 1;
@@ -404,8 +536,7 @@ impl Sampler {
         }
         let was = self.tracked(&addr);
         let token = self.proof_token(true);
-        self.states.insert(addr, State::Cooling { until, token });
-        self.expiry.insert((until, token, addr));
+        self.cool(addr, token, until, false);
         self.restored_live += 1;
         // Never refused for its shares, as for capacity; it still counts.
         self.recount(&addr, was);
@@ -418,13 +549,12 @@ impl Sampler {
         let flying: Vec<SocketAddr> = self
             .states
             .iter()
-            .filter(|(_, s)| matches!(s, State::InFlight(_)))
+            .filter(|(_, s)| matches!(s, State::InFlight { .. }))
             .map(|(a, _)| *a)
             .collect();
         for addr in flying {
             let token = self.proof_token(false);
-            self.states.insert(addr, State::Cooling { until, token });
-            self.expiry.insert((until, token, addr));
+            self.cool(addr, token, until, false);
         }
     }
 
@@ -441,7 +571,7 @@ impl Sampler {
     pub fn restrictions(&self, now: Instant) -> impl Iterator<Item = (SocketAddr, Instant)> + '_ {
         let bound = now + MAX_INTERVAL;
         self.states.iter().filter_map(move |(addr, s)| match s {
-            State::Cooling { until, token } if *until > now => {
+            State::Cooling { until, token, .. } if *until > now => {
                 let until = if token & PROOF_TOKEN == 0 {
                     (*until).min(bound)
                 } else {
@@ -480,7 +610,11 @@ impl Sampler {
         self.expiry.len()
     }
     pub fn inflight(&self) -> usize {
-        self.known() - self.cooling()
+        self.known() - self.cooling() - self.struck()
+    }
+    /// Remembered streaks whose cooldown ended (escalation on only).
+    pub fn struck(&self) -> usize {
+        self.struck.len()
     }
     /// Whether the sampler can't admit anyone: the table is full and,
     /// with the split on, no cooldown can move to the filter. With the
@@ -489,6 +623,7 @@ impl Sampler {
     /// `next` admits no one that tick without this saying so.
     pub fn saturated(&self) -> bool {
         self.known() >= self.capacity
+            && self.struck.is_empty()
             && !(self.split
                 && self.cooling() > 0
                 && self.spill.as_ref().is_none_or(spill::Spill::has_room))
@@ -821,6 +956,8 @@ pub(crate) mod spill {
     }
 }
 
+#[cfg(test)]
+mod escalate_tests;
 #[cfg(test)]
 mod split_tests;
 

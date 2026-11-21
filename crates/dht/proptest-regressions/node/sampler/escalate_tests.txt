@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 45caa0a44970558ad1c670330ada0dbdead614f0e9b55cc0875fffc100cefffc # shrinks to escalate = true, capacity = 7, ops = [Offer(5), Offer(8), Offer(3), Offer(10), Offer(6), Next, Offer(2), Next, Offer(0), Answer(0), Answer(0), Offer(4), Answer(0), Offer(9), Offer(0), Answer(0), Next, Next, Offer(0), Answer(0), Offer(0), Next, Answer(0), Next, Offer(0), Next, Answer(0), Advance(1), Answer(0), Answer(0), Offer(5), Offer(1), Offer(6), Next, Next, Offer(8), Answer(0), Next, Next, Abort(7), Answer(0), Offer(0), Offer(0), Offer(0), Offer(5), Next, Next, Advance(1), Next, Offer(2), Offer(4), Next, Abort(18), Offer(5), Offer(3), Next, Fail(87), Answer(0), Answer(0), Answer(0), Answer(0), Answer(0), Offer(1), Next, Answer(0), Advance(1), Next, Offer(8), Offer(0), Offer(0), Next, Offer(0), Fail(91)]
+cc 40aab94cb836c4d4b43e1b2ad77a72e1e8f7ebd3ee68773e85f4c7ec42d84d99 # shrinks to escalate = true, capacity = 5, ops = [Offer(0), Offer(0), Next, Next, Offer(0), Offer(0), Next, Next, Next, Offer(0), Offer(6), Offer(0), Next, Offer(0), Answer(31), Offer(0), Advance(1), Offer(0), Next, Offer(6), Offer(0), Offer(1), Next, Next, Fail(25)]
+cc c797a6d4572d6b17b0a80aefd5f9618986f504de0b1d57f14dd0568a487dfab5 # shrinks to escalate = true, capacity = 8, ops = [Offer(1), Offer(2), Offer(0), Next, Offer(3), Next, Offer(0), Offer(6), Offer(4), Offer(5), Next, Answer(0), Answer(0), Answer(0), Next, Offer(0), Next, Next, Answer(0), Offer(0), Offer(0), Advance(0), Next, Offer(0), Offer(0), Offer(8), Abort(0), Offer(6), Next, Next, Offer(0), Answer(172), Offer(0), Offer(0), Fail(24), Offer(0), Advance(3), Offer(5), Next, Fail(0), Fail(155), Offer(0), Offer(0), Offer(0)]

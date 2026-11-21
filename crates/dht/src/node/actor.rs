@@ -96,7 +96,10 @@ const SCRAPE_DEADLINE: Duration = Duration::from_secs(30);
 /// Below this frontier size, refill it and explore a random region.
 const LOW_FRONTIER: usize = 64;
 /// Backoff for a sample query that timed out (CR-0: six hours, which the
-/// restart proof relies on).
+/// restart proof relies on as an upper bound: H = `MAX_INTERVAL` plus the
+/// query timeout). With `dht.sample_backoff_escalate` on, a node's first
+/// failure in a row cools for the shorter `sampler::FIRST_FAILURE_BACKOFF`
+/// (CR-SAMPLE-BACKOFF-ESCALATE), still inside H.
 const SAMPLE_TIMEOUT_BACKOFF: Duration = sampler::MAX_INTERVAL;
 /// The most contacts one reply offers to sampling; an honest reply holds
 /// 8 per family. Ping replies offer none.
@@ -868,7 +871,8 @@ impl Actor {
             harvest,
             seen: SeenFilter::new(SEEN_CAPACITY, 0.01),
             peer_store: PeerStore::default(),
-            sampler: Sampler::new(cfg.sampler_cooldown_split),
+            sampler: Sampler::new(cfg.sampler_cooldown_split)
+                .with_escalation(cfg.sample_backoff_escalate),
             recent: VecDeque::with_capacity(RECENT_SAMPLES),
             get_peers_queue: VecDeque::new(),
             peer_requests: Map::default(),
@@ -1877,8 +1881,20 @@ impl Actor {
                 }
                 _ => {
                     Stats::inc(&self.stats.sample_failures);
-                    self.sampler
-                        .complete(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
+                    // KRPC 204: the node doesn't know the method. Asking
+                    // again soon only gets the same answer, so it cools in
+                    // full at once; any other error or an inconsistent
+                    // reply may pass, so it escalates
+                    // (CR-SAMPLE-BACKOFF-ESCALATE).
+                    let unknown = matches!(&msg.body,
+                        Body::Error(e) if e.code == error_code::METHOD_UNKNOWN);
+                    if unknown {
+                        self.sampler
+                            .complete(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
+                    } else {
+                        self.sampler
+                            .fail(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
+                    }
                 }
             }
             return;
@@ -2915,8 +2931,7 @@ impl Actor {
             }
             if let Purpose::Sample = p.purpose {
                 Stats::inc(&self.stats.sample_failures);
-                self.sampler
-                    .complete(p.to, tid, SAMPLE_TIMEOUT_BACKOFF, now_i);
+                self.sampler.fail(p.to, tid, SAMPLE_TIMEOUT_BACKOFF, now_i);
             }
             if let Purpose::Lookup(lid) = p.purpose
                 && let Some(l) = self.lookups.get_mut(&lid)
@@ -4310,6 +4325,101 @@ mod tests {
                 until >= before + want && until <= after + want,
                 "scale {scale}"
             );
+        }
+    }
+
+    /// CR-SAMPLE-BACKOFF-ESCALATE through the actor: with the switch on, a
+    /// timeout or an error reply other than 204 cools a node for the first
+    /// failure's backoff and the next failure in a row for six hours; a
+    /// KRPC 204 cools for six hours at once. With it off, each cools for
+    /// six hours at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_sample_escalates_only_with_the_switch_on() {
+        #[derive(Clone, Copy, Debug)]
+        enum Failure {
+            Timeout,
+            Error(i64),
+        }
+        // A 204 completes in full; every other failure starts a streak.
+        let failure_streaks = |f: Failure| !matches!(f, Failure::Error(error_code::METHOD_UNKNOWN));
+        let short = sampler::FIRST_FAILURE_BACKOFF;
+        let full = sampler::MAX_INTERVAL;
+        for (escalate, failure, first, second) in [
+            (true, Failure::Timeout, short, full),
+            (true, Failure::Error(error_code::SERVER), short, full),
+            (true, Failure::Error(error_code::GENERIC), short, full),
+            (true, Failure::Error(error_code::METHOD_UNKNOWN), full, full),
+            (false, Failure::Timeout, full, full),
+            (false, Failure::Error(error_code::SERVER), full, full),
+            (
+                false,
+                Failure::Error(error_code::METHOD_UNKNOWN),
+                full,
+                full,
+            ),
+        ] {
+            let (mut a, sockets) = fixture();
+            a.sampler = Sampler::new(false).with_escalation(escalate);
+            let remote = SocketAddr::from(([127, 0, 0, 9], 7000));
+            // Each round: sample the node, fail, and read its cooldown.
+            let round = |a: &mut Actor, want: Duration| {
+                let now = Instant::now();
+                assert!(a.sampler.offer(candidate(remote), now));
+                a.sample_tick(&sockets, now);
+                let tid = a
+                    .pending
+                    .iter()
+                    .find(|(_, p)| matches!(p.purpose, Purpose::Sample) && p.to == remote)
+                    .map(|(t, _)| *t)
+                    .expect("a sample sent");
+                let before = Instant::now();
+                match failure {
+                    Failure::Timeout => {
+                        a.cfg.query_timeout = Duration::ZERO;
+                        a.maintain(&sockets);
+                    }
+                    Failure::Error(code) => {
+                        let tid_bytes = tid.to_be_bytes();
+                        let msg = Message {
+                            transaction_id: &tid_bytes,
+                            version: None,
+                            ip: None,
+                            read_only: false,
+                            body: Body::Error(ErrorBody {
+                                code,
+                                message: b"no",
+                            }),
+                        };
+                        a.on_response(&sockets, 0, &msg, None, remote);
+                    }
+                }
+                let after = Instant::now();
+                assert!(!a.pending.contains_key(&tid), "{failure:?}: settled");
+                let until = a
+                    .sampler
+                    .restrictions(after)
+                    .find(|(x, _)| *x == remote)
+                    .map(|(_, u)| u)
+                    .expect("cooling");
+                assert!(
+                    until >= before + want && until <= after + want,
+                    "escalate {escalate}, {failure:?}: want {want:?}"
+                );
+                until
+            };
+            let until = round(&mut a, first);
+            // The cooldown ends (on the paused clock); the next sample
+            // fails the same way.
+            tokio::time::advance(until - Instant::now()).await;
+            a.sampler.prune(Instant::now());
+            assert_eq!(a.sampler.restrictions(Instant::now()).count(), 0);
+            assert_eq!(
+                a.sampler.struck(),
+                usize::from(escalate && failure_streaks(failure)),
+                "{failure:?}: a streak kept"
+            );
+            round(&mut a, second);
+            assert_eq!(a.stats.snapshot().sample_failures, 2);
         }
     }
 
