@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T09:58Z",
+    "updated": "2026-11-21T10:44Z",
     "items": [
       {
         "slot": 1,
@@ -10675,12 +10675,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-api-repeated-params",
+        "slice": "X-prefs-invisible-share",
         "role": "build",
         "agent": "session_01MMjhnBpjPfQ45Zap7mZNyi",
         "model": "opus",
-        "since": "2026-11-21T05:52Z",
-        "doing": "briefed: briefs/X-api-repeated-params.md"
+        "since": "2026-11-21T10:44Z",
+        "doing": "brief sent; shared Default_Ignorable table, shortcut-key rule"
       },
       {
         "slot": 4,
