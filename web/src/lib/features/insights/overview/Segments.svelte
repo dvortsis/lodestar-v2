@@ -3,6 +3,8 @@
 	// searchable torrents by event time and link to Search; source bars show yield by discovery
 	// cohort and link to the Discover page. The response carries no shares, so none are shown.
 	import { formatCount, formatPercent } from '$lib/format';
+	import { sourceIdLabel } from '$lib/format/label-source-names';
+	import { typeLabel } from '$lib/format/label-type';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import ChartPanel from './ChartPanel.svelte';
@@ -29,21 +31,9 @@
 		adult: () => m.insights_group_adult(),
 		unclassified: () => m.insights_group_unclassified()
 	};
-	const typeNames: Record<string, () => string> = {
-		movie: () => m.insights_type_movie(),
-		tv: () => m.insights_type_tv(),
-		video: () => m.insights_type_video(),
-		music: () => m.insights_type_music(),
-		audiobook: () => m.insights_type_audiobook(),
-		ebook: () => m.insights_type_ebook(),
-		comic: () => m.insights_type_comic(),
-		software: () => m.insights_type_software(),
-		game: () => m.insights_type_game(),
-		images: () => m.insights_type_images(),
-		other: () => m.insights_type_other(),
-		adult: () => m.insights_type_adult(),
-		unclassified: () => m.insights_group_unclassified()
-	};
+	// The glossary's type names (X-labels), one spelling everywhere; "unclassified" is Insights' own.
+	const typeName = (k: string) =>
+		k === 'unclassified' ? m.insights_group_unclassified() : typeLabel(k);
 
 	// Largest first; ties by key, so the order is stable between refetches.
 	const byCount = <T extends { key: string; searchable: number }>(list: readonly T[]) =>
@@ -51,7 +41,7 @@
 
 	function counts(
 		kind: 'group' | 'type',
-		names: Record<string, () => string>,
+		name: (key: string) => string,
 		list: Overview['segments']['by_group']
 	) {
 		const sorted = byCount(list);
@@ -60,7 +50,7 @@
 			const href = searchHref(kind, s.key, query);
 			return {
 				key: s.key,
-				label: names[s.key]?.() ?? s.key,
+				label: name(s.key),
 				href,
 				value: s.searchable,
 				text: formatCount(s.searchable, locale)
@@ -68,8 +58,8 @@
 		});
 		return { items, scale };
 	}
-	const group = $derived(counts('group', groupNames, segments.by_group));
-	const type = $derived(counts('type', typeNames, segments.by_content_type));
+	const group = $derived(counts('group', (k) => groupNames[k]?.() ?? k, segments.by_group));
+	const type = $derived(counts('type', typeName, segments.by_content_type));
 
 	const sources = $derived(
 		[...segments.by_source].sort(
@@ -79,7 +69,7 @@
 	const sourceItems = $derived<BarItem[]>(
 		sources.map((s) => ({
 			key: s.key,
-			label: s.key,
+			label: sourceIdLabel(s.key),
 			href: stageHref('discover', query),
 			value: s.yield,
 			text: formatPercent(s.yield, locale, 1),
@@ -155,7 +145,7 @@
 		{ key: 'searchable', label: m.searchable(), numeric: true }
 	]}
 	rows={sources.map((s) => ({
-		label: s.key,
+		label: sourceIdLabel(s.key),
 		yield: formatPercent(s.yield, locale, 1),
 		harvested: formatCount(s.harvested, locale),
 		searchable: formatCount(s.searchable, locale)

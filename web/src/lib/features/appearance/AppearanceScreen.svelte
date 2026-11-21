@@ -3,6 +3,7 @@
 	// undone; there is no Save. The theme picker and the custom theme editor load when opened.
 	import { onMount, tick, type Component, type ComponentProps } from 'svelte';
 	import { ApiError, api } from '$lib/api/client';
+	import { themeLabel } from '$lib/format/label-theme';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
@@ -29,6 +30,16 @@
 
 	let status = $state<'loading' | 'ready' | 'failed'>('loading');
 	let prefs = $state<Appearance>({ ...DEFAULTS });
+	// The current theme by its own name (X-labels): Riverstone needs no file; any other theme's name
+	// comes from `themes.json` (already fetched to apply it) or the browser's custom themes.
+	let themeNames = $state.raw<readonly { id: string; family: string }[]>([]);
+	$effect(() => {
+		if (prefs.theme === 'riverstone') return;
+		loadThemes().then(
+			(f) => (themeNames = [...f.themes, ...readCustom()]),
+			() => (themeNames = readCustom())
+		);
+	});
 	/** What the server last confirmed; `prefs` is this plus any change still saving. */
 	let saved = $state.raw<Appearance>({ ...DEFAULTS });
 	let locks = $state<Loaded['locks']>({});
@@ -292,7 +303,7 @@
 				/>
 			{:else}
 				<p class="as-body">
-					{m.appearance_current({ theme: prefs.theme })}
+					{m.appearance_current({ theme: themeLabel(prefs.theme, themeNames) })}
 				</p>
 				<div>
 					<Button onclick={() => void openPicker()}>{m.appearance_browse()}</Button>

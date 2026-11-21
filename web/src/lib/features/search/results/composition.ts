@@ -23,7 +23,11 @@ export function composition(
 	if (!first) return null;
 	const known = shares.map((s) => ({ ...s, group: groupOf(s.group) }));
 	const label = (s: (typeof known)[number]) =>
-		m.dominant_share({ share: formatShare(s.pct_bytes, locale), group: groupLabel(s.group) });
+		// "82% video": lower case in a sentence, as the glossary writes it (X-labels).
+		m.dominant_share({
+			share: formatShare(s.pct_bytes, locale),
+			group: groupLabel(s.group).toLocaleLowerCase(locale)
+		});
 	const top = known.reduce((a, b) => (b.pct_bytes > a.pct_bytes ? b : a));
 	return {
 		segments: known.map((s) => ({ group: s.group, value: s.bytes, label: groupLabel(s.group) })),

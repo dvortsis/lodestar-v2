@@ -103,7 +103,19 @@ describe('the Builder', () => {
 		const panel = await screen.findByRole('region', { name: 'Query builder' });
 		const draft = await within(panel).findByRole('group', { name: 'New filter' }, LAZY);
 		const field = within(draft).getByLabelText('Field');
-		expect(optionsOf(field)).toEqual(['res', 'year', 'discovered', 'type']);
+		// Plain words with the code beside them (X-labels); the option values stay the codes.
+		expect(optionsOf(field)).toEqual([
+			'Resolution (res)',
+			'Year (year)',
+			'Discovered (discovered)',
+			'Type (type)'
+		]);
+		expect([...field.querySelectorAll('option')].map((o) => o.value)).toEqual([
+			'res',
+			'year',
+			'discovered',
+			'type'
+		]);
 		const op = () => optionsOf(within(draft).getByLabelText('Operator'));
 		await fireEvent.change(field, { target: { value: 'discovered' } });
 		expect(op()).toEqual(['less than', 'more than']);
@@ -113,6 +125,7 @@ describe('the Builder', () => {
 		const value = within(draft).getByLabelText('Value');
 		expect(value.tagName).toBe('SELECT');
 		expect([...value.querySelectorAll('option')].map((o) => o.value)).toEqual(['', 'movie', 'tv']);
+		expect(optionsOf(value).slice(-2)).toEqual(['Movie', 'TV']);
 	});
 
 	it('asks again when it opens: Adult shown once the setting is on, gone when it is off', async () => {
@@ -123,11 +136,11 @@ describe('the Builder', () => {
 			view.unmount();
 			return names;
 		};
-		expect(await open()).not.toContain('adult');
+		expect(await open()).not.toContain('Adult type (adult)');
 		adultOn = true;
-		expect(await open()).toContain('adult');
+		expect(await open()).toContain('Adult type (adult)');
 		adultOn = false;
-		expect(await open()).not.toContain('adult');
+		expect(await open()).not.toContain('Adult type (adult)');
 	});
 
 	it('keeps a row with several listed values as text, and a share field as text', async () => {

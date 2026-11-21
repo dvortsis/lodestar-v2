@@ -34,6 +34,33 @@ describe('buildRows', () => {
 		expect(rows.filter((r) => r.differs).map((r) => r.id)).toEqual(['attr-res', 'attr-group']);
 	});
 
+	it('shows parsed values in plain words, lists one part at a time (X-labels)', () => {
+		const r = buildRows(
+			response(2, {
+				torrents: [
+					torrent(0, {
+						attributes: {
+							vcodec: 'h265',
+							acodec: 'dts-hd-ma, truehd',
+							source: 'web-dl',
+							lang: 'fr'
+						}
+					}),
+					torrent(1, { attributes: { vcodec: 'x9', group: 'RARBG' } })
+				],
+				differs: { vcodec: true, acodec: true, source: true, lang: true, group: true }
+			}),
+			'en'
+		);
+		const cell = (id: string, i: number) => r.find((x) => x.id === id)!.cells[i]!.text;
+		expect(cell('attr-vcodec', 0)).toBe('H.265 (HEVC)');
+		expect(cell('attr-acodec', 0)).toBe('DTS-HD MA, Dolby TrueHD');
+		expect(cell('attr-source', 0)).toBe('WEB-DL');
+		expect(cell('attr-lang', 0)).toBe('French');
+		expect(cell('attr-vcodec', 1)).toBe('x9');
+		expect(cell('attr-group', 1)).toBe('RARBG');
+	});
+
 	it('shows nulls as null (the dash), never zero', () => {
 		const r = buildRows(
 			response(2, {
@@ -82,8 +109,8 @@ describe('compositionView', () => {
 
 	it('summarises every share and names the dominant one', () => {
 		const v = compositionView(torrent(0), 'en')!;
-		expect(v.summary).toBe('80% Video, 20% Audio');
-		expect(v.dominant).toBe('80% Video');
+		expect(v.summary).toBe('80% video, 20% audio');
+		expect(v.dominant).toBe('80% video');
 		expect(v.segments.map((s) => s.group)).toEqual(['video', 'audio']);
 	});
 
@@ -97,7 +124,7 @@ describe('compositionView', () => {
 			}),
 			'en'
 		)!;
-		expect(v.dominant).toBe('50% Video');
+		expect(v.dominant).toBe('50% video');
 	});
 });
 

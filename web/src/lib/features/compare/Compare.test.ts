@@ -114,8 +114,8 @@ describe('columns layout', () => {
 		const bar = screen.getByTestId('compare-composition-1-bar');
 		const share = (data.torrents[1]!.size / data.scale_bytes) * 100;
 		expect(parseFloat(bar.style.width)).toBeCloseTo(share, 5);
-		expect(bar.getAttribute('aria-label')).toBe('80% Video, 20% Audio');
-		expect(screen.getByTestId('compare-composition-1-dominant').textContent).toBe('80% Video');
+		expect(bar.getAttribute('aria-label')).toBe('80% video, 20% audio');
+		expect(screen.getByTestId('compare-composition-1-dominant').textContent).toBe('80% video');
 		expect(parseFloat(screen.getByTestId('compare-composition-0-bar').style.width)).toBe(100);
 	});
 

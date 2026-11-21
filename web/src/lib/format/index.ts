@@ -15,3 +15,4 @@ export { formatDateTime, type DateOptions } from './datetime';
 export { formatDateFull, type DateFullOptions } from './datefull';
 export { formatDate } from './date';
 export { sizeBinEdges, sizeBinLabel, RANGE_SEPARATOR, type SizeBinEdges } from './histogram';
+export { bucketTimeZone } from './zone';

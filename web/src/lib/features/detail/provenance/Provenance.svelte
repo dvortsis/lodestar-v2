@@ -3,11 +3,13 @@
 	// "private"); for anyone else the server sets `withheld`, and a separate note says some details
 	// are private, naming nothing. What differs from the verified metadata loads on its own, and
 	// only when something does (the drawer's first view is size-limited, §10.1).
+	import { sourceLabel } from '$lib/format/label-source';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { Provenance } from './types';
 
 	let { provenance, level = 3 }: { provenance: Provenance; level?: number } = $props();
-	const short = (name: string) => name.replace(/^Mainline\s+/, '');
+	// A plugin's name in plain words (X-labels); the DHT is "DHT".
+	const short = (s: { plugin: string; name: string }) => sourceLabel(s.plugin, s.name);
 	const differing = $derived(
 		provenance.sources.filter(
 			(s) => s.claim && (s.claim.name || s.claim.size || s.claim.file_count)
@@ -30,7 +32,7 @@
 		{#each provenance.sources as s, i (s.id)}
 			{#if i > 0}<span class="sr-only">, </span><span aria-hidden="true">&ensp;·&ensp;</span
 				>{/if}<span data-testid="detail-source-{s.plugin}"
-				>{short(s.name)}{#if s.private}
+				>{short(s)}{#if s.private}
 					<span class="text-caption">({m.detail_provenance_private()})</span>{/if}</span
 			>
 		{/each}

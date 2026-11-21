@@ -19,7 +19,7 @@
 	interface Props {
 		height?: number;
 		query: InsightsQuery;
-		/** `range.tz` and `updated_at` of the loaded overview. */
+		/** The display time zone (Language & region; the browser's for Automatic), and `updated_at`. */
 		tz: string;
 		updatedAt: number | undefined;
 		crawler: CrawlerStatus | undefined;

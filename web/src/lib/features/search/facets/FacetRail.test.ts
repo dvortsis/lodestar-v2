@@ -51,6 +51,25 @@ describe('FacetRail', () => {
 		expect(screen.getByTestId('facet-ext-other').textContent).toContain('220');
 	});
 
+	it('labels values in plain words; the value stays the code (X-labels)', () => {
+		const data = response({
+			facets: {
+				codec: term([['h264', 9]]),
+				audio: term([['dts-hd-ma', 4]]),
+				hdr: term([['dv', 3]]),
+				lang: term([['fr', 7]]),
+				group: term([['RARBG', 2]])
+			}
+		});
+		render(FacetRail, props({ data }));
+		expect(screen.getByLabelText('H.264')).toBeTruthy();
+		expect(screen.getByLabelText('DTS-HD MA')).toBeTruthy();
+		expect(screen.getByLabelText('Dolby Vision')).toBeTruthy();
+		expect(screen.getByLabelText('French')).toBeTruthy();
+		expect(screen.getByLabelText('RARBG')).toBeTruthy();
+		expect(screen.getByTestId('facet-codec-h264-count').textContent).toContain('9');
+	});
+
 	it('marks estimated counts with ≈, and says so once', () => {
 		const data = response({
 			sampled: true,

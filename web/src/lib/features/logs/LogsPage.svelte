@@ -1,6 +1,7 @@
 <script lang="ts">
 	// The live log (§10.10.12): a full-width, virtualised list of one-line rows that follows
 	// `GET /logs/stream`. All text is untrusted and goes through `safe()` into text nodes only.
+	import { displayTimeZone } from '$lib/i18n/locale.svelte';
 	import { onMount, tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
@@ -146,7 +147,9 @@
 		l.fields.map((f) => `${safe(f.name, 64)}=${safe(f.value, FIELD_MAX)}`).join(' ');
 	const dump = () =>
 		view.lines
-			.map((l) => [lineText(l, utc, FIELD_MAX), fieldsText(l)].filter(Boolean).join(' '))
+			.map((l) =>
+				[lineText(l, utc, FIELD_MAX, displayTimeZone()), fieldsText(l)].filter(Boolean).join(' ')
+			)
 			.join('\n');
 	async function copy() {
 		try {
@@ -385,7 +388,9 @@
 							{@const open = expanded.has(keyOf(l))}
 							<div class="px-2 py-1 {TONE[l.level]}">
 								<div class="flex gap-2 {wrap || open ? '' : 'truncate'}">
-									<span class="shrink-0 text-muted-text">{formatTime(l.ts, utc)}</span>
+									<span class="shrink-0 text-muted-text"
+										>{formatTime(l.ts, utc, displayTimeZone())}</span
+									>
 									<span class="logs-level inline-flex shrink-0 items-center gap-1">
 										<Icon aria-hidden="true" />{levelName(l.level)}
 									</span>

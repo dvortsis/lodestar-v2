@@ -3,12 +3,12 @@
 	// (one line). Counts are the server's; `source` counts are partial while its index field is
 	// still being filled in. A private source never arrives by name for a non-admin caller: the
 	// server folds it into `other`, which TermGroup shows without naming anything.
+	import { sourceLabel } from '$lib/format/label-source';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { Ast } from '$lib/state/search.svelte';
 	import TermGroup from '../facets/TermGroup.svelte';
 	import type { FacetsResponse } from '../facets/facets.svelte';
 	import { clearField, fieldOf, fixedValues, toggleValue } from '../facets/toggle';
-	import { shortName } from './source';
 	import UnverifiedToggle from './UnverifiedToggle.svelte';
 
 	interface Props {
@@ -21,7 +21,7 @@
 	const FIELD = fieldOf('source')!;
 	const source = $derived(data.facets.source);
 	const unverified = $derived(data.facets.verified?.values.find((v) => v.value === 'no'));
-	const nameOf = (id: string) => shortName(data.source_names[id] ?? id);
+	const nameOf = (id: string) => sourceLabel(id, data.source_names[id]);
 </script>
 
 {#if source && source.values.length}

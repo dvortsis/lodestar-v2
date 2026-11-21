@@ -10,7 +10,8 @@
 	import type { ApiError } from '$lib/api/client';
 	import type { Ast } from '$lib/state/search.svelte';
 	import type { FacetsResponse, TermFacet } from './facets.svelte';
-	import { ADULT_VALUE } from '../query/clauses';
+	import { valueLabel } from '$lib/format/label-release';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import SourceFacets from '../unverified/SourceFacets.svelte';
 	import { wholeDays } from './bins';
 	import RangeGroup from './RangeGroup.svelte';
@@ -67,20 +68,6 @@
 		backfill: m.search_facets_backfill,
 		adult: m.search_facets_adult
 	};
-	const TYPE: Record<string, () => string> = {
-		movie: m.content_type_movie,
-		tv: m.content_type_tv,
-		music: m.content_type_music,
-		audiobook: m.content_type_audiobook,
-		ebook: m.content_type_ebook,
-		comic: m.content_type_comic,
-		software: m.content_type_software,
-		game: m.content_type_game,
-		images: m.content_type_images,
-		video: m.content_type_video,
-		other: m.content_type_other,
-		adult: m.content_type_adult
-	};
 	const FLAGS = new Set(['private', 'v2', 'ambiguous', 'imported', 'backfill']);
 	const MORE = [
 		'lang',
@@ -98,14 +85,9 @@
 	];
 	const yesNo = (v: string) =>
 		v === 'yes' ? m.search_facets_yes() : v === 'no' ? m.search_facets_no() : v;
+	// Values in plain words (X-labels): `h264` reads "H.264", `fr` "French"; a query keeps the code.
 	const labelFor = (name: string) =>
-		name === 'type'
-			? (v: string) => TYPE[v]?.() ?? v
-			: name === 'adult'
-				? (v: string) => ADULT_VALUE[v]?.() ?? v
-				: FLAGS.has(name)
-					? yesNo
-					: (v: string) => v;
+		FLAGS.has(name) ? yesNo : (v: string) => valueLabel(name, v, currentLocale());
 
 	const facet = (name: string): TermFacet | undefined => data?.facets[name];
 	const blocked = (name: string) => !!data?.unavailable.includes(name);

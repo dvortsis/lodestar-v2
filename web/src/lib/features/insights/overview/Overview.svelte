@@ -4,8 +4,8 @@
 	import { untrack, type Component } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { formatDate } from '$lib/format';
-	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import { bucketTimeZone, formatDate } from '$lib/format';
+	import { currentLocale, displayTimeZone } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { statusRef } from '$lib/shell/status-ref.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -167,13 +167,13 @@
 <div class="ins-page" data-testid="insights-page" style:--ins-context-height="{contextHeight}px">
 	<h1 class="sr-only">{m.insights_overview_title()}</h1>
 	{#if Print && overview}
-		<Print {rangeText} compare={query.compare} tz={overview.range.tz} />
+		<Print {rangeText} compare={query.compare} tz={displayTimeZone()} />
 	{/if}
 
 	<ContextBar
 		bind:height={contextHeight}
 		{query}
-		tz={overview?.range.tz ?? 'UTC'}
+		tz={displayTimeZone()}
 		updatedAt={overview?.updated_at}
 		crawler={insights.crawler}
 		busy={insights.busy}
@@ -227,7 +227,7 @@
 			<Banner kind="warning" title={m.insights_overview_stale_title()}>
 				<span data-testid="insights-stale">{staleReason}</span>
 				{m.insights_overview_stale_since()}
-				<RelativeTime seconds={overview.stale.since} timeZone={overview.range.tz} />.
+				<RelativeTime seconds={overview.stale.since} />.
 			</Banner>
 		{/if}
 
@@ -286,7 +286,11 @@
 			<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
 				{m.insights_overview_movement_title()}
 			</h2>
-			<p class="ins-sub">{m.insights_overview_movement_time({ tz: overview.range.tz })}</p>
+			<p class="ins-sub">
+				{m.insights_overview_movement_time({
+					tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
+				})}
+			</p>
 			<Lazy
 				load={() => import('./Movement.svelte')}
 				props={{ overview, query, rangeText }}

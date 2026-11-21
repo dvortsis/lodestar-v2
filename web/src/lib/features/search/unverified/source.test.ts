@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Ast } from '$lib/state/search.svelte';
 import { clearField, fieldOf, fixedValues, selection, toggleValue } from '../facets/toggle';
-import { shortName } from './source';
+import { sourceLabel } from '$lib/format/labels';
 
 // The Source facet is `facets/toggle.ts`'s `source` kind: include only here, same rules as the rest.
 const field = fieldOf('source')!;
@@ -46,9 +46,10 @@ describe('source facet edits', () => {
 	});
 });
 
-describe('shortName', () => {
-	it('shortens Mainline DHT only', () => {
-		expect(shortName('Mainline DHT')).toBe('DHT');
-		expect(shortName('Nyaa')).toBe('Nyaa');
+describe('the Source facet names (X-labels: sourceLabel replaces shortName)', () => {
+	it('shows the DHT as "DHT" and other sources by their names, else the id', () => {
+		expect(sourceLabel('dht', 'Mainline DHT')).toBe('DHT');
+		expect(sourceLabel('nyaa', 'Nyaa')).toBe('Nyaa');
+		expect(sourceLabel('gone', 'gone')).toBe('gone');
 	});
 });
