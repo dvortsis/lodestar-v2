@@ -671,6 +671,7 @@ placement:
   - X-gs3-nits
   - X-search-param-errors
   - X-param-echo-cap
+  - X-api-repeated-params
   - ENR-12
   - UP-2
   - X-watch-env

@@ -710,7 +710,7 @@ async fn a_repeated_parameter_is_named() {
         let (status, body) = json_of(&f.app, get(uri, c)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
         let e = &body["error"];
-        assert_eq!(e["code"], "bad_parameter", "{uri}: {body}");
+        assert_eq!(e["code"], "repeated_parameter", "{uri}: {body}");
         assert_eq!(e["field"], name, "{uri}: {body}");
         assert_eq!(
             e["message"],
@@ -735,7 +735,7 @@ async fn a_repeated_parameter_is_named() {
         let (status, body) = json_of(&f.app, get(&uri, c)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         let e = &body["error"];
-        assert_eq!(e["code"], "bad_parameter", "{body}");
+        assert_eq!(e["code"], "repeated_parameter", "{body}");
         assert_eq!(e["field"], shown, "{body}");
         assert_eq!(
             e["message"],

@@ -995,11 +995,7 @@ fn topics_param(query: Option<&str>) -> ApiResult<Option<String>> {
         .map(|(_, v)| v.into_owned());
     let first = values.next();
     if values.next().is_some() {
-        return Err(ApiError::bad_request(
-            "bad_parameter",
-            "Give `topics` once, as a comma-separated list.",
-        )
-        .field("topics"));
+        return Err(crate::extract::repeated_parameter("topics"));
     }
     Ok(first)
 }
@@ -1364,9 +1360,13 @@ mod tests {
             let e = topics_param(Some(twice)).unwrap_err();
             assert_eq!(
                 (e.code(), e.status()),
-                ("bad_parameter", StatusCode::BAD_REQUEST)
+                ("repeated_parameter", StatusCode::BAD_REQUEST)
             );
             assert_eq!(e.error_body().field.as_deref(), Some("topics"));
+            assert_eq!(
+                e.error_body().message,
+                "topics was sent more than once: send it once."
+            );
         }
         let long = "é".repeat(500);
         let e = parse_topics(Some(&long)).unwrap_err();

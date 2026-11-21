@@ -25,10 +25,10 @@ use crate::dto::facets::{
     FacetValue, FacetsRequest, FacetsResponse, Histogram, HistogramBin, SwarmBuckets, TermFacet,
 };
 use crate::error::{ApiError, ApiResult, internal};
-use crate::extract::{Json, Query, same_origin_json};
+use crate::extract::{Json, Query, repeated_param, repeated_parameter, same_origin_json};
 use crate::search::{
-    Visibility, base_query, client_of, echo, fingerprint, open_cursor, repeated_param, request_ast,
-    scope_of, search_error, shown, sort_param, tz_param, unix_now,
+    Visibility, base_query, client_of, echo, fingerprint, open_cursor, request_ast, scope_of,
+    search_error, shown, sort_param, tz_param, unix_now,
 };
 use crate::torrents::{Catalogue, Viewer, plugin_names};
 use crate::{ApiState, auth};
@@ -118,9 +118,10 @@ fn facets_param(key: &str) -> bool {
     matches!(key, "q" | "sort" | "lease" | "tz" | "hidden") || key.starts_with("limit.")
 }
 
-/// Refuses a `/facets` query that repeats a parameter, naming it, as
-/// `/search` does (still `bad_parameter` here: the code is unchanged).
-/// Without this the map extractor would keep the last value silently.
+/// Refuses a `/facets` query that repeats a parameter, naming it, as every
+/// route does ([`repeated_parameter`]). The map extractor reads no field
+/// names, so this layer supplies `/facets`' own, prefix families included;
+/// without it the map would keep the last value silently.
 async fn single_valued(
     req: axum::extract::Request,
     next: axum::middleware::Next,
@@ -134,13 +135,7 @@ async fn single_valued(
         .filter(|_| reads_query)
         .and_then(|q| repeated_param(q, facets_param));
     if let Some(name) = repeated {
-        let name = shown(&name);
-        return ApiError::bad_request(
-            "bad_parameter",
-            format!("{name} was sent more than once: send it once."),
-        )
-        .field(name)
-        .into_response();
+        return repeated_parameter(&name).into_response();
     }
     next.run(req).await
 }

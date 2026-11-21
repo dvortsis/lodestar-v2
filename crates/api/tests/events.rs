@@ -407,7 +407,7 @@ async fn bad_requests_get_the_envelope() {
         assert_eq!(body["error"]["code"], "unknown_topic");
         assert_eq!(body["error"]["field"], "topics");
     }
-    let (status, _, body) = call(
+    let (status, headers, body) = call(
         &f.app,
         get(
             "/api/v1/events?topics=torrents&topics=crawler",
@@ -416,8 +416,26 @@ async fn bad_requests_get_the_envelope() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"]["code"], "bad_parameter");
+    assert_eq!(body["error"]["code"], "repeated_parameter");
     assert_eq!(body["error"]["field"], "topics");
+    assert_eq!(
+        body["error"]["message"],
+        "topics was sent more than once: send it once."
+    );
+    // HEAD, which `get()` also serves, gives the same status and length
+    // (X-api-repeated-params).
+    let mut head = get(
+        "/api/v1/events?topics=torrents&topics=crawler",
+        &[("cookie", &cookie)],
+    );
+    *head.method_mut() = axum::http::Method::HEAD;
+    let (head_status, head_headers, _) = call(&f.app, head).await;
+    assert_eq!(head_status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        head_headers.get(axum::http::header::CONTENT_LENGTH),
+        headers.get(axum::http::header::CONTENT_LENGTH)
+    );
+    assert!(headers.get(axum::http::header::CONTENT_LENGTH).is_some());
     assert_eq!(f.hub.streams(), 0);
 }
 

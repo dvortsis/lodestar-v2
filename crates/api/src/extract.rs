@@ -103,7 +103,79 @@ fn json_content_type(headers: &HeaderMap) -> bool {
             .is_some_and(|sub| sub.ends_with("+json"))
 }
 
-/// Query parameters; bad ones are an [`ApiError`] naming the parameter.
+/// The first parameter `is_param` accepts that `query` sends more than
+/// once, read with the same decoder the query extractor uses (so a
+/// percent-encoded name or `+` for a space counts as it would there).
+pub(crate) fn repeated_param(query: &str, is_param: impl Fn(&str) -> bool) -> Option<String> {
+    let mut seen = std::collections::HashSet::new();
+    form_urlencoded::parse(query.as_bytes())
+        .map(|(key, _)| key)
+        .filter(|key| is_param(key))
+        .find(|key| !seen.insert(key.clone()))
+        .map(|key| key.into_owned())
+}
+
+/// The one answer to a known query parameter sent more than once, on every
+/// route that reads its query: `400 repeated_parameter`, naming it (capped
+/// and escaped, as any echoed request value is).
+pub(crate) fn repeated_parameter(name: &str) -> ApiError {
+    let name = crate::search::shown(name);
+    ApiError::bad_request(
+        "repeated_parameter",
+        format!("{name} was sent more than once: send it once."),
+    )
+    .field(name)
+}
+
+/// The names a query struct's derived `Deserialize` reads, renames and
+/// aliases included, as serde itself lists them: so a field added to a plain
+/// struct is checked for repeats with nothing else to remember. A type that
+/// never asks for a struct has none and gets no repeat check: a map, which
+/// is why `/facets` keeps its own layer, and a struct with a
+/// `#[serde(flatten)]` field, which serde reads as a map (tested below). A newtype wrapper reads its inner
+/// struct's names.
+pub(crate) fn field_names<T: DeserializeOwned>() -> &'static [&'static str] {
+    use serde::de::{self, Visitor};
+    use std::cell::Cell;
+
+    struct Fields<'a>(&'a Cell<&'static [&'static str]>);
+    impl<'de> de::Deserializer<'de> for Fields<'_> {
+        type Error = de::value::Error;
+        fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+            Err(de::Error::custom("not a struct"))
+        }
+        fn deserialize_struct<V: Visitor<'de>>(
+            self,
+            _: &'static str,
+            fields: &'static [&'static str],
+            _: V,
+        ) -> Result<V::Value, Self::Error> {
+            self.0.set(fields);
+            Err(de::Error::custom("only the field names are read"))
+        }
+        fn deserialize_newtype_struct<V: Visitor<'de>>(
+            self,
+            _: &'static str,
+            visitor: V,
+        ) -> Result<V::Value, Self::Error> {
+            // A wrapper reads its inner struct's names.
+            visitor.visit_newtype_struct(self)
+        }
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf
+            option unit unit_struct seq tuple tuple_struct map enum identifier
+            ignored_any
+        }
+    }
+    let names = Cell::new(&[][..]);
+    let _ = T::deserialize(Fields(&names));
+    names.get()
+}
+
+/// Query parameters; bad ones are an [`ApiError`] naming the parameter. A
+/// known parameter sent more than once is [`repeated_parameter`], before
+/// any value is read (the struct's fields are the known names); unknown
+/// ones are ignored, repeated or not.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Query<T>(pub T);
 
@@ -112,6 +184,10 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequestParts<S> for Query<T> {
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, ApiError> {
         let query = parts.uri.query().unwrap_or("");
+        let known = field_names::<T>();
+        if let Some(name) = repeated_param(query, |key| known.contains(&key)) {
+            return Err(repeated_parameter(&name));
+        }
         let de = serde_urlencoded::Deserializer::new(form_urlencoded::parse(query.as_bytes()));
         serde_path_to_error::deserialize(de)
             .map(Query)
@@ -226,7 +302,36 @@ pub fn same_origin_json(headers: &HeaderMap) -> ApiResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::bad_field;
+    use super::{bad_field, field_names};
+
+    #[test]
+    fn field_names_are_the_structs_own_and_flatten_has_none() {
+        use std::collections::BTreeMap;
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Plain {
+            #[serde(rename = "type")]
+            kind: Option<String>,
+            #[serde(alias = "max")]
+            limit: Option<u32>,
+        }
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Wrapper(Plain);
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Flattened {
+            q: Option<String>,
+            #[serde(flatten)]
+            plain: Plain,
+        }
+        let mut plain = field_names::<Plain>().to_vec();
+        plain.sort_unstable();
+        assert_eq!(plain, ["limit", "max", "type"]);
+        assert_eq!(field_names::<Wrapper>().len(), 3);
+        assert!(field_names::<Flattened>().is_empty());
+        assert!(field_names::<BTreeMap<String, String>>().is_empty());
+    }
 
     #[test]
     fn a_bad_field_is_its_path_capped_and_escaped() {

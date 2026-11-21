@@ -84,9 +84,7 @@ pub(super) fn parse(query: Option<&str>) -> ApiResult<BTreeMap<String, String>> 
             continue;
         };
         if out.insert(name.to_string(), v.into_owned()).is_some() {
-            return Err(
-                ApiError::bad_request("bad_parameter", format!("Give `{name}` once.")).field(*name),
-            );
+            return Err(crate::extract::repeated_parameter(name));
         }
     }
     Ok(out)
