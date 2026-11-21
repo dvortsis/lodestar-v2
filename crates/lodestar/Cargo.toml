@@ -58,6 +58,10 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 utoipa = { version = "5.5.0", default-features = false, features = ["macros"] }
 
+# Shortcut keys can't be a lone combining mark (`settings::preferences`);
+# filter and search already use it.
+unicode-normalization = "0.1.24"
+
 # PUID/PGID privilege drop (src/privdrop.rs): safe wrappers for the set*id
 # and *at syscalls, since the workspace forbids `unsafe` (and so libc). It is
 # already in the lock through tantivy's fs4 and tempfile.
@@ -90,6 +94,9 @@ sha2 = "0.11.0"
 tower = { version = "0.5.3", features = ["util"] }
 lodestar-classify.workspace = true
 lodestar-metainfo.workspace = true
+# The reference general category for preferences' exhaustive shortcut-key
+# test; metainfo already uses it.
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 # TEST ONLY signing for tests/supervisor.rs's overlays.
 lodestar-update = { workspace = true, features = ["testing"] }
 tempfile = "3.27.0"

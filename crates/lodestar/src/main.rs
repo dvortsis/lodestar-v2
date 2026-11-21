@@ -29,6 +29,7 @@ mod subscriptions;
 mod system;
 #[cfg(test)]
 mod test_log;
+mod text;
 mod thp;
 mod torrent_cache;
 mod update;
