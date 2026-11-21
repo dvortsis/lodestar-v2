@@ -1190,3 +1190,54 @@ fn print_screen(off: &Scenario, on: &Scenario) {
         rises(&per_query),
     );
 }
+
+/// X-sampler-frontier-starve's reproduction: why the sampler's rate falls
+/// once every known node is cooling. `base` at 20,000 nodes, Balanced, 90
+/// simulated minutes, seed 1, in three arms:
+/// - **A**, `dht.sampler_cooldown_split` on, with `base`'s loss (2 % each
+///   way), error replies (0.5 %) and remote rate limit (20 a second);
+/// - **B**, the same with the split off;
+/// - **C**, the split on, without loss, error replies or the rate limit.
+///
+/// It prints samples a minute and the frontier's and cooldowns' means,
+/// per 10 minutes, and each arm's samples, failed samples and timeouts.
+/// Expect the frontier near 0 in every arm after the first pass; A's
+/// samples a minute falling steadily (about 1,540 to 860), B equal to A
+/// (the 200,000-entry table never fills at this size, so the split is
+/// inert), and C flat (about 1,730). The difference is the 6 h cooldown
+/// after one failed sample: `docs/decisions/2026-11-21-X-sampler-frontier-starve.md`.
+/// About a minute of wall time per arm.
+/// `cargo test -p lodestar-crawler-sim --test sim sampler_starve -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: about three minutes of wall time"]
+fn sampler_starve() {
+    let mut a = scenario::base("sampler-starve");
+    a.minutes = 90;
+    a.net.nodes = 20_000;
+    a.switches.sampler_cooldown_split = true;
+    let mut b = a.clone();
+    b.switches.sampler_cooldown_split = false;
+    let mut c = a.clone();
+    c.net.loss_permille = 0;
+    c.net.error_permille = 0;
+    c.net.rate_limit_qps = None;
+    println!("arm | minutes | samples/min | frontier mean | cooling mean");
+    for (arm, s) in [("A", &a), ("B", &b), ("C", &c)] {
+        let r = simulate(s);
+        for (k, block) in r.sampling.chunks(10).enumerate() {
+            let n = block.len() as f64;
+            println!(
+                "{arm} | {}-{} | {:.0} | {:.1} | {:.0}",
+                k * 10 + 1,
+                k * 10 + block.len(),
+                block.iter().map(|m| m.samples as f64).sum::<f64>() / n,
+                block.iter().map(|m| m.frontier).sum::<f64>() / n,
+                block.iter().map(|m| m.cooling).sum::<f64>() / n,
+            );
+        }
+        println!(
+            "{arm} | total | samples {} | failed samples {} | timeouts {}",
+            r.dht.samples_sent, r.dht.sample_failures, r.dht.timeouts
+        );
+    }
+}

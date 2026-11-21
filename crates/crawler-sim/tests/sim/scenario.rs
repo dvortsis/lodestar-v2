@@ -138,12 +138,15 @@ pub struct Switches {
     pub lookup_end: bool,
     /// CR-1c: `dht.preset_slots`.
     pub preset_slots: bool,
+    /// X-sampler-cooldown-split: `dht.sampler_cooldown_split`.
+    pub sampler_cooldown_split: bool,
 }
 
 impl Switches {
     /// Writes the switches into the real configs the run starts with.
     pub fn apply(&self, dht: &mut Config, pool: &mut PoolConfig) {
         dht.preset_slots = self.preset_slots;
+        dht.sampler_cooldown_split = self.sampler_cooldown_split;
         if self.coordinated_admission {
             // As the pipeline wires it (`crates/pipeline/src/lib.rs`): one
             // permit per DHT slot (32, or the preset's with CR-1c).
@@ -172,6 +175,7 @@ impl Switches {
             (self.target_prefixes, "target_prefixes=true"),
             (self.lookup_end, "lookup_end=true"),
             (self.preset_slots, "preset_slots=true"),
+            (self.sampler_cooldown_split, "sampler_cooldown_split=true"),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))
