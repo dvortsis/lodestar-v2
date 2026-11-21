@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Sources (§18.8, §10.10): every source plugin of this build, grouped by kind, with its
 	// status, enable toggle, priority and 24 h yield. Groups collapse behind a summary line, a filter
 	// box narrows the rows by name or kind, each row is one line that expands, and a legend names
@@ -6,7 +7,6 @@
 	// dialogs (SRC-15b) load on first use; until a dialog's chunk arrives the screen stays as it is.
 	// The screen shows the server's last answer and replaces a row with the PATCH's reply.
 	import { onDestroy, onMount, tick } from 'svelte';
-	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import IconCaret from '~icons/ph/caret-right-bold';
@@ -142,7 +142,7 @@
 	});
 </script>
 
-<PageHeader title={m.sources_title()} />
+<h1 class={PAGE_H1} tabindex="-1">{m.sources_title()}</h1>
 <p class="text-muted-text">{m.sources_purpose()}</p>
 <p class="sr-only" role="status" data-testid="sources-announce">{announce}</p>
 

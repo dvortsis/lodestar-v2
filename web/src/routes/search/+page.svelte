@@ -12,8 +12,7 @@
 	import { registerSearchCommands } from '$lib/features/search/query/commands';
 	import { onFirstInteraction } from '$lib/features/search/query/engaged';
 	import { checkFirstRun } from '$lib/features/auth/first-check';
-	import { FOCUS_RING } from '$lib/ui/classes';
-	import { PAGE_FRAME, PAGE_FRAME_BODY, PAGE_H1 } from '$lib/ui/layout/classes';
+	import { PAGE_FRAME, PAGE_BODY_FULL, PAGE_H1 } from '$lib/ui/layout/classes';
 
 	let bar = $state<ReturnType<typeof QueryBar>>();
 
@@ -117,7 +116,7 @@
 
 <!-- The page frame (ui/layout), as plain classes: the first view is on a byte budget. -->
 <div class={PAGE_FRAME} data-page-frame="">
-	<div class={PAGE_FRAME_BODY}>
+	<div class={PAGE_BODY_FULL}>
 		<!-- The shell's skip link's classes: visible on focus, and no new utilities in the global sheet. -->
 		<a
 			href="#results"
@@ -125,7 +124,7 @@
 			data-testid="skip-to-results"
 			onclick={skipToResults}>{m.search_page_skip_results()}</a
 		>
-		<header><h1 class="{PAGE_H1} {FOCUS_RING}" tabindex="-1">{m.search_page_title()}</h1></header>
+		<header><h1 class={PAGE_H1} tabindex="-1">{m.search_page_title()}</h1></header>
 		<QueryBar bind:this={bar} />
 		<div class="search-grid">
 			<!-- S-search-2: the facet rail. -->

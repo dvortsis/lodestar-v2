@@ -1,6 +1,5 @@
 <script lang="ts" module>
 	import type { Component } from 'svelte';
-	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import type { About } from './screens';
 	// Loaded bodies, so a return visit renders at once instead of showing the loading line again.
 	const bodies = new WeakMap<object, Component>();
@@ -9,6 +8,7 @@
 </script>
 
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	import { untrack } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -103,17 +103,17 @@
 		<Body />
 	{:else}
 		{#await loadBody(screen)}
-			<PageHeader title={screen.title()} />
+			<h1 class={PAGE_H1} tabindex="-1">{screen.title()}</h1>
 			<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
 		{:then Loaded}
 			<Loaded />
 		{:catch}
-			<PageHeader title={screen.title()} />
+			<h1 class={PAGE_H1} tabindex="-1">{screen.title()}</h1>
 			{@render chunkFailed()}
 		{/await}
 	{/if}
 {:else}
-	<PageHeader title={screen?.title() ?? m.settings_shell_title()} />
+	<h1 class={PAGE_H1} tabindex="-1">{screen?.title() ?? m.settings_shell_title()}</h1>
 	{#if !screen}
 		<p>{m.settings_shell_unavailable()}</p>
 	{:else}

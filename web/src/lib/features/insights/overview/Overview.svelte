@@ -1,6 +1,5 @@
 <script lang="ts">
-	import PageFrame from '$lib/ui/layout/PageFrame.svelte';
-	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
+	import { PAGE_BODY_FULL, PAGE_FRAME, PAGE_H1 } from '$lib/ui/layout/classes';
 	// The Insights overview (§10.9): one story, top to bottom. This file only composes: the data and
 	// the crawler controls live in `state.svelte.ts`, the URL contract in `query.ts`.
 	import { untrack, type Component } from 'svelte';
@@ -166,179 +165,185 @@
 </script>
 
 <Hatch />
-<PageFrame size="full">
-	<div class="ins-page" data-testid="insights-page" style:--ins-context-height="{contextHeight}px">
-		<PageHeader title={m.insights_overview_title()} />
-		{#if Print && overview}
-			<Print {rangeText} compare={query.compare} tz={displayTimeZone()} />
-		{/if}
-
-		<ContextBar
-			bind:height={contextHeight}
-			{query}
-			tz={displayTimeZone()}
-			updatedAt={overview?.updated_at}
-			crawler={insights.crawler}
-			busy={insights.busy}
-			crawlerError={insights.crawlerError}
-			{fieldError}
-			onrange={(range) => setQuery({ range, compare: query.compare })}
-			oncustom={(from, to) => setQuery({ range: 'custom', from, to, compare: query.compare })}
-			oncompare={(compare) => setQuery({ ...query, compare })}
-			onpause={() => void insights.pause()}
-			onresume={() => void insights.resume()}
-			onintensity={(level) => void insights.setIntensity(level)}
-		/>
-
-		<div class="sr-only" role="status" aria-live="polite" data-testid="insights-announce">
-			{announcement}
-		</div>
-
-		{#if insights.phase === 'error' && fieldError}
-			<p class="ins-sentence" data-testid="insights-range-invalid">
-				{m.insights_overview_range_invalid()}
-			</p>
-		{:else if insights.phase === 'error'}
-			<Banner kind="error" title={m.insights_overview_error_title()}>
-				{m.insights_overview_error_body()}
-				{#snippet action()}
-					<Button onclick={() => void insights.retry()} data-testid="insights-retry"
-						>{m.insights_overview_retry()}</Button
-					>
-				{/snippet}
-			</Banner>
-		{:else if !overview}
-			<Skeleton />
-		{:else}
-			{#if overview.privacy}
-				<!-- Loaded only while something identifying is recorded (§10.10.12). -->
-				<Lazy
-					load={() => import('$lib/features/shell/privacy/door').then<Loaded>((d) => d.load())}
-					props={{ overview, reload: insights.refresh }}
-					height=""
-				/>
-			{/if}
-			{#if stalled}
-				<Banner kind="warning" title={m.insights_overview_stalled_title()}>
-					<span data-testid="insights-stalled">{m.insights_overview_stalled_body()}</span>
-				</Banner>
+<div class={PAGE_FRAME} data-page-frame="">
+	<div class={PAGE_BODY_FULL}>
+		<div
+			class="ins-page"
+			data-testid="insights-page"
+			style:--ins-context-height="{contextHeight}px"
+		>
+			<h1 class={PAGE_H1} tabindex="-1">{m.insights_overview_title()}</h1>
+			{#if Print && overview}
+				<Print {rangeText} compare={query.compare} tz={displayTimeZone()} />
 			{/if}
 
-			<StageStrip stages={overview.stages} onjump={jump} />
+			<ContextBar
+				bind:height={contextHeight}
+				{query}
+				tz={displayTimeZone()}
+				updatedAt={overview?.updated_at}
+				crawler={insights.crawler}
+				busy={insights.busy}
+				crawlerError={insights.crawlerError}
+				{fieldError}
+				onrange={(range) => setQuery({ range, compare: query.compare })}
+				oncustom={(from, to) => setQuery({ range: 'custom', from, to, compare: query.compare })}
+				oncompare={(compare) => setQuery({ ...query, compare })}
+				onpause={() => void insights.pause()}
+				onresume={() => void insights.resume()}
+				onintensity={(level) => void insights.setIntensity(level)}
+			/>
 
-			{#if overview.stale}
-				<Banner kind="warning" title={m.insights_overview_stale_title()}>
-					<span data-testid="insights-stale">{staleReason}</span>
-					{m.insights_overview_stale_since()}
-					<RelativeTime seconds={overview.stale.since} />.
-				</Banner>
-			{/if}
+			<div class="sr-only" role="status" aria-live="polite" data-testid="insights-announce">
+				{announcement}
+			</div>
 
-			{#if paused || insights.startup === 'yes'}
-				<Lazy
-					load={() => import('./States.svelte')}
-					props={{
-						kind: paused ? ('paused' as const) : ('starting' as const),
-						live: insights.live
-					}}
-					height="ins-sk-panel"
-				/>
-			{/if}
-
-			<section id="insights-status" class="ins-section" aria-labelledby="insights-status-heading">
-				<h2 id="insights-status-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_status_title()}
-				</h2>
-				<p class="ins-sub">{m.insights_overview_status_time()}</p>
-				<KpiRow kpi={overview.kpi} annotations={overview.annotations} />
-			</section>
-
-			<section
-				id="insights-exceptions"
-				class="ins-section"
-				aria-labelledby="insights-exceptions-heading"
-			>
-				<h2 id="insights-exceptions-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_exceptions_title()}
-				</h2>
-				<p class="ins-sub">{m.insights_overview_exceptions_time()}</p>
-				<div class="ins-card">
-					<Exceptions exceptions={overview.exceptions} />
-					<a
-						class="ins-link target"
-						href={resolve(csvHref('exceptions', query) as Route)}
-						download
-						data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
-					>
-				</div>
-			</section>
-
-			<section id="insights-funnel" class="ins-section" aria-labelledby="insights-funnel-heading">
-				<h2 id="insights-funnel-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_funnel_heading()}
-				</h2>
-				<p class="ins-sub">{m.insights_overview_funnel_time()}</p>
-				<Lazy
-					load={() => import('./Funnel.svelte')}
-					props={{ overview, query, rangeText }}
-					height="ins-sk-funnel"
-				/>
-			</section>
-
-			<section
-				id="insights-movement"
-				class="ins-section"
-				aria-labelledby="insights-movement-heading"
-			>
-				<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_movement_title()}
-				</h2>
-				<p class="ins-sub">
-					{m.insights_overview_movement_time({
-						tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
-					})}
+			{#if insights.phase === 'error' && fieldError}
+				<p class="ins-sentence" data-testid="insights-range-invalid">
+					{m.insights_overview_range_invalid()}
 				</p>
-				<Lazy
-					load={() => import('./Movement.svelte')}
-					props={{ overview, query, rangeText }}
-					height="ins-sk-movement"
-				/>
-			</section>
+			{:else if insights.phase === 'error'}
+				<Banner kind="error" title={m.insights_overview_error_title()}>
+					{m.insights_overview_error_body()}
+					{#snippet action()}
+						<Button onclick={() => void insights.retry()} data-testid="insights-retry"
+							>{m.insights_overview_retry()}</Button
+						>
+					{/snippet}
+				</Banner>
+			{:else if !overview}
+				<Skeleton />
+			{:else}
+				{#if overview.privacy}
+					<!-- Loaded only while something identifying is recorded (§10.10.12). -->
+					<Lazy
+						load={() => import('$lib/features/shell/privacy/door').then<Loaded>((d) => d.load())}
+						props={{ overview, reload: insights.refresh }}
+						height=""
+					/>
+				{/if}
+				{#if stalled}
+					<Banner kind="warning" title={m.insights_overview_stalled_title()}>
+						<span data-testid="insights-stalled">{m.insights_overview_stalled_body()}</span>
+					</Banner>
+				{/if}
 
-			<section
-				id="insights-segments"
-				class="ins-section"
-				aria-labelledby="insights-segments-heading"
-			>
-				<h2 id="insights-segments-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_segments_title()}
-				</h2>
-				<p class="ins-sub">{m.insights_overview_segments_time()}</p>
-				<Lazy
-					load={() => import('./Segments.svelte')}
-					props={{ segments: overview.segments, query, rangeText }}
-					height="ins-sk-funnel"
-				/>
-			</section>
+				<StageStrip stages={overview.stages} onjump={jump} />
 
-			<section id="insights-serve" class="ins-section" aria-labelledby="insights-serve-heading">
-				<h2 id="insights-serve-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_serve_title()}
-				</h2>
-				<p class="ins-sub">{m.insights_overview_serve_time()}</p>
-				<Lazy
-					load={() => import('./ServePanel.svelte')}
-					props={{ serve: overview.serve, query }}
-					height="ins-sk-kpi"
-				/>
-			</section>
+				{#if overview.stale}
+					<Banner kind="warning" title={m.insights_overview_stale_title()}>
+						<span data-testid="insights-stale">{staleReason}</span>
+						{m.insights_overview_stale_since()}
+						<RelativeTime seconds={overview.stale.since} />.
+					</Banner>
+				{/if}
 
-			<section id="insights-detail" class="ins-section" aria-labelledby="insights-detail-heading">
-				<h2 id="insights-detail-heading" class="ins-heading" tabindex="-1">
-					{m.insights_overview_detail_title()}
-				</h2>
-				<DetailLinks {query} />
-			</section>
-		{/if}
+				{#if paused || insights.startup === 'yes'}
+					<Lazy
+						load={() => import('./States.svelte')}
+						props={{
+							kind: paused ? ('paused' as const) : ('starting' as const),
+							live: insights.live
+						}}
+						height="ins-sk-panel"
+					/>
+				{/if}
+
+				<section id="insights-status" class="ins-section" aria-labelledby="insights-status-heading">
+					<h2 id="insights-status-heading" class="ins-heading" tabindex="-1">
+						{m.insights_overview_status_title()}
+					</h2>
+					<p class="ins-sub">{m.insights_overview_status_time()}</p>
+					<KpiRow kpi={overview.kpi} annotations={overview.annotations} />
+				</section>
+
+				<section
+					id="insights-exceptions"
+					class="ins-section"
+					aria-labelledby="insights-exceptions-heading"
+				>
+					<h2 id="insights-exceptions-heading" class="ins-heading" tabindex="-1">
+						{m.insights_overview_exceptions_title()}
+					</h2>
+					<p class="ins-sub">{m.insights_overview_exceptions_time()}</p>
+					<div class="ins-card">
+						<Exceptions exceptions={overview.exceptions} />
+						<a
+							class="ins-link target"
+							href={resolve(csvHref('exceptions', query) as Route)}
+							download
+							data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
+						>
+					</div>
+				</section>
+
+				<section id="insights-funnel" class="ins-section" aria-labelledby="insights-funnel-heading">
+					<h2 id="insights-funnel-heading" class="ins-heading" tabindex="-1">
+						{m.insights_overview_funnel_heading()}
+					</h2>
+					<p class="ins-sub">{m.insights_overview_funnel_time()}</p>
+					<Lazy
+						load={() => import('./Funnel.svelte')}
+						props={{ overview, query, rangeText }}
+						height="ins-sk-funnel"
+					/>
+				</section>
+
+				<section
+					id="insights-movement"
+					class="ins-section"
+					aria-labelledby="insights-movement-heading"
+				>
+					<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
+						{m.insights_overview_movement_title()}
+					</h2>
+					<p class="ins-sub">
+						{m.insights_overview_movement_time({
+							tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
+						})}
+					</p>
+					<Lazy
+						load={() => import('./Movement.svelte')}
+						props={{ overview, query, rangeText }}
+						height="ins-sk-movement"
+					/>
+				</section>
+
+				<section
+					id="insights-segments"
+					class="ins-section"
+					aria-labelledby="insights-segments-heading"
+				>
+					<h2 id="insights-segments-heading" class="ins-heading" tabindex="-1">
+						{m.insights_overview_segments_title()}
+					</h2>
+					<p class="ins-sub">{m.insights_overview_segments_time()}</p>
+					<Lazy
+						load={() => import('./Segments.svelte')}
+						props={{ segments: overview.segments, query, rangeText }}
+						height="ins-sk-funnel"
+					/>
+				</section>
+
+				<section id="insights-serve" class="ins-section" aria-labelledby="insights-serve-heading">
+					<h2 id="insights-serve-heading" class="ins-heading" tabindex="-1">
+						{m.insights_overview_serve_title()}
+					</h2>
+					<p class="ins-sub">{m.insights_overview_serve_time()}</p>
+					<Lazy
+						load={() => import('./ServePanel.svelte')}
+						props={{ serve: overview.serve, query }}
+						height="ins-sk-kpi"
+					/>
+				</section>
+
+				<section id="insights-detail" class="ins-section" aria-labelledby="insights-detail-heading">
+					<h2 id="insights-detail-heading" class="ins-heading" tabindex="-1">
+						{m.insights_overview_detail_title()}
+					</h2>
+					<DetailLinks {query} />
+				</section>
+			{/if}
+		</div>
 	</div>
-</PageFrame>
+</div>

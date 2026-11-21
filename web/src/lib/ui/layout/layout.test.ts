@@ -1,47 +1,44 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
-import { html, text } from '../testing';
-import PageFrame from './PageFrame.svelte';
-import PageHeader from './PageHeader.svelte';
+import {
+	PAGE_BODY_FULL,
+	PAGE_BODY_MANUSCRIPT,
+	PAGE_BODY_WIDE,
+	PAGE_FRAME,
+	PAGE_H1,
+	PAGE_HEADER
+} from './classes';
 
-describe('PageFrame', () => {
-	it('is a left-aligned container with the shared gutters and renders its children', () => {
-		const { container } = render(PageFrame, { children: text('Body') });
-		const frame = container.querySelector<HTMLElement>('[data-page-frame]')!;
-		expect(frame.className).toContain('px-4');
-		expect(frame.className).toContain('large:px-6');
-		expect(frame.className).not.toMatch(/\bmx-auto\b/);
-		expect(frame.textContent).toBe('Body');
+const all = {
+	PAGE_FRAME,
+	PAGE_BODY_FULL,
+	PAGE_BODY_WIDE,
+	PAGE_BODY_MANUSCRIPT,
+	PAGE_HEADER,
+	PAGE_H1
+};
+const tokens = (s: string) => s.split(/\s+/);
+
+describe('page frame classes', () => {
+	it('has the shared gutters, 16 px and 24 px from large, and is never centred', () => {
+		expect(tokens(PAGE_FRAME)).toEqual(expect.arrayContaining(['px-4', 'large:px-6']));
+		for (const value of Object.values(all)) expect(tokens(value)).not.toContain('mx-auto');
 	});
 
-	it('caps the content by size and never the gutters', () => {
-		const inner = (size?: 'full' | 'wide' | 'manuscript') => {
-			const { container, unmount } = render(PageFrame, { size, children: text('x') });
-			const cls = container.querySelector<HTMLElement>('[data-page-frame] > div')!.className;
-			unmount();
-			return cls;
-		};
-		expect(inner('full')).not.toContain('max-w');
-		expect(inner('wide')).toContain('max-w-7xl');
-		expect(inner()).toContain('max-w-7xl');
-		expect(inner('manuscript')).toContain('max-w-(--manuscript-width)');
-	});
-});
-
-describe('PageHeader', () => {
-	it('renders one h1, with whatever the page puts after it', () => {
-		render(PageHeader, { title: 'Alerts', children: html('<button>New</button>') });
-		expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
-		expect(screen.getByRole('heading', { name: 'Alerts' })).toBeTruthy();
-		expect(screen.getByRole('button', { name: 'New' })).toBeTruthy();
+	it('caps the content box only by width, and never the gutters', () => {
+		expect(PAGE_BODY_FULL).not.toContain('max-w');
+		expect(tokens(PAGE_BODY_WIDE)).toContain('max-w-7xl');
+		expect(tokens(PAGE_BODY_MANUSCRIPT)).toContain('max-w-(--manuscript-width)');
+		expect(PAGE_FRAME).not.toContain('max-w');
 	});
 
-	it('keeps its id and is a script focus target, not a tab stop', () => {
-		render(PageHeader, { title: 'A', id: 'a-h' });
-		const h1 = screen.getByRole('heading', { level: 1 });
-		expect(h1.id).toBe('a-h');
-		expect(h1.getAttribute('tabindex')).toBe('-1');
-		h1.focus();
-		expect(document.activeElement).toBe(h1);
+	it('is the display h1 with the shared focus ring', () => {
+		expect(tokens(PAGE_H1)).toEqual(
+			expect.arrayContaining(['text-display', 'font-semibold', 'focus-visible:outline-primary'])
+		);
+	});
+
+	it('uses no hex and no arbitrary values (the spacing steps are checked by the bans script)', () => {
+		for (const value of Object.values(all))
+			for (const t of tokens(value)) expect(t).not.toMatch(/#|\[/);
 	});
 });

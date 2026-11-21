@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Jobs (SRC-16, §18.8, §9): the background jobs of this server with progress, rate
 	// and ETA, and pause, resume and cancel. Every state shown is the server's: a control sends its
 	// request and the job's row becomes what the server answers, never a guess made first.
 	import { onMount, tick } from 'svelte';
-	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { ApiError, api, isAbort } from '$lib/api/client';
 	import { formatCount, formatDateTime, formatPercent, formatSpan } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -195,7 +195,7 @@
 	});
 </script>
 
-<PageHeader id="jobs-title" title={m.jobs_title()} />
+<h1 id="jobs-title" class={PAGE_H1} tabindex="-1">{m.jobs_title()}</h1>
 <p class="text-muted-text">{m.jobs_purpose()}</p>
 
 <p class="sr-only" role="status" data-testid="jobs-announce">{announcement}</p>

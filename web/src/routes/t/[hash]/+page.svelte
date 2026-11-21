@@ -1,11 +1,10 @@
 <script lang="ts">
+	import { PAGE_BODY_WIDE, PAGE_FRAME, PAGE_H1, PAGE_HEADER } from '$lib/ui/layout/classes';
 	// /t/{hash} as a full page (a direct link, or "Open full page"). From Search it is a drawer
 	// instead (features/detail/DetailHost). The page is up to 2 × --results-min-width wide; its header and summary keep --manuscript-width.
 	import { onMount, untrack } from 'svelte';
 	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
-	import PageFrame from '$lib/ui/layout/PageFrame.svelte';
-	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import DetailActions from '$lib/features/detail/DetailActions.svelte';
 	import DetailView from '$lib/features/detail/DetailView.svelte';
 	import { setDrawerTarget } from '$lib/features/detail/target';
@@ -35,13 +34,16 @@
 
 <svelte:head><title>{showBidi(model.title) || m.torrent()} · Lodestar</title></svelte:head>
 
-<PageFrame>
-	<div class="contents ls-detail-page">
-		<PageHeader title={showBidi(model.title) || m.torrent()}>
-			<div class="ls-detail-row">
-				<DetailActions detail={model.detail} />
-			</div>
-		</PageHeader>
-		<DetailView {model} mode="page" />
+<div class={PAGE_FRAME} data-page-frame="">
+	<div class={PAGE_BODY_WIDE}>
+		<div class="contents ls-detail-page">
+			<header class={PAGE_HEADER}>
+				<h1 class={PAGE_H1} tabindex="-1">{showBidi(model.title) || m.torrent()}</h1>
+				<div class="ls-detail-row">
+					<DetailActions detail={model.detail} />
+				</div>
+			</header>
+			<DetailView {model} mode="page" />
+		</div>
 	</div>
-</PageFrame>
+</div>

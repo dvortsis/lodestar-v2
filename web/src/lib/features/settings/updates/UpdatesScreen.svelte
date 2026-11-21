@@ -1,10 +1,10 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Updates (§10.10.14, part 1). It shows only what the server says (`GET /updates`
 	// and the `updates` settings): a failed or refused request leaves the last server state on
 	// screen with an error, and a control's position is put back to the server's value afterwards.
 	// Release notes and history load right after the first paint (Releases.svelte). Roll back sits in the Danger zone at the end (S-updates-4).
 	import { onDestroy, onMount, tick, type Component } from 'svelte';
-	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
@@ -388,7 +388,7 @@
 	</label>
 {/snippet}
 
-<PageHeader title={m.settings_updates_title()} />
+<h1 class={PAGE_H1} tabindex="-1">{m.settings_updates_title()}</h1>
 <p class="text-muted-text">{m.settings_updates_purpose()}</p>
 
 {#if store.loading && status === undefined && settings === undefined}

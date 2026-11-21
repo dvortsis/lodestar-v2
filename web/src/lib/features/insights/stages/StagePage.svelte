@@ -1,6 +1,5 @@
 <script lang="ts">
-	import PageFrame from '$lib/ui/layout/PageFrame.svelte';
-	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
+	import { PAGE_BODY_FULL, PAGE_FRAME, PAGE_H1 } from '$lib/ui/layout/classes';
 	// A stage detail page (§10.9.5): breadcrumb and stage strip, 3–4 KPIs, one primary trend, then
 	// drivers and tables. One component for the four stages that have a typed endpoint; the data
 	// mapping is in `model.ts`. The range and Compare come from the URL and are kept by every link.
@@ -279,366 +278,375 @@
 	{#if x.value === null}<span class="sr-only">{m.insights_stage_na()}</span>{/if}
 {/snippet}
 
-<PageFrame size="full">
-	<div class="ins-page" data-testid="insights-stage-page">
-		<nav aria-label={m.insights_stage_breadcrumb()} data-testid="insights-breadcrumb">
-			<ol class="ins-row">
-				<li>
-					<a
-						class="ins-link target"
-						href={resolve(overviewHref as Route)}
-						data-testid="insights-back">{m.insights_overview_title()}</a
-					>
-				</li>
-				<li><span class="ins-muted">/</span> <span aria-current="page">{names[stage]()}</span></li>
-			</ol>
-		</nav>
-		<PageHeader title={names[stage]()} />
-
-		<nav aria-label={m.insights_overview_strip_label()} data-testid="insights-strip">
-			<ol class="ins-row">
-				{#each STAGES as s (s)}
+<div class={PAGE_FRAME} data-page-frame="">
+	<div class={PAGE_BODY_FULL}>
+		<div class="ins-page" data-testid="insights-stage-page">
+			<nav aria-label={m.insights_stage_breadcrumb()} data-testid="insights-breadcrumb">
+				<ol class="ins-row">
 					<li>
 						<a
 							class="ins-link target"
-							href={resolve(stageLink(s) as Route)}
-							aria-current={s === stage ? 'page' : undefined}
-							data-testid="insights-stage-{s}">{names[s]()}</a
+							href={resolve(overviewHref as Route)}
+							data-testid="insights-back">{m.insights_overview_title()}</a
 						>
 					</li>
-				{/each}
-			</ol>
-		</nav>
+					<li>
+						<span class="ins-muted">/</span> <span aria-current="page">{names[stage]()}</span>
+					</li>
+				</ol>
+			</nav>
+			<h1 class={PAGE_H1} tabindex="-1">{names[stage]()}</h1>
 
-		<div class="ins-row" data-testid="insights-stage-context">
-			<SegmentedControl
-				options={ranges}
-				value={query.range}
-				label={m.insights_overview_range_label()}
-				onchange={(r) =>
-					void goto(resolve(rangeLink(r as RangeId) as Route), { keepFocus: true, noScroll: true })}
-			/>
-			{#if query.range !== 'all'}
-				<Button
-					variant={query.compare ? 'primary' : 'secondary'}
-					dense
-					aria-pressed={query.compare}
-					onclick={() =>
-						void goto(resolve(compareLink as Route), { keepFocus: true, noScroll: true })}
-					data-testid="insights-stage-compare"
-				>
-					{m.insights_overview_compare()}
-				</Button>
-			{/if}
-			{#if reason}
-				<a
-					class="ins-link target"
-					href={resolve(withContext(`/insights/${stage}`, query) as Route)}
-					data-testid="insights-reason-chip"
-					>{m.insights_stage_reason_reset({ reason: reasonName(reason) })}</a
-				>
-			{/if}
-			{#if data}
-				<span class="ins-muted ins-grow" data-testid="insights-stage-updated">
-					{m.insights_overview_stale_since()}
-					<RelativeTime seconds={data.updated_at} timeZone={zone} /> · {m.insights_overview_tz({
-						tz: zone
-					})}
-				</span>
-			{/if}
-		</div>
-
-		{#if phase === 'error'}
-			<Banner kind="error" title={m.insights_overview_error_title()}>
-				{m.insights_stage_error_body()}
-				{#snippet action()}
-					<Button onclick={() => void load(query, reason)} data-testid="insights-retry"
-						>{m.insights_overview_retry()}</Button
-					>
-				{/snippet}
-			</Banner>
-		{:else if !model || !data}
-			<Skeleton />
-		{:else}
-			{#if data.stale}
-				<Banner kind="warning" title={m.insights_overview_stale_title()}>
-					<span data-testid="insights-stale"
-						>{staleReason[data.stale.reason]?.() ??
-							m.insights_overview_stale_other({ reason: data.stale.reason })}</span
-					>
-					{m.insights_overview_stale_since()}
-					<RelativeTime seconds={data.stale.since} timeZone={zone} />.
-				</Banner>
-			{/if}
-
-			<section class="ins-section" aria-labelledby="ins-s-kpi">
-				<h2 id="ins-s-kpi" class="ins-heading">{m.insights_stage_kpis()}</h2>
-				<p class="ins-sub">{m.insights_stage_time_kpis({ tz })}</p>
-				<div class="ins-kpis" data-testid="insights-stage-kpis">
-					{#each model.kpis as x (x.key)}
-						<div class="ins-card" data-testid="insights-stage-kpi-{x.key}">
-							<span class="ins-muted">{x.label}</span>
-							<span class="ins-status">{@render metricValue(x)}</span>
-							{#if x.snapshot}
-								<span class="ins-kpi-note" data-testid="insights-stage-{x.key}-snapshot"
-									>{m.insights_stage_snapshot()}</span
-								>
-							{/if}
-							{#if hasPrev(x)}
-								<span class="ins-kpi-note"
-									>{m.insights_overview_previous_period()}:
-									<span data-testid="insights-stage-{x.key}-previous"
-										>{metricText(x, x.previous)}</span
-									></span
-								>
-							{/if}
-							{#if x.value === null}
-								<span class="ins-kpi-note" data-testid="insights-stage-{x.key}-na"
-									>{m.insights_stage_na()}</span
-								>
-							{/if}
-							{#if x.help}
-								<span class="ins-kpi-note" data-testid="insights-stage-{x.key}-help">{x.help}</span>
-							{/if}
-						</div>
-					{/each}
-				</div>
-			</section>
-
-			{#each model.charts as c (c.id)}
-				{@const times = data.trend.map((p) => p.at)}
-				<section class="ins-section" aria-labelledby="ins-{c.id}-h">
-					<h2 id="ins-{c.id}-h" class="ins-heading">{c.title}</h2>
-					<p class="ins-sub">
-						{c.snapshot
-							? m.insights_stage_time_snapshot({ tz })
-							: m.insights_stage_time_event({ tz })}
-					</p>
-					{#if noData(c.series)}
-						<p class="ins-sentence" data-testid="insights-chart-{c.id}-empty">
-							{m.insights_stage_nothing_measured()}
-						</p>
-					{:else}
-						<ChartPanel
-							id="ins-{c.id}"
-							title={c.title}
-							summary={summaryOf(c)}
-							caption={c.title}
-							columns={[
-								{ key: 'at', label: m.insights_overview_col_time() },
-								...c.series.flatMap((s) => [
-									{ key: s.key, label: s.label, numeric: true },
-									...(query.compare && s.previous
-										? [{ key: `${s.key}-prev`, label: previousLabel(s.label), numeric: true }]
-										: [])
-								])
-							]}
-							rows={data.trend.map((p, i) => ({
-								at: formatDateFull(p.at, locale, { timeZone: tz, bucket }),
-								...Object.fromEntries(
-									c.series.flatMap((s) => [
-										[s.key, fmtPoint(c.approx, s.values[i])],
-										...(query.compare && s.previous
-											? [[`${s.key}-prev`, fmtPoint(c.approx, s.previous[i])]]
-											: [])
-									])
-								)
-							}))}
-							csv={reason ? undefined : c.csv}
-							{query}
-							forceTable={failedChart}
-							testid="insights-chart-{c.id}"
-						>
-							<LineChart
-								{times}
-								series={c.series.flatMap((s, i) => [
-									{ label: s.label, values: s.values, token: `--data-${i + 1}` },
-									...(query.compare && s.previous
-										? [
-												{
-													label: previousLabel(s.label),
-													values: s.previous,
-													token: '--color-muted-text'
-												}
-											]
-										: [])
-								])}
-								label={summaryOf(c)}
-								unit={c.snapshot ? (c.snapshotUnit ?? m.insights_stage_unit_torrents()) : unit}
-								format={c.approx ? approxCount : formatCount}
-								axisFormat={formatCompact}
-								{bucket}
-								timeZone={tz}
-								timeLabel={m.insights_overview_col_time()}
-								onerror={() => (failedChart = true)}
-								testid="insights-line-{c.id}"
-							/>
-						</ChartPanel>
-						{#if reason && c.csv}
+			<nav aria-label={m.insights_overview_strip_label()} data-testid="insights-strip">
+				<ol class="ins-row">
+					{#each STAGES as s (s)}
+						<li>
 							<a
 								class="ins-link target"
-								href={resolve(csv(c.csv) as Route)}
-								download
-								data-testid="insights-chart-{c.id}-csv">{m.insights_overview_csv()}</a
+								href={resolve(stageLink(s) as Route)}
+								aria-current={s === stage ? 'page' : undefined}
+								data-testid="insights-stage-{s}">{names[s]()}</a
 							>
-						{/if}
-					{/if}
-				</section>
-			{/each}
+						</li>
+					{/each}
+				</ol>
+			</nav>
 
-			{#if stage === 'index'}<ImportMarkers annotations={marks} tz={zone} />{/if}
+			<div class="ins-row" data-testid="insights-stage-context">
+				<SegmentedControl
+					options={ranges}
+					value={query.range}
+					label={m.insights_overview_range_label()}
+					onchange={(r) =>
+						void goto(resolve(rangeLink(r as RangeId) as Route), {
+							keepFocus: true,
+							noScroll: true
+						})}
+				/>
+				{#if query.range !== 'all'}
+					<Button
+						variant={query.compare ? 'primary' : 'secondary'}
+						dense
+						aria-pressed={query.compare}
+						onclick={() =>
+							void goto(resolve(compareLink as Route), { keepFocus: true, noScroll: true })}
+						data-testid="insights-stage-compare"
+					>
+						{m.insights_overview_compare()}
+					</Button>
+				{/if}
+				{#if reason}
+					<a
+						class="ins-link target"
+						href={resolve(withContext(`/insights/${stage}`, query) as Route)}
+						data-testid="insights-reason-chip"
+						>{m.insights_stage_reason_reset({ reason: reasonName(reason) })}</a
+					>
+				{/if}
+				{#if data}
+					<span class="ins-muted ins-grow" data-testid="insights-stage-updated">
+						{m.insights_overview_stale_since()}
+						<RelativeTime seconds={data.updated_at} timeZone={zone} /> · {m.insights_overview_tz({
+							tz: zone
+						})}
+					</span>
+				{/if}
+			</div>
 
-			{#if extraBars.length || model.hists.length}
-				<section class="ins-section" aria-labelledby="ins-s-drivers">
-					<h2 id="ins-s-drivers" class="ins-heading">{m.insights_stage_drivers()}</h2>
-					{#if stage === 'fetch'}<p class="ins-sub">{m.insights_stage_time_event({ tz })}</p>{/if}
-					{#each extraBars as b (b.id)}
-						<div class="ins-card" data-testid="insights-bars-{b.id}">
-							<div class="ins-card-head">
-								<h3 class="ins-card-title">{b.title}</h3>
-								{#if b.csv}
-									<a
-										class="ins-link target"
-										href={resolve(csv(b.csv) as Route)}
-										download
-										data-testid="insights-bars-{b.id}-csv">{m.insights_overview_csv()}</a
+			{#if phase === 'error'}
+				<Banner kind="error" title={m.insights_overview_error_title()}>
+					{m.insights_stage_error_body()}
+					{#snippet action()}
+						<Button onclick={() => void load(query, reason)} data-testid="insights-retry"
+							>{m.insights_overview_retry()}</Button
+						>
+					{/snippet}
+				</Banner>
+			{:else if !model || !data}
+				<Skeleton />
+			{:else}
+				{#if data.stale}
+					<Banner kind="warning" title={m.insights_overview_stale_title()}>
+						<span data-testid="insights-stale"
+							>{staleReason[data.stale.reason]?.() ??
+								m.insights_overview_stale_other({ reason: data.stale.reason })}</span
+						>
+						{m.insights_overview_stale_since()}
+						<RelativeTime seconds={data.stale.since} timeZone={zone} />.
+					</Banner>
+				{/if}
+
+				<section class="ins-section" aria-labelledby="ins-s-kpi">
+					<h2 id="ins-s-kpi" class="ins-heading">{m.insights_stage_kpis()}</h2>
+					<p class="ins-sub">{m.insights_stage_time_kpis({ tz })}</p>
+					<div class="ins-kpis" data-testid="insights-stage-kpis">
+						{#each model.kpis as x (x.key)}
+							<div class="ins-card" data-testid="insights-stage-kpi-{x.key}">
+								<span class="ins-muted">{x.label}</span>
+								<span class="ins-status">{@render metricValue(x)}</span>
+								{#if x.snapshot}
+									<span class="ins-kpi-note" data-testid="insights-stage-{x.key}-snapshot"
+										>{m.insights_stage_snapshot()}</span
+									>
+								{/if}
+								{#if hasPrev(x)}
+									<span class="ins-kpi-note"
+										>{m.insights_overview_previous_period()}:
+										<span data-testid="insights-stage-{x.key}-previous"
+											>{metricText(x, x.previous)}</span
+										></span
+									>
+								{/if}
+								{#if x.value === null}
+									<span class="ins-kpi-note" data-testid="insights-stage-{x.key}-na"
+										>{m.insights_stage_na()}</span
+									>
+								{/if}
+								{#if x.help}
+									<span class="ins-kpi-note" data-testid="insights-stage-{x.key}-help"
+										>{x.help}</span
 									>
 								{/if}
 							</div>
-							{#if b.unavailable}
-								<p class="ins-muted" data-testid="insights-bars-{b.id}-na">
-									{m.insights_stage_na()}
-								</p>
-							{:else if b.items.length}
-								<LinkedBars
-									items={b.items.map((i) => ({
-										key: i.key,
-										label: i.label,
-										value: i.value,
-										text: i.text,
-										sub: i.sub,
-										href: hrefFor(b.id, i.key)
-									}))}
-									max={Math.max(...b.items.map((i) => i.value))}
-									label={b.title}
-									testid="insights-list-{b.id}"
+						{/each}
+					</div>
+				</section>
+
+				{#each model.charts as c (c.id)}
+					{@const times = data.trend.map((p) => p.at)}
+					<section class="ins-section" aria-labelledby="ins-{c.id}-h">
+						<h2 id="ins-{c.id}-h" class="ins-heading">{c.title}</h2>
+						<p class="ins-sub">
+							{c.snapshot
+								? m.insights_stage_time_snapshot({ tz })
+								: m.insights_stage_time_event({ tz })}
+						</p>
+						{#if noData(c.series)}
+							<p class="ins-sentence" data-testid="insights-chart-{c.id}-empty">
+								{m.insights_stage_nothing_measured()}
+							</p>
+						{:else}
+							<ChartPanel
+								id="ins-{c.id}"
+								title={c.title}
+								summary={summaryOf(c)}
+								caption={c.title}
+								columns={[
+									{ key: 'at', label: m.insights_overview_col_time() },
+									...c.series.flatMap((s) => [
+										{ key: s.key, label: s.label, numeric: true },
+										...(query.compare && s.previous
+											? [{ key: `${s.key}-prev`, label: previousLabel(s.label), numeric: true }]
+											: [])
+									])
+								]}
+								rows={data.trend.map((p, i) => ({
+									at: formatDateFull(p.at, locale, { timeZone: tz, bucket }),
+									...Object.fromEntries(
+										c.series.flatMap((s) => [
+											[s.key, fmtPoint(c.approx, s.values[i])],
+											...(query.compare && s.previous
+												? [[`${s.key}-prev`, fmtPoint(c.approx, s.previous[i])]]
+												: [])
+										])
+									)
+								}))}
+								csv={reason ? undefined : c.csv}
+								{query}
+								forceTable={failedChart}
+								testid="insights-chart-{c.id}"
+							>
+								<LineChart
+									{times}
+									series={c.series.flatMap((s, i) => [
+										{ label: s.label, values: s.values, token: `--data-${i + 1}` },
+										...(query.compare && s.previous
+											? [
+													{
+														label: previousLabel(s.label),
+														values: s.previous,
+														token: '--color-muted-text'
+													}
+												]
+											: [])
+									])}
+									label={summaryOf(c)}
+									unit={c.snapshot ? (c.snapshotUnit ?? m.insights_stage_unit_torrents()) : unit}
+									format={c.approx ? approxCount : formatCount}
+									axisFormat={formatCompact}
+									{bucket}
+									timeZone={tz}
+									timeLabel={m.insights_overview_col_time()}
+									onerror={() => (failedChart = true)}
+									testid="insights-line-{c.id}"
 								/>
-							{:else}
-								<p class="ins-muted" data-testid="insights-bars-{b.id}-empty">
-									{b.empty ?? m.insights_stage_nothing()}
-								</p>
+							</ChartPanel>
+							{#if reason && c.csv}
+								<a
+									class="ins-link target"
+									href={resolve(csv(c.csv) as Route)}
+									download
+									data-testid="insights-chart-{c.id}-csv">{m.insights_overview_csv()}</a
+								>
 							{/if}
-						</div>
-					{/each}
-					{#each model.hists as h (h.id)}
-						{@const edges = h.bins ? binEdges(h.bins) : undefined}
-						<div data-testid="insights-hist-{h.id}">
-							{#if !h.bins}
-								<div class="ins-card">
-									<h3 class="ins-card-title">{h.title}</h3>
-									<p class="ins-muted" data-testid="insights-hist-{h.id}-na">
+						{/if}
+					</section>
+				{/each}
+
+				{#if stage === 'index'}<ImportMarkers annotations={marks} tz={zone} />{/if}
+
+				{#if extraBars.length || model.hists.length}
+					<section class="ins-section" aria-labelledby="ins-s-drivers">
+						<h2 id="ins-s-drivers" class="ins-heading">{m.insights_stage_drivers()}</h2>
+						{#if stage === 'fetch'}<p class="ins-sub">{m.insights_stage_time_event({ tz })}</p>{/if}
+						{#each extraBars as b (b.id)}
+							<div class="ins-card" data-testid="insights-bars-{b.id}">
+								<div class="ins-card-head">
+									<h3 class="ins-card-title">{b.title}</h3>
+									{#if b.csv}
+										<a
+											class="ins-link target"
+											href={resolve(csv(b.csv) as Route)}
+											download
+											data-testid="insights-bars-{b.id}-csv">{m.insights_overview_csv()}</a
+										>
+									{/if}
+								</div>
+								{#if b.unavailable}
+									<p class="ins-muted" data-testid="insights-bars-{b.id}-na">
 										{m.insights_stage_na()}
 									</p>
+								{:else if b.items.length}
+									<LinkedBars
+										items={b.items.map((i) => ({
+											key: i.key,
+											label: i.label,
+											value: i.value,
+											text: i.text,
+											sub: i.sub,
+											href: hrefFor(b.id, i.key)
+										}))}
+										max={Math.max(...b.items.map((i) => i.value))}
+										label={b.title}
+										testid="insights-list-{b.id}"
+									/>
+								{:else}
+									<p class="ins-muted" data-testid="insights-bars-{b.id}-empty">
+										{b.empty ?? m.insights_stage_nothing()}
+									</p>
+								{/if}
+							</div>
+						{/each}
+						{#each model.hists as h (h.id)}
+							{@const edges = h.bins ? binEdges(h.bins) : undefined}
+							<div data-testid="insights-hist-{h.id}">
+								{#if !h.bins}
+									<div class="ins-card">
+										<h3 class="ins-card-title">{h.title}</h3>
+										<p class="ins-muted" data-testid="insights-hist-{h.id}-na">
+											{m.insights_stage_na()}
+										</p>
+									</div>
+								{:else}
+									<ChartPanel
+										id="ins-hist-{h.id}"
+										title={h.title}
+										summary={m.insights_stage_hist_summary({ title: h.title })}
+										caption={h.title}
+										columns={[
+											{ key: 'bin', label: m.insights_stage_col_range() },
+											{ key: 'count', label: m.insights_stage_col_count(), numeric: true }
+										]}
+										rows={h.bins.map((b) => ({
+											bin: binLabel(b, h.fmt, locale),
+											count: formatCount(b.count, locale)
+										}))}
+										{query}
+										forceTable={!edges}
+										testid="insights-histogram-{h.id}"
+									>
+										{#if edges}
+											<Histogram
+												counts={h.bins.map((b) => b.count)}
+												edges={edgeLabels(edges, h.fmt, locale)}
+												label={h.title}
+												testid="insights-histogram-{h.id}-chart"
+											/>
+										{/if}
+									</ChartPanel>
+								{/if}
+							</div>
+						{/each}
+					</section>
+				{/if}
+
+				<section class="ins-section" aria-labelledby="ins-s-more">
+					<h2 id="ins-s-more" class="ins-heading">{m.insights_stage_more()}</h2>
+					<div class="ins-card">
+						<dl class="ins-list" data-testid="insights-stage-more">
+							{#each model.more as x (x.key)}
+								<div class="ins-item-row" data-testid="insights-stage-more-{x.key}">
+									<dt>{x.label}</dt>
+									<dd class="ins-num">
+										{@render metricValue(x)}
+										{#if x.value === null}
+											<span class="ins-muted" data-testid="insights-stage-{x.key}-na"
+												>{m.insights_stage_na()}</span
+											>
+										{:else if hasPrev(x)}
+											<span class="ins-muted" data-testid="insights-stage-{x.key}-previous"
+												>· {metricText(x, x.previous)}</span
+											>
+										{/if}
+									</dd>
 								</div>
-							{:else}
-								<ChartPanel
-									id="ins-hist-{h.id}"
-									title={h.title}
-									summary={m.insights_stage_hist_summary({ title: h.title })}
-									caption={h.title}
-									columns={[
-										{ key: 'bin', label: m.insights_stage_col_range() },
-										{ key: 'count', label: m.insights_stage_col_count(), numeric: true }
-									]}
-									rows={h.bins.map((b) => ({
-										bin: binLabel(b, h.fmt, locale),
-										count: formatCount(b.count, locale)
-									}))}
-									{query}
-									forceTable={!edges}
-									testid="insights-histogram-{h.id}"
-								>
-									{#if edges}
-										<Histogram
-											counts={h.bins.map((b) => b.count)}
-											edges={edgeLabels(edges, h.fmt, locale)}
-											label={h.title}
-											testid="insights-histogram-{h.id}-chart"
-										/>
-									{/if}
-								</ChartPanel>
-							{/if}
-						</div>
-					{/each}
+							{/each}
+							{#each model.notes as n (n.key)}
+								<div class="ins-item-row">
+									<dt>{n.label}</dt>
+									<dd data-testid="insights-stage-note-{n.key}">{n.text}</dd>
+								</div>
+							{/each}
+						</dl>
+					</div>
 				</section>
+
+				{#if Workers && (stage === 'discover' || stage === 'fetch')}
+					<Workers {stage} {byWorker} />
+				{/if}
+
+				{#each [...model.tables, ...extraTables] as t (t.id)}
+					<section class="ins-section" aria-labelledby="ins-t-{t.id}">
+						<h2 id="ins-t-{t.id}" class="ins-heading">{t.title}</h2>
+						{#if t.csv}
+							<a
+								class="ins-link target"
+								href={resolve(csv(t.csv) as Route)}
+								download
+								data-testid="insights-table-{t.id}-csv">{m.insights_overview_csv()}</a
+							>
+						{/if}
+						{#if t.empty && !t.rows.length}
+							<p class="ins-sentence" data-testid="insights-table-{t.id}-na">{t.empty}</p>
+						{:else if !t.rows.length}
+							<p class="ins-sentence" data-testid="insights-table-{t.id}-empty">
+								{m.insights_stage_nothing()}
+							</p>
+						{:else}
+							<DataTableAlternative
+								caption={t.title}
+								columns={t.columns}
+								rows={t.rows}
+								visible
+								testid="insights-table-{t.id}"
+							/>
+						{/if}
+					</section>
+				{/each}
 			{/if}
-
-			<section class="ins-section" aria-labelledby="ins-s-more">
-				<h2 id="ins-s-more" class="ins-heading">{m.insights_stage_more()}</h2>
-				<div class="ins-card">
-					<dl class="ins-list" data-testid="insights-stage-more">
-						{#each model.more as x (x.key)}
-							<div class="ins-item-row" data-testid="insights-stage-more-{x.key}">
-								<dt>{x.label}</dt>
-								<dd class="ins-num">
-									{@render metricValue(x)}
-									{#if x.value === null}
-										<span class="ins-muted" data-testid="insights-stage-{x.key}-na"
-											>{m.insights_stage_na()}</span
-										>
-									{:else if hasPrev(x)}
-										<span class="ins-muted" data-testid="insights-stage-{x.key}-previous"
-											>· {metricText(x, x.previous)}</span
-										>
-									{/if}
-								</dd>
-							</div>
-						{/each}
-						{#each model.notes as n (n.key)}
-							<div class="ins-item-row">
-								<dt>{n.label}</dt>
-								<dd data-testid="insights-stage-note-{n.key}">{n.text}</dd>
-							</div>
-						{/each}
-					</dl>
-				</div>
-			</section>
-
-			{#if Workers && (stage === 'discover' || stage === 'fetch')}
-				<Workers {stage} {byWorker} />
-			{/if}
-
-			{#each [...model.tables, ...extraTables] as t (t.id)}
-				<section class="ins-section" aria-labelledby="ins-t-{t.id}">
-					<h2 id="ins-t-{t.id}" class="ins-heading">{t.title}</h2>
-					{#if t.csv}
-						<a
-							class="ins-link target"
-							href={resolve(csv(t.csv) as Route)}
-							download
-							data-testid="insights-table-{t.id}-csv">{m.insights_overview_csv()}</a
-						>
-					{/if}
-					{#if t.empty && !t.rows.length}
-						<p class="ins-sentence" data-testid="insights-table-{t.id}-na">{t.empty}</p>
-					{:else if !t.rows.length}
-						<p class="ins-sentence" data-testid="insights-table-{t.id}-empty">
-							{m.insights_stage_nothing()}
-						</p>
-					{:else}
-						<DataTableAlternative
-							caption={t.title}
-							columns={t.columns}
-							rows={t.rows}
-							visible
-							testid="insights-table-{t.id}"
-						/>
-					{/if}
-				</section>
-			{/each}
-		{/if}
+		</div>
 	</div>
-</PageFrame>
+</div>
 
 <style>
 	/* The current stage, range and Compare state are shown, not only exposed to assistive tech:

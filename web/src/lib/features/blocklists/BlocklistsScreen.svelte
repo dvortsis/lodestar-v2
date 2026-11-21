@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Filters & Safety → Blocklist subscriptions (§20.13, owner §2.9): the one-click
 	// catalog, your lists with their figures, pause, resume, remove and the held-version choice.
 	// Nothing is subscribed by default. Every change goes through the filters flows' dialog (preview,
@@ -6,7 +7,6 @@
 	// counts and asks for the password there. This screen shows the server's last answer and
 	// reloads it once a change applied.
 	import { onDestroy, onMount, type Component } from 'svelte';
-	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
 	import { api, isAbort } from '$lib/api/client';
 	import { formatCount, formatDateTime, formatPercent } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -98,7 +98,7 @@
 	});
 </script>
 
-<PageHeader id="blocklists-title" title={m.blocklists_title()} />
+<h1 id="blocklists-title" class={PAGE_H1} tabindex="-1">{m.blocklists_title()}</h1>
 <p class="text-muted-text">{m.blocklists_purpose()}</p>
 
 {#if problem}

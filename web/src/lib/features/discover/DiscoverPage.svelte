@@ -1,6 +1,5 @@
 <script lang="ts">
-	import PageFrame from '$lib/ui/layout/PageFrame.svelte';
-	import PageHeader from '$lib/ui/layout/PageHeader.svelte';
+	import { PAGE_BODY_WIDE, PAGE_FRAME, PAGE_H1 } from '$lib/ui/layout/classes';
 	// Discover (§10.7): Newest with a tab per content type, then Rising and Recently resolved.
 	// The URL is the state: `?type=<tab>` and `?density=`. Every count, section and the Adult rule
 	// come from `GET /discover`; the client names, lays out and links, and never filters or counts.
@@ -158,228 +157,235 @@
 	</Banner>
 {/snippet}
 
-<PageFrame>
-	<div class="contents" style:--row-h="{rowHeight}px">
-		<PageHeader title={m.discover_title()} />
+<div class={PAGE_FRAME} data-page-frame="">
+	<div class={PAGE_BODY_WIDE}>
+		<div class="contents" style:--row-h="{rowHeight}px">
+			<h1 class={PAGE_H1} tabindex="-1">{m.discover_title()}</h1>
 
-		<nav aria-label={m.discover_tabs_label()} class="dsc-tabs-box">
-			<ul class="dsc-tabs">
-				{#each tabs as t (t ?? 'all')}
-					<li>
-						<a
-							href={resolve(tabHref(t, search) as Route)}
-							aria-current={tab === t ? 'page' : undefined}
-							class="dsc-tab {FOCUS_RING}"
-							data-testid="discover-tab-{t ?? 'all'}">{tabLabel(t)}</a
-						>
-					</li>
-				{/each}
-			</ul>
-		</nav>
-
-		{#if d.failure === 'unknown_type'}
-			<EmptyState
-				headingLevel={3}
-				title={m.discover_unknown_type_title()}
-				text={m.discover_unknown_type_text()}
-			>
-				{#snippet action()}
-					<a href={resolve(tabHref(null, search) as Route)} class={linkButton}
-						>{m.discover_unknown_type_action()}</a
-					>
-				{/snippet}
-			</EmptyState>
-		{:else if d.failure === 'search_disabled'}
-			<EmptyState
-				headingLevel={3}
-				title={m.discover_search_off_title()}
-				text={m.discover_search_off_text()}
-			>
-				{#snippet action()}
-					<a href={resolve('/settings/search')} class={linkButton}
-						>{m.discover_search_off_action()}</a
-					>
-				{/snippet}
-			</EmptyState>
-		{:else}
-			<div class="dsc-grid">
-				<section class="dsc-panel" aria-labelledby="discover-newest-h" aria-busy={d.loading}>
-					<header class="dsc-panel-head">
-						<h2 id="discover-newest-h" class="dsc-panel-title">{m.discover_newest()}</h2>
-						{#if d.newest && !adultHidden && !showSkeleton}
-							<p class="dsc-total">
-								<span data-testid="discover-newest-total">{total}</span>
-								{m.discover_newest_unit()}
-							</p>
-						{/if}
-						<a
-							class="dsc-see-all target {FOCUS_RING}"
-							href={resolve(searchHref(tab ?? null, search) as Route)}
-							data-testid="discover-see-all">{m.discover_see_all()}</a
-						>
-					</header>
-					<div class="sr-only" role="status" aria-live="polite" data-testid="discover-announce">
-						{announce}
-					</div>
-
-					{#if d.failure === 'other'}
-						<div class="dsc-notice-box">{@render failure()}</div>
-					{/if}
-					{#if d.restarted}
-						<div class="dsc-notice-box">
-							<Banner kind="info">{m.discover_error_restart()}</Banner>
-						</div>
-					{/if}
-					{#if d.moreFailed}
-						<div class="dsc-notice-box">
-							<Banner kind="error">
-								{m.discover_error_more()}
-								{#snippet action()}
-									<button
-										type="button"
-										class="btn btn-sm btn-outline border-field-border {FOCUS_RING} {TARGET_MIN}"
-										onclick={() => d.retryMore()}>{m.discover_retry()}</button
-									>
-								{/snippet}
-							</Banner>
-						</div>
-					{/if}
-
-					{#if showSkeleton}
-						<div class="dsc-skeletons" data-testid="discover-skeleton">
-							{#each skeletonRows as i (i)}
-								<Skeleton class="dsc-skeleton-row" />
-							{/each}
-						</div>
-					{:else if adultHidden}
-						<div class="dsc-notice-box">
-							<Banner kind="info" title={tabLabel('adult')}>
-								{m.discover_adult_hidden()}
-								{#snippet action()}
-									<a
-										href={resolve('/settings/content')}
-										class="btn btn-sm btn-outline border-field-border {FOCUS_RING} {TARGET_MIN}"
-										>{m.discover_adult_hidden_action()}</a
-									>
-								{/snippet}
-							</Banner>
-						</div>
-					{:else if empty}
-						{#if tab === null}
-							<EmptyState
-								headingLevel={3}
-								title={m.discover_empty_title()}
-								text={m.discover_empty_text()}
+			<nav aria-label={m.discover_tabs_label()} class="dsc-tabs-box">
+				<ul class="dsc-tabs">
+					{#each tabs as t (t ?? 'all')}
+						<li>
+							<a
+								href={resolve(tabHref(t, search) as Route)}
+								aria-current={tab === t ? 'page' : undefined}
+								class="dsc-tab {FOCUS_RING}"
+								data-testid="discover-tab-{t ?? 'all'}">{tabLabel(t)}</a
 							>
-								{#snippet illustration()}<StateScene id="empty_state_explore" />{/snippet}
-								{#snippet action()}
-									<a href={resolve('/insights')} class={linkButton}>{m.discover_empty_action()}</a>
-								{/snippet}
-							</EmptyState>
-						{:else}
-							<EmptyState
-								title={m.discover_empty_tab_title({ type: lowerLabel })}
-								text={m.discover_empty_tab_text()}
-							>
-								{#snippet action()}
-									<a href={resolve(tabHref(null, search) as Route)} class={linkButton}
-										>{m.discover_empty_tab_action()}</a
-									>
-								{/snippet}
-							</EmptyState>
-						{/if}
-					{:else if d.hits.length > 0}
-						<div
-							class="dsc-list"
-							class:dsc-complete={!d.hasMore}
-							style:--loaded-height="{d.hits.length * rowHeight}px"
-							bind:this={listBox}
-						>
-							<VirtualList
-								bind:this={list}
-								items={d.hits}
-								getKey={(hit) => hit.hash}
-								label={m.discover_newest_label()}
-								estimateSize={rowHeight}
-								totalCount={d.newest?.total_approx ? undefined : d.newest?.total}
-								resetKey="{type}:{d.loads}"
-								hasMore={d.hasMore}
-								loadingMore={d.loadingMore}
-								onLoadMore={() => d.more()}
-								loadMoreLabel={m.discover_loading_more()}
-								onActivate={(_, hit) => open(hit)}
-							>
-								{#snippet row(hit, index)}
-									<div
-										class="dsc-cell"
-										class:dsc-reveal={reveal && d.firstData && index < REVEAL_ROWS}
-										style:--i={index}
-										data-testid="discover-row-{hit.hash}"
-									>
-										<ResultRow {hit} {density} testid="discover-row-{hit.hash}" root={false} />
-									</div>
-								{/snippet}
-							</VirtualList>
-						</div>
-					{/if}
-				</section>
-
-				<div class="dsc-side">
-					{#each sections as s (s.id)}
-						<section
-							class="dsc-panel"
-							aria-labelledby="discover-{s.id}-h"
-							data-testid="discover-{s.id}"
-						>
-							<header class="dsc-panel-head">
-								<h2 id="discover-{s.id}-h" class="dsc-panel-title">{s.title()}</h2>
-							</header>
-							{#if s.group === null}
-								{#if d.loading}<div class="dsc-skeletons">
-										<Skeleton class="dsc-skeleton-row" />
-									</div>{/if}
-							{:else if s.group.status === 'unavailable'}
-								{@const why = s.group.reason ? unavailableText(s.group.reason) : null}
-								<div class="dsc-unavailable" data-testid="discover-{s.id}-unavailable">
-									<Info class="dsc-icon" aria-hidden="true" />
-									<div>
-										<p class="dsc-caption">{m.discover_unavailable_label()}</p>
-										{#if why}<p>{why.text}</p>
-											{#if why.action}<a
-													class="dsc-inline-link target {FOCUS_RING}"
-													href={resolve(why.action.href as Route)}>{why.action.label}</a
-												>{/if}
-										{/if}
-									</div>
-								</div>
-							{:else}
-								<p class="dsc-how">{s.how()}</p>
-								<ul class="dsc-plain" aria-label={s.title()}>
-									{#each s.group.hits as hit (hit.hash)}
-										{@const href = torrentHref(hit.hash, search)}
-										<li style:height="{rowHeight}px">
-											{#if href}
-												<a
-													href={resolve(href as Route)}
-													class="dsc-row-link {FOCUS_RING}"
-													data-testid="discover-{s.id}-{hit.hash}"
-													><ResultRow {hit} {density} testid="discover-{s.id}-row-{hit.hash}" /></a
-												>
-											{:else}
-												<ResultRow {hit} {density} testid="discover-{s.id}-row-{hit.hash}" />
-											{/if}
-										</li>
-									{/each}
-								</ul>
-								{#if s.group.truncated}<p class="dsc-how">{m.discover_truncated()}</p>{/if}
-							{/if}
-						</section>
+						</li>
 					{/each}
+				</ul>
+			</nav>
+
+			{#if d.failure === 'unknown_type'}
+				<EmptyState
+					headingLevel={3}
+					title={m.discover_unknown_type_title()}
+					text={m.discover_unknown_type_text()}
+				>
+					{#snippet action()}
+						<a href={resolve(tabHref(null, search) as Route)} class={linkButton}
+							>{m.discover_unknown_type_action()}</a
+						>
+					{/snippet}
+				</EmptyState>
+			{:else if d.failure === 'search_disabled'}
+				<EmptyState
+					headingLevel={3}
+					title={m.discover_search_off_title()}
+					text={m.discover_search_off_text()}
+				>
+					{#snippet action()}
+						<a href={resolve('/settings/search')} class={linkButton}
+							>{m.discover_search_off_action()}</a
+						>
+					{/snippet}
+				</EmptyState>
+			{:else}
+				<div class="dsc-grid">
+					<section class="dsc-panel" aria-labelledby="discover-newest-h" aria-busy={d.loading}>
+						<header class="dsc-panel-head">
+							<h2 id="discover-newest-h" class="dsc-panel-title">{m.discover_newest()}</h2>
+							{#if d.newest && !adultHidden && !showSkeleton}
+								<p class="dsc-total">
+									<span data-testid="discover-newest-total">{total}</span>
+									{m.discover_newest_unit()}
+								</p>
+							{/if}
+							<a
+								class="dsc-see-all target {FOCUS_RING}"
+								href={resolve(searchHref(tab ?? null, search) as Route)}
+								data-testid="discover-see-all">{m.discover_see_all()}</a
+							>
+						</header>
+						<div class="sr-only" role="status" aria-live="polite" data-testid="discover-announce">
+							{announce}
+						</div>
+
+						{#if d.failure === 'other'}
+							<div class="dsc-notice-box">{@render failure()}</div>
+						{/if}
+						{#if d.restarted}
+							<div class="dsc-notice-box">
+								<Banner kind="info">{m.discover_error_restart()}</Banner>
+							</div>
+						{/if}
+						{#if d.moreFailed}
+							<div class="dsc-notice-box">
+								<Banner kind="error">
+									{m.discover_error_more()}
+									{#snippet action()}
+										<button
+											type="button"
+											class="btn btn-sm btn-outline border-field-border {FOCUS_RING} {TARGET_MIN}"
+											onclick={() => d.retryMore()}>{m.discover_retry()}</button
+										>
+									{/snippet}
+								</Banner>
+							</div>
+						{/if}
+
+						{#if showSkeleton}
+							<div class="dsc-skeletons" data-testid="discover-skeleton">
+								{#each skeletonRows as i (i)}
+									<Skeleton class="dsc-skeleton-row" />
+								{/each}
+							</div>
+						{:else if adultHidden}
+							<div class="dsc-notice-box">
+								<Banner kind="info" title={tabLabel('adult')}>
+									{m.discover_adult_hidden()}
+									{#snippet action()}
+										<a
+											href={resolve('/settings/content')}
+											class="btn btn-sm btn-outline border-field-border {FOCUS_RING} {TARGET_MIN}"
+											>{m.discover_adult_hidden_action()}</a
+										>
+									{/snippet}
+								</Banner>
+							</div>
+						{:else if empty}
+							{#if tab === null}
+								<EmptyState
+									headingLevel={3}
+									title={m.discover_empty_title()}
+									text={m.discover_empty_text()}
+								>
+									{#snippet illustration()}<StateScene id="empty_state_explore" />{/snippet}
+									{#snippet action()}
+										<a href={resolve('/insights')} class={linkButton}>{m.discover_empty_action()}</a
+										>
+									{/snippet}
+								</EmptyState>
+							{:else}
+								<EmptyState
+									title={m.discover_empty_tab_title({ type: lowerLabel })}
+									text={m.discover_empty_tab_text()}
+								>
+									{#snippet action()}
+										<a href={resolve(tabHref(null, search) as Route)} class={linkButton}
+											>{m.discover_empty_tab_action()}</a
+										>
+									{/snippet}
+								</EmptyState>
+							{/if}
+						{:else if d.hits.length > 0}
+							<div
+								class="dsc-list"
+								class:dsc-complete={!d.hasMore}
+								style:--loaded-height="{d.hits.length * rowHeight}px"
+								bind:this={listBox}
+							>
+								<VirtualList
+									bind:this={list}
+									items={d.hits}
+									getKey={(hit) => hit.hash}
+									label={m.discover_newest_label()}
+									estimateSize={rowHeight}
+									totalCount={d.newest?.total_approx ? undefined : d.newest?.total}
+									resetKey="{type}:{d.loads}"
+									hasMore={d.hasMore}
+									loadingMore={d.loadingMore}
+									onLoadMore={() => d.more()}
+									loadMoreLabel={m.discover_loading_more()}
+									onActivate={(_, hit) => open(hit)}
+								>
+									{#snippet row(hit, index)}
+										<div
+											class="dsc-cell"
+											class:dsc-reveal={reveal && d.firstData && index < REVEAL_ROWS}
+											style:--i={index}
+											data-testid="discover-row-{hit.hash}"
+										>
+											<ResultRow {hit} {density} testid="discover-row-{hit.hash}" root={false} />
+										</div>
+									{/snippet}
+								</VirtualList>
+							</div>
+						{/if}
+					</section>
+
+					<div class="dsc-side">
+						{#each sections as s (s.id)}
+							<section
+								class="dsc-panel"
+								aria-labelledby="discover-{s.id}-h"
+								data-testid="discover-{s.id}"
+							>
+								<header class="dsc-panel-head">
+									<h2 id="discover-{s.id}-h" class="dsc-panel-title">{s.title()}</h2>
+								</header>
+								{#if s.group === null}
+									{#if d.loading}<div class="dsc-skeletons">
+											<Skeleton class="dsc-skeleton-row" />
+										</div>{/if}
+								{:else if s.group.status === 'unavailable'}
+									{@const why = s.group.reason ? unavailableText(s.group.reason) : null}
+									<div class="dsc-unavailable" data-testid="discover-{s.id}-unavailable">
+										<Info class="dsc-icon" aria-hidden="true" />
+										<div>
+											<p class="dsc-caption">{m.discover_unavailable_label()}</p>
+											{#if why}<p>{why.text}</p>
+												{#if why.action}<a
+														class="dsc-inline-link target {FOCUS_RING}"
+														href={resolve(why.action.href as Route)}>{why.action.label}</a
+													>{/if}
+											{/if}
+										</div>
+									</div>
+								{:else}
+									<p class="dsc-how">{s.how()}</p>
+									<ul class="dsc-plain" aria-label={s.title()}>
+										{#each s.group.hits as hit (hit.hash)}
+											{@const href = torrentHref(hit.hash, search)}
+											<li style:height="{rowHeight}px">
+												{#if href}
+													<a
+														href={resolve(href as Route)}
+														class="dsc-row-link {FOCUS_RING}"
+														data-testid="discover-{s.id}-{hit.hash}"
+														><ResultRow
+															{hit}
+															{density}
+															testid="discover-{s.id}-row-{hit.hash}"
+														/></a
+													>
+												{:else}
+													<ResultRow {hit} {density} testid="discover-{s.id}-row-{hit.hash}" />
+												{/if}
+											</li>
+										{/each}
+									</ul>
+									{#if s.group.truncated}<p class="dsc-how">{m.discover_truncated()}</p>{/if}
+								{/if}
+							</section>
+						{/each}
+					</div>
 				</div>
-			</div>
-		{/if}
+			{/if}
+		</div>
 	</div>
-</PageFrame>
+</div>
 
 <style>
 	@reference '../../../app.css';
