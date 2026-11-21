@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T03:38Z",
+    "updated": "2026-11-21T03:41Z",
     "items": [
       {
         "slot": 1,
@@ -10687,12 +10687,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-param-echo-cap",
+        "slice": "X-win-log-path-display",
         "role": "build",
         "agent": "session_01MMjhnBLWWDc2xQCuaJPWjK",
         "model": "opus",
-        "since": "2026-11-21T00:36Z",
-        "doing": "briefed; follow-up to #1000 (merged 1a2114fe)",
+        "since": "2026-11-21T03:41Z",
+        "doing": "briefed; X-param-echo-cap #1001 merged f9362833",
         "status": "running"
       }
     ],
