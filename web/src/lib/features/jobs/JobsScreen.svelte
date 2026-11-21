@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Jobs (SRC-16, §18.8, §9): the background jobs of this server with progress, rate
 	// and ETA, and pause, resume and cancel. Every state shown is the server's: a control sends its
 	// request and the job's row becomes what the server answers, never a guess made first.
@@ -194,7 +195,7 @@
 	});
 </script>
 
-<h1 id="jobs-title" tabindex="-1" class="text-title font-semibold">{m.jobs_title()}</h1>
+<h1 id="jobs-title" class={PAGE_H1} tabindex="-1">{m.jobs_title()}</h1>
 <p class="text-muted-text">{m.jobs_purpose()}</p>
 
 <p class="sr-only" role="status" data-testid="jobs-announce">{announcement}</p>

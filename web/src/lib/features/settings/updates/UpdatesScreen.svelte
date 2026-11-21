@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Updates (§10.10.14, part 1). It shows only what the server says (`GET /updates`
 	// and the `updates` settings): a failed or refused request leaves the last server state on
 	// screen with an error, and a control's position is put back to the server's value afterwards.
@@ -387,7 +388,7 @@
 	</label>
 {/snippet}
 
-<h1 class="text-title font-semibold">{m.settings_updates_title()}</h1>
+<h1 class={PAGE_H1} tabindex="-1">{m.settings_updates_title()}</h1>
 <p class="text-muted-text">{m.settings_updates_purpose()}</p>
 
 {#if store.loading && status === undefined && settings === undefined}

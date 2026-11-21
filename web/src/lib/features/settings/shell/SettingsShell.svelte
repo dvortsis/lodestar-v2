@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_BODY_FULL, PAGE_FRAME } from '$lib/ui/layout/classes';
 	import type { Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -29,43 +30,48 @@
 	const href = (path: string) => resolve(withDensity(path, page.url.searchParams) as Route);
 </script>
 
-<div class="settings-shell p-4" class:settings-overview={overview}>
-	<aside class="settings-navigation flex flex-col gap-6">
-		<a
-			class="ls-focus text-title font-semibold"
-			href={href('/settings')}
-			aria-current={overview ? 'page' : undefined}>{m.settings_shell_title()}</a
-		>
-		<label class="flex flex-col gap-2 text-small">
-			{m.settings_shell_filter_sections()}
-			<input class="input ls-focus w-full" type="search" bind:value={query} />
-		</label>
-		<nav class="flex flex-col gap-6" aria-label={m.settings_shell_navigation()}>
-			{#each groups as group (group.id)}
-				{@const members = matches.filter((screen) => screen.group === group.id)}
-				{#if members.length}
-					<div class="flex flex-col gap-2">
-						<h2 class="text-small text-muted-text">{group.label()}</h2>
-						{#each members as screen (screen.id)}
-							<a
-								class="settings-link ls-focus flex items-center gap-2 rounded-field px-3 py-2"
-								href={href(`/settings/${screen.id}`)}
-								aria-current={page.params.section === screen.id ? 'page' : undefined}
-							>
-								<NavIcon {screen} />{screen.title()}
-							</a>
-						{/each}
-					</div>
-				{/if}
-			{/each}
-			{#if !matches.length}<p role="status">{m.settings_shell_no_sections()}</p>{/if}
-		</nav>
-	</aside>
-	<div class="settings-content flex min-w-0 flex-col gap-6">
-		{#if !overview}<a class="settings-back ls-focus text-primary underline" href={href('/settings')}
-				>{m.settings_shell_back()}</a
-			>{/if}
-		{@render children()}
+<div class={PAGE_FRAME} data-page-frame="">
+	<div class={PAGE_BODY_FULL}>
+		<div class="settings-shell" class:settings-overview={overview}>
+			<aside class="settings-navigation flex flex-col gap-6">
+				<a
+					class="ls-focus text-title font-semibold"
+					href={href('/settings')}
+					aria-current={overview ? 'page' : undefined}>{m.settings_shell_title()}</a
+				>
+				<label class="flex flex-col gap-2 text-small">
+					{m.settings_shell_filter_sections()}
+					<input class="input ls-focus w-full" type="search" bind:value={query} />
+				</label>
+				<nav class="flex flex-col gap-6" aria-label={m.settings_shell_navigation()}>
+					{#each groups as group (group.id)}
+						{@const members = matches.filter((screen) => screen.group === group.id)}
+						{#if members.length}
+							<div class="flex flex-col gap-2">
+								<h2 class="text-small text-muted-text">{group.label()}</h2>
+								{#each members as screen (screen.id)}
+									<a
+										class="settings-link ls-focus flex items-center gap-2 rounded-field px-3 py-2"
+										href={href(`/settings/${screen.id}`)}
+										aria-current={page.params.section === screen.id ? 'page' : undefined}
+									>
+										<NavIcon {screen} />{screen.title()}
+									</a>
+								{/each}
+							</div>
+						{/if}
+					{/each}
+					{#if !matches.length}<p role="status">{m.settings_shell_no_sections()}</p>{/if}
+				</nav>
+			</aside>
+			<div class="settings-content flex min-w-0 flex-col gap-6">
+				{#if !overview}<a
+						class="settings-back ls-focus text-primary underline"
+						href={href('/settings')}>{m.settings_shell_back()}</a
+					>{/if}
+				{@render children()}
+			</div>
+		</div>
 	</div>
 </div>
 

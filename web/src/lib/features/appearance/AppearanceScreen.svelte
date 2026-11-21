@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Preferences → Appearance (§10.10.8, §10.18). Preferences apply at once and can be
 	// undone; there is no Save. The theme picker and the custom theme editor load when opened.
 	import { onMount, tick, type Component, type ComponentProps } from 'svelte';
@@ -263,7 +264,7 @@
 </script>
 
 <div class="as-root" data-testid="appearance-screen" aria-busy={status === 'loading'}>
-	<h1 class="as-h1">{m.appearance_title()}</h1>
+	<h1 class={PAGE_H1} tabindex="-1">{m.appearance_title()}</h1>
 	<p class="as-text">{m.appearance_lead()}</p>
 	{#if status === 'failed'}
 		<Banner kind="error">{m.appearance_load_failed()}</Banner>

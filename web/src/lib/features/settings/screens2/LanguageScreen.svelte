@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Preferences → Language & region (§10.10.8): the `region` group of `preferences`,
 	// shown by LanguageForm. The rest of `preferences` belongs to Appearance and Keyboard. This
 	// body stays small: the form and the engine load with it, as the shell's section form does.
@@ -44,7 +45,7 @@
 	});
 </script>
 
-<h1 class="text-title font-semibold">{m.settings_screen_language_title()}</h1>
+<h1 class={PAGE_H1} tabindex="-1">{m.settings_screen_language_title()}</h1>
 <p class="text-muted-text">{m.settings_screen_language_purpose()}</p>
 {#if failed}
 	<Banner kind="error"

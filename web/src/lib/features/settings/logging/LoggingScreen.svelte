@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Logging (§10.10.12, §12.1): what gets a line (events), what a line may contain
 	// (data kinds and the opt-ins) and what is never logged. The events' settings go through the
 	// form engine. What the server has on now (`GET /logs/catalog`) drives the banners, the event
@@ -81,9 +82,7 @@
 	});
 </script>
 
-<h1 id="logging-title" tabindex="-1" class="text-title font-semibold">
-	{m.settings_logging_title()}
-</h1>
+<h1 id="logging-title" class={PAGE_H1} tabindex="-1">{m.settings_logging_title()}</h1>
 <p class="text-muted-text">{m.settings_logging_purpose()}</p>
 <a class="self-start underline" href={resolve('/logs')}>{m.settings_logging_open_live()}</a>
 {#if parts && catalog}

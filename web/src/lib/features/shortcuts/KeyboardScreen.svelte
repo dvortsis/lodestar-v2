@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	// Settings → Preferences → Keyboard (§10.10.8): single-key shortcuts on or off, and remapping.
 	// A preference (§10.10.1): each change applies at once and saves through the `preferences`
 	// section with `if_revision`, then offers Undo, as Appearance does. Saves go one at a time. A
@@ -224,7 +225,7 @@
 </script>
 
 <div class="sc-screen" data-testid="keyboard-screen" aria-busy={status === 'loading'}>
-	<h1 class="sc-h1">{m.shortcuts_screen_title()}</h1>
+	<h1 class={PAGE_H1} tabindex="-1">{m.shortcuts_screen_title()}</h1>
 	<p class="sc-text">{m.shortcuts_screen_lead()}</p>
 	{#if status === 'failed'}
 		<Banner kind="error">{m.shortcuts_load_failed()}</Banner>

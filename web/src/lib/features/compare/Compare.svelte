@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PAGE_BODY_WIDE, PAGE_FRAME, PAGE_H1 } from '$lib/ui/layout/classes';
 	// /compare?h=a,b,c (§10.3, §10.6). One POST /compare per list; the server computes every
 	// difference, scale and file lists, so removing a column asks again and nothing is recomputed here.
 	import { tick, untrack, type Component } from 'svelte';
@@ -186,100 +187,85 @@
 	}
 </script>
 
-<div class="cmp-page">
-	<h1 class="cmp-h1" id="compare-heading" tabindex="-1">{m.compare_title()}</h1>
+<div class={PAGE_FRAME} data-page-frame="">
+	<div class={PAGE_BODY_WIDE}>
+		<h1 id="compare-heading" class={PAGE_H1} tabindex="-1">{m.compare_title()}</h1>
 
-	{#if manual !== undefined}
-		<div class="cmp-manual" role="group" aria-label={m.compare_manual_label()}>
-			<p>{m.compare_manual_help({ shortcut: copyShortcut() })}</p>
-			<input
-				id="compare-manual-field"
-				readonly
-				class="input border-field-border cmp-field font-mono {FOCUS_RING}"
-				aria-label={m.compare_manual_label()}
-				data-testid="compare-manual-magnet"
-			/>
-			<Button variant="quiet" dense onclick={() => (manual = undefined)}
-				>{m.common_dismiss()}</Button
-			>
-		</div>
-	{/if}
-
-	<div aria-busy={busy || (data !== undefined && !Body)} data-testid="compare-region">
-		{#if hashes.length < 2}
-			<EmptyState
-				title={m.compare_choose_title()}
-				text={m.compare_choose_text()}
-				data-testid="compare-choose"
-			>
-				{#snippet illustration()}<StateScene id="empty_state_explore" />{/snippet}
-				{#snippet action()}
-					<a href={resolve('/search')} class="btn btn-primary {FOCUS_RING} {TARGET_MIN}"
-						>{m.compare_go_to_search()}</a
-					>
-				{/snippet}
-			</EmptyState>
-		{:else if failure === 'fixable'}
-			<ErrorPanel
-				testid="compare-error-{error?.code}"
-				title={m.compare_error_title()}
-				text={fixableText}
-				{hashes}
-				onRemove={remove}
-			/>
-		{:else if failure === 'missing'}
-			<ErrorPanel
-				testid="compare-error-not-found"
-				title={m.compare_error_title()}
-				text={m.compare_error_not_found()}
-				{hashes}
-				onRemove={remove}
-			/>
-		{:else if failure === 'transient' && (!stale || !Body)}
-			<Banner kind="error" title={m.compare_error_title()}>
-				{error?.code === 'network' ? m.compare_error_network() : m.compare_error_server()}
-				{#snippet action()}
-					<Button dense onclick={() => load(hashes)}>{m.compare_retry()}</Button>
-				{/snippet}
-			</Banner>
-		{:else if data && Body}
-			{#if stale}
-				<div class="cmp-stale">
-					<Banner kind="warning" title={m.compare_stale_title()}>
-						{m.compare_stale_text()}
-						{#snippet action()}
-							<Button dense onclick={() => load(hashes)}>{m.compare_retry()}</Button>
-						{/snippet}
-					</Banner>
-				</div>
-			{/if}
-			<Body {data} {columns} onCopy={copy} onPrefetch={prefetch} onRemove={remove} />
-		{:else if showSkeleton || data}
-			<div class="cmp-skeleton" data-testid="compare-skeleton">
-				{#each Array.from({ length: 9 }, (_, n) => n) as n (n)}<Skeleton />{/each}
+		{#if manual !== undefined}
+			<div class="cmp-manual" role="group" aria-label={m.compare_manual_label()}>
+				<p>{m.compare_manual_help({ shortcut: copyShortcut() })}</p>
+				<input
+					id="compare-manual-field"
+					readonly
+					class="input border-field-border cmp-field font-mono {FOCUS_RING}"
+					aria-label={m.compare_manual_label()}
+					data-testid="compare-manual-magnet"
+				/>
+				<Button variant="quiet" dense onclick={() => (manual = undefined)}
+					>{m.common_dismiss()}</Button
+				>
 			</div>
 		{/if}
+
+		<div aria-busy={busy || (data !== undefined && !Body)} data-testid="compare-region">
+			{#if hashes.length < 2}
+				<EmptyState
+					title={m.compare_choose_title()}
+					text={m.compare_choose_text()}
+					data-testid="compare-choose"
+				>
+					{#snippet illustration()}<StateScene id="empty_state_explore" />{/snippet}
+					{#snippet action()}
+						<a href={resolve('/search')} class="btn btn-primary {FOCUS_RING} {TARGET_MIN}"
+							>{m.compare_go_to_search()}</a
+						>
+					{/snippet}
+				</EmptyState>
+			{:else if failure === 'fixable'}
+				<ErrorPanel
+					testid="compare-error-{error?.code}"
+					title={m.compare_error_title()}
+					text={fixableText}
+					{hashes}
+					onRemove={remove}
+				/>
+			{:else if failure === 'missing'}
+				<ErrorPanel
+					testid="compare-error-not-found"
+					title={m.compare_error_title()}
+					text={m.compare_error_not_found()}
+					{hashes}
+					onRemove={remove}
+				/>
+			{:else if failure === 'transient' && (!stale || !Body)}
+				<Banner kind="error" title={m.compare_error_title()}>
+					{error?.code === 'network' ? m.compare_error_network() : m.compare_error_server()}
+					{#snippet action()}
+						<Button dense onclick={() => load(hashes)}>{m.compare_retry()}</Button>
+					{/snippet}
+				</Banner>
+			{:else if data && Body}
+				{#if stale}
+					<div class="cmp-stale">
+						<Banner kind="warning" title={m.compare_stale_title()}>
+							{m.compare_stale_text()}
+							{#snippet action()}
+								<Button dense onclick={() => load(hashes)}>{m.compare_retry()}</Button>
+							{/snippet}
+						</Banner>
+					</div>
+				{/if}
+				<Body {data} {columns} onCopy={copy} onPrefetch={prefetch} onRemove={remove} />
+			{:else if showSkeleton || data}
+				<div class="cmp-skeleton" data-testid="compare-skeleton">
+					{#each Array.from({ length: 9 }, (_, n) => n) as n (n)}<Skeleton />{/each}
+				</div>
+			{/if}
+		</div>
 	</div>
 </div>
 
 <style>
-	.cmp-page {
-		padding: calc(var(--spacing) * 4);
-		display: flex;
-		flex-direction: column;
-		gap: calc(var(--spacing) * 4);
-	}
-	.cmp-h1 {
-		font-size: var(--text-display);
-		line-height: var(--text-display--line-height);
-		letter-spacing: var(--text-display--letter-spacing);
-		font-weight: var(--font-weight-semibold);
-	}
-	.cmp-h1:focus-visible {
-		outline-width: var(--focus-ring-width);
-		outline-style: solid;
-		outline-color: var(--color-primary);
-	}
 	.cmp-manual {
 		display: flex;
 		flex-direction: column;
