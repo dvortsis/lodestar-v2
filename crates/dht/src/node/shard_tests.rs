@@ -346,6 +346,55 @@ fn the_re_id_on_an_address_change_honours_the_shard() {
     assert!(a.ids.iter().all(|id| secure_id::is_valid(id, &moved)));
 }
 
+#[test]
+fn the_vote_re_ids_kept_ids_that_repeat_a_slot() {
+    // Saved without a public address, the ids are kept as they are, and
+    // these two are valid for the address the vote finds, in the shard,
+    // but in one slot. The vote must re-id them one per slot, as a start
+    // with that address saved would have.
+    let ip = public();
+    let shard = Shard::new(128..256, 0b0000_1100).unwrap();
+    let twice = secure_id::virtual_ids_in(&ip, 0b0000_0100, 2, &mut StdRng::seed_from_u64(4));
+    assert_eq!(secure_id::slot(&twice[0]), secure_id::slot(&twice[1]));
+    let saved = State {
+        ids: twice.clone(),
+        external_ip: None,
+        nodes: vec![],
+    };
+    let mut a = idle(Some(shard), false, 4, Some(&saved), 3);
+    assert_eq!(a.ids, twice, "kept until the vote");
+    vote_for(&mut a, ip);
+    let slots: Vec<u8> = a.ids.iter().map(secure_id::slot).collect();
+    assert_eq!(slots, [2, 3], "one per slot after the vote");
+    assert!(a.ids.iter().all(|id| secure_id::is_valid(id, &ip)));
+
+    // Distinct slots, valid and in the shard: kept through the vote.
+    let distinct = secure_id::virtual_ids_in(&ip, 0b0000_1100, 2, &mut StdRng::seed_from_u64(4));
+    let saved = State {
+        ids: distinct.clone(),
+        ..saved
+    };
+    let mut b = idle(Some(shard), false, 4, Some(&saved), 3);
+    vote_for(&mut b, ip);
+    assert_eq!(b.ids, distinct);
+}
+
+#[test]
+fn without_a_shard_ids_may_share_a_slot() {
+    // Sixteen ids over eight slots: valid for the address, so the vote
+    // keeps them, two per slot, as before.
+    let ip = public();
+    let ids = secure_id::virtual_ids(&ip, 16, &mut StdRng::seed_from_u64(5));
+    let saved = State {
+        ids: ids.clone(),
+        external_ip: None,
+        nodes: vec![],
+    };
+    let mut a = idle(None, false, 16, Some(&saved), 3);
+    vote_for(&mut a, ip);
+    assert_eq!(a.ids, ids);
+}
+
 /// Two disjoint shards: prefix ranges that don't overlap (adjacent, or
 /// with a gap, in either order) and two disjoint, non-empty slot sets.
 fn disjoint() -> impl Strategy<Value = (Shard, Shard)> {

@@ -34,6 +34,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         responder_hints: false,
         hint_first: false,
         lookup_end: false,
+        preset_slots: false,
         target_prefixes: false,
         utp: None,
         shard: None,
