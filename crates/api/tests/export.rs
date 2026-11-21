@@ -1906,3 +1906,101 @@ async fn an_unknown_field_is_echoed_short_and_marked() {
         );
     }
 }
+
+/// Any `ast` or `hashes` in a GET or HEAD query is named for what it is,
+/// sent once, twice or bare, before the query extractor reads it; with
+/// both, `ast` is named; signed out, the guard answers first; and POST
+/// ignores the query (X-api-openapi-repeated).
+#[tokio::test]
+async fn ast_and_hashes_on_get_need_post() {
+    let f = fixture(&golden_torrents()[..2], Opts::default());
+    let c = session(&f).await;
+    let head = |uri: &str| {
+        Request::head(uri)
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let length = |resp: &axum::response::Response| {
+        resp.headers()
+            .get(header::CONTENT_LENGTH)
+            .map(|v| v.to_str().unwrap().to_owned())
+    };
+    for (query, code, field) in [
+        ("ast=x", "ast_needs_post", "ast"),
+        ("ast=x&ast=y", "ast_needs_post", "ast"),
+        ("q=a&ast", "ast_needs_post", "ast"),
+        ("hashes=x", "hashes_need_post", "hashes"),
+        ("hashes=x&hashes=y", "hashes_need_post", "hashes"),
+        ("format=csv&hashes", "hashes_need_post", "hashes"),
+        ("hashes=x&ast=y", "ast_needs_post", "ast"),
+        ("%61st=x", "ast_needs_post", "ast"),
+        ("%68ashes=x", "hashes_need_post", "hashes"),
+    ] {
+        let uri = format!("/api/v1/export?{query}");
+        let resp = f.app.clone().oneshot(get(&uri, Some(&c))).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri}");
+        let get_length = length(&resp);
+        assert!(get_length.is_some(), "{uri}");
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], code, "{uri}: {body}");
+        assert_eq!(body["error"]["field"], field, "{uri}: {body}");
+        // HEAD, which `get()` also serves: the same status and length.
+        let resp = f.app.clone().oneshot(head(&uri)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "HEAD {uri}");
+        assert_eq!(length(&resp), get_length, "HEAD {uri}");
+        // Signed out, the guard answers first, on HEAD too.
+        let (status, body) = json_of(&f.app, get(&uri, None)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}: {body}");
+        let signed_out = Request::head(&uri).body(Body::empty()).unwrap();
+        let status = f.app.clone().oneshot(signed_out).await.unwrap().status();
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "HEAD {uri}");
+    }
+    // A POST reads its body, never the URL's query.
+    let resp = f
+        .app
+        .clone()
+        .oneshot(post(
+            "/api/v1/export?ast=x&hashes=y",
+            Some(&c),
+            json!({ "q": "" }),
+        ))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 24)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+}
+
+/// The layers that name an `ast` or `hashes` in a query wrap only the
+/// routes, never the method-not-allowed fallback: an unsupported method
+/// is still a 405 with either in its query.
+#[tokio::test]
+async fn an_unsupported_method_is_still_405_with_ast_in_the_query() {
+    let f = fixture(&golden_torrents()[..2], Opts::default());
+    let c = session(&f).await;
+    for (method, uri) in [
+        ("DELETE", "/api/v1/export?ast=x"),
+        ("PUT", "/api/v1/export?hashes=x"),
+        ("DELETE", "/api/v1/search?ast=x"),
+        ("DELETE", "/api/v1/facets?ast=x&q=a&q=b"),
+    ] {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap();
+        let (status, body) = json_of(&f.app, req).await;
+        assert_eq!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} {uri}: {body}"
+        );
+    }
+}

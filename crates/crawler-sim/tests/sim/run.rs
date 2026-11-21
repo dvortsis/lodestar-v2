@@ -53,6 +53,17 @@ pub struct Report {
     pub pool: PoolEnd,
     /// The capacity ledger after warmup.
     pub ledger: Ledger,
+    /// Per minute: samples sent, and the frontier's and cooldowns' means
+    /// (X-sampler-frontier-starve). Not in the report text.
+    pub sampling: Vec<SamplingMinute>,
+}
+
+/// One minute of the sampler, from [`Minute`].
+#[derive(Debug, Clone, Copy)]
+pub struct SamplingMinute {
+    pub samples: u64,
+    pub frontier: f64,
+    pub cooling: f64,
 }
 
 /// The capacity ledger (`docs/reviews/2026-11-20-path-to-100-review.md`
@@ -126,6 +137,11 @@ impl Gauge {
         self.sum += v;
         self.max = self.max.max(v);
     }
+
+    /// The mean over a minute of once-a-second readings.
+    pub fn mean(&self) -> f64 {
+        self.sum as f64 / 60.0
+    }
 }
 
 /// One simulated minute: counter deltas and gauge means/maxima.
@@ -155,6 +171,12 @@ pub struct Minute {
     pub outstanding: Gauge,
     pub pool_lookups: Gauge,
     pub pool_active: Gauge,
+    /// X-sampler-frontier-starve: BEP 51 samples sent, and the sampler's
+    /// frontier and cooldown gauges. Read by `sampler_starve`; no report
+    /// or golden prints them.
+    pub samples_sent: u64,
+    pub sample_frontier: Gauge,
+    pub sample_cooling: Gauge,
 }
 
 /// Cumulative counters the per-minute rows are deltas of.
@@ -422,6 +444,7 @@ impl Leg {
         let mut out = Vec::new();
         let mut minute = Minute::default();
         let mut last = Totals::default();
+        let mut last_samples = 0;
         let seconds = u64::from(minutes) * 60;
         for sec in 1..=seconds {
             sleep_until(from + SAMPLE * sec as u32).await;
@@ -432,7 +455,11 @@ impl Leg {
             minute.outstanding.add(d.outstanding);
             minute.pool_lookups.add(p.lookups.load(Ordering::Relaxed));
             minute.pool_active.add(p.active.load(Ordering::Relaxed));
+            minute.sample_frontier.add(d.sample_frontier);
+            minute.sample_cooling.add(d.sample_cooling);
             if sec % 60 == 0 {
+                minute.samples_sent = d.samples_sent - last_samples;
+                last_samples = d.samples_sent;
                 let t = self.totals(&d, p);
                 minute.admitted = t.admitted - last.admitted;
                 minute.rejected = t.rejected - last.rejected;
@@ -592,6 +619,14 @@ pub fn finish(
         steady_stored: steady(minutes, |m| m.stored),
         pool,
         ledger: ledger(minutes),
+        sampling: minutes
+            .iter()
+            .map(|m| SamplingMinute {
+                samples: m.samples_sent,
+                frontier: m.sample_frontier.mean(),
+                cooling: m.sample_cooling.mean(),
+            })
+            .collect(),
     }
 }
 
