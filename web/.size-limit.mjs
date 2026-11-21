@@ -1451,6 +1451,8 @@ export default [
 	// 45 → 45.3 (45.28), Language 45 → 45.1 (45.08): the engine's safety code in the first view (the
 	// secret flag for list fields, in-flight save tracking, the draft block after Sign out). The 401
 	// path is on demand. X-settings-leave-guard-split is the planned give-back.
+	// X-safety-toggles (runner §2.26): FiltersScreen 31.14 → 31.41 KB, measured 31,401 B, for the
+	// rules' names: the holder that loads them on demand, RuleLabel and the core rows' danger style.
 	// SRC-15a: the Sources screen's first view measured 29.24 KB, limit = measured + ~2.6%.
 	// SRC-15b: the Sources first view measured 30.54 KB (was 29.97 KB: the dialogs' loader, their state
 	// and the purge button), limit = measured + ~1.2%; the dialogs load on demand, 36.2 KB, limit 37 KB.
@@ -1463,7 +1465,7 @@ export default [
 			`Settings ${name} (first view)`,
 			files,
 			name === 'FiltersScreen'
-				? '31.14 KB'
+				? '31.41 KB'
 				: name === 'JobsScreen'
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
@@ -1490,9 +1492,12 @@ export default [
 	// there); Block dialog +1.4 KB. Was 34.4 KB.
 	entry('Filters dialogs (on demand)', filtersDialogsLazy, '35.9 KB'),
 	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
-	entry('Filters rule names (on demand)', filtersRuleTextLazy, '9 KB'), // placeholder: measured below
-	entry('Filters packs list (on demand)', filtersPacksLazy, '1.85 KB'), // measured 1.27 KB + ~25% for later packs; RP-6: +0.38 KB for the mount of the pack panels (measured 1.68 KB; 1.79 KB with the {:catch})
-	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '9 KB'),
+	// X-safety-toggles (runner §2.26): the rules' and packs' names, measured 3,999 B; it replaces
+	// "Filters pack descriptions" (1.6 KB). The packs list (1,557 B) and the pack panels (7,878 B)
+	// lost their pack ids and descriptions to it, so their limits fall to the measured sizes.
+	entry('Filters rule names (on demand)', filtersRuleTextLazy, '4.0 KB'),
+	entry('Filters packs list (on demand)', filtersPacksLazy, '1.56 KB'),
+	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '7.88 KB'),
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),
 	// X-sources-restructure: 41.3 KB; this walk includes the screen's own chunk, so it grows with the
 	// first view above (the dialogs are unchanged). Limit = measured + ~1.2%.
@@ -1644,7 +1649,9 @@ export default [
 	// ENR-13: one dynamic import for the identified-as section (§2.26, runner): 28,064 B -> 28,128 B.
 	// X-auth-early-401 (runner §2.26): the early-401 replay in the shared API client: 28,133 B
 	// measured, rounded up to the next 0.01 KB.
-	entry('Detail drawer (own JS + CSS)', drawerView, '28.14 KB'),
+	// X-safety-toggles (runner §2.26): 28.14 → 28.15 KB, measured 28,141 B: chunk-hash and gzip
+	// drift, with no change to the drawer's code.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28.15 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)

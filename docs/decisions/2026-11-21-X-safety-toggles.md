@@ -1,4 +1,4 @@
-# X-safety-toggles decisions (#PR)
+# X-safety-toggles decisions (#1019)
 
 Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI review (`docs/review/2026-11-13-ui-ux/`), placed by `docs/decisions/2026-11-14-runner-ui-review-placement.md`. Labels and styling only. What a rule, a pack or a switch does is unchanged; every change still goes through the same flow; the child-safety core changes only through the weakening flow (owner §2.39, architecture §20.5.3, §20.11).
 
@@ -21,7 +21,11 @@ Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI rev
   - "Change Child terms near sexual terms" for a core rule and "Change pack: Malware" for a pack. A pack rule gets "Change <name>" from its own message (`filters_packs_rule_title`); it used to share the pack's "Change pack {id}".
   - The rule's description shows under the title, as the dialog's `aria-describedby` text (`ChangeDialog`'s new `description`, passed to `Dialog`).
   - The messages that took `{id}` now take `{name}`, and get the plain name, or the code when there's none.
-- **The packs list's "What each pack hides" door is gone** (runner call, §2.26). Each pack row now says what it hides, the unauthorised-copy pack's "can't know who holds the rights … Always allow" included (owner §2.39). `PackInfo.svelte` and its size entry are removed.
+- **The packs list's "What each pack hides" door is gone** (a UX call, approved by the runner, §2.26). `PackInfo.svelte` and its size entry are removed. Nothing it showed is lost:
+  - it listed each pack's id and its `filters_pack_info_*` text;
+  - each pack row now shows the same text, with the id beside the name as its code;
+  - that includes the malware pack's "(MW-6)" reference and the unauthorised-copy pack's "can't know who holds the rights … Always allow" (owner §2.39).
+  - The rule ids that the pack panels list stay there, under each pack's disclosure.
 
 ## Loading the texts
 - **The texts are one on-demand module, `filters/screens/rule-text.ts`,** and a small holder (`names.svelte.ts`) imports it once. Neither the screen's first view nor the change dialogs carry them (sizes below).
@@ -75,20 +79,24 @@ Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI rev
 - **The source switch keeps its behaviour and its polarity;** only its text changes. "Enabled" also stops reading as a state ("On") shown unchecked next to the "Off" status.
 
 ## Sizes
-gzip, main ea6ff8c1 → this branch. Limits are runner calls, §2.26.
+gzip, main ea6ff8c1 → this branch. The new limits are the runner's calls (§2.26), each the measured size rounded up to 0.01 kB, after everything that can load on demand does.
 
 | Entry | Before | After | Limit before | Limit after |
 |---|---|---|---|---|
-| Settings FiltersScreen (first view) | 30,879 B | 31,401 B | 31.14 kB | (runner) |
-| Filters rule names (on demand) | — | 3,999 B | — | (runner) |
+| Settings FiltersScreen (first view) | 30,879 B | 31,401 B | 31.14 kB | 31.41 kB |
+| Filters rule names (on demand) | — | 3,999 B | — | 4.0 kB |
 | Filters pack descriptions (on demand) | 1,427 B | removed | 1.6 kB | removed |
-| Filters packs list (on demand) | 1,797 B | 1,557 B | 1.85 kB | (runner) |
-| Filters pack panels (on demand) | 8,765 B | 7,878 B | 9 kB | (runner) |
+| Filters packs list (on demand) | 1,797 B | 1,557 B | 1.85 kB | 1.56 kB |
+| Filters pack panels (on demand) | 8,765 B | 7,878 B | 9 kB | 7.88 kB |
 | Filters dialogs (on demand) | 35,880 B | 35,898 B | 35.9 kB | 35.9 kB |
-| Detail drawer (own JS + CSS) | 28,139 B | 28,141 B | 28.14 kB | (runner) |
+| Detail drawer (own JS + CSS) | 28,139 B | 28,141 B | 28.14 kB | 28.15 kB |
 
 - **The first view's +522 B** is the names holder, `RuleLabel` (which the core rows need on first render), the rows' markup and the 1.5 s wait.
-- **The Detail drawer's +2 B is chunk-hash and gzip drift.** This slice doesn't touch the drawer, and about 30 other entries moved by ±1–10 B the same way.
+- **The Detail drawer's +2 B is chunk-hash and gzip drift that this PR doesn't cause in code.**
+  - The drawer's code is unchanged.
+  - About 30 other entries moved ±1–10 B the same way.
+  - Main had 1 B of headroom there.
+- **The packs list and the pack panels fall to their measured sizes,** so the bytes they freed can't be quietly spent.
 
 ## Left alone
 - **The review queue and the exceptions list still show a rule's code** (`Badge {rule}`): the brief covers rule rows, packs and the dialogs that name a rule. Naming them there too is a follow-up for the runner.
