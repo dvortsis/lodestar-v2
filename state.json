@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T11:10Z",
+    "updated": "2026-11-21T12:03Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-fleet-switch-passthrough",
+        "slice": "X-rusqlite-041",
         "role": "build",
         "agent": "session_01MMjhnC26GEmJTmeotVuggT",
         "model": "opus",
-        "since": "2026-11-21T11:10Z",
-        "doing": "brief sent; fleet VM stack passes the four new crawler switches"
+        "since": "2026-11-21T12:03Z",
+        "doing": "brief sent; rusqlite 0.41 / libsqlite3-sys 0.39, drop the RUSTSEC-2026-0459 ignore"
       },
       {
         "slot": 2,
