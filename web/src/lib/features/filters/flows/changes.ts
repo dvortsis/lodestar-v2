@@ -1,7 +1,7 @@
 // Change builders: one per `op`, typed to `Change`, no logic beyond shaping. Whether a change
 // weakens filtering, needs the password or is allowed at all is the server's answer to the
 // preview, never the builder's.
-import type { ChangeOf, MatchInput } from './types';
+import type { Assessment, ChangeOf, MatchInput } from './types';
 
 export const coreSwitch = (rule: string, on: boolean): ChangeOf<'core_switch'> => ({
 	op: 'core_switch',
@@ -88,6 +88,18 @@ export const floorRemoval = (
 });
 
 export const undoChange = (): ChangeOf<'undo'> => ({ op: 'undo' });
+
+/**
+ * Whether the server's assessment says the change loosens child safety: its `loosens_child_safety`
+ * flag, or, as a supporting signal, a preview in which the child-safety core would have let through
+ * what it caught in the last 30 days or entries would leave the locked floor. Undo reads it
+ * (X-safety-undo-danger): it can't know what it restores before the server's assessment. Style
+ * only; whether the change weakens and needs the password is still the server's `confirm`.
+ */
+export const loosensChildSafety = (a: Pick<Assessment, 'loosens_child_safety' | 'preview'>) =>
+	a.loosens_child_safety === true ||
+	a.preview.core_caught_30d > 0 ||
+	a.preview.removed_from_floor > 0;
 
 /** The ops that take `shadow_days` (§20.3, §20.5.5): "Shadow for N days" is offered only for these. */
 export const SHADOW_OPS = ['add_rule', 'update_rule', 'add_override'] as const;

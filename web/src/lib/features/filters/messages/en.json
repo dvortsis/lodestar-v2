@@ -196,6 +196,7 @@
 	"filters_undo_help": "Go back to the rule set before your last change. It can loosen filtering, so it may ask for your password.",
 	"filters_undo": "Undo the last change",
 	"filters_undo_title": "Undo the last change",
+	"filters_undo_apply_loosens": "Undo and loosen child safety",
 	"filters_queue_heading": "Review queue",
 	"filters_queue_help": "Torrents the filters are holding, shown by hash only. A name can be revealed one at a time, with your password.",
 	"filters_queue_empty": "Nothing is waiting for review.",

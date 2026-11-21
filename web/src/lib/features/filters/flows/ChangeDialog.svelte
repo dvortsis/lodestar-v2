@@ -15,7 +15,7 @@
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { canShadow } from './changes';
+	import { canShadow, loosensChildSafety } from './changes';
 	import EffectWarning from './EffectWarning.svelte';
 	import { errorText } from './errors';
 	import type { ChangeFlow } from './flow.svelte';
@@ -94,6 +94,16 @@
 	const assessment = $derived<Assessment | null>(
 		s.kind === 'review' || s.kind === 'confirm' || s.kind === 'applying' ? s.assessment : null
 	);
+	/**
+	 * Apply's danger style: the caller's, or, for Undo, which can't know what it restores before
+	 * the preview, the server's assessment (X-safety-undo-danger). Before the preview arrives, and
+	 * after a failure, there's no assessment: the ordinary style, never a guess. Not colour alone:
+	 * Undo's Apply then names what it does, as the other loosening flows' labels do.
+	 */
+	const undoLoosens = $derived(
+		change?.op === 'undo' && assessment !== null && loosensChildSafety(assessment)
+	);
+	const dangerous = $derived(!!danger || undoLoosens);
 	/** The server asked for the password for the change on screen. */
 	const asksPassword = $derived(
 		s.kind === 'confirm' || (s.kind === 'applying' && s.assessment.confirm)
@@ -112,7 +122,9 @@
 	const primaryLabel = $derived(
 		shadowing && change && canShadow(change)
 			? m.filters_flows_shadow({ days: formatCount(change.shadow_days, currentLocale()) })
-			: (applyLabel ?? m.filters_flows_apply())
+			: undoLoosens
+				? m.filters_undo_apply_loosens()
+				: (applyLabel ?? m.filters_flows_apply())
 	);
 
 	// Leaving `confirm` (sent, refused, re-previewed, closed) always drops the typed password.
@@ -479,7 +491,7 @@
 		</Button>
 		{#if s.kind === 'review' || s.kind === 'confirm' || s.kind === 'applying'}
 			<Button
-				variant={danger ? 'danger' : 'primary'}
+				variant={dangerous ? 'danger' : 'primary'}
 				type="submit"
 				form={formId}
 				loading={busy}

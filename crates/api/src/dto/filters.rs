@@ -261,6 +261,15 @@ pub struct Assessment {
     /// The password is needed (every weakening change, and marking a list
     /// as part of the locked floor).
     pub confirm: bool,
+    /// The change loosens child safety: it turns a child-safety core rule
+    /// off or weakens one (an exception to it, or an override that can
+    /// bypass it), takes entries off the locked floor, or releases or marks
+    /// as a false positive a hold by a child-safety rule. For Undo it
+    /// compares the kept rule set with the current one, whatever those
+    /// rules caught. Style only: `confirm` still decides the password.
+    /// Sent only when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loosens_child_safety: bool,
     /// The plain-language effect warning; null for a strengthening change.
     #[schema(required = true)]
     pub warning: Option<String>,

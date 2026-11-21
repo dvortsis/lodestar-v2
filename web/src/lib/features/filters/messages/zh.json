@@ -106,6 +106,7 @@
 	"filters_undo_help": "恢复到上次更改之前的规则集。这可能放宽过滤,因此可能需要输入密码。",
 	"filters_undo": "撤销上次更改",
 	"filters_undo_title": "撤销上次更改",
+	"filters_undo_apply_loosens": "撤销并放宽儿童安全保护",
 	"filters_queue_heading": "审核队列",
 	"filters_queue_help": "过滤器正在拦截的种子,仅显示哈希。可凭密码逐个显示名称。",
 	"filters_queue_empty": "没有等待审核的内容。",
