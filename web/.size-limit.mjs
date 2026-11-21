@@ -1306,7 +1306,9 @@ export default [
 	// X-results-drawer-adaptive (runner §2.26): +2 B for --results-min-width-drawer (19,722 B).
 	// X-page-frame (runner §2.26): 19.73 → 19.79 KB, measured 19,783 B: the frame's gutters and caps
 	// (large:px-6, large:py-6, print:p-0, max-w-7xl) and the h1's one class string.
-	entry('CSS', search.css, '19.79 KB'),
+	// X-grid-two-col-large (runner §2.26): 19.79 → 19.80 KB, measured 19,792 B: the large: grid utilities
+	// (grid-cols-2, col-span-2, gap-x-4) of three label | value lists; +9 B over main.
+	entry('CSS', search.css, '19.80 KB'),
 	...(appEntry
 		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
 		: []),
