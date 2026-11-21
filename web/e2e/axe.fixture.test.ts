@@ -8,7 +8,7 @@
 //   E2E_FIXTURE=1 E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_PASSWORD=<pw> \
 //     npx playwright test axe.fixture --project=fixture
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { WCAG_22_AA } from './a11y';
 import { fixtureCookies } from './support/fixture-session';
 
@@ -19,6 +19,20 @@ test.skip(!url || !password, 'set E2E_FIXTURE_URL and E2E_FIXTURE_PASSWORD to ru
 type AxePage = ConstructorParameters<typeof AxeBuilder>[0]['page'];
 /** Waits for conditions, never for a fixed time; 10 s at least, for the slowest runner. */
 const WAIT = { timeout: 15_000 };
+
+/**
+ * What axe scans must be the loaded screen, not a placeholder: no `aria-busy` element left, no
+ * error banner (each `Banner` of kind error starts with the screen-reader label "Error:"), and the
+ * screen's own controls (`ready`) on show. A slow runner would otherwise scan "Loading…" and pass.
+ */
+async function settled(scope: Locator, ready: Locator, where: string) {
+	await expect(scope.locator('[aria-busy="true"]'), `${where}: still loading`).toHaveCount(0, WAIT);
+	await expect(ready.first(), `${where}: its controls`).toBeVisible(WAIT);
+	await expect(
+		scope.locator('.sr-only', { hasText: /^Error:/ }),
+		`${where}: an error banner`
+	).toHaveCount(0);
+}
 
 /** Fails on serious or critical violations; lesser ones are attached to the report. */
 async function expectNoSeriousViolations(page: Page, where: string) {
@@ -47,8 +61,11 @@ test.beforeEach(async ({ page }) => {
 
 test('/insights over the fixture data has no serious or critical violations', async ({ page }) => {
 	await page.goto(`${url}/insights?range=7d`);
-	// The overview has rendered its numbers, its trend with the fixture's gaps and its funnel.
-	await expect(page.getByTestId('insights-kpi-new-value')).toBeVisible(WAIT);
+	// The overview has rendered its numbers, its trend with the fixture's gaps and its funnel, and
+	// its loading skeleton is gone.
+	const main = page.locator('main');
+	await settled(main, page.getByTestId('insights-kpi-new-value'), '/insights');
+	await expect(page.getByTestId('insights-loading')).toHaveCount(0);
 	await expect(page.getByTestId('insights-funnel-stored-value')).toBeVisible(WAIT);
 	await expect(page.locator('[data-testid^="insights-annotation-"]').first()).toBeVisible(WAIT);
 	await expectNoSeriousViolations(page, '/insights (7d)');
@@ -59,33 +76,58 @@ test('/insights over the fixture data has no serious or critical violations', as
 	await expectNoSeriousViolations(page, '/insights (7d, trend table)');
 });
 
-// Every step in order, with its title (en): optional steps are left with Skip, which sends nothing;
-// "How it works" has no Skip and saves nothing, so Continue leaves it.
-const STEPS: { title: string; leave: 'skip' | 'continue' | null }[] = [
-	{ title: 'Network check', leave: 'skip' },
-	{ title: 'How it works', leave: 'continue' },
-	{ title: 'Crawl intensity', leave: 'skip' },
-	{ title: 'Storage & retention', leave: 'skip' },
-	{ title: 'Download client', leave: 'skip' },
-	{ title: 'Rule packs', leave: 'skip' },
-	{ title: 'Blocklists', leave: 'skip' },
-	{ title: 'Updates', leave: 'skip' },
-	{ title: 'Done', leave: null }
+/**
+ * Every step in order, with its title (en) and what shows once its data is in: a field, a radio,
+ * the pack or blocklist list, or the step's own result. Optional steps are left with Skip, which
+ * sends nothing; "How it works" has no Skip and saves nothing, so Continue leaves it.
+ */
+const STEPS: {
+	title: string;
+	leave: 'skip' | 'continue' | null;
+	ready: (wizard: Locator) => Locator;
+}[] = [
+	{
+		title: 'Network check',
+		leave: 'skip',
+		// The check's result replaces "Reading the network check…" (a banner, not aria-busy).
+		ready: (w) =>
+			w
+				.getByTestId('wizard-net')
+				.locator('.font-medium')
+				.filter({ hasNotText: /^Reading the network check…$/ })
+	},
+	{ title: 'How it works', leave: 'continue', ready: (w) => w.getByTestId('wizard-how') },
+	{ title: 'Crawl intensity', leave: 'skip', ready: (w) => w.locator('[data-field]') },
+	{ title: 'Storage & retention', leave: 'skip', ready: (w) => w.locator('[data-field]') },
+	{ title: 'Download client', leave: 'skip', ready: (w) => w.locator('[data-field]') },
+	{
+		title: 'Rule packs',
+		leave: 'skip',
+		ready: (w) => w.locator('[data-testid="wizard-packs"], [data-testid="wizard-packs-offered"]')
+	},
+	{
+		title: 'Blocklists',
+		leave: 'skip',
+		ready: (w) =>
+			w.locator('[data-testid="wizard-blocklists"], [data-testid="wizard-blocklists-none"]')
+	},
+	{ title: 'Updates', leave: 'skip', ready: (w) => w.getByRole('radio') },
+	{ title: 'Done', leave: null, ready: (w) => w.getByTestId('wizard-done-wait') }
 ];
 
 test('every first-run wizard step has no serious or critical violations', async ({ page }) => {
 	await page.goto(`${url}/welcome`);
 	const wizard = page.getByTestId('wizard');
 	await expect(wizard).toBeVisible(WAIT);
-	for (const { title, leave } of STEPS) {
+	for (const { title, leave, ready } of STEPS) {
+		const where = `/welcome (${title})`;
 		await expect(
 			wizard.locator('[aria-current="step"]'),
 			`the progress list is at ${title}`
 		).toContainText(title, WAIT);
-		// The step's chunk is in once its primary action is enabled (the last step has none).
+		await settled(wizard, ready(wizard), where);
+		await expectNoSeriousViolations(page, where);
 		const primary = wizard.getByRole('button', { name: /^(Continue|Save and continue)$/ });
-		if (leave) await expect(primary).toBeEnabled(WAIT);
-		await expectNoSeriousViolations(page, `/welcome (${title})`);
 		if (leave === 'skip') await wizard.getByRole('button', { name: 'Skip this step' }).click();
 		else if (leave === 'continue') await primary.click();
 	}

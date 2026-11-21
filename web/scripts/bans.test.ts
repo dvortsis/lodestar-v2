@@ -1,5 +1,14 @@
+// @vitest-environment node
+import { RuleTester } from 'eslint';
 import { describe, expect, it } from 'vitest';
-import { findViolations, isExempt, stripComments } from './bans.mjs';
+import {
+	DEAD_BREAKPOINT,
+	UNWEIGHTED_ICON,
+	findViolations,
+	isExempt,
+	noBannedLiterals,
+	stripComments
+} from './bans.mjs';
 
 const kinds = (src: string) => findViolations(src).map((v) => v.kind);
 
@@ -165,9 +174,55 @@ describe('lint bans', () => {
 		expect(kinds("import IconRaw from '~icons/ph/gear-bold?raw';")).toEqual([]);
 	});
 
+	it('flags the max-/min- forms of the removed breakpoints', () => {
+		for (const v of ['max-sm', 'max-md', 'min-lg', 'max-xl', 'min-2xl'])
+			expect(kinds(`<div class="${v}:hidden">`)).toEqual(['breakpoint']);
+		expect(kinds('<div class="max-medium:hidden min-large:flex">')).toEqual([]);
+		expect(kinds('<div class="max-w-full min-h-0">')).toEqual([]);
+	});
+
+	it('matches a bare import string, as eslint passes it, without quotes', () => {
+		expect(UNWEIGHTED_ICON.test('~icons/ph/gear')).toBe(true);
+		expect(UNWEIGHTED_ICON.test('~icons/ph/gear-bold')).toBe(false);
+		expect(UNWEIGHTED_ICON.test('~icons/ph/star-fill')).toBe(false);
+		expect(UNWEIGHTED_ICON.test('~icons/ph/gear-bold?raw')).toBe(false);
+		expect(DEAD_BREAKPOINT.test('sm:grid-cols-2')).toBe(true);
+	});
+
 	it('exempts the theme module and generated files', () => {
 		expect(isExempt('src/lib/theme/riverstone.ts')).toBe(true);
 		expect(isExempt('src/lib/api/schema.d.ts')).toBe(true);
 		expect(isExempt('src/lib/ui/Button.svelte')).toBe(false);
 	});
+});
+
+// The eslint half: the same rule `eslint.config.js` registers, run the way eslint runs it.
+RuleTester.describe = describe;
+RuleTester.it = it;
+RuleTester.itOnly = it.only;
+const tester = new RuleTester({ languageOptions: { ecmaVersion: 'latest', sourceType: 'module' } });
+const reports = (message: RegExp) => [{ message }];
+
+tester.run('no-banned-literals', noBannedLiterals, {
+	valid: [
+		"import IconGear from '~icons/ph/gear-bold';",
+		"import IconStar from '~icons/ph/star-fill';",
+		"const c = 'grid medium:grid-cols-2';",
+		'const sizes = { sm: 1, md: 2 };'
+	],
+	invalid: [
+		{
+			code: "import IconGear from '~icons/ph/gear';",
+			errors: reports(/Phosphor icon without a weight/)
+		},
+		{
+			code: "const load = () => import('~icons/ph/warning');",
+			errors: reports(/Phosphor icon without a weight/)
+		},
+		{
+			code: "const c = 'grid sm:grid-cols-2';",
+			errors: reports(/compile to nothing here/)
+		},
+		{ code: 'const c = `p-4 max-md:p-2`;', errors: reports(/compile to nothing here/) }
+	]
 });

@@ -1593,7 +1593,7 @@ export default [
 	// keys are gated by "Search results key commands (on demand)".
 	// X-results-drawer-adaptive (runner §2.26): +7 B for the row's 720 and 600 px container tiers
 	// (40,617 B), rounded up to 0.1 kB.
-	// X-ui-guards (runner §2.26): 40,617 → 40,753 B with Bold icons, rounded up at 0.01 kB. A reshuffle:
+	// X-ui-guards (runner §2.26): 40,600 B on main → 40,753 B with Bold icons, rounded up at 0.01 kB. A reshuffle:
 	// the shared search glyphs moved here from the cards and the live banner, whose limits fall with it.
 	entry('Search results (lazy)', resultsFirst, '40.76 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
