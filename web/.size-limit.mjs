@@ -541,8 +541,9 @@ const updatesBody = /features\/settings\/updates\/UpdatesScreen\.svelte$/;
 // body is of code already loaded.
 const filtersLater = [
 	/features\/filters\/screens\/Queue\.svelte$/,
-	// What each rule pack hides, opened from the packs list (RP-UC, runner on #469).
-	/features\/filters\/screens\/PackInfo\.svelte$/,
+	// The rules' and packs' names and descriptions, loaded with the screen's first request
+	// (X-safety-toggles; it replaces RP-UC's "What each pack hides" door, runner on #469).
+	/features\/filters\/screens\/rule-text\.ts$/,
 	// The packs list, loaded from the switches (RP-UC).
 	/features\/filters\/screens\/Packs\.svelte$/,
 	// The per-pack panels, versions and overrides, loaded from the switches (RP-6).
@@ -902,8 +903,8 @@ const filtersQueueLazy = filtersLazy({
 	keys: [filtersLater[0]],
 	stop: filtersDialogs
 });
-const filtersPackInfoLazy = filtersLazy({
-	name: 'Filters pack descriptions (on demand)',
+const filtersRuleTextLazy = filtersLazy({
+	name: 'Filters rule names (on demand)',
 	keys: [filtersLater[1]],
 	stop: filtersDialogs
 });
@@ -1489,7 +1490,7 @@ export default [
 	// there); Block dialog +1.4 KB. Was 34.4 KB.
 	entry('Filters dialogs (on demand)', filtersDialogsLazy, '35.9 KB'),
 	entry('Filters review queue (on demand)', filtersQueueLazy, '3.1 KB'),
-	entry('Filters pack descriptions (on demand)', filtersPackInfoLazy, '1.6 KB'), // measured 1.43 KB + 10%
+	entry('Filters rule names (on demand)', filtersRuleTextLazy, '9 KB'), // placeholder: measured below
 	entry('Filters packs list (on demand)', filtersPacksLazy, '1.85 KB'), // measured 1.27 KB + ~25% for later packs; RP-6: +0.38 KB for the mount of the pack panels (measured 1.68 KB; 1.79 KB with the {:catch})
 	entry('Filters pack panels (on demand)', filtersPackPanelsLazy, '9 KB'),
 	entry('Filters pack impact (on demand)', filtersPackImpactLazy, '2.4 KB'),

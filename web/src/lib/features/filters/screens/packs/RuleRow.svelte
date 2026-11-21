@@ -9,6 +9,8 @@
 	import Field from '$lib/ui/fields/Field.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import Select from '$lib/ui/fields/Select.svelte';
+	import { nameOf, textOf } from '../names.svelte';
+	import RuleLabel from '../RuleLabel.svelte';
 	import type { Ask } from '../types';
 	import { confirmOverride, removeOverride, setOverride, switchRule } from './ops';
 	import { ACTIONS, actionText } from './text';
@@ -28,11 +30,14 @@
 		unless = u;
 	});
 	const options = ACTIONS.map((a) => ({ value: a, label: actionText(a) }));
+	// The rule's plain name (its code when it has none), in every label and dialog title.
+	const name = $derived(nameOf(r.id));
+	const description = $derived(textOf(r.id) ?? undefined);
 </script>
 
 <li class="flex flex-col gap-2" data-testid="pack-rule-{r.id}">
 	<div class="flex flex-wrap items-center gap-3">
-		<Mono>{r.id}@{r.version}</Mono>
+		<RuleLabel id={r.id} code="{r.id}@{r.version}" />
 		<Badge variant={r.on ? 'success' : 'warning'}
 			>{r.on ? m.filters_state_on() : m.filters_state_off()}</Badge
 		>
@@ -48,13 +53,12 @@
 			dense
 			onclick={() =>
 				ask(switchRule(r.id, !r.on), {
-					title: m.filters_pack_title({ id: r.id }),
-					applyLabel: r.on
-						? m.filters_pack_apply_off({ id: r.id })
-						: m.filters_pack_apply_on({ id: r.id })
+					title: m.filters_packs_rule_title({ name }),
+					description,
+					applyLabel: r.on ? m.filters_pack_apply_off({ name }) : m.filters_pack_apply_on({ name })
 				})}
 			data-testid="pack-rule-switch-{r.id}"
-			>{r.on ? m.filters_pack_turn_off({ id: r.id }) : m.filters_pack_turn_on({ id: r.id })}</Button
+			>{r.on ? m.filters_pack_turn_off({ name }) : m.filters_pack_turn_on({ name })}</Button
 		>
 	</div>
 
@@ -92,10 +96,11 @@
 							dense
 							onclick={() =>
 								ask(confirmOverride(r.id), {
-									title: m.filters_packs_confirm_title({ id: r.id }),
-									applyLabel: m.filters_packs_confirm_apply({ id: r.id })
+									title: m.filters_packs_confirm_title({ name }),
+									description,
+									applyLabel: m.filters_packs_confirm_apply({ name })
 								})}
-							data-testid="pack-confirm-{r.id}">{m.filters_packs_confirm({ id: r.id })}</Button
+							data-testid="pack-confirm-{r.id}">{m.filters_packs_confirm({ name })}</Button
 						>
 					</div>
 				{/if}
@@ -105,15 +110,16 @@
 
 	<details>
 		<summary class="cursor-pointer text-small" data-testid="pack-edit-{r.id}"
-			>{m.filters_packs_edit({ id: r.id })}</summary
+			>{m.filters_packs_edit({ name })}</summary
 		>
 		<form
 			class="mt-2 flex flex-col gap-3"
 			onsubmit={(e) => {
 				e.preventDefault();
 				ask(setOverride(r.id, action, unless.trim()), {
-					title: m.filters_packs_override_title({ id: r.id }),
-					applyLabel: m.filters_packs_override_apply({ id: r.id })
+					title: m.filters_packs_override_title({ name }),
+					description,
+					applyLabel: m.filters_packs_override_apply({ name })
 				});
 			}}
 		>
@@ -139,8 +145,9 @@
 						dense
 						onclick={() =>
 							ask(removeOverride(r.id), {
-								title: m.filters_packs_remove_title({ id: r.id }),
-								applyLabel: m.filters_packs_remove_apply({ id: r.id })
+								title: m.filters_packs_remove_title({ name }),
+								description,
+								applyLabel: m.filters_packs_remove_apply({ name })
 							})}
 						data-testid="pack-remove-{r.id}">{m.filters_packs_override_remove()}</Button
 					>

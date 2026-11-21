@@ -9,6 +9,7 @@
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
 	import { undoChange } from './ops';
 	import { createModel } from './model.svelte';
+	import { loadNames } from './names.svelte';
 	import Switches from './Switches.svelte';
 	import Rules from './Rules.svelte';
 
@@ -47,7 +48,21 @@
 		);
 	}
 
-	onMount(model.load);
+	// The rules' names load beside the first request, and the screen waits for them so a row doesn't
+	// change from its code to its name under the reader; but only until they arrive, fail, or take
+	// longer than NAMES_WAIT. A failed or slow load shows the codes (a late one then names them).
+	const NAMES_WAIT = 1500;
+	let named = $state(false);
+	onMount(() => {
+		void model.load();
+		const done = () => (named = true);
+		const late = setTimeout(done, NAMES_WAIT);
+		void loadNames().then(() => {
+			clearTimeout(late);
+			done();
+		});
+		return () => clearTimeout(late);
+	});
 	onDestroy(model.destroy);
 </script>
 
@@ -73,7 +88,7 @@
 	</div>
 {/if}
 
-{#if model.overview}
+{#if model.overview && named}
 	{@const o = model.overview}
 	<div class="flex flex-col gap-8" data-testid="filters-screen">
 		<Switches {o} {ask} />
@@ -112,6 +127,8 @@
 	<Dialog
 		flow={model.flow}
 		title={model.pending.title}
+		description={model.pending.description}
+		danger={model.pending.danger}
 		applyLabel={model.pending.applyLabel}
 		shadowDays={model.pending.shadowDays}
 		onapplied={model.load}

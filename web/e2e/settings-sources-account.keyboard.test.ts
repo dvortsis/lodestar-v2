@@ -81,7 +81,7 @@ test.describe('keyboard: Sources account and purge', () => {
 		kbd
 	}) => {
 		await go('/settings/sources');
-		const toggle = page.getByRole('switch', { name: 'Private Tracker: on' });
+		const toggle = page.getByRole('switch', { name: 'Private Tracker: enabled' });
 		await kbd.tabTo(toggle, 60);
 		await kbd.press('Space');
 		const dialog = page.getByRole('dialog', {

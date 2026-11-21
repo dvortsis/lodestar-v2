@@ -1,13 +1,18 @@
 <script lang="ts">
 	// Core rules, packs and the locked floor. A switch is a button that starts a change: its label
-	// follows the server's `on`, never a local toggle. The floor has no control at all.
+	// follows the server's `on`, never a local toggle. The floor has no control at all. Each rule is
+	// named in plain words with its code beside it (I5), and the controls that loosen child safety
+	// (turning a rule off, dropping a floor list's entries) use the danger style; what they send,
+	// and the weakening flow they go through (§2.39), are unchanged.
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import { nameOf, textOf } from './names.svelte';
 	import { coreSwitch, floorRemoval } from './ops';
+	import RuleLabel from './RuleLabel.svelte';
 	import type { Ask } from './types';
 	import type { Overview } from './model.svelte';
 
@@ -19,8 +24,9 @@
 	<p class="text-muted-text">{m.filters_core_help()}</p>
 	<ul class="flex flex-col gap-2" data-testid="filters-core">
 		{#each o.core as r (r.id)}
+			{@const name = nameOf(r.id)}
 			<li class="flex flex-wrap items-center gap-3" data-testid="core-{r.id}">
-				<Mono>{r.id}</Mono>
+				<RuleLabel id={r.id} />
 				<Badge variant={r.on ? 'success' : 'warning'}
 					>{r.on ? m.filters_state_on() : m.filters_state_off()}</Badge
 				>
@@ -29,17 +35,18 @@
 				{:else}
 					<Button
 						dense
+						variant={r.on ? 'danger' : 'secondary'}
 						onclick={() =>
 							ask(coreSwitch(r.id, !r.on), {
-								title: m.filters_core_title({ id: r.id }),
+								title: m.filters_core_title({ name }),
+								description: textOf(r.id) ?? undefined,
+								danger: r.on,
 								applyLabel: r.on
-									? m.filters_core_apply_off({ id: r.id })
-									: m.filters_core_apply_on({ id: r.id })
+									? m.filters_core_apply_off({ name })
+									: m.filters_core_apply_on({ name })
 							})}
 						data-testid="core-switch-{r.id}"
-						>{r.on
-							? m.filters_core_turn_off({ id: r.id })
-							: m.filters_core_turn_on({ id: r.id })}</Button
+						>{r.on ? m.filters_core_turn_off({ name }) : m.filters_core_turn_on({ name })}</Button
 					>
 				{/if}
 			</li>
@@ -69,9 +76,11 @@
 					>
 					<Button
 						dense
+						variant="danger"
 						onclick={() =>
 							ask(floorRemoval(p.source, true), {
 								title: m.filters_pending_remove_title(),
+								danger: true,
 								applyLabel: m.filters_pending_remove()
 							})}
 						data-testid="pending-remove-{p.source}">{m.filters_pending_remove()}</Button

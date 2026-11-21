@@ -114,6 +114,45 @@ const lastApply = () => JSON.parse(net.to('/filters/apply').at(-1)!.body!);
 afterEach(() => vi.unstubAllGlobals());
 beforeEach(() => vi.useRealTimers());
 
+describe('a pack collapsed by default', () => {
+	it('opens from a real disclosure button named for the pack', async () => {
+		setup([rule()]);
+		const toggle = await screen.findByTestId('pack-expand-malware');
+		expect(toggle.tagName).toBe('BUTTON');
+		expect(toggle.getAttribute('aria-expanded')).toBe('false');
+		expect(toggle.textContent?.trim()).toBe('Rules and versions of Malware');
+		const body = document.getElementById(toggle.getAttribute('aria-controls')!)!;
+		expect(body.hidden).toBe(true);
+		expect(body.contains(screen.getByTestId('pack-rule-MW-2'))).toBe(true);
+		await fireEvent.click(toggle);
+		expect(toggle.getAttribute('aria-expanded')).toBe('true');
+		expect(body.hidden).toBe(false);
+		await fireEvent.click(toggle);
+		expect(body.hidden).toBe(true);
+	});
+	it('says a version is waiting while closed', async () => {
+		setup([rule({ pending: 3 })], [pend]);
+		const toggle = await screen.findByTestId('pack-expand-malware');
+		expect(toggle.getAttribute('aria-expanded')).toBe('false');
+		const body = document.getElementById(toggle.getAttribute('aria-controls')!)!;
+		const waiting = screen.getByTestId('pack-waiting-malware');
+		expect(body.contains(waiting)).toBe(false);
+		expect(waiting.textContent?.trim()).toBe('A newer version is waiting');
+		await fireEvent.click(toggle);
+		expect(screen.queryByTestId('pack-waiting-malware')).toBeNull();
+	});
+	it('names its rules, with the code and version as secondary text', async () => {
+		setup([rule()]);
+		const row = await screen.findByTestId('pack-rule-MW-2');
+		expect(row.textContent).toContain('Programs in media');
+		expect(row.querySelector('code')?.textContent).toBe('MW-2@2');
+		expect(screen.getByTestId('pack-rule-switch-MW-2').textContent?.trim()).toBe(
+			'Turn off Programs in media'
+		);
+		expect(screen.getByTestId('pack-panel-malware').textContent).toContain('Rule versions');
+	});
+});
+
 describe('a pack with nothing pending', () => {
 	it('shows its version, changelog as text and corpus status, and offers no Accept', async () => {
 		setup([rule()]);

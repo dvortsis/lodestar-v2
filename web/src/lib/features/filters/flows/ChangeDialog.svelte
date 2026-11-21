@@ -27,8 +27,12 @@
 	interface Props {
 		flow: ChangeFlow;
 		title: string;
-		/** The Apply button's label, naming the action ("Turn off CS-4a"). */
+		/** Under the title: what the rule checks (I5). */
+		description?: string;
+		/** The Apply button's label, naming the action ("Turn off Child terms near sexual terms"). */
 		applyLabel?: string;
+		/** Apply in the danger style, for a change that loosens child safety. Style only. */
+		danger?: boolean;
 		/** Offer "Shadow for N days" (only for changes that take `shadow_days`). */
 		shadowDays?: number;
 		onapplied?: (response: ApplyResponse) => void;
@@ -50,7 +54,9 @@
 	let {
 		flow,
 		title,
+		description,
 		applyLabel,
+		danger,
 		shadowDays,
 		onapplied,
 		onclose,
@@ -307,6 +313,7 @@
 <Dialog
 	bind:open={dialogOpen}
 	{title}
+	{description}
 	closeLabel={m.filters_flows_close()}
 	{onOpenChange}
 	{initialFocus}
@@ -472,7 +479,7 @@
 		</Button>
 		{#if s.kind === 'review' || s.kind === 'confirm' || s.kind === 'applying'}
 			<Button
-				variant="primary"
+				variant={danger ? 'danger' : 'primary'}
 				type="submit"
 				form={formId}
 				loading={busy}

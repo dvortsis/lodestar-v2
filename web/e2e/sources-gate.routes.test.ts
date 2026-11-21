@@ -62,7 +62,7 @@ test('every consent class shows its state, and no switch turns it on unasked', a
 		await expect(page.getByTestId(`${id}-consent`)).toHaveText(label);
 		await expect(page.getByTestId(`${id}-status`)).toContainText('Needs setup');
 		await expect(page.getByTestId(`${id}-need`)).toBeVisible();
-		const toggle = page.getByRole('switch', { name: `${s.name}: on` });
+		const toggle = page.getByRole('switch', { name: `${s.name}: enabled` });
 		await expect(toggle).not.toBeChecked();
 		await toggle.focus();
 		await page.keyboard.press('Space');
@@ -88,7 +88,7 @@ test("the server's refusal leaves the switch off and says nothing changed", asyn
 	// Acknowledged by an earlier build: the screen asks the server, and this build refuses.
 	const sent = sourcesBackend(mock, [dht, nyaaAcked], () => refused);
 	await go('/settings/sources');
-	const toggle = page.getByRole('switch', { name: 'Nyaa: on' });
+	const toggle = page.getByRole('switch', { name: 'Nyaa: enabled' });
 	await expect(toggle).not.toBeChecked();
 	await toggle.focus();
 	await page.keyboard.press('Space');

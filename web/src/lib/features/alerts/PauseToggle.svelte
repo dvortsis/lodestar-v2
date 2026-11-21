@@ -1,7 +1,8 @@
 <script lang="ts">
 	// Pausing is a toggle with no confirmation (§10.8). It sends PATCH {paused}, shows pending
 	// (`aria-busy`, no second send) until the answer, then the server's value. On an error it goes
-	// back to what it was, with a toast.
+	// back to what it was, with a toast. The switch is labelled for its on state (I4): "Active",
+	// checked while the alert isn't paused, so on means it records new alerts.
 	import Toggle from '$lib/ui/fields/Toggle.svelte';
 	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -10,30 +11,31 @@
 	let { search, onUpdated }: { search: SavedSearch; onUpdated: (updated: SavedSearch) => void } =
 		$props();
 
-	// What the switch shows: the server's value, except while an answer is awaited.
+	// What the switch shows (active = not paused): the server's value, except while an answer is
+	// awaited.
 	let shown = $state(false);
 	let pending = $state(false);
 	let resumed = $state(false);
 	$effect.pre(() => {
-		if (!pending) shown = search.paused;
+		if (!pending) shown = !search.paused;
 	});
 
 	async function change() {
 		if (pending) {
-			shown = search.paused; // a second flip while waiting is ignored
+			shown = !search.paused; // a second flip while waiting is ignored
 			return;
 		}
-		const wanted = shown;
+		const wanted = !shown;
 		pending = true;
 		try {
 			const updated = await setPaused(search.id, wanted);
-			shown = updated.paused;
+			shown = !updated.paused;
 			resumed = !updated.paused;
 			pending = false;
 			onUpdated(updated);
 		} catch {
 			pending = false;
-			shown = search.paused;
+			shown = !search.paused;
 			resumed = false;
 			toast.push({ kind: 'error', text: m.alerts_pause_failed({ name: search.name }) });
 		}
@@ -42,15 +44,15 @@
 
 <span class="al-pause">
 	<Toggle
-		label={m.alerts_pause_label()}
-		aria-label={m.alerts_pause_aria({ name: search.name })}
+		label={m.alerts_active_label()}
+		aria-label={m.alerts_active_aria({ name: search.name })}
 		bind:checked={shown}
 		aria-busy={pending || undefined}
 		onchange={change}
 		data-testid="alerts-pause-{search.id}"
 	/>
 	<!-- The rule, stated once after a resume. -->
-	{#if resumed && !shown}
+	{#if resumed && shown}
 		<span class="al-help" role="status" data-testid="alerts-resume-help-{search.id}"
 			>{m.alerts_resume_help()}</span
 		>

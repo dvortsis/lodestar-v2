@@ -98,7 +98,7 @@ describe('Sources layout', () => {
 		expect(expand.getAttribute('aria-controls')).toBe(detail.id);
 		expect(detail.hidden).toBe(true);
 		// The line keeps the switch; priority is in the detail.
-		expect(screen.getByRole('switch', { name: 'Mainline DHT: on' })).toBeTruthy();
+		expect(screen.getByRole('switch', { name: 'Mainline DHT: enabled' })).toBeTruthy();
 		expect(screen.queryByRole('combobox', { name: 'Mainline DHT: priority' })).toBeNull();
 		await fireEvent.click(expand);
 		expect(expand.getAttribute('aria-expanded')).toBe('true');
@@ -111,7 +111,7 @@ describe('Sources layout', () => {
 	it('keeps the setup note the switch points at in the page while the row is closed', async () => {
 		setup();
 		await screen.findByTestId('source-1');
-		const toggle = screen.getByRole('switch', { name: 'Nyaa: on' });
+		const toggle = screen.getByRole('switch', { name: 'Nyaa: enabled' });
 		const note = document.getElementById(toggle.getAttribute('aria-describedby')!);
 		expect(note?.textContent).toContain('sites it contacts');
 	});
