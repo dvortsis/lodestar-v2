@@ -24,12 +24,13 @@ No route deliberately depends on a repeated known parameter: none reads a list f
 ## The shared check
 
 - **Where:** in the `Query<T>` extractor itself (`extract.rs`), before serde reads the query. Every route that takes `Query<T>` is covered, with no per-route line to forget.
-- **The names come from the struct.** `field_names::<T>()` hands derived `Deserialize` a tiny deserializer that records the `fields` list it passes to `deserialize_struct`: the struct's own wire names, renames included (`DiscoverQuery`'s `type`). A field added later is checked without anyone remembering to list it. `SearchRequest`'s hand-kept `SEARCH_PARAMS` list goes; its test now compares the serialized fields with `field_names::<SearchRequest>()`.
+- **The names come from the struct.** `field_names::<T>()` hands derived `Deserialize` a tiny deserializer that records the `fields` list it passes to `deserialize_struct`: the struct's own wire names, renames and aliases included (`DiscoverQuery`'s `type`). A field added to a plain struct is checked without anyone remembering to list it. A newtype wrapper reads its inner struct's names.
+  - **The limit:** a struct with a `#[serde(flatten)]` field is read as a map, so it has no names and no repeat check (repeats fall back to serde's generic `bad_parameter`), as a map has. None of today's query structs has one; a unit test pins the behaviour. A primary name and its alias sent together are two names, not a repeat, and get serde's generic error. `SearchRequest`'s hand-kept `SEARCH_PARAMS` list goes; its test now compares the serialized fields with `field_names::<SearchRequest>()`.
 - **`repeated_param(query, is_param)`** decodes with `form_urlencoded::parse`, the extractor's own decoder, so `%73ort` and `sort` are the same name, and returns the first known name seen twice. **`repeated_parameter(name)`** builds the error, the name passed through `search::shown()` (at most 64 characters, escaped) for both the field and the message.
 - **Unknown parameters stay ignored,** repeated or not: only names the route reads are checked.
 - **The other readers use the same two helpers:** `/facets`' layer (its names are `q`, `sort`, `lease`, `tz`, `hidden` and each `limit.<facet>`, so the prefix family keeps working), `logs::params::parse` and `/events`' `topics`.
 - **HEAD** is served by each route's `get()`, so it gets GET's answer without the body: the same status and `content-length` (tested on every route).
-- **Order:** the auth guard runs first, so a signed-out request with a repeat is still a `401` (tested on every route in the table).
+- **Order:** the auth guard runs first, so a signed-out request with a repeat is still a `401` (tested on every route in `tests/repeated_params.rs`' table, and for `?ast=x` on `/search` and `/facets`).
 
 ## `/facets`' code (runner)
 
@@ -37,8 +38,8 @@ No route deliberately depends on a repeated known parameter: none reads a list f
 
 ## Any `ast` on GET or HEAD (O1)
 
-- `/search` used to answer a repeated `ast` on GET with `repeated_parameter`, and a single one with `ast_needs_post`, as `bad_parameter`. Now a layer answers any `ast` on a non-POST request with `400 ast_needs_post`, `field: "ast"`, "Send an AST with POST.", repeated or not, before the extractor runs. `/facets` already did this.
-- **`GET /export` differs, as before:** its handler refuses a single `ast` (`ast_needs_post`) or `hashes` (`hashes_need_post`), but a repeated one now meets the extractor's check first and gets `repeated_parameter`. O1 names `/search` and `/facets` only; giving `/export` the same layer is a possible follow-up.
+- `/search` used to answer a repeated `ast` on GET with `repeated_parameter`, and a single one with the generic `bad_parameter` ("A query parameter has the wrong type or value."): an AST can't be read from a query string, so the extractor failed before the handler's `ast_needs_post` check, which was unreachable. Now a layer answers any `ast` on a non-POST request with `400 ast_needs_post`, `field: "ast"`, "Send an AST with POST.", repeated or not, before the extractor runs. `/facets` already did this.
+- **`GET /export` differs, as before:** a single `ast` or `hashes` can't be read from a query string either, so it's the generic `bad_parameter` (its OpenAPI text says so), and a repeated one is now `repeated_parameter`. Its handler's `ast_needs_post` and `hashes_need_post` checks are unreachable on GET. O1 names `/search` and `/facets` only; giving `/export` the same layer is a possible follow-up.
 - The golden `tests/golden/search_ast_needs_post.txt` changes from `bad_parameter` to `ast_needs_post`. `ast_needs_post` is an existing code (`/facets`, `/export`), so this adds none.
 
 ## Tests
@@ -64,4 +65,10 @@ Each mutant was run against `tests/repeated_params.rs`, `facets.rs`, `search_col
 
 ## Unchanged
 
-POST bodies, unknown parameters, every other error code, Torznab, the auth guard, and the OpenAPI descriptions. No new error code, dependency or `unsafe`.
+POST bodies, unknown parameters, every other error code, Torznab and the auth guard. No new error code, dependency or `unsafe`.
+
+## Follow-ups
+
+- **The OpenAPI 400 descriptions** for `/facets`, the logs routes and `/events` list their codes one by one and don't yet name `repeated_parameter` (`/events`' didn't name the old `bad_parameter` either). Changing them regenerates `web/src/lib/api/openapi.json` and `schema.d.ts`, outside this slice's owns, so it's left for a small follow-up. No client code reads them.
+- **`GET /export`'s `ast` and `hashes`**, above.
+- **`docs/architecture.md`'s `/events` line** names the new code. It's the one API doc that listed the old one, edited under the brief's "any API error-code doc".

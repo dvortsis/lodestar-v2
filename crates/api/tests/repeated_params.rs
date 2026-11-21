@@ -241,4 +241,12 @@ async fn signed_out_is_still_a_401_first() {
         let status = f.app.clone().oneshot(req).await.unwrap().status();
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {twice}");
     }
+    // `/search`'s `ast` layer sits inside the guard too.
+    for u in ["/api/v1/search?ast=x", "/api/v1/facets?ast=x"] {
+        let mut req = Request::get(u).body(Body::empty()).unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 1))));
+        let status = f.app.clone().oneshot(req).await.unwrap().status();
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{u}");
+    }
 }

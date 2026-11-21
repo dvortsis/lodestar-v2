@@ -757,6 +757,7 @@ async fn every_logs_route_names_a_repeated_parameter() {
             body["error"]["message"],
             "level was sent more than once: send it once."
         );
+        assert!(headers.get(header::CONTENT_LENGTH).is_some(), "{twice}");
         let (h, h_headers, _) = call(&f.app, head(&twice)).await;
         assert_eq!(h, StatusCode::BAD_REQUEST, "HEAD {twice}");
         assert_eq!(

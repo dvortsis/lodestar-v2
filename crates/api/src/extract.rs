@@ -127,11 +127,13 @@ pub(crate) fn repeated_parameter(name: &str) -> ApiError {
     .field(name)
 }
 
-/// The names a query struct's derived `Deserialize` reads, renames
-/// included, as serde itself lists them: so every field is checked for
-/// repeats and a new one can't be missed. A type that isn't a plain struct
-/// (a map, or a hand-written impl that never asks for a struct) has none,
-/// and its route keeps its own handling.
+/// The names a query struct's derived `Deserialize` reads, renames and
+/// aliases included, as serde itself lists them: so a field added to a plain
+/// struct is checked for repeats with nothing else to remember. A type that
+/// never asks for a struct has none and gets no repeat check: a map, which
+/// is why `/facets` keeps its own layer, and a struct with a
+/// `#[serde(flatten)]` field, which serde reads as a map (tested below). A newtype wrapper reads its inner
+/// struct's names.
 pub(crate) fn field_names<T: DeserializeOwned>() -> &'static [&'static str] {
     use serde::de::{self, Visitor};
     use std::cell::Cell;
@@ -151,9 +153,17 @@ pub(crate) fn field_names<T: DeserializeOwned>() -> &'static [&'static str] {
             self.0.set(fields);
             Err(de::Error::custom("only the field names are read"))
         }
+        fn deserialize_newtype_struct<V: Visitor<'de>>(
+            self,
+            _: &'static str,
+            visitor: V,
+        ) -> Result<V::Value, Self::Error> {
+            // A wrapper reads its inner struct's names.
+            visitor.visit_newtype_struct(self)
+        }
         serde::forward_to_deserialize_any! {
             bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf
-            option unit unit_struct newtype_struct seq tuple tuple_struct map enum identifier
+            option unit unit_struct seq tuple tuple_struct map enum identifier
             ignored_any
         }
     }
@@ -292,6 +302,35 @@ pub fn same_origin_json(headers: &HeaderMap) -> ApiResult<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn field_names_are_the_structs_own_and_flatten_has_none() {
+        use std::collections::BTreeMap;
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Plain {
+            #[serde(rename = "type")]
+            kind: Option<String>,
+            #[serde(alias = "max")]
+            limit: Option<u32>,
+        }
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Wrapper(Plain);
+        #[derive(serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Flattened {
+            q: Option<String>,
+            #[serde(flatten)]
+            plain: Plain,
+        }
+        let mut plain = field_names::<Plain>().to_vec();
+        plain.sort_unstable();
+        assert_eq!(plain, ["limit", "max", "type"]);
+        assert_eq!(field_names::<Wrapper>().len(), 3);
+        assert!(field_names::<Flattened>().is_empty());
+        assert!(field_names::<BTreeMap<String, String>>().is_empty());
+    }
+
     use super::bad_field;
 
     #[test]
