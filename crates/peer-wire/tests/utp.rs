@@ -379,6 +379,13 @@ async fn fetches_over_a_lossy_link() {
             allow_private: true,
             timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(10),
+            // The product's 4 s first-window bound (X-fetch-first-window)
+            // is missed by about 1.5% of honest fetches over this link: a
+            // couple of retransmit timeouts in the window's ~46 packets
+            // use it up. Over 1,000 probe fetches the window took up to
+            // 9.8 s; 20 s covers that with margin, inside the 30 s
+            // deadline (X-flake-utp-lossy-win).
+            first_window_deadline: Duration::from_secs(20),
             ..utp_opts(utp.clone(), mode)
         };
         let got = fetch(peer.addr(), hash, &o)

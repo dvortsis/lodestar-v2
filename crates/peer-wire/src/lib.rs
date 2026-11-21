@@ -40,7 +40,8 @@ pub enum Error {
     Io(io::Error),
     Timeout,
     /// A dict larger than one request window, whose first window didn't
-    /// arrive within [`FIRST_WINDOW_DEADLINE`] of being requested. Counted
+    /// arrive within [`FetchOptions::first_window_deadline`]
+    /// ([`FIRST_WINDOW_DEADLINE`] by default) of being requested. Counted
     /// as a timeout.
     FirstWindow,
     /// A large dict's peer fell behind the pace it must keep. Counted as a
