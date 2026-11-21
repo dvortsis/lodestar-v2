@@ -707,6 +707,10 @@ proptest! {
     }
 }
 
+/// The owner's budget (§1.6.6, architecture §20.8): under 50 µs per
+/// torrent on the reference runner at 10,000 rules. [`budget`] holds it.
+const BUDGET_US: f64 = 50.0;
+
 /// A held case over budget, measured again on its own at the end of the
 /// run (X-filter-budget-remeasure).
 #[derive(Debug)]
@@ -736,6 +740,13 @@ fn remeasured(again: &Timing, near: f64, scale_us: f64, speed: impl Fn(f64) -> f
     }
 }
 
+/// Whether a re-measured case fails the gate: over budget again. At the
+/// budget is over, as in the attempt (`per >= BUDGET_US`): the budget is
+/// "under 50 µs".
+fn still_over(r: &Remeasured) -> bool {
+    r.per >= BUDGET_US
+}
+
 /// The 9V74 job on #1007's first head: every case from the mixed set at
 /// commit to the pending versions' 1% at commit ran about 1.6× slower,
 /// alike in each pass, between calibrations of 9.04 µs that didn't see it.
@@ -751,7 +762,7 @@ fn a_slowed_block_passes_on_re_measure() {
     // Again, at the speed the same case ran on #957's green 9V74 job.
     let again = timing(vec![34.9, 34.7, 34.8, 34.7, 34.8, 34.5, 34.8]);
     let r = remeasured(&again, 9.1, calib, speed);
-    assert!(r.per < 50.0, "{r:?}");
+    assert!(!still_over(&r), "{r:?}");
     assert_eq!(r.scale_us, calib, "a slower calibration doesn't loosen it");
 }
 
@@ -768,7 +779,7 @@ fn a_steady_slowdown_fails_on_re_measure() {
     assert!(first.at / speed(calib) > 50.0);
     for near in [calib, 9.5, 12.0, 20.0] {
         let r = remeasured(&timing(slower.clone()), near, calib, speed);
-        assert!(r.per > 50.0, "near {near}: {r:?}");
+        assert!(still_over(&r), "near {near}: {r:?}");
     }
 }
 
@@ -778,10 +789,33 @@ fn a_faster_calibration_beside_the_re_measure_scales_it_stricter() {
     let speed = |s: f64| scaling(cpu, s, mixed).speed;
     // Under budget by the attempt's calibration, over by the faster one.
     let again = timing(vec![38.0; 7]);
-    assert!(remeasured(&again, calib, calib, speed).per < 50.0);
+    assert!(!still_over(&remeasured(&again, calib, calib, speed)));
     let r = remeasured(&again, 7.5, calib, speed);
     assert_eq!(r.scale_us, 7.5);
-    assert!(r.per > 50.0, "{r:?}");
+    assert!(still_over(&r), "{r:?}");
+}
+
+#[test]
+fn a_re_measure_at_the_budget_fails_and_just_under_passes() {
+    assert_eq!(BUDGET_US, 50.0, "the owner's number");
+    let at = |per: f64| Remeasured {
+        per,
+        speed: 1.0,
+        scale_us: 10.0,
+    };
+    assert!(still_over(&at(BUDGET_US)), "at the budget is over");
+    assert!(still_over(&at(BUDGET_US * 1.01)));
+    assert!(still_over(&at(f64::INFINITY)));
+    assert!(!still_over(&at(BUDGET_US - 0.01)));
+    assert!(!still_over(&at(0.0)));
+    // Read from the gate's own path: a case 1% over on the reference,
+    // raw, re-measured the same, fails; 1% under passes.
+    let raw = |at_us: f64| {
+        let t = timing(vec![at_us; 7]);
+        still_over(&remeasured(&t, 10.0, 10.0, |_| 1.0))
+    };
+    assert!(raw(BUDGET_US * 1.01));
+    assert!(!raw(BUDGET_US * 0.99));
 }
 
 proptest! {
@@ -1190,7 +1224,6 @@ fn sigs_at_cap(items: &[Item]) -> std::sync::Arc<lodestar_filter::spam_sigs::Spa
 #[test]
 #[ignore]
 fn budget() {
-    const BUDGET_US: f64 = 50.0;
     // Outside this, the measurement is wrong rather than the runner slow:
     // the runners seen took 0.67× (Xeon 6973P-C) to 1.1× (an Intel build
     // VM) the reference's time.
@@ -1720,16 +1753,16 @@ fn budget() {
                 scaling(&cpu, s, mixed).speed
             });
             let both = format!(
-                "{what}: {per:.1} µs, calibration {scale_us:.2} µs; re-measured {:.1} µs \
+                "{per:.1} µs, calibration {scale_us:.2} µs; re-measured {:.1} µs \
                  ({:.1} µs here, ÷ {:.3}), calibration {near_before:.2} µs before and \
                  {near_after:.2} µs after, scaled by {:.2} µs",
                 r.per, again.at, r.speed, r.scale_us
             );
-            if r.per < BUDGET_US {
-                println!("::warning::passed on re-measure: {both}");
+            if still_over(&r) {
+                println!("over on re-measure: {what}: {both}");
+                still.push(format!("{line}; then {both}"));
             } else {
-                println!("over on re-measure: {both}");
-                still.push(format!("{line}; {both}"));
+                println!("::warning::passed on re-measure: {what}: {both}");
             }
         }
         assert!(

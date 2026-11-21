@@ -16,7 +16,7 @@ Only what happens to a held case still over budget at the end of an attempt chan
 
 - **No code change.** `crates/filter` is unchanged since 558a9121 (#957's head, 2026-11-15). So is everything it calls from metainfo, search (the tokenizer and query), classify and release-parser. The `Cargo.lock` diff since then touches only email-encoding, lettre and a flate2 line for sources-feeds, none of them in the filter's tree.
 - **No toolchain change.** #957's jobs and #1007's first head all ran rustc 1.100.0 (0ef1bc386 2026-11-09).
-- **The red has a shape: a run of whole cases about 1.5× slower.**
+- **The red has a shape: a run of whole cases about 1.6× slower.**
   - **#1007's first head (EPYC 9V74, red):**
     - the cases up to the mixed set ran at #957's green speed (mixed 34.2 µs here, against 34.3);
     - every case from the mixed set at commit to the pending versions' 1% at commit ran about 1.6× slower: Near 29.7 → 46.8 µs, Negation 27.8 → 43.9, Fuzzy 35.8 → 58.6, Title 28.7 → 45.8;
@@ -69,6 +69,8 @@ Only what happens to a held case still over budget at the end of an attempt chan
   - `a_steady_slowdown_fails_on_re_measure`: the engine 1.5× slower, with any calibration beside it, fails;
   - `a_faster_calibration_beside_the_re_measure_scales_it_stricter`;
   - the property test above.
+  - `a_re_measure_at_the_budget_fails_and_just_under_passes`: the decision itself (`still_over`), at the budget, just over and just under. At 50 µs is over, as in the attempt.
+- **The decision is tested outside the ignored gate** (the runner's review of #1009). `budget()` calls `still_over` rather than comparing inline. Each of these mutants of it fails a normal test: never over (3 tests fail), a 1.3× looser bound (2) and `>` for `>=` (1). `BUDGET_US` moved to module scope so the tests read the same constant; its value, 50.0, is unchanged and a test pins it.
 - **Mutation checks, local and not committed.** A busy-wait of 30 µs per torrent was added to every mixed-set case. The budget was set to 70 µs for the check only, because this unlisted CPU reads about 55 µs on the mixed set.
   - **Slowed every time** (a steady regression): all 9 held mixed-set cases were over in the attempt (80–115 µs) and over again on re-measure (84–118 µs), and the gate failed with both numbers for each.
   - **Slowed in the full run only** (a slowed block): every case whose re-measure ran on a steady host read its own time again (52–61 µs) and printed `passed on re-measure`. The cases whose re-measure fell in this container's own slow stretches stayed over (77–90 µs) and failed. Each had calibration passes of 15–17 µs beside it, against the attempt's fastest 10.5 µs, and the gate didn't loosen its scale to excuse them.
