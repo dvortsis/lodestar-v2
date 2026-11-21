@@ -40,6 +40,8 @@ Each list holds the codes that the route's own code paths can return as a 400, r
     - a `hashes` is `400 hashes_need_post`, `field: "hashes"`;
     - with both, `ast` is named.
 - **When it applies:** on GET and HEAD, sent once, repeated or bare, before the query extractor, whose repeat check would otherwise answer a repeat first.
+- **It wraps only the routes** (`route_layer`), as `/search`'s and `/facets`' now do too (runner's review). An unsupported method with `ast` or `hashes` in its query is a 405, pinned by a test over all three routes.
+  - **Checked against `.layer`:** with all three put back to `.layer`, the test still passed. `auth::protected` sets its own `method_not_allowed_fallback` after the layer, which replaces the layered fallback, so no route answered a 400 there before either. `route_layer` keeps it that way without relying on that order.
 - **It sits inside the session guard**, the `route_layer` over the jobs and export router, so a signed-out request is still a 401.
 - **The handler's own checks went.** `export_get` used to check `ast` and `hashes` itself, but those checks couldn't be reached: the extractor failed first with the generic `bad_parameter`, because neither field can be read from a query string. The layer replaces them.
 - **Tests:** in `tests/export.rs`:
@@ -53,8 +55,9 @@ Each list holds the codes that the route's own code paths can return as a 400, r
 ## The intensity summary (brief item 3)
 
 After CR-1c (#1014) merged, the summary of `PATCH /crawler` in `crates/api/src/ops.rs` says what a live intensity change does with `dht.preset_slots` on, following `docs/decisions/2026-11-21-CR-1c.md`:
-- the lookup slots are sized once, from the intensity the node starts with, so the slot count follows a new preset only after a restart;
-- running lookups, the query rate and the outstanding cap follow the new preset at once, never with more lookups running than the slots allow.
+- new lookups start only within the new preset's count at once, and lookups already running finish, so the running count settles there (`Actor::running_slots` limits starts; the runner's review);
+- the query rate and outstanding cap follow at once;
+- the slot count, sized from the intensity the node starts with, follows only after a restart.
 
 The brief names it "the `POST /ops/intensity` summary"; it's the `patchCrawler` operation, the summary the brief quotes. `main` was brought in for it (runner).
 

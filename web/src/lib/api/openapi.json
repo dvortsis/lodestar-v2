@@ -2654,7 +2654,7 @@
         "tags": [
           "crawler"
         ],
-        "summary": "Sets the crawler's intensity at once: the same setting as\n`crawler.intensity` in `/settings/crawler`, refused the same way when\nan environment variable sets it. With `dht.preset_slots` on, the lookup\nslots are sized once, from the intensity the node starts with: running\nlookups, the query rate and the outstanding cap follow the new preset at\nonce (never more lookups running than the slots allow), and the slot\ncount itself follows only after a restart.",
+        "summary": "Sets the crawler's intensity at once: the same setting as\n`crawler.intensity` in `/settings/crawler`, refused the same way when\nan environment variable sets it. With `dht.preset_slots` on, new\nlookups start only within the new preset's count at once, and lookups\nalready running finish, so the running count settles there; the query\nrate and outstanding cap follow at once; the slot count, sized from the\nintensity the node starts with, follows only after a restart.",
         "operationId": "patchCrawler",
         "requestBody": {
           "content": {

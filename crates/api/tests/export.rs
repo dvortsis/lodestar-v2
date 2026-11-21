@@ -1976,3 +1976,31 @@ async fn ast_and_hashes_on_get_need_post() {
         .unwrap();
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
 }
+
+/// The layers that name an `ast` or `hashes` in a query wrap only the
+/// routes, never the method-not-allowed fallback: an unsupported method
+/// is still a 405 with either in its query.
+#[tokio::test]
+async fn an_unsupported_method_is_still_405_with_ast_in_the_query() {
+    let f = fixture(&golden_torrents()[..2], Opts::default());
+    let c = session(&f).await;
+    for (method, uri) in [
+        ("DELETE", "/api/v1/export?ast=x"),
+        ("PUT", "/api/v1/export?hashes=x"),
+        ("DELETE", "/api/v1/search?ast=x"),
+        ("DELETE", "/api/v1/facets?ast=x&q=a&q=b"),
+    ] {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap();
+        let (status, body) = json_of(&f.app, req).await;
+        assert_eq!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} {uri}: {body}"
+        );
+    }
+}

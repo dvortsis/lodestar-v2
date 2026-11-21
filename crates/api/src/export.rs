@@ -145,7 +145,7 @@ pub fn routes() -> Router<ApiState> {
         "/export",
         get(export_get)
             .post(export_post)
-            .layer(axum::middleware::from_fn(needs_post)),
+            .route_layer(axum::middleware::from_fn(needs_post)),
     )
 }
 

@@ -50,7 +50,7 @@ pub fn routes() -> Router<ApiState> {
             "/facets",
             get(facets_get)
                 .post(facets_post)
-                .layer(axum::middleware::from_fn(single_valued)),
+                .route_layer(axum::middleware::from_fn(single_valued)),
         ),
     )
 }

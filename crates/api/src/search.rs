@@ -196,7 +196,7 @@ pub fn routes() -> Router<ApiState> {
                 "/search",
                 get(search_route)
                     .post(search_post)
-                    .layer(axum::middleware::from_fn(ast_needs_post)),
+                    .route_layer(axum::middleware::from_fn(ast_needs_post)),
             )
             .route("/search/state", get(index_state)),
     )
