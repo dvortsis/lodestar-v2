@@ -150,6 +150,14 @@ class HintFirstTests(Base):
         self.assertGreater(detail["ignored"], detail["keys"])
         self.assertIn("unexpected source", detail["note"])
 
+    def test_as_many_ignored_as_taken_is_within(self):
+        sim = Stage3Sim("hint")
+        sim.ignored = sim.keys
+        report = self.run_sim(sim)
+        self.assertValid(report)
+        self.assertEqual(report["hint_first"]["ignored"], report["hint_first"]["keys"])
+        self.assertIn("## Hint-first", analyze_cr.markdown(report))
+
     def test_the_control_arm_is_not_judged(self):
         report = self.run_sim(Stage3Sim("hint", on=False))
         self.assertValid(report)
@@ -202,7 +210,7 @@ class SamplerSplitTests(Base):
 
     def test_a_table_that_fills_mid_window_without_spill_voids(self):
         sim = Stage3Sim("split")
-        sim.table = lambda e: collect.SAMPLER_TABLE if e >= 2400 else 150_000
+        sim.table = lambda e: collect.SAMPLER_TABLE if e >= 1500 else 150_000  # mid-window
         sim.spill = lambda e: 0  # the table fills mid-window and the filter stays empty
         report = self.run_sim(sim)
         self.assertEqual(report["verdict_reasons"], ["spill_slots_used_once_table_fills"])
@@ -216,6 +224,16 @@ class SamplerSplitTests(Base):
         self.assertValid(report)
         self.assertEqual(report["sampler_split"]["spill_check"], "not_exercised")
         self.assertIsNone(self.check(report, "spill_slots_used_once_table_fills"))
+
+    def test_a_table_first_full_at_the_last_scrape_is_not_exercised(self):
+        sim = Stage3Sim("split")
+        last = sim.warm_min * 60 + sim.hours * sim.hour_s  # the window's end scrape, in elapsed seconds
+        sim.table = lambda e: collect.SAMPLER_TABLE if e >= last else 150_000  # full at the last scrape only
+        sim.spill = lambda e: 0
+        report = self.run_sim(sim)
+        self.assertValid(report)
+        self.assertEqual(report["sampler_split"]["spill_check"], "not_exercised")
+        self.assertIsNotNone(report["sampler_split"]["table_filled_after_seconds"])
 
     def test_spill_slots_alone_show_the_table_filled(self):
         sim = Stage3Sim("split")
@@ -241,6 +259,12 @@ class SamplerSplitTests(Base):
                 self.assertEqual({"hour", "stored_per_min"}, set(worst[0]))
         off, on = (self.run_sim(Stage3Sim("split", on=x))["sampler_split"]["sampler_full_seconds"] for x in (False, True))
         self.assertGreater(off, on)  # as written: the split spends less time full
+        report = self.run_sim(Stage3Sim("split"))
+        gate = report["sampler_split"]["restart_gate"]
+        self.assertEqual(gate["suppression_reason_at_open"], report["startup"]["suppression_reason_at_open"])
+        self.assertIn("suppressed_seconds", gate)
+        self.assertIn("## Sampler split", analyze_cr.markdown(report))
+        self.assertIn("spilled; sampler-full", analyze_cr.markdown(report))
 
     def test_missing_split_series_in_either_arm_is_missing_evidence(self):
         for on in (True, False):
@@ -348,6 +372,16 @@ class Stage3EffectTests(unittest.TestCase):
         self.assertEqual(out["sampler_split_by_arm"]["A"][0]["sampler_full_seconds"], 120.0)
         self.assertEqual(len(out["sampler_split_by_arm"]["B"]), 4)
         self.assertNotIn("hint_first_by_arm", out)
+        self.assertEqual(out["split_not_exercised_b_segments"], 0)
+
+    def test_split_never_exercised_in_any_treatment_segment_warns(self):
+        idle = {"spill_check": "not_exercised", "sampler_full_seconds": 0.0, "max_spill_slots": 0,
+                "worst_hours_stored_per_min": []}
+        out = self.effect("split", sampler_split=idle)
+        self.assertEqual(out["split_not_exercised_b_segments"], 4)
+        self.assertEqual(out["warnings"], [analyze_cr.SPLIT_NOT_EXERCISED])
+        self.assertEqual(out["outcome"], self.effect("split")["outcome"])  # the verdict stands
+        self.assertEqual(out["sampler_split_by_arm"]["B"][0]["spill_check"], "not_exercised")
 
 
 class RehearsalTests(Base):

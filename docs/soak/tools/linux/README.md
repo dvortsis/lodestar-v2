@@ -369,9 +369,10 @@ Both are stacked treatments, so they take `--winners` as stage 2 does.
   (`LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT`). Once the sampler's 200,000-place table
   fills, a treatment segment is void unless the spill filter holds slots. If the
   table never fills in the window, the split wasn't exercised (`spill_check`
-  reads `not_exercised`); that isn't a failure.
-- **Rule 6.4, for split, in both arms:** each segment reports its sampler-full time
-  and its three worst hours of stored per minute (`sampler_split`), and `effect`
+  reads `not_exercised`); that isn't a failure. If no treatment segment was
+  exercised, `effect` adds a warning: the outcome says nothing about a full table.
+- **Rule 6.4, for split, in both arms:** each segment reports its sampler-full time,
+  its three worst hours of stored per minute and any restart gate (`sampler_split`), and `effect`
   lists them per arm (`sampler_split_by_arm`). They're reported, never decided on.
 
 Each treatment's series are required in both arms of its own segments. Every other
@@ -387,8 +388,9 @@ python3 -I -m unittest discover -s docs/soak/tools -p 'test_*.py'
 
 `test_collect_spec.py` runs each CR-SPEC run kind on the virtual clock and has
 `analyze_cr.py` judge it; `../test_analyze_cr.py` has a passing and a failing
-fixture for each rule the analyzer judges, and `../test_analyze_cr_col5.py` for
-r5.1's checks, with stage 1's verdicts pinned in `../fixtures/`.
+fixture for each rule the analyzer judges, `../test_analyze_cr_col5.py` for
+r5.1's checks, with stage 1's verdicts pinned in `../fixtures/`, and
+`../test_analyze_cr_col6.py` for stage 3's treatments and their rehearsal.
 
 The Linux tests use a fake HTTP server on 127.0.0.1, fake cgroup and `/proc`
 trees, a fake Docker API and a virtual clock. They need no network and no

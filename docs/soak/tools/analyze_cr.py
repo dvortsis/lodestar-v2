@@ -69,6 +69,9 @@ HINT_SERIES = tuple(HINT.values())
 CR_ADM = "coordinated_admission"
 # The runner's call (2026-11-21): stage 3's control should have CR-ADM on, since #1003's screen
 # shows the T1 tier does little without it. Without it the effect report says so; never a verdict.
+SPLIT_NOT_EXERCISED = ("The sampler's table never filled in any treatment segment, so the split was never "
+                       "exercised: the outcome says nothing about what it does once the table is full. The "
+                       "verdict is unchanged.")
 HINT_WITHOUT_ADM = ("The control doesn't have coordinated admission (CR-ADM) on: #1003's screen shows the hint-first "
                     "tier does little without it, so a small or absent effect may come from that. The verdict "
                     "is unchanged.")
@@ -704,6 +707,9 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treat
         "fetch_lookups": get(snap, "fetch_lookups"),
         "dht_peer_active_plus_queued": (get(snap, "dht_peer_active") or 0) + (get(snap, "dht_peer_queued") or 0),
     }
+    # X-sampler-cooldown-split's restart gate, beside sampler-full time (rule 6.4's report).
+    out["sampler_split"]["restart_gate"] = {k: out["startup"][k] for k in (
+        "suppression_reason_at_start", "suppression_reason_at_open", "suppressed_seconds")}
     out["already_stored_and_rediscovered"] = {
         r: delta(t_s, end, "metadata_excluded_total", reason=r) for r in ("already_stored", "rediscovered")}
     return out
@@ -811,13 +817,17 @@ def sampler_split(checks, window, switches, hourly, judged):
             if (t is not None and t >= collect.SAMPLER_TABLE) or (s or 0) > 0]
     first = full[0] if full else None
     spilled = first is not None and any((s or 0) > 0 for s in spill[first:])
+    # A table first seen full at the window's last scrape had no scrape after it in which to
+    # spill (a cooldown moves out only when the next node needs a place): not exercised.
+    if first is not None and not spilled and first == len(window) - 1:
+        first = None
     a, b = window[0], window[-1]
     hours = [{"hour": h["hour"], "stored_per_min": h["stored_per_min"]} for h in hourly]
     out = {"on": bool(switches.get("sampler_cooldown_split")),
            "sampler_full_seconds": optional_delta(a, b, SPLIT["full_seconds"]),
            "max_spill_slots": max((s for s in spill if s is not None), default=None),
            "max_table_entries": max((t for t in table if t is not None), default=None),
-           "table_filled_after_seconds": None if first is None else round(window[first]["e"] - a["e"]),
+           "table_filled_after_seconds": None if not full else round(window[full[0]]["e"] - a["e"]),
            "worst_hours_stored_per_min": sorted(hours, key=lambda h: h["stored_per_min"])[:3]}
     out["absent"] = sorted(([] if out["sampler_full_seconds"] is not None else ["sampler_full_seconds"])
                            + ([] if out["max_spill_slots"] is not None else ["spill_slots"])
@@ -1016,6 +1026,16 @@ def markdown(report):
         lines += ["## Ledger", "", f"W {f(led['W_seconds'])} s, q {f(led['q'])}, y {f(led['y'], 4)} over "
                   f"{f(led['lookups_ended'])} lookups ended"
                   + (f"; absent: {', '.join(led['absent'])}" if led["absent"] else "") + ".", ""]
+    hint, split = report.get("hint_first"), report.get("sampler_split")
+    if report.get("treatment") == "hint" and hint:
+        lines += ["## Hint-first", "", f"On: {str(hint['on']).lower()}; marked {f(hint['marked'])}, taken as keys "
+                  f"{f(hint['keys'])}, ignored {f(hint['ignored'])}, first lookups {f(hint['lookups'])}"
+                  + (f"; absent: {', '.join(hint['absent'])}" if hint["absent"] else "") + ".", ""]
+    if report.get("treatment") == "split" and split:
+        lines += ["## Sampler split", "", f"On: {str(split['on']).lower()}"
+                  + (f"; {split['spill_check'].replace('_', ' ')}" if "spill_check" in split else "")
+                  + f"; sampler-full {f(split['sampler_full_seconds'])} s; peak spill slots {f(split['max_spill_slots'])}"
+                  + (f"; absent: {', '.join(split['absent'])}" if split["absent"] else "") + ".", ""]
     num = report.get("numerator")
     if num:
         w = num["window"]
@@ -1262,8 +1282,13 @@ def analyze_effect(treatment, block_reports, winners=None):
             out["warnings"] = [HINT_WITHOUT_ADM]
     if treatment == "split":  # CR-COL-6: rule 6.4's report, per arm; never decided on
         out["sampler_split_by_arm"] = stage3_by_arm(valid, "sampler_split",
-                                                    ("sampler_full_seconds", "max_spill_slots",
-                                                     "worst_hours_stored_per_min"))
+                                                    ("spill_check", "table_filled_after_seconds",
+                                                     "sampler_full_seconds", "max_spill_slots",
+                                                     "worst_hours_stored_per_min", "restart_gate"))
+        idle = [s for s in out["sampler_split_by_arm"]["B"] if s["spill_check"] == "not_exercised"]
+        out["split_not_exercised_b_segments"] = len(idle)
+        if out["sampler_split_by_arm"]["B"] and len(idle) == len(out["sampler_split_by_arm"]["B"]):
+            out["warnings"] = [SPLIT_NOT_EXERCISED]
     if len(controls) > 1:
         out.update(outcome="invalid", decided=False,
                    reason="the control's switch set differs between blocks of this treatment (r5.1 A2)")

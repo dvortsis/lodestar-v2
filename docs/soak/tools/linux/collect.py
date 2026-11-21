@@ -1965,7 +1965,7 @@ class Collector:
                         self.write(self.root / "baseline-start.prom", snapshot)
                         self.note(f"baseline started; collecting {a.baseline_hours:g} hours")
                     over = (values["dht_peer_active"] + values["dht_peer_queued"] > 32
-                            or values["dht_sample_cooling"] + values["dht_sample_inflight"] > 200000
+                            or values["dht_sample_cooling"] + values["dht_sample_inflight"] > SAMPLER_TABLE
                             or values["dht_sample_frontier"] > 20000 or values["dht_outstanding"] > 1024
                             or values["fetch_lookups"] > 256)
                     bad_bounds = bad_bounds + 1 if over else 0
