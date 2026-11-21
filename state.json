@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T12:30Z",
+    "updated": "2026-11-21T12:34Z",
     "items": [
       {
         "slot": 1,
@@ -10666,12 +10666,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-ui-guards",
+        "slice": "X-safety-toggles",
         "role": "build",
         "agent": "session_01MMjhn9GVcDSYWYeMUmvdpc",
         "model": "opus",
-        "since": "2026-11-21T09:58Z",
-        "doing": "brief sent; weighted icons, breakpoint ban, fixture axe"
+        "since": "2026-11-21T12:34Z",
+        "doing": "brief sent; rule and pack names, CS danger style, packs collapsed, switch labels"
       },
       {
         "slot": 3,
