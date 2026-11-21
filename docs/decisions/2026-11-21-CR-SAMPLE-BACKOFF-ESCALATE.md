@@ -1,4 +1,4 @@
-# CR-SAMPLE-BACKOFF-ESCALATE decisions (#PRNUM)
+# CR-SAMPLE-BACKOFF-ESCALATE decisions (#1029)
 
 X-sampler-frontier-starve (#1022) traced the BEP 51 frontier starving to one rule: a single failed sample cools a live node for 6 h. This slice adds a per-node escalation, a short first backoff, behind a new switch that is off by default. With the switch off, behaviour is byte for byte today's: every sim golden is unchanged, and `fail` is `complete` for every backoff (`with_the_switch_off_fail_is_complete`).
 
