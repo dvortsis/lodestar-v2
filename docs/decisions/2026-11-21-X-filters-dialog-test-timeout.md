@@ -1,4 +1,4 @@
-# X-filters-dialog-test-timeout decisions (#PR)
+# X-filters-dialog-test-timeout decisions (#1035)
 
 Runner brief, 2026-11-21Z. Test-only.
 
