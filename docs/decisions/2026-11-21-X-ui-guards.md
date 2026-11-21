@@ -48,4 +48,7 @@ Glyph weights change the icon modules, and Rolldown regroups the shared ones.
 | Search live banner (lazy) | 2,938 B | 2,576 B | 3.02 kB | 2.58 kB |
 
 ## Snapshots
-The Bold glyphs change pixels in the matrix, state and theme baselines. CI regenerates them through the `web/e2e/.update-snapshots` marker (e2e/README.md "Updating snapshots"), and the PNG diffs are reviewed before the marker is removed.
+CI regenerated the baselines through the `web/e2e/.update-snapshots` marker (e2e/README.md "Updating snapshots"). Only one moved past the 0.001 tolerance: `smoke.test.ts-snapshots/settings-bp2560-riverstone-dark-comfortable-linux.png`. Its diff is the Bold glyphs plus one finding:
+- **The old baseline predated Outputs in the Settings nav.** The new shot has the Outputs item under Connections, which `shell/screens.ts` always lists (an eager glob of every `screen.ts`, since OUT-2), so every row below it moves down by one.
+- **The regenerated baseline is kept,** because it matches current main (runner's call).
+- **Other baselines may be stale the same way.** The light 2560 baseline, which wasn't rewritten, also lacks Outputs. Why it still passes, whether it isn't compared in pull-request runs or the tolerance hides a nav row, is the runner's follow-up slice X-snapshot-stale-outputs. This slice touches no other baseline.
