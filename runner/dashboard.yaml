@@ -504,6 +504,9 @@ placement:
   - X-workflow-tests-filter
   - X-openapi-400s-tidy
   - X-fixture-server-kill-on-drop
+  - X-fuzz-advisories
+  - X-size-limit-one-build
+  - X-vm-status-mode
   - X-soak-screen-calibrate
   - X-collect-checklist-docker
   - X-collect-checklist-launch-2
@@ -620,6 +623,7 @@ placement:
   - X-sample-cooling-metric
   - CR-UTP-FIRST-WINDOW
   - X-pool-first-request-docs
+  - X-pool-past-cap-room
 - ws: ws-cr-live
   match:
   - CR-AB-*
