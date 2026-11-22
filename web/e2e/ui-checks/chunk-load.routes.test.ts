@@ -1,10 +1,11 @@
 // UI check (review 02 §3e, 03 "A lazy chunk fails to load"): most screens load on first use, so
 // one failed request for a lazy chunk must leave a page that says so and recovers, not a blank one.
-// Each case blocks the ONE chunk that holds a screen (found by a string only that screen's code
+// Each case blocks the chunk that holds a screen (found by a string only that screen's code
 // has, so no hashed file name is pinned), shows the page's own error, then lets the chunk through
 // and follows its Retry or Reload. Waits are conditions with a 10 s deadline; no fixed sleeps.
 // Ported from the review's flows; named `.routes.test.ts` so the `core` project picks it up.
 import type { Page } from '@playwright/test';
+import { body, hits, indexState, server } from '../search-results.fixtures';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
 import {
 	SettingsBackend,
@@ -32,9 +33,10 @@ async function blockChunk(page: Page, marker: string) {
 			} else {
 				await route.fulfill({ response, body: text });
 			}
-		} catch {
-			// The page closed or navigated away while the request was in flight (a Reload or
-			// the end of the test); there is nothing left to answer.
+		} catch (error) {
+			// The page closed while the request was in flight (the end of the test, or a Reload
+			// that replaced it); there is nothing left to answer. Anything else is a real failure.
+			if (!page.isClosed() && !String(error).includes('closed')) throw error;
 		}
 	});
 	return gate;
@@ -119,5 +121,30 @@ test.describe('a lazy chunk fails to load', () => {
 				"Part of this page couldn't load. Check your connection, then reload the page."
 			)
 		).toHaveCount(0);
+	});
+
+	// EXPECTED GAP, not the wanted behaviour: when the Search results chunk fails, the page shows
+	// only the query bar, no results and no message, and raises an uncaught rejection, because
+	// `loadResults()` in src/routes/search/+page.svelte has no `.catch`. The follow-up slice
+	// X-search-chunk-retry adds a retry state; it must flip this case to assert that state
+	// (a role=alert message with a Retry that brings the results back) and drop the page error.
+	test('Search results (expected gap, X-search-chunk-retry): blank query-bar page and an uncaught error', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const errors: string[] = [];
+		page.on('pageerror', (error) => errors.push(error.message));
+		server(mock, () => body(hits(2)));
+		mock.on('searchIndexState', indexState(5_000_000));
+		const gate = await blockChunk(page, 'results-announce');
+		await go('/search?q=lantern');
+		await expect(page.getByRole('combobox', { name: 'Search torrents' })).toBeVisible();
+		await expect.poll(() => gate.hit).toBeGreaterThan(0);
+		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toHaveCount(0);
+		await expect(page.getByTestId('results-announce')).toHaveCount(0);
+		await expect
+			.poll(() => errors.filter((e) => e.includes('Failed to fetch dynamically imported module')))
+			.toHaveLength(1);
 	});
 });

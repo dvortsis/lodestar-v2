@@ -1,6 +1,8 @@
-// UI check (review 03 "Dialog and drawer focus return", flow-drawer-and-focus.mjs): every dialog
-// and palette opened from the keyboard hands focus back to the control that opened it, whether it
-// is closed with Esc or answered with its Cancel button. One case per dialog; a new one is one
+// UI check (review 03 "Dialog and drawer focus return", flow-drawer-and-focus.mjs): the dialogs in
+// the table below (Alerts' New alert, Companions' update offer), opened from the keyboard, hand
+// focus back to the control that opened them, whether closed with Esc or answered with Cancel.
+// The drawer, the `?` sheet and the command palette are covered by ui-overlays.keyboard.test.ts
+// and shell.keyboard.test.ts (palette). One case per dialog; a new one is one
 // more entry in a table. Keyboard only (the `kbd` fixture fails the test on any pointer event);
 // waits are conditions with a 10 s deadline, no fixed sleeps.
 import type { Locator, Page } from '@playwright/test';
