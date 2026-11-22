@@ -1,4 +1,4 @@
-# X-pool-past-cap-room decisions
+# X-pool-past-cap-room decisions (#1071)
 
 Follows X-pool-first-request-docs (#1061). That slice found seven first reservations waiting past the budget model's 30 s `MAX_WAIT`, at the test-sized budget (`LIMIT`, 1,000,000 B) with 640 seeds. It asked whether a growth past the grown claims' cap should leave room for two first requests.
 
@@ -30,10 +30,12 @@ Follows X-pool-first-request-docs (#1061). That slice found seven first reservat
 - **The order doesn't depend on which task runs first.** A first version let a held-back claim take its place back only when its own task polled. The fresh review showed that a younger head polled first could still take the room. On the multi-thread runtime that's the likely order, since its LIFO slot runs the most recently woken task first. `an_older_held_back_claim_goes_first_whoever_looks_first` polls the younger head in the test's own task, before the held-back claim's task runs.
 - **A new claim waits behind its network's held-back claims,** even one small enough for what's left of the share. Otherwise a stream of small claims from its own network could keep a larger one out, which is the same starvation.
 - **The cost:**
-  - `partials` and `apart` together are bounded by the fetches in flight, one claim each: `max_sockets` as configured, which is 400 by default, 1,000 for the most intense preset, and 200 in a worker.
-  - `order` looks at the front and at each waiting network's oldest claim: O(networks waiting apart).
-  - A claim's place, and whether it's held back (`apart_ids`), are looked up without a scan.
-  - Nothing is allocated beyond the queues' own room.
+  - **The bound:** `partials` and `apart` together are bounded by the fetches in flight, one claim each. That is `max_sockets`: 400 by default, 1,000 in the most intense preset, 200 in a worker, and at most 4,096 by setting.
+  - **What one call costs:** `order` looks at the front and at each waiting network's oldest claim, O(networks waiting apart).
+  - **What one broadcast costs:** each broadcast on `freed` has every waiter run `order`, so waiters × networks waiting apart. That's the same order as the `contains`/`retain` each waiter ran before.
+  - **Networks waiting apart:** at most the held-back claims, so at most `max_sockets`. In practice they're the few networks over their share at once.
+  - **Lookups and removal:** a claim's place, and whether it's held back (`apart_ids`), are looked up without a scan. A granted claim, always the head, leaves with `pop_front`. A claim that leaves while it waits (cancelled, or its fetch's deadline) is removed with a `retain` over its queue.
+  - **Allocation:** nothing beyond the queues' own room.
 - **The model** now checks on every tick that:
   - `starved` is only ever the head;
   - both queues are in order of place;
@@ -84,12 +86,13 @@ All numbers are from the budget model: waits past 30 s, the worst wait, waits ov
 - **The 640-seed caveat is gone** from the module doc. `POOL_MODEL_SEEDS=640` passes at both budgets on this head.
 
 ## Tests
+- **What the model doesn't cover:** it never cancels a held-back claim, and never settles a partial claim without growing. Only the unit tests below cover those two paths.
 - **The changed test:** `a_claim_held_by_its_networks_share_keeps_its_turn` now asserts the opposite order.
   - B, held back by its network's share, is older than C, another network's claim that heads the queue meanwhile. When the share frees, B goes first, while C still waits on its own rule.
   - The old test had B queue behind C. That order was the bug: a claim's wait had no bound, since each time its network's share freed it went behind every claim that had come since.
 - **`one_networks_partial_claims_keep_to_their_share`:** it now checks that the held-back claim is in its network's `apart` queue.
 - **New tests,** all deterministic in paused time, with waits on conditions with 10 s deadlines:
-  - `a_held_back_claim_is_woken_however_its_network_frees_its_share`: one table row each for the claim holding the share growing, settling, being dropped, being cancelled while it waits to grow, and running out a deadline waiting.
+  - `a_held_back_claim_is_woken_however_its_network_frees_its_share`: one table row each for the claim holding the share growing, settling or being dropped, and for its fetch, which owns the claim and waits to grow, being cancelled (an aborted task) or running out its own deadline (a timeout in paused time). Each drops the claim mid-await.
   - `a_dropped_held_back_claim_leaves_no_dead_head`.
   - `a_networks_oldest_held_back_claim_goes_first`.
   - `a_younger_claim_waits_behind_its_networks_held_back_one`.

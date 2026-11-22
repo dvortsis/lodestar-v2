@@ -316,10 +316,15 @@ struct BudgetState {
     /// the oldest claim whose network's share has room for it.
     ///
     /// With `apart`, bounded by the fetches in flight, one claim each: the
-    /// pool's `max_sockets` as configured (400 by default, 1,000 for the
-    /// most intense preset, 200 in a worker). Ordering them costs one look
-    /// at each network's oldest held-back claim, and allocates nothing but
-    /// the queues' own room.
+    /// pool's `max_sockets` (400 by default, 1,000 in the most intense
+    /// preset, 200 in a worker, and at most 4,096 by setting). Each
+    /// [`BudgetState::order`] looks at the front and at each network's
+    /// oldest held-back claim, and allocates nothing but the queues' own
+    /// room. Each broadcast on `freed` has every waiter run it, so a
+    /// broadcast costs waiters × networks waiting apart: the same order as
+    /// the `contains`/`retain` each waiter ran before. Networks waiting
+    /// apart are at most the held-back claims, so at most `max_sockets`,
+    /// and in practice the few networks over their share at once.
     partials: VecDeque<PartialWait>,
     /// Partial claims held back by their network's share, by network,
     /// oldest first, each keeping its place. A network's oldest takes its
@@ -471,7 +476,13 @@ impl BudgetState {
             return;
         }
         if !self.apart_ids.remove(&claim.id) {
-            self.partials.retain(|w| w.id != claim.id);
+            // A granted claim is the head; one that leaves while it waits
+            // (cancelled, or its fetch's deadline) may be anywhere.
+            if self.head() == Some(claim.id) {
+                self.partials.pop_front();
+            } else {
+                self.partials.retain(|w| w.id != claim.id);
+            }
         } else if let Some(net) = claim.net
             && let std::collections::hash_map::Entry::Occupied(mut waiting) = self.apart.entry(net)
         {
@@ -629,7 +640,9 @@ impl Budget {
     /// room left in the floor (a fetch of a small dict would be granted;
     /// what a fetch will ask for isn't known before its handshake). A claim
     /// held back by a rule of its own doesn't stop dispatch: it may be a
-    /// liar's.
+    /// liar's. It first puts the partial claims' queue in order
+    /// ([`BudgetState::order`]), which may clear a stale `starved` and
+    /// wake the waiters.
     fn has_room(&self) -> bool {
         let mut s = self.lock();
         if s.order(self.limit - self.floor()) {
@@ -5001,23 +5014,33 @@ mod budget {
                     drop(a);
                     None
                 }
+                // A's fetch owns its claim and waits to grow (700,000
+                // doesn't fit beside the other grown claim and the floor):
+                // it's cancelled, or its own deadline runs out, and the
+                // claim is dropped with it, mid-await.
                 "cancelled" | "deadline" => {
                     let total = 700_000;
-                    let mut grow = growing(&a, total);
+                    let deadline = if how == "cancelled" {
+                        Duration::from_secs(3_600)
+                    } else {
+                        Duration::from_secs(5)
+                    };
+                    let mut fetch = tokio::spawn(async move {
+                        tokio::time::timeout(deadline, a.reserve(total, total))
+                            .await
+                            .is_err()
+                    });
                     queued(&b, |s| s.growth.len() == 1).await;
                     if how == "cancelled" {
-                        grow.abort();
-                        let _ = (&mut grow).await;
+                        fetch.abort();
+                        assert!((&mut fetch).await.unwrap_err().is_cancelled());
                     } else {
-                        let r = a.clone();
-                        grow.abort();
-                        let _ = (&mut grow).await;
-                        let ran_out =
-                            tokio::time::timeout(Duration::from_secs(1), r.reserve(total, total))
-                                .await;
-                        assert!(ran_out.is_err(), "{how}: A's growth still waits");
+                        let ran_out = tokio::time::timeout(Duration::from_secs(10), &mut fetch)
+                            .await
+                            .expect("A's deadline runs out")
+                            .unwrap();
+                        assert!(ran_out, "{how}: A's growth was never granted");
                     }
-                    drop(a);
                     None
                 }
                 _ => unreachable!(),
