@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { formatDateTime, formatRelative } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import { m } from '$lib/paraglide/messages.js';
 	import { subscribeTicker, ticker } from './ticker.svelte';
 
 	interface Props {
@@ -16,7 +17,9 @@
 	$effect(() => subscribeTicker());
 
 	const locale = $derived(currentLocale());
-	const relative = $derived(formatRelative(seconds, locale, { now: ticker.now }));
+	const relative = $derived(
+		formatRelative(seconds, locale, { now: ticker.now, justNow: m.common_just_now() })
+	);
 	const absolute = $derived(formatDateTime(seconds, locale, { timeZone }));
 	const iso = $derived(
 		typeof seconds === 'number' && Number.isFinite(seconds)

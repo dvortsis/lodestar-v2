@@ -303,9 +303,9 @@ describe('formatRelative', () => {
 		[-86400, 'yesterday', '昨天'],
 		[5 * 60, 'in 5 minutes', '5分钟后'],
 		[-45, '45 seconds ago', '45秒钟前'],
-		[-44, 'just now', '刚刚'],
-		[0, 'just now', '刚刚'],
-		[44, 'just now', '刚刚'],
+		[-44, 'now', '现在'],
+		[0, 'now', '现在'],
+		[44, 'now', '现在'],
 		[45, 'in 45 seconds', '45秒钟后'],
 		[-59, '59 seconds ago', '59秒钟前'],
 		[-60, '1 minute ago', '1分钟前'],
@@ -324,6 +324,13 @@ describe('formatRelative', () => {
 	}
 	it('takes the translated just_now message', () => {
 		expect(formatRelative(now, 'en', { now, justNow: 'Just now!' })).toBe('Just now!');
+	});
+	it("without just_now, says Intl's own word for the moment, not built-in English", () => {
+		// Under 45 s either way: the rows above. Any locale Intl knows is localized.
+		expect(formatRelative(now + 10, 'fr', { now })).toBe(
+			new Intl.RelativeTimeFormat('fr', { numeric: 'auto' }).format(0, 'second')
+		);
+		expect(formatRelative(now, 'zh', { now })).not.toBe('just now');
 	});
 	it('uses the clock when now is omitted', () => {
 		expect(formatRelative(Date.now() / 1000 - 3 * 3600, 'en')).toBe('3 hours ago');

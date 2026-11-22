@@ -135,7 +135,8 @@ REPORT = {
 }
 SEGMENT = {"segment": num, "arm": one_of("control", "treatment"), "result": RESULT, "report": REPORT}
 DOC = {"version": num, "rules_commit": commit, "spec_commit": commit, "lodestar_commit": commit,
-       "image_digest": digest, "treatment": treatment_key, "winners": winners_list, "segment_hours": num,
+       "image_digest": digest, "treatment": treatment_key, "winners": winners_list,
+       "mode": one_of("abba", "on"), "segment_hours": num,
        "role": one_of("main", "worker"),
        "outages": num, "outage_notes": num, "host_guard_drops": count, "damaged": boolean,
        "segments": [SEGMENT]}
@@ -225,10 +226,13 @@ def collect(block: Path, out: Path, run=subprocess.run) -> dict:
     for line in (block / "block.env").read_text(encoding="ascii").splitlines():
         k, _, v = line.partition("=")
         env[k] = v
+    mode = "on" if env.get("MODE") == "on" else "abba"  # block.env names MODE for on-only alone
     doc = {"version": 1, "rules_commit": env.get("RULES_COMMIT"), "spec_commit": env.get("SPEC_COMMIT"),
            "lodestar_commit": env.get("LODESTAR_COMMIT"), "image_digest": "sha256:" + env.get("IMAGE_DIGEST", ""),
            "treatment": env.get("TREATMENT"),
-           "winners": [w for w in env.get("WINNERS", "").split("-") if w], "segment_hours": int(env.get("SEGMENT_HOURS", "0") or 0),
+           "winners": [w for w in env.get("WINNERS", "").split("-") if w],
+           # X-block-on-only-mode: an on-only block is marked, so it's never read as an A/B.
+           "mode": mode, "segment_hours": int(env.get("SEGMENT_HOURS", "0") or 0),
            "role": env.get("ROLE"), "outages": count_lines(block / "outages"),
            "outage_notes": count_lines(block / "notes"),
            "host_guard_drops": count_kind(block / "outages", "host_guard_dropped"), "damaged": damaged(block),
@@ -252,7 +256,7 @@ def collect(block: Path, out: Path, run=subprocess.run) -> dict:
             report = read_json(report_path) if r.returncode == 0 else None
         except subprocess.TimeoutExpired:
             report = None
-        doc["segments"].append({"segment": n, "arm": "treatment" if n in (2, 3) else "control",
+        doc["segments"].append({"segment": n, "arm": "treatment" if mode == "on" or n in (2, 3) else "control",
                                 "result": read_json(seg / "result.json"),
                                 "report": report if report is not None else {"state": "analysis_failed"}})
     return scrub(doc)

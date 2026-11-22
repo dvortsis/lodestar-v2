@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # start-block (OP-3b; docs/plan/2026-11-08-cloud-test-plan.md Lane L and the
-# cloud screen): one ABBA block at a rules commit, from a fresh data directory.
+# cloud screen): one ABBA block at a rules commit, from a fresh data directory,
+# or with MODE=on (X-block-on-only-mode) one with the treatment on in every
+# segment, for a screen that needs no control (PURPOSE=screen; block-lib.sh
+# mode_check).
 # It returns once segment 1's collector is running; the collectors and the
 # outage watcher run detached.
 #
@@ -38,7 +41,7 @@ fail() {
 
 # The arguments, already checked by the control side; checked again here.
 # Only the arguments' image pin counts, never one from the environment.
-unset IMAGE_DIGEST LOCAL_IMAGE_ID WINNERS
+unset IMAGE_DIGEST LOCAL_IMAGE_ID WINNERS MODE PURPOSE
 while IFS='=' read -r k v; do
   case $k in
     IMAGE_DIGEST | LOCAL_IMAGE_ID) [[ $v =~ ^[0-9a-f]{64}$ ]] ;;
@@ -49,6 +52,8 @@ while IFS='=' read -r k v; do
     ROLE) [[ $v =~ ^(main|worker)$ ]] ;;
     NOTICE_VERSION) [[ $v =~ ^[1-9][0-9]{0,5}$ ]] ;;
     BLOCK_ID) [[ $v =~ ^[0-9]{1,20}-[0-9]{1,6}$ ]] ;;
+    MODE) [[ $v =~ ^(abba|on)$ ]] ;;
+    PURPOSE) [[ $v == screen ]] ;;
     *) false ;;
   esac || fail args_valid
   printf -v "$k" '%s' "$v"
@@ -64,7 +69,14 @@ done
 if ! why=$(stacking "$TREATMENT" "${WINNERS:-}"); then
   echo "fail stacking_$why"; fail args_valid
 fi
+# On-only has no control arm: refused for a stage that needs one, here as on
+# the control side (rules.py), before anything starts.
+if ! why=$(mode_check "${MODE:-}" "${PURPOSE:-}" "${WINNERS:-}"); then
+  echo "fail $why"; fail args_valid
+fi
+[[ ${MODE:-} == abba ]] && MODE=""  # abba is the default: its block.env is as before
 echo "ok args_valid"
+[[ ${MODE:-} == on ]] && echo "ok mode_on"  # every segment runs the treatment
 for tool in docker systemctl iptables flock; do
   command -v "$tool" >/dev/null 2>&1 || fail "tool_missing_${tool//-/_}"
 done
@@ -109,7 +121,8 @@ echo "ok boot_guard_installed"
 printf 'block=%s\nsegment=1\nstate=starting\n' "$BLOCK_ID" | marker_write || fail marker_written
 echo "ok marker_written"
 {
-  for k in IMAGE_DIGEST LOCAL_IMAGE_ID LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT WINNERS SEGMENT_HOURS ROLE; do
+  for k in IMAGE_DIGEST LOCAL_IMAGE_ID LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT WINNERS SEGMENT_HOURS ROLE \
+    MODE PURPOSE; do
     if [[ -n ${!k:-} ]]; then printf '%s=%s\n' "$k" "${!k}"; fi
   done
 } >"$BLOCK/block.env" && load_block_env || fail block_env
