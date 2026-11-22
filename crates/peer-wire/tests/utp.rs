@@ -293,12 +293,9 @@ struct Loss {
 }
 
 impl Loss {
-    fn new(seed: u64) -> Loss {
-        Loss::at(seed, 0.15)
-    }
-
     /// A link losing `rate` of its packets (below 50%: never two in a row).
     fn at(seed: u64, rate: f64) -> Loss {
+        debug_assert!((0.0..0.5).contains(&rate), "a loss rate below 50%: {rate}");
         Loss {
             rng: StdRng::seed_from_u64(seed),
             dropped_last: false,
@@ -393,11 +390,12 @@ async fn fetches_over_a_lossy_link() {
             timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(10),
             // The product's 4 s first-window bound (X-fetch-first-window)
-            // is missed by about 1.5% of honest fetches over this link: a
-            // couple of retransmit timeouts in the window's ~46 packets
+            // is missed by about 2% of honest fetches over this link: a
+            // couple of retransmit timeouts in the window's ~55 packets
             // use it up. Over 1,000 probe fetches the window took up to
             // 9.8 s; 20 s covers that with margin, inside the 30 s
-            // deadline (X-flake-utp-lossy-win).
+            // deadline (X-flake-utp-lossy-win). The product keeps 4 s
+            // (CR-UTP-FIRST-WINDOW, `first_window_miss_rates`).
             first_window_deadline: Duration::from_secs(20),
             ..utp_opts(utp.clone(), mode)
         };
@@ -436,13 +434,17 @@ async fn lossy_fetch(
     (got.map(|_| ()).map_err(|e| e.to_string()), took, window)
 }
 
-/// CR-UTP-FIRST-WINDOW's measurement: honest fetches over the lossy link
-/// at 5, 10, 15 and 20% loss, each seed run with the product's 4 s first
-/// window and again with 20 s, 16 at a time. Prints, per loss rate, the
-/// first-window misses at 4 s, other failures, and the 20 s runs' total
-/// times. `cargo test -p lodestar-peer-wire --test utp first_window_miss_rates -- --ignored --nocapture`
+/// CR-UTP-FIRST-WINDOW's measurement (a measurement, not a disabled
+/// check): honest fetches of a 120 kB dict over the lossy link at 5, 10,
+/// 15 and 20% loss, each seed run with the product's 4 s first window and
+/// again with 20 s, 16 at a time. Prints, per loss rate, the first-window
+/// misses at 4 s, other failures, and the 20 s runs' total times.
+/// 400 fetches per run by default (`FIRST_WINDOW_FETCHES` changes it), about
+/// 32 min in a release build:
+/// `cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates -- --ignored --nocapture`
+/// Results and the decision: `docs/decisions/2026-11-22-CR-UTP-FIRST-WINDOW.md`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "measurement: a few minutes of wall time"]
+#[ignore = "measurement: about 32 min in a release build"]
 async fn first_window_miss_rates() {
     let n: u64 = std::env::var("FIRST_WINDOW_FETCHES")
         .ok()
