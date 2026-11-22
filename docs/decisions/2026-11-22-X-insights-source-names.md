@@ -1,4 +1,4 @@
-# X-insights-source-names decisions (#PR)
+# X-insights-source-names decisions (#1039)
 
 Runner brief, 2026-11-21Z, from X-labels (#1023): "Insights by-source rows carry the plugin's display name from the server". Architecture §10.9; `docs/metrics.md` §6.8, §7.7; `docs/decisions/2026-11-21-X-labels.md` ("Two lazy passes": the plugin-name table the client carried for Insights).
 
