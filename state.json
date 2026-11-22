@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-22T20:03:34Z",
+  "updated_at": "2026-11-22T21:22:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T20:03:34Z",
+    "updated": "2026-11-22T21:22:54Z",
     "items": [
       {
         "slot": 1,
@@ -10671,16 +10671,16 @@
         "agent": "session_01MMjhnCUfvFAhDBHWuB237x",
         "model": "opus",
         "since": "2026-11-22T20:03:11Z",
-        "doing": "step 0 (resolution source, response shape, latency, table column)"
+        "doing": "go (A); merging main after #1077, then ready"
       },
       {
         "slot": 3,
-        "slice": "X-settings-find",
-        "role": "slice",
-        "agent": "session_01MMjhn8dW836gVL7w6tkAZz",
+        "slice": "X-narrow-states",
+        "role": "build",
+        "agent": "pending",
         "model": "sonnet",
-        "since": "2026-11-22T15:33Z",
-        "doing": "#1075 merged; .size-limit.mjs handed over; merging main, re-measuring, then ready"
+        "since": "2026-11-22T21:22:54Z",
+        "doing": "launching; step 0 first"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhn91TUNsrnanuJrszsr",
         "model": "sonnet",
         "since": "2026-11-22T17:19:17Z",
-        "doing": "step 0 for PR 2 (stage pages); #1073 merged"
+        "doing": ".size-limit.mjs handed over after #1077; merging main, entries, PR"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
