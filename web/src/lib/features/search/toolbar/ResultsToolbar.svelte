@@ -30,22 +30,34 @@
 
 	const sorts = $derived(SORTS.map((s) => ({ value: s.value, label: s.label() })));
 	const sort = $derived(sortValue(search.sort));
-	// The account's Appearance density (set on <html> by the shell) is the default view.
-	// It arrives with the saved preferences, after the page starts, so it is watched.
-	let pref = $state(prefOf(document.documentElement.dataset.density));
+	// The account's Appearance density is the default view. The shell sets <html data-density> only
+	// after the page starts, so the start reads the cache it wrote on the last visit (prefs.ts), and
+	// the attribute is watched for the first visit and for a change.
+	const cached = () => {
+		try {
+			return JSON.parse(localStorage.getItem('lodestar.appearance') ?? 'null')?.density;
+		} catch {
+			return undefined;
+		}
+	};
+	let pref = $state(prefOf(document.documentElement.dataset.density ?? cached()));
+	// A view picked on this page stays, whatever the preference says when it arrives.
+	let chose = false;
 	$effect(() => {
 		const root = document.documentElement;
 		const mo = new MutationObserver(() => (pref = prefOf(root.dataset.density)));
 		mo.observe(root, { attributes: true, attributeFilter: ['data-density'] });
 		return () => mo.disconnect();
 	});
-	const view = $derived(viewOf(page.url, pref));
+	// Only on /search: elsewhere (the drawer's shallow /t/{hash} URL) the rows read the URL alone.
+	const live = $derived(page.url.pathname === '/search' ? pref : 'comfortable');
+	const view = $derived(viewOf(page.url, live));
 	// A link that names no view gets the preference's, written to the URL (replacing the entry) so the
 	// rows and the table read the same view.
 	$effect(() => {
-		if (pref !== 'comfortable' && page.url.pathname === '/search' && viewUnset(page.url))
+		if (!chose && live !== 'comfortable' && viewUnset(page.url))
 			// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewHref() keeps this page's own path
-			void goto(viewHref(page.url, viewOf(page.url, pref), pref), {
+			void goto(viewHref(page.url, viewOf(page.url, live), live), {
 				replaceState: true,
 				keepFocus: true,
 				noScroll: true
@@ -82,10 +94,11 @@
 	}
 
 	function setView(next: View) {
+		chose = true;
 		ensureSearchPath();
 		// A view parameter, not a search: it replaces the entry, so Back still walks searches.
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewHref() keeps this page's own path
-		void goto(viewHref(page.url, next, pref), {
+		void goto(viewHref(page.url, next, live), {
 			replaceState: true,
 			keepFocus: true,
 			noScroll: true

@@ -1,6 +1,7 @@
 // The toolbar against stand-ins: W5's state, the results store and kit's page. The count is
 // visual only; sort goes to W5, density to the URL, and Save opens the alerts' dialog.
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hit } from '../results/fixtures';
 
@@ -151,7 +152,18 @@ describe('the account density preference', () => {
 		document.documentElement.dataset.density = 'cards';
 		visit('/search?q=lantern&density=comfortable');
 		render(ResultsToolbar);
+		await tick();
 		expect((screen.getByLabelText('View') as HTMLSelectElement).value).toBe('list');
 		expect(goto).not.toHaveBeenCalled();
+	});
+
+	it('reads the cache from the last visit, and not off /search', async () => {
+		localStorage.setItem('lodestar.appearance', JSON.stringify({ density: 'cards' }));
+		visit('/t/' + 'a'.repeat(40) + '?q=lantern');
+		render(ResultsToolbar);
+		await tick();
+		expect((screen.getByLabelText('View') as HTMLSelectElement).value).toBe('list');
+		expect(goto).not.toHaveBeenCalled();
+		localStorage.removeItem('lodestar.appearance');
 	});
 });

@@ -234,7 +234,7 @@
 							{:else}
 								<td class:rt-num={NUMERIC.has(id)} data-testid="table-{id}-{i + 1}">
 									{#if id === 'raw'}
-										<span class="rt-raw">{showBidi(hit.name)}</span>
+										<span class="rt-raw" title={hit.name}>{showBidi(hit.name)}</span>
 									{:else if id === 'type'}
 										{(hit.content_type && TYPE[hit.content_type]?.()) || '—'}
 									{:else if id === 'size'}

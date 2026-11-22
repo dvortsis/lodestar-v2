@@ -189,6 +189,13 @@ test('on a phone the controls fit one row above the first result, and More is a 
 	// Filters and Sort share a line, and the first row starts well above the old 515 px.
 	expect(Math.abs(filters!.y - sort!.y)).toBeLessThan(16);
 	expect(first!.y).toBeLessThan(420);
+	expect(filters!.x + filters!.width).toBeLessThanOrEqual(sort!.x);
+	// With filters active the label grows ("Filters (1)"): the button still never overlaps the row.
+	await go('/search?q=lantern+type:movie');
+	await expect(row(page, 1)).toBeVisible();
+	const wide = await page.getByTestId('facet-open').boundingBox();
+	const sort2 = await page.getByLabel('Sort').boundingBox();
+	expect(wide!.x + wide!.width).toBeLessThanOrEqual(sort2!.x);
 	await expect(page.getByTestId('select-mode')).toBeHidden();
 	const more = page.getByRole('button', { name: 'More', exact: true });
 	await more.click();
