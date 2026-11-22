@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-22T20:03:11Z",
+  "updated_at": "2026-11-22T20:03:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T20:03:11Z",
+    "updated": "2026-11-22T20:03:34Z",
     "items": [
       {
         "slot": 1,
@@ -10668,10 +10668,10 @@
         "slot": 2,
         "slice": "X-hit-resolution",
         "role": "build",
-        "agent": "pending",
+        "agent": "session_01MMjhnCUfvFAhDBHWuB237x",
         "model": "opus",
         "since": "2026-11-22T20:03:11Z",
-        "doing": "launching; step 0 first"
+        "doing": "step 0 (resolution source, response shape, latency, table column)"
       },
       {
         "slot": 3,
