@@ -153,19 +153,23 @@ test.describe('a lazy chunk fails to load', () => {
 	}) => {
 		const { errors, failed, gate } = await failSearch(page, go, mock as OpenApiMock);
 		gate.blocked = false;
-		// Keyboard only: Tab from the query bar reaches Retry, and Enter runs it.
+		// Keyboard only: Retry is within a few Tab stops of the query bar (the bar's Syntax button
+		// comes first), and Enter runs it.
 		const retry = failed.getByRole('button', { name: 'Retry' });
 		await page.getByRole('combobox', { name: 'Search torrents' }).focus();
-		await expect
-			.poll(async () => {
-				await page.keyboard.press('Tab');
-				return retry.evaluate((el) => el === document.activeElement);
-			})
-			.toBe(true);
+		let reached = false;
+		for (let i = 0; i < 4 && !reached; i++) {
+			await page.keyboard.press('Tab');
+			reached = await retry.evaluate((el) => el === document.activeElement);
+		}
+		expect(reached).toBe(true);
 		await page.keyboard.press('Enter');
 		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
 		await expect(failed).toHaveCount(0);
 		await expect.poll(() => focusInResults(page)).toBe(true);
+		// The marker that sends focus there never reaches the URL, and is used up.
+		expect(new URL(page.url()).hash).toBe('');
+		expect(await page.evaluate(() => window.name)).toBe('');
 		expect(errors).toEqual([]);
 	});
 
@@ -191,6 +195,23 @@ test.describe('a lazy chunk fails to load', () => {
 		await expect(box).toHaveText('harbor');
 		await expect(failed).toHaveCount(0);
 		await expect.poll(() => focusInResults(page)).toBe(true);
+		expect(errors).toEqual([]);
+	});
+
+	test('Search results: Retry while the chunk still fails shows the alert again, with no error', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const { errors, failed, gate } = await failSearch(page, go, mock as OpenApiMock);
+		const before = gate.hit;
+		await failed.getByRole('button', { name: 'Retry' }).click();
+		// The reload asked for the chunk again, and it failed again.
+		await expect.poll(() => gate.hit).toBeGreaterThan(before);
+		await expect(failed).toHaveText("Results couldn't load.Retry");
+		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toHaveCount(0);
+		// The one-shot marker was used by that load: a later success doesn't move focus.
+		expect(await page.evaluate(() => window.name)).toBe('');
 		expect(errors).toEqual([]);
 	});
 });
