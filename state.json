@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-22T15:45:29Z",
+  "updated_at": "2026-11-22T17:19:17Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T15:45:29Z",
+    "updated": "2026-11-22T17:19:17Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhnBpaU4uMckWHth6C5f",
         "model": "opus",
         "since": "2026-11-22T15:33Z",
-        "doing": "building after step 0 go (15:42Z)"
+        "doing": "#1076 in fresh review"
       },
       {
         "slot": 2,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhnAa7HfaQXcvUi8EyoQ",
         "model": "sonnet",
         "since": "2026-11-22T14:39Z",
-        "doing": "building; lighter Results toolbar before any size call"
+        "doing": "#1075 review CHANGES: fixing typing loss, skip link, banner, late-preference shift"
       },
       {
         "slot": 3,
@@ -10680,16 +10680,16 @@
         "agent": "session_01MMjhn8dW836gVL7w6tkAZz",
         "model": "sonnet",
         "since": "2026-11-22T15:33Z",
-        "doing": "building after step 0 go (15:4xZ)"
+        "doing": "local; size file after #1075 merges"
       },
       {
         "slot": 4,
-        "slice": "X-insights-story",
+        "slice": "X-insights-story-stages",
         "role": "slice",
         "agent": "session_01MMjhn91TUNsrnanuJrszsr",
         "model": "sonnet",
-        "since": "2026-11-22T14:39Z",
-        "doing": "PR 1 (#1073) open: applying the runner calls; PR 2 stage pages after it"
+        "since": "2026-11-22T17:19:17Z",
+        "doing": "step 0 for PR 2 (stage pages); #1073 merged"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
