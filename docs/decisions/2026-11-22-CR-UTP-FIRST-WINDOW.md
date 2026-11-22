@@ -72,8 +72,9 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
   - **Changed while building:** the step-0 version waited for every requested piece before moving on, and that would have let such a peer skip every pace check until the fetch deadline.
 - **What it costs:**
   - **The hostile-peer worst case** is 80 KiB of dict pinned for 4 s, against 64 KiB, by a peer that announces a large dict and sends nothing.
-  - **In the pool's units** (`weigh`: the dict, the client name, a full PEX list and the `FetchedKey`), a waiting first request is about 87 KiB against about 71 KiB. That ratio is where "about 20% fewer" comes from.
-  - **The global reserve budget is unchanged.** About 20% fewer first requests fit in it at once when it binds.
+  - **In the pool's units** (`weigh`: the dict, the client name, a full PEX list and the `FetchedKey`), a waiting first request is about 87 KiB against about 71 KiB.
+  - **The global reserve budget is unchanged.** About 18–20% fewer first requests fit in it at once when it binds, from that ratio.
+  - **Silent peers:** 20 that announce a large dict and send nothing pin about 1.7 MB of a worker's 4 MiB budget, against about 1.4 MB today (`silent_claimers_pin_one_small_window_and_small_dicts_still_flow`'s case).
   - **Every time bound is unchanged** for every peer, slow, silent or hostile.
   - **What the reserve protects is unchanged:** every requested byte is still reserved before it's requested.
 - **Smaller dicts are unchanged:**
@@ -123,3 +124,12 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
   - TCP is unchanged.
 - **The gain left for it after (d):** the misses in the (d) column above, at most 9.25% at 20% loss and 2.5% at 15%. It would remove those that need under 8 s. That isn't measured with the extension in place.
 - **The runner's recommendation:** not to build it unless live data show uTP paths at 15% loss or worse are common. The runner adds the owner_queue entry in its records PR.
+
+## Follow-up (the runner places it in r11)
+The pool's docs and fixtures still describe a 64 KiB first request. No pool rule depends on it (above), and every test passes. The runner decided (§2.26) to keep them out of this slice:
+- `crates/sources/src/pool.rs:250-251`: "a dict over 64 KiB reserves in two steps: its first request window".
+- `crates/sources/src/pool.rs:458`: `SMALL_CLAIM`'s doc ("a dict of one request window (64 KiB)"). The claim limit itself is right: no whole claim passes one window.
+- `crates/sources/src/pool_budget_model.rs:104-110`: the per-network invariant `held <= share + SMALL_CLAIM`, to be written as `share + one first request`.
+- `crates/sources/tests/pool.rs:80-86`: `WINDOW = 64 << 10`, documented as peer-wire's first request window.
+- `crates/sources/tests/pool.rs:2874-2877`: `silent_claimers_pin_one_small_window_and_small_dicts_still_flow`'s doc, "only their first 64 KiB window each".
+- `docs/metrics.md:935`: "asks for that first window all at once".
