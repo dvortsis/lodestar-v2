@@ -201,14 +201,15 @@ By default a block is **ABBA**: segment 1 is the control, 2 and 3 the treatment,
     "notice_version": 4
   }
   ```
-- **What's refused,** by the control plane when it reads the rules and again by start-block on the VM:
+- **What's refused,** by the control plane when it reads the rules (`the screen rules at that commit are malformed`) and again by start-block on the VM, which names the reason:
   - `"mode": "on"` without `"purpose": "screen"` (`mode_needs_control`);
   - `"mode": "on"` with `winners`: a stacked stage's control is the winners (`mode_needs_control`);
   - `"purpose"` without `"mode": "on"` (`purpose_needs_on_mode`);
   - any other mode or purpose value (`args_valid` alone).
 - **What the VM gets:** `block.env` gains `MODE=on` and `PURPOSE=screen`. start-block's answer includes `mode_on`. Every segment starts Lodestar with the treatment's switches on. Everything else is the same as an ABBA block: the leak test, the host and boot guards, arm-switch after each segment, copy-off. No stop condition changes.
 - **In the evidence:** copy-off marks the block `"mode": "on"` and every segment's `arm` as `treatment`. `analyze_cr.py effect` refuses such a block with `no_control_arm` (and `order_not_abba_or_baab`), so it never counts toward an A/B outcome. Each segment's own `segment` report reads as usual.
-- **A fresh-database screen's restart drill:** let the block run **at least 12 hours** on its fresh database before the restart drill (§6, after the gluetun-stop drill). An earlier restart doesn't test what the screen is for.
+- **A fresh-database screen's restart drill** (on the test VM, `infra/dev-vm/linux-lane.md` §2 step 5, with the commands at the end of §6): let Lodestar run **at least 12 hours** on its fresh database before the restart. An earlier restart doesn't test what the screen is for.
+  - A fleet on-only block can't give that: arm-switch restarts Lodestar after every segment (every 2 or 3 hours), and the block ends after segment 4 (8 or 12 hours). Use the fleet block for the treatment-on segments; do the 12-hour restart on the test VM.
 - **Checking a running Lodestar's switches:** the image has no `env` binary, so `docker exec lodestar env` fails. Read the main process's environment from the host instead:
   ```bash
   sudo cat /proc/"$(sudo docker inspect -f '{{.State.Pid}}' lodestar)"/environ | tr '\0' '\n' | grep '^LODESTAR_DHT_'
@@ -392,7 +393,7 @@ sudo LODESTAR_IMAGE=ghcr.io/dvortsis/lodestar-v2@sha256:<IMAGE_DIGEST> DOCKER_GI
 ```
 `<IMAGE_DIGEST>` is the `IMAGE_DIGEST=` line of `/var/lib/lodestar-block/block.env`; for a locally built image, use `LODESTAR_IMAGE=sha256:<LOCAL_IMAGE_ID>` from its `LOCAL_IMAGE_ID=` line. A restart doesn't recreate the container, so it keeps the image and switches it started with.
 
-For a fresh-database screen, run it only once the block has run at least 12 hours (3.3.2). To check the switches before and after, read them from `/proc/<pid>/environ` (3.3.2); the image has no `env` binary.
+For a fresh-database screen, run it only once Lodestar has run at least 12 hours on that database (3.3.2). To check the switches before and after, read them from `/proc/<pid>/environ` (3.3.2); the image has no `env` binary.
 
 ## 7. Renewing the VPN, host keys, and where the evidence lands
 - **`/fleet run renew-vpn <vm>`** delivers the PIA login again, through the same `deliver-pia` chain as after `up`. It first answers `run renew-vpn <vm>: deliver the PIA login again (deliver-pia, under this run's lock)`, then:

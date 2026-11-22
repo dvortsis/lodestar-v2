@@ -2376,6 +2376,7 @@ class OnOnlyMode(Base):
                  "on for a stacked stage": {"mode": "on", "purpose": "screen", "treatment": "lc", "winners": ["utp"]},
                  "a purpose on an abba block": {"purpose": "screen"},
                  "a purpose with abba named": {"mode": "abba", "purpose": "screen"},
+                 "a null purpose on an abba block": {"purpose": None},
                  "an unknown mode": {"mode": "baab"}, "a mode in capitals": {"mode": "ON"},
                  "a mode as a list": {"mode": ["on"]}, "a mode as a boolean": {"mode": True},
                  "a null mode": {"mode": None}, "a purpose as a list": {"mode": "on", "purpose": ["screen"]},
@@ -2396,6 +2397,14 @@ class OnOnlyMode(Base):
                 self.assertEqual(env.count("\n"), 7)  # no MODE or PURPOSE line
                 self.assertNotIn("MODE", env)
                 self.assertEqual(self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"], "false")  # segment 1: control
+        # The caller's environment never sets the mode at start-block either.
+        self.setUp()
+        self.args()
+        rc, lines, raw = self.run_script("start-block.sh", MODE="on", PURPOSE="screen")
+        self.assertEqual(rc, 0, raw)
+        self.assertNotIn("ok mode_on", lines)
+        self.assertNotIn("MODE", (self.block / "block.env").read_text())
+        self.assertEqual(self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"], "false")
         for seg, want in ((1, "true"), (2, "true"), (3, "false")):  # into segments 2, 3 and 4
             with self.subTest(seg=seg):
                 self.setUp()

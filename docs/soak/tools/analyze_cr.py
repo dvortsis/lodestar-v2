@@ -1171,7 +1171,7 @@ def judge_block(reports, treatment, winners=None):
         problems.append("treatment_switches_split")
     if arms not in ("ABBA", "BAAB"):
         problems.append("order_not_abba_or_baab")
-    if "A" not in arms:  # X-block-on-only-mode: an on-only block has no control, so no A/B verdict
+    if "A" not in arms and "?" not in arms:  # X-block-on-only-mode: an on-only block has no control, so no A/B verdict
         problems.append("no_control_arm")
     for s in segs:
         if s["verdict"] == "invalid" or (s["verdict"] == "void" and s["reasons"] != ["no_opportunity"]):

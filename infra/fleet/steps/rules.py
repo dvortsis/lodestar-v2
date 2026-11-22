@@ -93,19 +93,19 @@ def parse(text: bytes) -> dict:
           and (not winners or doc["treatment"] in STACKED)
           and _int(doc["segment_hours"]) and doc["segment_hours"] in (2, 3)
           and _int(doc["notice_version"]) and 1 <= doc["notice_version"] <= 999999
-          and _mode_ok(doc.get("mode", "abba"), doc.get("purpose"), winners))
+          and _mode_ok(doc.get("mode", "abba"), doc.get("purpose"), "purpose" in doc, winners))
     if not ok:
         raise bad
     return dict(doc, winners=list(winners), mode=doc.get("mode", "abba"), image_digest=image.group(1))
 
 
-def _mode_ok(mode, purpose, winners) -> bool:
+def _mode_ok(mode, purpose, has_purpose, winners) -> bool:
     """On-only has no control arm: only for a screen that needs none, never a stacked stage."""
     if not isinstance(mode, str) or mode not in MODES:
         return False
     if mode == "on":
         return purpose == "screen" and isinstance(purpose, str) and not winners
-    return purpose is None
+    return not has_purpose  # a purpose, even null, goes only with on-only
 
 
 def read(commit: str, repo: str, run=subprocess.run) -> tuple[dict, dict[str, bytes]]:
