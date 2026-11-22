@@ -9,7 +9,6 @@
 	"settings_find_none": "No setting matches “{query}”.",
 	"settings_find_key": "Find a setting",
 	"settings_find_palette_title": "Settings: {label}",
-	"settings_find_palette_section": "Settings",
 	"settings_find_start_title": "Start here",
 	"settings_find_start_client": "Download client",
 	"settings_find_start_client_none": "Not set up",

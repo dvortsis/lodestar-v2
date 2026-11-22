@@ -1,8 +1,8 @@
 // Finding a setting (X-settings-find, §10.10.3) against the OpenAPI mock, by keyboard alone, with
 // axe: `/` focuses the box, results come from every field's label, help and keys with a breadcrumb
 // and the current value, Enter opens the screen, reveals Advanced, focuses the field and outlines
-// it; the command palette offers the same fields; and on a phone the
-// Overview reads search, attention, then the list of screens.
+// it; the command palette offers the same fields; a secret's value is on no page and in no result;
+// and Start here names each basic. (The phone order of the Overview is deferred to X-field-layout.)
 import type { Page } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
 import { liveEvents, openPaletteWithKey } from './support/events-server';
@@ -129,6 +129,21 @@ test.describe('keyboard: Settings search', () => {
 		await expect(rows.nth(3)).toContainText('Set a schedule');
 		await expect(rows.nth(4)).toContainText('Admin password');
 		await expect(rows.nth(4).getByRole('link', { name: 'Change' })).toBeVisible();
+	});
+
+	test('a secret value appears on no page and in no result', async ({ page, go, kbd }) => {
+		const secret = 'hunter2-never-shown';
+		await go('/settings');
+		await expect(page.getByTestId('changed-row').first()).toBeVisible();
+		expect(await page.content()).not.toContain(secret);
+		await focusBoxWithSlash(page, kbd);
+		await page.keyboard.type('token');
+		expect(await page.content()).not.toContain(secret);
+		await kbd.press('Escape');
+		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'crawling');
+		await openPaletteWithKey(page, () => kbd.press('Control+k'));
+		await page.keyboard.type('token');
+		expect(await page.content()).not.toContain(secret);
 	});
 
 	test('the current item is shaded, not only bold', async ({ page, go }) => {

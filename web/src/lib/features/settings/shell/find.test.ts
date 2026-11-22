@@ -8,6 +8,7 @@ import type { FieldSpec } from '../form/types';
 import {
 	clearFindIndex,
 	describeValue,
+	FIELD_SCREENS,
 	highlight,
 	loadFindIndex,
 	matches,
@@ -91,6 +92,21 @@ describe('the index on the golden schema', () => {
 			expect(entry.href).toBe(`/settings/${entry.screen}#${spec.key}`);
 		}
 		expect(reached).toBeGreaterThan(40);
+	});
+
+	it('indexes fields only for screens whose form opens #field', async () => {
+		const entries = await loadFindIndex();
+		const fieldScreens = new Set(entries.filter((e) => e.spec).map((e) => e.screen));
+		expect(fieldScreens.size).toBeGreaterThan(3);
+		for (const id of fieldScreens) {
+			const screen = screens.find((s) => s.id === id)!;
+			expect(
+				screen.sections?.length || FIELD_SCREENS.has(id),
+				`${id}'s form doesn't open #field`
+			).toBeTruthy();
+		}
+		for (const id of ['appearance', 'updates', 'logging', 'language'])
+			expect(fieldScreens.has(id), id).toBe(false);
 	});
 
 	it('finds a field by its config.toml key, its environment name and its help', async () => {

@@ -155,16 +155,3 @@ export function screenFields(screen: Screen, index: SettingsIndexView): FieldSpe
 export async function aboutOf(screen: Screen): Promise<About> {
 	return (await screen.about?.())?.[screen.id] ?? {};
 }
-
-/**
- * Navigation matching does not load any setting values or private data. It matches the title, and
- * the purpose once the screen's `about` has loaded.
- */
-export function matchesScreen(screen: Screen, query: string, about: About = {}): boolean {
-	const normalize = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
-	const haystack = normalize(`${screen.title()} ${about.purpose?.() ?? ''}`);
-	return normalize(query)
-		.trim()
-		.split(/\s+/)
-		.every((word) => haystack.includes(word));
-}

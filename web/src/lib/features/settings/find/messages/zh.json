@@ -9,7 +9,6 @@
 	"settings_find_none": "没有与“{query}”匹配的设置。",
 	"settings_find_key": "查找设置",
 	"settings_find_palette_title": "设置：{label}",
-	"settings_find_palette_section": "设置",
 	"settings_find_start_title": "从这里开始",
 	"settings_find_start_client": "下载客户端",
 	"settings_find_start_client_none": "未设置",

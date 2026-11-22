@@ -9,6 +9,8 @@ import { highlight, loadFindIndex, search } from './find';
 
 /** The fields that match, as palette options; none when the index can't load (signed out, offline). */
 let failedAt = 0;
+// The last outline, stopped when another result is opened.
+let stopHighlight: (() => void) | undefined;
 // Signing in (any request that works) lifts the back-off.
 onSessionOk(() => (failedAt = 0));
 
@@ -29,8 +31,9 @@ export async function settingsRows(query: string) {
 		section: entry.trail,
 		keys: [] as string[],
 		open: () => {
+			stopHighlight?.();
 			void goto(resolve(entry.href as Route)).then(() => {
-				if (entry.spec) highlight(entry.spec.key);
+				if (entry.spec) stopHighlight = highlight(entry.spec.key);
 			});
 		}
 	}));

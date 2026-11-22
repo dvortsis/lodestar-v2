@@ -32,15 +32,24 @@
 	let selected = $state(0);
 	let values = $state.raw<Record<string, Described | undefined>>({});
 
-	// The index is built for the locale in use, and tried again after a failure when the text changes.
+	// The index is built for the locale in use. After a failed load it is asked for again only when the
+	// text changes, never on the same text, and `failed` is only written here, not read, so a
+	// failure can't start the effect again by itself.
+	let failedFor: string | undefined;
 	$effect(() => {
 		void currentLocale();
-		if (failed && !query.trim()) return;
+		const text = query.trim();
+		if (failedFor !== undefined && (text === failedFor || !text)) return;
+		failedFor = undefined;
 		failed = false;
 		let live = true;
 		loadFindIndex().then(
 			(entries) => live && (index = entries),
-			() => live && (failed = true)
+			() => {
+				if (!live) return;
+				failedFor = text;
+				failed = true;
+			}
 		);
 		return () => {
 			live = false;
@@ -140,11 +149,10 @@
 {#if query.trim()}
 	<div>
 		{#if failed}
-			<p role="status" class="text-small">{m.settings_find_failed()}</p>
+			<p class="text-small">{m.settings_find_failed()}</p>
 		{:else if !index}
-			<p role="status" class="text-small text-muted-text">{m.settings_find_loading()}</p>
+			<p class="text-small text-muted-text">{m.settings_find_loading()}</p>
 		{:else if results.length}
-			<p class="sr-only" role="status">{m.settings_find_count({ count: results.length })}</p>
 			<ul
 				id="find-list"
 				role="listbox"

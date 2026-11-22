@@ -30,15 +30,22 @@ export interface FindEntry {
 	head: string;
 }
 
-/** Sections no screen lists belong to Appearance (the Overview does the same). */
-const SCREEN_OF: Record<string, string> = { content: 'appearance', preferences: 'appearance' };
+/**
+ * The screens whose own form opens `#<field>` (it reveals Advanced, scrolls and focuses): the
+ * generated ones (SectionForm, GroupedForm) and the connection screens on GroupedForm. A field of
+ * any other screen (Appearance, Updates, Logging, Language) isn't indexed: the screen is, and a
+ * jump to it would land on its top, with Advanced maybe still closed.
+ */
+export const FIELD_SCREENS: ReadonlySet<string> = new Set([
+	'integrations',
+	'notifications',
+	'insights'
+]);
 
 const screenOfSection = (section: string): Screen | undefined => {
-	const id =
-		screens.find((s) => s.sections?.includes(section))?.id ??
-		screens.find((s) => s.id === section)?.id ??
-		SCREEN_OF[section];
-	return screens.find((s) => s.id === id);
+	const screen =
+		screens.find((s) => s.sections?.includes(section)) ?? screens.find((s) => s.id === section);
+	return screen && (screen.sections?.length || FIELD_SCREENS.has(screen.id)) ? screen : undefined;
 };
 
 /** Case and accent insensitive, so "Réseau" and "reseau" meet. */
@@ -96,37 +103,41 @@ let builtFor: string | undefined;
 export function loadFindIndex(): Promise<FindEntry[]> {
 	if (builtFor !== currentLocale()) built = undefined;
 	builtFor = currentLocale();
-	built ??= (async () => {
-		const index = await loadSettingsIndex();
-		const names = index.sections.map((s) => s.section);
-		await loadMessages(names);
-		const out: FindEntry[] = [];
-		for (const screen of screens) {
-			const about = await aboutOf(screen).catch(() => ({}) as { purpose?: () => string });
-			out.push({
-				screen: screen.id,
-				screenTitle: screen.title(),
-				label: screen.title(),
-				trail: trailOf(screen, false),
-				href: `/settings/${screen.id}`,
-				hay: normalize(`${screen.title()} ${about.purpose?.() ?? ''}`),
-				head: normalize(screen.title())
-			});
-		}
-		for (const name of names) {
-			const screen = screenOfSection(name);
-			if (!screen) continue;
-			for (const spec of index.fieldsOf([name])) {
-				if (INERT.has(spec.key)) continue;
-				const group = settingText(`settings.group.${spec.group}`);
-				out.push(fieldEntry(spec, screen, group));
+	built ??= ((): Promise<FindEntry[]> => {
+		const mine: Promise<FindEntry[]> = (async () => {
+			const index = await loadSettingsIndex();
+			const names = index.sections.map((s) => s.section);
+			await loadMessages(names);
+			const out: FindEntry[] = [];
+			for (const screen of screens) {
+				const about = await aboutOf(screen).catch(() => ({}) as { purpose?: () => string });
+				out.push({
+					screen: screen.id,
+					screenTitle: screen.title(),
+					label: screen.title(),
+					trail: trailOf(screen, false),
+					href: `/settings/${screen.id}`,
+					hay: normalize(`${screen.title()} ${about.purpose?.() ?? ''}`),
+					head: normalize(screen.title())
+				});
 			}
-		}
-		return out;
-	})().catch((e: unknown) => {
-		built = undefined;
-		throw e;
-	});
+			for (const name of names) {
+				const screen = screenOfSection(name);
+				if (!screen) continue;
+				for (const spec of index.fieldsOf([name])) {
+					if (INERT.has(spec.key)) continue;
+					const group = settingText(`settings.group.${spec.group}`);
+					out.push(fieldEntry(spec, screen, group));
+				}
+			}
+			return out;
+		})();
+		// A failure forgets only its own attempt, never a newer one (a locale switch meanwhile).
+		mine.catch(() => {
+			if (built === mine) built = undefined;
+		});
+		return mine;
+	})();
 	return built;
 }
 

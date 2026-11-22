@@ -129,7 +129,7 @@ test('desktop navigation, field labels and unknown destinations', async ({ page,
 	await expectNoA11yViolations(page);
 	await page.screenshot({ path: '../target/settings-desktop.png', fullPage: true });
 	// Settings search (X-settings-find): results replace the list, and a screen is one of them.
-	await page.getByLabel('Find a section').fill('network');
+	await page.getByLabel('Find a setting').fill('network');
 	await page.getByRole('option', { name: /^Network & VPN/ }).click();
 	await expect(page).toHaveURL(/\/settings\/network$/);
 	await expect(page.getByLabel('Web address', { exact: true })).not.toBeEditable();
