@@ -288,7 +288,7 @@ jobs:
       # for overflow, clipped text and hard-coded English. Nightly and manual only, like this whole
       # job. It builds a scratch copy of web/ OUTSIDE the repository (scripts/pseudo-locale.mjs), so
       # web/build, the Docker image and the release never see it. Its own report and output folders
-      # keep the all-themes diffs above intact; `if: always()` runs it even when all-themes failed.
+      # keep the all-themes diffs above intact; `!cancelled()` runs it even when all-themes failed.
       # A failure here fails this job; the run summary below counts it with the all-themes run, so the
       # tracking issue lists its failing specs too ("pseudo: " in front of each title).
       - name: Pseudo-locale check
@@ -330,7 +330,10 @@ jobs:
               };
               for (const su of r.suites || []) walk(su, []);
             } catch (e) {
-              // No report from this run: it stopped before the tests produced one.
+              // No report from this run: it stopped before the tests produced one. Said per run,
+              // so a missing all-themes report is not hidden by a present pseudo-locale one.
+              all.push(`${prefix || 'all themes: '}no test report (the run stopped before the tests finished)`);
+              s.failed += 1;
             }
           }
           s.failing = all.slice(0, 25);

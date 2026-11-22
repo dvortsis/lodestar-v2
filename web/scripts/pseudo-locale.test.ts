@@ -1,12 +1,13 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-// @ts-expect-error a plain .mjs script with no type declarations
 import {
 	CLOSE,
 	EXPANSION,
 	OPEN,
+	newScratchDir,
+	plainEnglish,
 	pseudoCatalogue,
 	pseudoText,
 	safeToReplace,
@@ -69,14 +70,19 @@ describe('pseudoCatalogue', () => {
 describe('scratchDir', () => {
 	const repo = resolve(import.meta.dirname, '..', '..');
 
-	it('is outside the repository by default, one folder per port', () => {
-		expect(relative(repo, scratchDir({})).startsWith('..')).toBe(true);
-		expect(scratchDir({}, 4174)).not.toBe(scratchDir({}, 4175));
+	it('uses one folder per user and port outside the repository by default', () => {
+		const a = newScratchDir({}, 4174);
+		expect(relative(repo, a).startsWith('..')).toBe(true);
+		expect(a).toBe(newScratchDir({}, 4174));
+		expect(a).not.toBe(newScratchDir({}, 4175));
 	});
 
-	it('refuses a place inside the repository', () => {
+	it('refuses a place inside the repository, a name starting with ".." included', () => {
 		expect(() => scratchDir({ PSEUDO_DIR: './build' })).toThrow(/inside the repository/);
 		expect(() => scratchDir({ PSEUDO_DIR: '../docs/pseudo' })).toThrow(/inside the repository/);
+		expect(() => scratchDir({ PSEUDO_DIR: join(repo, '..pseudo') })).toThrow(
+			/inside the repository/
+		);
 	});
 
 	it('refuses a folder that holds the repository, which the build would delete', () => {
@@ -84,6 +90,24 @@ describe('scratchDir', () => {
 			/contains the repository/
 		);
 		expect(() => scratchDir({ PSEUDO_DIR: '/' })).toThrow(/contains the repository/);
+	});
+
+	it('judges real paths: a link into the repository is refused', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'pseudo-link-'));
+		try {
+			symlinkSync(join(repo, 'docs'), join(dir, 'into-repo'));
+			expect(() => scratchDir({ PSEUDO_DIR: join(dir, 'into-repo', 'x') })).toThrow(
+				/inside the repository/
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('accepts a new folder in the temp folder', () => {
+		expect(scratchDir({ PSEUDO_DIR: join(tmpdir(), 'lodestar-pseudo-test-new') })).toContain(
+			'lodestar-pseudo-test-new'
+		);
 	});
 });
 
@@ -100,5 +124,49 @@ describe('safeToReplace', () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe('plainEnglish', () => {
+	it('catches plain English and lets accented messages through', () => {
+		expect(plainEnglish('Search results')).toBe(true);
+		expect(plainEnglish(pseudoText('Search results'))).toBe(false);
+	});
+
+	it('catches a bare "Show" button, though "Show" is a fixture title on the torrent page', () => {
+		expect(plainEnglish('Show', { route: 'torrent', tag: 'h1' })).toBe(false);
+		expect(plainEnglish('Show', { route: 'torrent', tag: 'button' })).toBe(true);
+		expect(plainEnglish('Show', { route: 'alerts', tag: 'h1' })).toBe(true);
+		expect(plainEnglish('Title 2', { testid: 'discover-row-abc123-title' })).toBe(false);
+		expect(plainEnglish('Title 2', { tag: 'label' })).toBe(true);
+	});
+
+	it('catches a hard-coded "Today" or "7 days" chip, but not Intl times', () => {
+		expect(plainEnglish('Today', { tag: 'button' })).toBe(true);
+		expect(plainEnglish('7 days', { tag: 'button' })).toBe(true);
+		expect(plainEnglish('3 days ago', { tag: 'time' })).toBe(false);
+		expect(plainEnglish('3 days ago', { tag: 'span', time: true })).toBe(false);
+		// A time put into a catalogue sentence is inside its ⟦ ⟧.
+		expect(plainEnglish(`${OPEN}Šééñ 3 days ago ŀö${CLOSE}`)).toBe(false);
+		expect(plainEnglish(`${OPEN}Šééñ ŀö${CLOSE} 3 days ago`, { tag: 'span' })).toBe(true);
+	});
+
+	it('allows an absolute Intl date as a whole text, not inside other words', () => {
+		expect(plainEnglish('Nov 14, 2023, 22:13', { tag: 'span' })).toBe(false);
+		expect(plainEnglish('· Nov 16, 2023, 02:00', { tag: 'span' })).toBe(false);
+		expect(plainEnglish('Wed, Oct 21, 2026, 12:00 UTC', { tag: 'td' })).toBe(false);
+		expect(plainEnglish(`${OPEN}Ĺöŕéɱ${CLOSE}, Thu, Oct 22, 2026, 06:00 UTC`)).toBe(false);
+		expect(plainEnglish('Updated Nov 14, 2023', { tag: 'span' })).toBe(true);
+		expect(plainEnglish('Updated Nov 14, 2023, 22:13', { tag: 'span' })).toBe(true);
+	});
+
+	it('catches a plain letter that touches an end mark ("⟦…⟧s")', () => {
+		expect(plainEnglish(`${OPEN}Ĺöŕéɱ${CLOSE}s`)).toBe(true);
+		expect(plainEnglish(`s${OPEN}Ĺöŕéɱ${CLOSE}`)).toBe(true);
+		expect(plainEnglish(`${OPEN}Ĺöŕéɱ${CLOSE} 3`)).toBe(false);
+	});
+
+	it('does not carry regex state between calls', () => {
+		for (let i = 0; i < 4; i++) expect(plainEnglish('Lodestar', {})).toBe(false);
 	});
 });
