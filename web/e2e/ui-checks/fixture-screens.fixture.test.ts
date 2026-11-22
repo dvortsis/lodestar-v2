@@ -7,10 +7,15 @@
 // axe.fixture.test.ts scans /insights and the wizard, not these, so each is scanned here. Insights
 // was tried and dropped: its page differs between two runs on the same server (its height moved by
 // 100 px or more), so it cannot hold a baseline.
-// The clock is frozen at the fixture's own "now" (its manifest `anchor`) and the crawler status
-// pill, which shows live figures, is masked. Baselines are
+// The clock is frozen at the fixture's own "now" (its manifest `anchor`), so relative times are
+// the same on every run. The masked parts change with the fixture build: the crawler status pill
+// (live figures) and the torrent page's absolute times (discovered, last seen, last scrape),
+// which the fixture builds from the hour it was made in.
+// The `fixture` project runs after `fixture-writes`, so these screens are captured with the rules
+// and crawler settings those specs leave behind. A change to filters-flows or settings-form can
+// change these baselines. Baselines are
 // Linux-only and come from CI's marker run, like every other baseline (web/e2e/README.md,
-// "Updating the fixture baselines"). Skips unless a fixture server is named:
+// "Updating snapshots", the fixture baselines paragraph). Skips unless a fixture server is named:
 //
 //   E2E_FIXTURE=1 E2E_FIXTURE_URL=http://127.0.0.1:8291 E2E_FIXTURE_DIR=/tmp/lodestar-fixture \
 //   E2E_FIXTURE_PASSWORD=<pw> npx playwright test fixture-screens --project=fixture
@@ -23,7 +28,10 @@ import { fixtureCookies } from '../support/fixture-session';
 const url = process.env.E2E_FIXTURE_URL;
 const password = process.env.E2E_FIXTURE_PASSWORD;
 const dir = process.env.E2E_FIXTURE_DIR ?? '';
-test.skip(!url || !password, 'set E2E_FIXTURE_URL and E2E_FIXTURE_PASSWORD to run');
+test.skip(
+	!url || !password || !dir,
+	'set E2E_FIXTURE_URL, E2E_FIXTURE_PASSWORD and E2E_FIXTURE_DIR to run'
+);
 test.use({ baseURL: url, viewport: { width: 1366, height: 900 } });
 
 type AxePage = ConstructorParameters<typeof AxeBuilder>[0]['page'];
@@ -64,7 +72,11 @@ async function noSeriousViolations(page: Page, where: string) {
 	).toEqual([]);
 }
 
-/** The shared snapshot options (e2e/snapshot.ts), plus a mask for what changes between runs. */
+/**
+ * The same options as `expectPageSnapshot` (e2e/snapshot.ts, tolerance included), plus a mask for
+ * what changes between runs. That helper takes no mask and lives outside this slice, so the
+ * options are repeated here; keep the two in step.
+ */
 async function snapshot(page: Page, name: string) {
 	await page.evaluate(() => document.fonts.ready);
 	await expect(page).toHaveScreenshot(`${name}.png`, {
@@ -72,7 +84,12 @@ async function snapshot(page: Page, name: string) {
 		animations: 'disabled',
 		caret: 'hide',
 		maxDiffPixelRatio: 0.001,
-		mask: [page.getByTestId('status-pill')]
+		mask: [
+			page.getByTestId('status-pill'),
+			page.getByTestId('detail-discovered'),
+			page.getByTestId('detail-last-seen'),
+			page.getByTestId('detail-scrape-at')
+		]
 	});
 }
 

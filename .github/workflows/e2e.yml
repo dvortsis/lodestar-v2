@@ -127,15 +127,19 @@ jobs:
   # session's next push (removing web/e2e/.update-snapshots) re-runs CI.
   commit-baselines:
     name: commit regenerated baselines
-    needs: [e2e, fixture]
+    needs: [changes, e2e, fixture-build, fixture]
     # `!cancelled()`: the fixture job is skipped on most runs, and a skipped need would skip this
-    # job too. Commit only when a run regenerated baselines and nothing failed.
+    # job too. Commit only when a run regenerated baselines, every job that ran succeeded (a
+    # cancelled or failed one commits nothing), and, on a marked pull request, the fixture job
+    # succeeded too: a failed fixture build must not commit the core baselines alone.
     if: >-
       !cancelled() &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (needs.e2e.outputs.updated == 'true' || needs.fixture.outputs.updated == 'true') &&
-      needs.e2e.result != 'failure' && needs.fixture.result != 'failure'
+      (needs.e2e.result == 'success' || needs.e2e.result == 'skipped') &&
+      (needs.fixture.result == 'success' || needs.fixture.result == 'skipped') &&
+      (needs.changes.outputs.marker != 'true' || needs.fixture.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -284,6 +288,7 @@ jobs:
           # The fixture job is not a pull-request check: it runs on a pull request only to regenerate,
           # so on every ordinary pull request (no marker) its result is `skipped`, which passes here
           # exactly as before the fixture job was a need. Only failure or cancelled is red.
+          # (Defensive: a marked run is already red above; this keeps a failed fixture job red.)
           case "$FIXTURE" in failure|cancelled) echo "fixture job result is '$FIXTURE'"; exit 1 ;; esac
           case "$BASELINES" in skipped) ;; *) echo "commit-baselines result '$BASELINES' (expected skipped)"; exit 1 ;; esac
           if [ "$APPLIES" = true ]; then
@@ -525,6 +530,8 @@ jobs:
   fixture:
     name: playwright (fixture)
     needs: [changes, fixture-build]
+    # Not bound to `changes`: the nightly run must not depend on its change detection.
+    if: ${{ !cancelled() && needs.fixture-build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -583,8 +590,11 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: snapshot-baselines-fixture
+          # Only the fixture specs' own baselines. This job checked out the OLD core, matrix and theme
+          # baselines and ran none of those projects: uploading them would put the old copies back
+          # over the e2e job's regenerated ones in the commit job.
           path: |
-            web/e2e/**/*-snapshots/*-linux.png
+            web/e2e/**/*.fixture.test.ts-snapshots/*-linux.png
           if-no-files-found: error
       - name: Stop the fixture server
         if: always()
