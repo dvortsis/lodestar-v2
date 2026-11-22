@@ -19,4 +19,4 @@ App chrome (§10.3, §10.13, §10.19). `routes/+layout.svelte` renders `Shell.sv
 
 ## Keep the first load small
 
-Only the frame and the top bar are in the search route's first load (§10.1). Anything heavier (a dialog, a menu, the event stream, the toaster) loads on first use or when the browser is idle. The top bar draws its icons with `Glyph.svelte` instead of `~icons` for the same reason. Check with `npx size-limit` after any change here.
+Only the frame and the top bar are in the search route's first load (§10.1). Anything heavier (a dialog, a menu, the event stream, the toaster) loads on first use or when the browser is idle. The top bar draws its icons with `Glyph.svelte` instead of `~icons` for the same reason. Check with `npm run size:ci` after any change here.

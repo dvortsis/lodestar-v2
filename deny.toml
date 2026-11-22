@@ -1,7 +1,7 @@
 # cargo-deny's configuration. CI runs only the advisory check
 # (`cargo deny check advisories`, the `advisories` job in ci.yml): every crate
-# in Cargo.lock against the RustSec advisory database
-# (X-ci-advisories, INFRA-09). Licences are checked by
+# in Cargo.lock and in fuzz/Cargo.lock (X-fuzz-advisories) against the RustSec
+# advisory database (X-ci-advisories, INFRA-09). Licences are checked by
 # .github/scripts/licenses.py, not here.
 #
 # Each ignore names the advisory, the crate, why it doesn't reach Lodestar and a
