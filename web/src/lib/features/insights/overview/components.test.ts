@@ -53,6 +53,19 @@ describe('every number is a response field through a formatter', () => {
 		);
 	});
 
+	it('each tile labels its time base, and the Index tile agrees with the Searchable KPI', () => {
+		const { unmount } = render(StageStrip, { stages: o.stages, onjump: () => {} });
+		expect(text('insights-stage-index-base')).toBe('Right now');
+		expect(text('insights-stage-discover-base')).toBe('By first harvest');
+		expect(text('insights-stage-fetch-base')).toBe('In this range');
+		const index = text('insights-stage-index-exact');
+		unmount();
+		render(KpiRow, { kpi: o.kpi });
+		// Both are the same response number ("Right now" on the tile, "a snapshot of now" on the KPI).
+		expect(o.stages.index).toBe(o.kpi.searchable);
+		expect(index).toBe(formatCount(o.kpi.searchable));
+	});
+
 	it('names why search is off', () => {
 		render(StageStrip, { stages: { ...o.stages, index: null }, onjump: () => {} });
 		expect(screen.getByTestId('insights-stage-index').textContent).toContain('Search is off');
