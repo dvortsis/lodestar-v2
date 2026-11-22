@@ -10653,17 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T13:15:00Z",
+    "updated": "2026-11-22T13:28Z",
     "items": [
       {
         "slot": 1,
-        "slice": null,
+        "slice": "X-pool-past-cap-room",
         "role": "slice",
-        "agent": null,
-        "model": "sonnet",
-        "since": "2026-11-22T12:55:00Z",
-        "doing": "#1066 merged 45d52af8; waits for r12 placements",
-        "status": "idle"
+        "agent": "session_01MMjhnCu7Lz36ja51ct62Rj",
+        "model": "opus",
+        "since": "2026-11-22T13:28Z",
+        "doing": "step 0: pool past-cap room options"
       },
       {
         "slot": 2,
@@ -10676,23 +10675,21 @@
       },
       {
         "slot": 3,
-        "slice": null,
+        "slice": "X-size-limit-one-build",
         "role": "slice",
-        "agent": null,
+        "agent": "session_01MMjhn9KDorrarfD68zPhsC",
         "model": "sonnet",
-        "since": "2026-11-22T13:15:00Z",
-        "doing": "#1067 merged 9293af5e; waits for r12 placements",
-        "status": "idle"
+        "since": "2026-11-22T13:28Z",
+        "doing": "step 0: why size-limit and size:ci differ"
       },
       {
         "slot": 4,
-        "slice": null,
+        "slice": "X-vm-status-mode",
         "role": "slice",
-        "agent": null,
-        "model": "opus",
-        "since": "2026-11-22T13:00:00Z",
-        "doing": "#1065 merged 586a2981; waits for r12 placements",
-        "status": "idle"
+        "agent": "session_01MMjhnCVFtt2mzUHuE7pQxC",
+        "model": "sonnet",
+        "since": "2026-11-22T13:28Z",
+        "doing": "building vm-status mode line"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
