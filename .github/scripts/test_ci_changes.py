@@ -48,9 +48,34 @@ class Infra(unittest.TestCase):
                   ".github/workflows/operator-apply.yml", ".github/workflows/operator-tripwire.yml",
                   ".github/workflows/operator-tripwire-sweep.yml"]:
             self.assertTrue(ci_changes.INFRA.match(f), f)
-        for f in ["docs/operations/lodestar-cloud-assets.md", ".agents/skills/lodestar-fleet/SKILL.md",
-                  "crates/infra/src/lib.rs", "web/src/infra.ts", ".github/workflows/fleet.yml.bak",
-                  ".github/workflows/operator-other.yml", ".github/workflows/operator-tripwire.yml.bak"]:
+        for f in [".agents/skills/lodestar-fleet/SKILL.md", "crates/infra/src/lib.rs", "web/src/infra.ts",
+                  ".github/workflows/fleet.yml.bak", ".github/workflows/operator-tripwire.yml.bak"]:
+            self.assertFalse(ci_changes.INFRA.match(f), f)
+
+
+class InfraWorkflows(unittest.TestCase):
+    """test_workflow.py reads every workflow, so any of them turns infra on (X-infra-filter-workflows)."""
+
+    def test_every_workflow_file_in_the_repo_turns_infra_on(self):
+        files = sorted(p.name for p in (ci_changes.ROOT / ".github/workflows").iterdir() if p.suffix in {".yml", ".yaml"})
+        self.assertIn("web.yml", files)
+        for name in files:
+            self.assertTrue(ci_changes.INFRA.match(f".github/workflows/{name}"), name)
+
+    def test_an_unrelated_or_new_workflow_turns_infra_on_and_near_misses_dont(self):
+        for f in [".github/workflows/web.yml", ".github/workflows/release.yml", ".github/workflows/a-new-one.yml",
+                  ".github/workflows/x.yaml", ".github/workflows/ci.yml"]:
+            self.assertTrue(ci_changes.INFRA.match(f), f)
+        for f in [".github/workflows/web.yml.bak", ".github/workflows/sub/web.yml", ".github/workflows/README.md",
+                  ".github/workflows", ".github/scripts/test_ci_changes.py", ".github/actions/x/action.yml",
+                  "x/.github/workflows/web.yml"]:
+            self.assertFalse(ci_changes.INFRA.match(f), f)
+
+    def test_the_operations_docs_turn_infra_on_but_not_the_imports_folder(self):
+        for f in ["docs/operations/cloud-fleet-runbook.md", "docs/operations/lodestar-cloud-assets.md"]:
+            self.assertTrue(ci_changes.INFRA.match(f), f)
+        for f in ["docs/operations", "docs/operations/", "docs/operationsx/a.md", "docs/operations/imports/x.md",
+                  "docs/operations/imports/pilots/smoke/smoke.py", "docs/architecture.md", "docs/user/01-install.md"]:
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
 
@@ -71,7 +96,7 @@ class FleetTestInputs(unittest.TestCase):
 class FleetEmergencyDown(unittest.TestCase):
     def test_the_workflow_turns_infra_on_and_near_misses_dont(self):
         self.assertTrue(ci_changes.INFRA.match(".github/workflows/fleet-emergency-down.yml"))
-        for f in [".github/workflows/fleet-emergency-down.yml.bak", ".github/workflows/fleet-emergency-down-x.yml"]:
+        for f in [".github/workflows/fleet-emergency-down.yml.bak", ".github/workflows/fleet-emergency-down.yml/x"]:
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
 
@@ -258,6 +283,12 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(kv["companion_pins"], "false")
             self.assertEqual(kv["unraid"], "false")
             self.assertEqual(kv["advisories"], "false")
+
+    def test_a_workflow_only_pr_runs_infra_and_a_change_outside_does_not(self):
+        kv = self.run_pr({".github/workflows/web.yml": "x"})
+        self.assertEqual((kv["infra"], kv["rust"], kv["rust_docs"]), ("true", "false", "false"))
+        for f in ["docs/architecture.md", ".github/scripts/other.py", "web/src/app.css"]:
+            self.assertEqual(self.run_pr({f: "x"})["infra"], "false", f)
 
     def test_a_lockfile_only_pr_runs_the_advisory_check(self):
         with tempfile.TemporaryDirectory() as tmp:
