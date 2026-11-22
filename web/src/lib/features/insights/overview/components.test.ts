@@ -46,11 +46,17 @@ describe('every number is a response field through a formatter', () => {
 		expect(screen.getByTestId('insights-stage-serve').textContent).toContain('Not measured yet');
 	});
 
-	it('stage strip says its time base', () => {
-		render(StageStrip, { stages: o.stages, onjump: () => {} });
-		expect(text('insights-strip-time')).toBe(
-			'In the selected time range, by when each step happened. Discover counts keys by when they were first harvested; Index is the count now.'
-		);
+	it('each tile labels its time base, and the Index tile agrees with the Searchable KPI', () => {
+		const { unmount } = render(StageStrip, { stages: o.stages, onjump: () => {} });
+		expect(text('insights-stage-index-base')).toBe('Right now');
+		expect(text('insights-stage-discover-base')).toBe('By first harvest');
+		expect(text('insights-stage-fetch-base')).toBe('In this range');
+		const index = text('insights-stage-index-exact');
+		unmount();
+		render(KpiRow, { kpi: o.kpi });
+		// Both are the same response number ("Right now" on the tile, "a snapshot of now" on the KPI).
+		expect(o.stages.index).toBe(o.kpi.searchable);
+		expect(index).toBe(formatCount(o.kpi.searchable));
 	});
 
 	it('names why search is off', () => {
@@ -119,6 +125,11 @@ describe('every number is a response field through a formatter', () => {
 		);
 		expect(text('insights-funnel-harvested-value')).toBe(formatCount(t.stages.harvested));
 		expect(screen.queryByTestId('insights-funnel-harvested-sub')).toBeNull();
+		// Cohort rows read in words, from the cohort's own fields (P10).
+		const c = o.funnel[1]!;
+		expect(text(`insights-cohort-${c.cohort}-value`)).toBe(
+			`${formatCount(c.stages.harvested)} harvested, ${formatCount(c.stages.searchable)} searchable`
+		);
 		expect(text('insights-funnel-complete')).toContain(
 			`${formatCount(t.final_cohorts)} of ${formatCount(t.cohorts)} cohorts complete`
 		);

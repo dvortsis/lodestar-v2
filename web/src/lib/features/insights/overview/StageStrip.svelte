@@ -2,8 +2,8 @@
 	// Orientation (§10.9.1): the five stages with one headline number each, as an ordered list of
 	// links that move you to the level explaining the stage. The list is its own text equivalent:
 	// the exact count is visually hidden beside the compact one. Discover is always approximate.
-	// A line under it says the time base: the range, by event time, except Discover (by first
-	// harvest, its cohorts) and Index (now) (UI review 2026-11-13, B4).
+	// Each tile names its time base: the range, by event time, except Discover (by first harvest, its
+	// cohorts) and Index (now) (UI review 2026-11-13, B4, I9).
 	import { formatCompact, formatCount, type MetricValue } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -30,6 +30,15 @@
 		understand: () => m.insights_overview_stage_understand_hint(),
 		index: () => m.insights_overview_stage_index_hint(),
 		serve: () => m.insights_overview_stage_serve_hint()
+	};
+	// The time base of each tile (§10.9.3, I9): the range by event time, except Discover (cohort of
+	// first harvest) and Index (now).
+	const bases: Record<Stage, () => string> = {
+		discover: () => m.insights_overview_stage_time_harvest(),
+		fetch: () => m.insights_overview_stage_time_range(),
+		understand: () => m.insights_overview_stage_time_range(),
+		index: () => m.insights_overview_stage_time_now(),
+		serve: () => m.insights_overview_stage_time_range()
 	};
 	// Why a stage has no number, for the accessible name next to the dash.
 	const missing: Record<Stage, () => string> = {
@@ -76,11 +85,11 @@
 						>
 					{/if}
 					<span class="ins-muted">{hints[stage]()}</span>
+					<span class="ins-muted ins-stage-base" data-testid="insights-stage-{stage}-base"
+						>{bases[stage]()}</span
+					>
 				</a>
 			</li>
 		{/each}
 	</ol>
-	<p class="mt-2 text-small text-muted-text" data-testid="insights-strip-time">
-		{m.insights_overview_strip_time()}
-	</p>
 </nav>

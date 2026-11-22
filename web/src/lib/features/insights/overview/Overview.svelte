@@ -16,6 +16,7 @@
 	import DetailLinks from './DetailLinks.svelte';
 	import Exceptions from './Exceptions.svelte';
 	import Hatch from './Hatch.svelte';
+	import { healthSentence } from './health';
 	import { resolve } from '$app/paths';
 	import type { Loaded } from '$lib/features/shell/privacy/door';
 	import type { Route } from './href';
@@ -27,6 +28,7 @@
 	import StageStrip from './StageStrip.svelte';
 	import { createInsights } from './state.svelte';
 	import './insights.css';
+	import './overview.css';
 
 	const insights = createInsights();
 	// The print layout loads after mount, so its markup and CSS are not in the route's first load.
@@ -162,6 +164,18 @@
 					m.insights_overview_stale_other({ reason: overview.stale.reason }))
 			: ''
 	);
+	const health = $derived(
+		healthSentence({
+			phase: insights.phase,
+			overview,
+			startup: insights.startup,
+			startupCheck: insights.startupCheck,
+			allTime: query.range === 'all',
+			stalled,
+			rangeText,
+			locale
+		})
+	);
 </script>
 
 <Hatch />
@@ -193,7 +207,17 @@
 				onpause={() => void insights.pause()}
 				onresume={() => void insights.resume()}
 				onintensity={(level) => void insights.setIntensity(level)}
+				undo={insights.undo}
+				onundo={() => void insights.undoIntensity()}
+				onundohold={(held) => insights.holdUndo(held)}
 			/>
+
+			<!-- One plain sentence first (U25); it prints with the report (§10.9.6). -->
+			{#if !fieldError}
+				<p class="ins-health" data-testid="insights-health-sentence" data-kind={health.kind}>
+					{health.text}
+				</p>
+			{/if}
 
 			<div class="sr-only" role="status" aria-live="polite" data-testid="insights-announce">
 				{announcement}
@@ -258,57 +282,64 @@
 					<KpiRow kpi={overview.kpi} annotations={overview.annotations} />
 				</section>
 
-				<section
-					id="insights-exceptions"
-					class="ins-section"
-					aria-labelledby="insights-exceptions-heading"
-				>
-					<h2 id="insights-exceptions-heading" class="ins-heading" tabindex="-1">
-						{m.insights_overview_exceptions_title()}
-					</h2>
-					<p class="ins-sub">{m.insights_overview_exceptions_time()}</p>
-					<div class="ins-card">
+				<!-- §10.9.6. The DOM is the wide order (trend, needs attention, funnel), so focus follows
+				     what a keyboard user on a wide screen sees (WCAG 2.4.3). On a narrow screen CSS order
+				     puts needs attention and the funnel before the trend, as the plan shows. -->
+				<div class="ins-story" data-calm={overview.exceptions.length === 0 ? '' : undefined}>
+					<section
+						id="insights-movement"
+						class="ins-section ins-movement"
+						aria-labelledby="insights-movement-heading"
+					>
+						<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
+							{m.insights_overview_movement_title()}
+						</h2>
+						<p class="ins-sub">
+							{m.insights_overview_movement_time({
+								tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
+							})}
+						</p>
+						<Lazy
+							load={() => import('./Movement.svelte')}
+							props={{ overview, query, rangeText }}
+							height="ins-sk-movement"
+						/>
+					</section>
+					<section
+						id="insights-exceptions"
+						class="ins-section ins-exceptions"
+						aria-labelledby="insights-exceptions-heading"
+					>
+						<h2 id="insights-exceptions-heading" class="ins-heading" tabindex="-1">
+							{m.insights_overview_exceptions_title()}
+						</h2>
+						<p class="ins-sub">{m.insights_overview_exceptions_time()}</p>
 						<Exceptions exceptions={overview.exceptions} />
-						<a
-							class="ins-link target"
-							href={resolve(csvHref('exceptions', query) as Route)}
-							download
-							data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
-						>
-					</div>
-				</section>
-
-				<section id="insights-funnel" class="ins-section" aria-labelledby="insights-funnel-heading">
-					<h2 id="insights-funnel-heading" class="ins-heading" tabindex="-1">
-						{m.insights_overview_funnel_heading()}
-					</h2>
-					<p class="ins-sub">{m.insights_overview_funnel_time()}</p>
-					<Lazy
-						load={() => import('./Funnel.svelte')}
-						props={{ overview, query, rangeText }}
-						height="ins-sk-funnel"
-					/>
-				</section>
-
-				<section
-					id="insights-movement"
-					class="ins-section"
-					aria-labelledby="insights-movement-heading"
-				>
-					<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
-						{m.insights_overview_movement_title()}
-					</h2>
-					<p class="ins-sub">
-						{m.insights_overview_movement_time({
-							tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
-						})}
-					</p>
-					<Lazy
-						load={() => import('./Movement.svelte')}
-						props={{ overview, query, rangeText }}
-						height="ins-sk-movement"
-					/>
-				</section>
+						{#if overview.exceptions.length}
+							<a
+								class="ins-link target"
+								href={resolve(csvHref('exceptions', query) as Route)}
+								download
+								data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
+							>
+						{/if}
+					</section>
+					<section
+						id="insights-funnel"
+						class="ins-section ins-funnel"
+						aria-labelledby="insights-funnel-heading"
+					>
+						<h2 id="insights-funnel-heading" class="ins-heading" tabindex="-1">
+							{m.insights_overview_funnel_heading()}
+						</h2>
+						<p class="ins-sub">{m.insights_overview_funnel_time()}</p>
+						<Lazy
+							load={() => import('./Funnel.svelte')}
+							props={{ overview, query, rangeText }}
+							height="ins-sk-funnel"
+						/>
+					</section>
+				</div>
 
 				<section
 					id="insights-segments"
