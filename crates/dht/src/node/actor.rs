@@ -1866,16 +1866,20 @@ impl Actor {
                     }
                     // WK-10e: a node's interval is waited this install's
                     // share times over; a failure or no support isn't.
-                    let (wait, scale) = if supported {
+                    let completed = if supported {
                         let secs = r.interval.unwrap_or(SAMPLE_INTERVAL);
-                        (
+                        self.sampler.complete_scaled(
+                            from,
+                            tid,
                             Duration::from_secs(u64::from(secs)),
                             self.cfg.sample_interval_scale,
+                            now_i,
                         )
                     } else {
-                        (sampler::UNSUPPORTED_BACKOFF, 1)
+                        // UNSUPPORTED_BACKOFF, unscaled.
+                        self.sampler.complete_unsupported(from, tid, now_i)
                     };
-                    if !self.sampler.complete_scaled(from, tid, wait, scale, now_i) {
+                    if !completed {
                         Stats::inc(&self.stats.sample_stale);
                     }
                 }
@@ -1889,11 +1893,10 @@ impl Actor {
                     let unknown = matches!(&msg.body,
                         Body::Error(e) if e.code == error_code::METHOD_UNKNOWN);
                     if unknown {
-                        self.sampler
-                            .complete(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
+                        self.sampler.complete_unsupported(from, tid, now_i);
                     } else {
                         self.sampler
-                            .fail(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
+                            .fail_reply(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
                     }
                 }
             }
@@ -2993,6 +2996,14 @@ impl Actor {
         self.stats
             .sample_cooling
             .store(self.sampler.cooling() as u64, Ordering::Relaxed);
+        for (gauge, n) in self
+            .stats
+            .sample_cooling_reason
+            .iter()
+            .zip(self.sampler.cooling_by_reason())
+        {
+            gauge.store(n as u64, Ordering::Relaxed);
+        }
         let sampling = self.cfg.harvest.sample && !self.paused && self.proof.may_sample(now_i);
         self.stats.sample_full_seconds.store(
             self.sampler.full_time(now_i, sampling).as_secs(),
@@ -4279,6 +4290,71 @@ mod tests {
         assert_eq!(a.active_get_peers, 0);
     }
 
+    /// X-sample-cooling-metric: a consistent reply cools as `interval` only
+    /// with both BEP 51 fields and an interval within 6 h; without either,
+    /// or with a longer interval, it cools as `unsupported`, for the full
+    /// backoff and unscaled.
+    #[test]
+    fn a_reply_without_bep51_cools_as_unsupported() {
+        use super::super::CoolingReason as R;
+        let samples = || Some(crate::krpc::Samples::default());
+        for (samples, interval, want) in [
+            (samples(), Some(600), R::Interval),
+            (None, Some(600), R::Unsupported),
+            (samples(), None, R::Unsupported),
+            (samples(), Some(SAMPLE_INTERVAL + 1), R::Unsupported),
+            (None, None, R::Unsupported),
+        ] {
+            let (mut a, sockets) = fixture();
+            a.on_command(Command::SetSampleScale(3));
+            let remote = SocketAddr::from(([127, 0, 0, 9], 7000));
+            let now = Instant::now();
+            assert!(a.sampler.offer(candidate(remote), now));
+            a.sample_tick(&sockets, now);
+            let tid = a
+                .pending
+                .iter()
+                .find(|(_, p)| matches!(p.purpose, Purpose::Sample) && p.to == remote)
+                .map(|(t, _)| *t)
+                .expect("a sample sent");
+            let response = Response {
+                id: candidate(remote).id,
+                samples,
+                interval,
+                ..Default::default()
+            };
+            let tid_bytes = tid.to_be_bytes();
+            let msg = Message {
+                transaction_id: &tid_bytes,
+                version: None,
+                ip: None,
+                read_only: false,
+                body: Body::Response(response.clone()),
+            };
+            let before = Instant::now();
+            a.on_response(&sockets, 0, &msg, Some(&response), remote);
+            let after = Instant::now();
+            let by = a.sampler.cooling_by_reason();
+            let case = format!("samples {} interval {interval:?}", samples.is_some());
+            assert_eq!(by[want as usize], 1, "{case}: {by:?}");
+            assert_eq!(by.iter().sum::<usize>(), 1, "{case}: {by:?}");
+            // Unsupported is the full backoff, not scaled.
+            let until = a
+                .sampler
+                .restrictions(after)
+                .find(|(x, _)| *x == remote)
+                .map(|(_, u)| u)
+                .expect("cooling");
+            let wait = if want == R::Interval {
+                Duration::from_secs(600 * 3)
+            } else {
+                sampler::UNSUPPORTED_BACKOFF
+            };
+            assert!(until >= before + wait && until <= after + wait, "{case}");
+            assert_eq!(a.stats.snapshot().sample_stale, 0, "{case}");
+        }
+    }
+
     /// WK-10e: with a scale of N, a node that answers with interval I isn't
     /// sampled again for N × I, and a changed scale applies from the next
     /// answer; a failure isn't scaled.
@@ -4344,6 +4420,22 @@ mod tests {
         }
         // A 204 completes in full; every other failure starts a streak.
         let failure_streaks = |f: Failure| !matches!(f, Failure::Error(error_code::METHOD_UNKNOWN));
+        // X-sample-cooling-metric: the reason a cooldown of `wait` counts
+        // under.
+        let reason = |f: Failure, wait: Duration| {
+            use super::super::CoolingReason as R;
+            match f {
+                Failure::Error(error_code::METHOD_UNKNOWN) => R::Unsupported,
+                _ if wait == sampler::FIRST_FAILURE_BACKOFF => R::FirstFailure,
+                Failure::Timeout => R::Timeout,
+                Failure::Error(_) | Failure::Inconsistent => R::Error,
+            }
+        };
+        let counted = |a: &Actor, want: super::super::CoolingReason| {
+            let by = a.sampler.cooling_by_reason();
+            assert_eq!(by[want as usize], 1, "{want:?} in {by:?}");
+            assert_eq!(by.iter().sum::<usize>(), 1, "{by:?}");
+        };
         let short = sampler::FIRST_FAILURE_BACKOFF;
         let full = sampler::MAX_INTERVAL;
         for (escalate, failure, first, second) in [
@@ -4429,6 +4521,7 @@ mod tests {
                 until
             };
             let until = round(&mut a, first);
+            counted(&a, reason(failure, first));
             // The cooldown ends (on the paused clock); the next sample
             // fails the same way.
             tokio::time::advance(until - Instant::now()).await;
@@ -4440,6 +4533,7 @@ mod tests {
                 "{failure:?}: a streak kept"
             );
             round(&mut a, second);
+            counted(&a, reason(failure, second));
             assert_eq!(a.stats.snapshot().sample_failures, 2);
         }
     }

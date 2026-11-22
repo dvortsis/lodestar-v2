@@ -3739,7 +3739,10 @@ pub(crate) async fn overview(State(s): State<ApiState>) -> ApiResult<Json<Overvi
     path = "/filters/queue",
     tag = "filters",
     params(QueueQuery),
-    responses((status = 200, body = Queue))
+    responses(
+        (status = 200, body = Queue),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`limit` isn't a whole number), `bad_limit` (`limit` outside 1–1000) or `bad_cursor` (not a review-queue cursor). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn queue(
     State(s): State<ApiState>,
@@ -3759,7 +3762,10 @@ pub(crate) async fn queue(
     path = "/filters/tombstones",
     tag = "filters",
     params(TombstonesQuery),
-    responses((status = 200, body = Tombstones))
+    responses(
+        (status = 200, body = Tombstones),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`adult` isn't a boolean, or `limit` isn't a whole number), `bad_limit` (`limit` outside 1–1000) or `bad_cursor` (not a review-queue cursor). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn tombstones(
     State(s): State<ApiState>,

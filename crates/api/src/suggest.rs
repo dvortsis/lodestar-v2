@@ -57,7 +57,10 @@ pub fn routes() -> Router<ApiState> {
     path = "/suggest",
     tag = "search",
     params(SuggestQuery),
-    responses((status = 200, body = SuggestResponse))
+    responses(
+        (status = 200, body = SuggestResponse),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type: `pos`, `limit` or `hidden`), `query_too_long` (`q`) or `bad_pos` (`pos` is past the end of `q`). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn suggest_get(
     State(s): State<ApiState>,

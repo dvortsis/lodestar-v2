@@ -12,10 +12,17 @@ JSON with exactly these keys:
       "lodestar_image": "ghcr.io/dvortsis/lodestar-v2@sha256:<64 hex>",
       "lodestar_commit": "<40 hex>",             # the source commit the image was built from
       "spec_commit": "<40 hex>",                 # the collector's --spec-commit (CR-SPEC in force)
-      "treatment": "adm",                        # adm | utp | route
+      "treatment": "adm",                        # adm | utp | route | lc | hint | split
+      "winners": [],                             # optional, non-empty for lc/hint/split only: earlier winners
       "segment_hours": 2,                        # 2 or 3 (screen rule 3)
       "notice_version": 4                        # the Legal Notice version start-block accepts (4 on main, 2026-11-11)
     }
+
+`winners` (X-fleet-stacked-arms) lists treatment keys, each at most once and
+none the treatment: a stacked stage (lc, hint or split) tests its treatment on
+top of them. Only those take winners: a stage-1 treatment runs against the
+shipped defaults (r5.1 A2). It's optional; absent or empty, the arms differ
+only in the treatment, as before.
 
 The image is pinned by digest, in the one repository the project publishes;
 both commits must also be ancestors of main. Anything else refuses with a
@@ -39,7 +46,11 @@ HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 SCREEN = re.compile(r"[a-z0-9-]{1,40}\Z")
 KEYS = {"version", "screen", "lodestar_image", "lodestar_commit", "spec_commit", "treatment", "segment_hours",
         "notice_version"}
-TREATMENTS = ("adm", "utp", "route")
+OPTIONAL = {"winners"}
+# The treatment keys (block-lib.sh's TREATMENT_KEYS; the collector's TREATMENT_SWITCHES).
+TREATMENTS = ("adm", "utp", "route", "lc", "hint", "split")
+# The stacked ones (the collector's STACKED): only they take winners (r5.1 A2).
+STACKED = ("lc", "hint", "split")
 MAX_BYTES = 4096
 
 
@@ -56,18 +67,23 @@ def parse(text: bytes) -> dict:
         doc = json.loads(text.decode("ascii"))
     except (UnicodeDecodeError, ValueError):
         raise bad from None
-    if not isinstance(doc, dict) or set(doc) != KEYS or doc["version"] != 1 or not _int(doc["version"]):
+    if (not isinstance(doc, dict) or not KEYS <= set(doc) <= KEYS | OPTIONAL
+            or doc["version"] != 1 or not _int(doc["version"])):
         raise bad
+    winners = doc.get("winners", [])
     image = IMAGE.match(doc["lodestar_image"]) if isinstance(doc["lodestar_image"], str) else None
     ok = (image is not None
           and isinstance(doc["screen"], str) and SCREEN.match(doc["screen"])
           and all(isinstance(doc[k], str) and HEX40.match(doc[k]) for k in ("lodestar_commit", "spec_commit"))
           and doc["treatment"] in TREATMENTS
+          and isinstance(winners, list) and all(w in TREATMENTS for w in winners)
+          and len(set(winners)) == len(winners) and doc["treatment"] not in winners
+          and (not winners or doc["treatment"] in STACKED)
           and _int(doc["segment_hours"]) and doc["segment_hours"] in (2, 3)
           and _int(doc["notice_version"]) and 1 <= doc["notice_version"] <= 999999)
     if not ok:
         raise bad
-    return dict(doc, image_digest=image.group(1))
+    return dict(doc, winners=list(winners), image_digest=image.group(1))
 
 
 def read(commit: str, repo: str, run=subprocess.run) -> tuple[dict, dict[str, bytes]]:
@@ -83,8 +99,11 @@ def read(commit: str, repo: str, run=subprocess.run) -> tuple[dict, dict[str, by
 
 
 def args(rules: dict, rules_commit: str, vm: str, block_id: str) -> dict[str, str]:
-    """start-block's arguments (remote.payload checks their shape again)."""
-    return {"IMAGE_DIGEST": rules["image_digest"], "LODESTAR_COMMIT": rules["lodestar_commit"],
+    """start-block's arguments (remote.payload checks their shape again). The
+    winners are joined by '-', which the arguments' shape allows; none, no
+    WINNERS argument."""
+    winners = {"WINNERS": "-".join(rules["winners"])} if rules.get("winners") else {}
+    return {**winners, "IMAGE_DIGEST": rules["image_digest"], "LODESTAR_COMMIT": rules["lodestar_commit"],
             "SPEC_COMMIT": rules["spec_commit"], "RULES_COMMIT": rules_commit, "TREATMENT": rules["treatment"],
             "SEGMENT_HOURS": str(rules["segment_hours"]), "ROLE": vm, "NOTICE_VERSION": str(rules["notice_version"]),
             "BLOCK_ID": block_id}
