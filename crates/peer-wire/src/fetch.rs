@@ -157,7 +157,7 @@ impl std::fmt::Debug for Reserve {
 /// size and sends nothing pins that much, 80 KiB of dict, until the
 /// window is due (runner, 2026-11-07; CR-UTP-FIRST-WINDOW).
 const FIRST_PIECES: usize = 4;
-/// The dict bytes the first request window covers.
+/// The dict bytes the first window covers.
 pub(crate) const FIRST_WINDOW: usize = FIRST_PIECES * METADATA_PIECE;
 /// Pieces asked for, and reserved, before the first window is in: the
 /// window and one more (CR-UTP-FIRST-WINDOW). The extra piece's data

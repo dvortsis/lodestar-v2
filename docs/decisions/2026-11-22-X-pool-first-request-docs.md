@@ -12,12 +12,12 @@ This slice makes the pool's docs, fixtures and budget model say the same.
 ## Pinned constants, not a re-export (runner, step 0)
 - **Why not a re-export:** `first_request` is private in `crates/peer-wire/src/fetch.rs`, and `FIRST_WINDOW` and `result_bound` are `pub(crate)`. A re-export would need visibility changes in a file that's docs-only for this slice (E0364), so `crates/peer-wire/src/lib.rs` is untouched.
 - **The local copies:**
-  - `pool_budget_model.rs` has `FIRST_REQUEST`, `FIVE_PIECE_FIRST` and `first_of(total)`.
+  - `pool_budget_model.rs` has `FIRST_REQUEST_BYTES`, `FIVE_PIECE_FIRST_BYTES` and `first_of(total)`.
   - `tests/pool.rs` has `first_reservation(size)`.
   - Both use the public `message::METADATA_PIECE` and a PEX bound of 200 × `size_of::<SocketAddr>()`, as `result_bound` has it with no client name.
 - **The pins:** two tests, both called `peer_wire_reserves_these_first`, run the real `fetch_on_stream` over a tokio duplex against a scripted peer. The peer announces a size and the client name "Lodestar". The tests record the fetch's first `(now, total)`.
   - The model's test covers dicts of 1 KiB, 4 pieces, 4 pieces + 1, 5 pieces, 5 pieces + 1, 6 pieces and 8 pieces.
-  - The fixture's test covers 1 KiB, 4, 5, 6 and 64 pieces.
+  - The fixture's test covers 1 KiB, 4, 5, 5 pieces + 1, 6 and 64 pieces.
   - The two scripted peers are duplicates, because an integration test can't see a unit module. Each names the other, so they change together.
 
 ## Fixtures
@@ -29,7 +29,7 @@ This slice makes the pool's docs, fixtures and budget model say the same.
 
 ## The per-network invariant: `held <= max(share, one first request)`
 - **What `net_partials_full` does:** it admits a network's first partial claim whatever its size, and a later one only while `held + want <= share`. So a network holds its share, or one first request alone.
-- **One first request** is `size_of::<FetchedKey>() + FIRST_REQUEST`, 88,448 bytes.
+- **One first request** is `size_of::<FetchedKey>() + FIRST_REQUEST_BYTES`, 88,448 bytes.
 - **Why not the brief's literal `share + one first request`** (runner's call at step 0):
   - The literal form would loosen the model's check by about 6.5 KB against the old `share + SMALL_CLAIM`.
   - It would miss a mutated first reservation unless that reservation passed about 182 KB.
@@ -72,5 +72,6 @@ This slice makes the pool's docs, fixtures and budget model say the same.
 - `docs/metrics.md`'s First windows paragraph no longer says the first window is asked for all at once.
 
 ## Mutations (each in a scratch copy, restored)
-- **The model's first reservation doubled** (`2 × FIRST_REQUEST`): the invariant fails ("seed 1: network … holds 176768 in partial claims"), and so does the pin.
-- **`FIRST_REQUEST` raised by one piece:** the pin fails ("a dict of 81921: first", 88,328 against 104,712).
+- **What the invariant can catch alone:** at both budgets the share (93,750 at LIMIT, 393,216 at WORKER) is larger than one first request (88,448). So the invariant catches a larger first reservation only once that reservation passes the share at LIMIT. A smaller drift from peer-wire's size, under about 5 KB, is caught by the pins (`peer_wire_reserves_these_first`), not the invariant.
+- **The model's first reservation doubled** (`2 × FIRST_REQUEST_BYTES`): the invariant fails ("seed 1: network … holds 176768 in partial claims"), and so does the pin.
+- **`FIRST_REQUEST_BYTES` raised by one piece:** the pin fails ("a dict of 81921: first", 88,328 against 104,712).

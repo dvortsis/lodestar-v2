@@ -3205,32 +3205,43 @@ async fn first_reserved(size: usize) -> (usize, usize) {
         ..FetchOptions::default()
     };
     let fetch = tokio::spawn(async move { fetch_on_stream(ours, &key, &opts, false).await });
-    let mut hello = [0u8; HANDSHAKE_LEN];
-    theirs.read_exact(&mut hello).await.unwrap();
-    theirs
-        .write_all(&message::handshake(&key.0, b"-PW0001-firstrequest", true))
-        .await
-        .unwrap();
-    let ext = message::our_extended_handshake(Some(size));
-    let mut frame = ((ext.len() + 2) as u32).to_be_bytes().to_vec();
-    frame.extend([20, 0]);
-    frame.extend(ext);
-    theirs.write_all(&frame).await.unwrap();
-    let got = tokio::time::timeout(Duration::from_secs(10), rx)
-        .await
-        .expect("peer-wire reserves at the extended handshake")
-        .unwrap();
+    // One deadline for the whole exchange, so a fetch that stops
+    // talking fails the test instead of hanging it.
+    let got = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut hello = [0u8; HANDSHAKE_LEN];
+        theirs.read_exact(&mut hello).await.unwrap();
+        theirs
+            .write_all(&message::handshake(&key.0, b"-PW0001-firstrequest", true))
+            .await
+            .unwrap();
+        let ext = message::our_extended_handshake(Some(size));
+        let mut frame = ((ext.len() + 2) as u32).to_be_bytes().to_vec();
+        frame.extend([20, 0]);
+        frame.extend(ext);
+        theirs.write_all(&frame).await.unwrap();
+        rx.await.unwrap()
+    })
+    .await
+    .expect("peer-wire reserves at the extended handshake, within 10 s");
     fetch.abort();
     got
 }
 
 /// `first_reservation` is peer-wire's: what the real fetch reserves first
-/// for dicts of 1 KiB and of 4, 5, 6 and 64 pieces (1 MiB), less the
+/// for dicts of 1 KiB, of 4, 5 and 6 pieces, of 5 pieces and a byte, and of
+/// 64 pieces (1 MiB), less the
 /// scripted peer's 8-byte client name.
 #[tokio::test]
 async fn peer_wire_reserves_these_first() {
     let name = "Lodestar".len();
-    for size in [1 << 10, WINDOW, 5 * WINDOW / 4, 6 * WINDOW / 4, MIB] {
+    for size in [
+        1 << 10,
+        WINDOW,
+        5 * WINDOW / 4,
+        5 * WINDOW / 4 + 1,
+        6 * WINDOW / 4,
+        MIB,
+    ] {
         let (now, total) = first_reserved(size).await;
         assert_eq!(
             (now, total),

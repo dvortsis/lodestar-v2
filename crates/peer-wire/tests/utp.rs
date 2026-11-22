@@ -404,7 +404,8 @@ async fn fetches_over_a_lossy_link() {
             // and the product's 4 s first-window bound (X-fetch-first-window)
             // is missed by about 2% of honest fetches over this link; with
             // the product's reserve only the first request (5 pieces) is
-            // asked for until the window is in, and more miss (CR-UTP-FIRST-WINDOW, `first_window_miss_rates`).
+            // asked for until the window is in, and more miss
+            // (CR-UTP-FIRST-WINDOW, `first_window_miss_rates`).
             // Over 1,000 probe fetches the window took up to 9.8 s; 20 s
             // covers that with margin, inside the 30 s deadline
             // (X-flake-utp-lossy-win).
@@ -455,8 +456,8 @@ async fn lossy_fetch(
 /// CR-UTP-FIRST-WINDOW's measurement (a measurement, not a disabled
 /// check): honest fetches of a 120 kB dict over the lossy link at 5, 10,
 /// 15 and 20% loss, with the product's request pattern (a reserve, so the
-/// first request's 5 pieces until the window is in), each seed run with the product's 4 s
-/// first window and again with 20 s, 16 at a time. Prints, per loss rate,
+/// first request's 5 pieces until the window is in), each seed run with
+/// the product's 4 s first window and again with 20 s, 16 at a time. Prints, per loss rate,
 /// the first-window misses, other failures and total times.
 /// `FIRST_WINDOW_ALL_PIECES=1` asks for all 8 pieces at once instead
 /// (#1008's probe, not the product's pattern); `FIRST_WINDOW_ONLY_4S=1`

@@ -35,7 +35,8 @@ use lodestar_peer_wire::message::METADATA_PIECE;
 use super::{Budget, FetchedKey, Reservation, net_of};
 
 /// The seeds every run uses; `POOL_MODEL_SEEDS=n` runs seeds 1 to n
-/// instead (640 for a 10x run).
+/// instead (640 for a 10x run, which fails at the test-sized budget: see
+/// the module doc).
 const SEEDS: u64 = 64;
 /// The budgets the seeds run with: a test-sized one, and a worker's.
 const LIMIT: usize = 1_000_000;
@@ -54,32 +55,32 @@ const NETWORKS: u64 = 6;
 /// has it: 200 peers.
 const PEX_BOUND: usize = 200 * std::mem::size_of::<std::net::SocketAddr>();
 /// What peer-wire reserves first, with no client name, for a dict of more
-/// than five pieces: the window and one more piece (`FIRST_REQUEST`,
-/// CR-UTP-FIRST-WINDOW) and the result's bound. It is the largest first
-/// reservation of a partial claim.
-const FIRST_REQUEST: usize = 5 * METADATA_PIECE + PEX_BOUND;
+/// than five pieces, in bytes: the window and one more piece (peer-wire's
+/// `FIRST_REQUEST`, 5 pieces; CR-UTP-FIRST-WINDOW) and the result's bound.
+/// It is the largest first reservation of a partial claim.
+const FIRST_REQUEST_BYTES: usize = 5 * METADATA_PIECE + PEX_BOUND;
 /// The same for a dict of exactly five pieces: the window alone.
-const FIVE_PIECE_FIRST: usize = 4 * METADATA_PIECE + PEX_BOUND;
+const FIVE_PIECE_FIRST_BYTES: usize = 4 * METADATA_PIECE + PEX_BOUND;
 
 /// What peer-wire reserves first for a result bound of `total` (a dict and
-/// the bound, no client name): [`FIRST_REQUEST`] for a dict over five
-/// pieces, [`FIVE_PIECE_FIRST`] for one of five, and the whole of a
+/// the bound, no client name): [`FIRST_REQUEST_BYTES`] for a dict over five
+/// pieces, [`FIVE_PIECE_FIRST_BYTES`] for one of five, and the whole of a
 /// smaller one, so no whole claim is over [`super::SMALL_CLAIM`].
 /// [`peer_wire_reserves_these_first`] pins it to the real fetch, as
 /// `tests/pool.rs`'s `first_reservation` is pinned there.
 fn first_of(total: usize) -> usize {
     let dict = total.saturating_sub(PEX_BOUND);
     if dict > 5 * METADATA_PIECE {
-        FIRST_REQUEST
+        FIRST_REQUEST_BYTES
     } else if dict > 4 * METADATA_PIECE {
-        FIVE_PIECE_FIRST
+        FIVE_PIECE_FIRST_BYTES
     } else {
         total
     }
 }
 
-/// What a run did, per test thread (each test runs its seeds on its own
-/// thread): first reservations, growths, waits for room over 1 s, and the
+/// What a run did, per thread (`seeds` resets them, so a test's count is
+/// its own whichever thread runs it): first reservations, growths, waits for room over 1 s, and the
 /// most any network held in partial claims. `--nocapture` prints them.
 #[derive(Default, Clone, Copy, Debug)]
 struct Counts {
@@ -170,7 +171,7 @@ fn check(b: &Budget, seed: u64) {
     // (`net_partials_full`): so a network holds its share, or one first
     // request alone.
     let share = beside / super::PARTIAL_NET_SHARE;
-    let one = (std::mem::size_of::<FetchedKey>() + FIRST_REQUEST) as u64;
+    let one = (std::mem::size_of::<FetchedKey>() + FIRST_REQUEST_BYTES) as u64;
     for (n, held) in &s.partial_nets {
         count(|c| c.most_net_partial = c.most_net_partial.max(*held));
         assert!(
@@ -515,21 +516,24 @@ async fn first_reserved(size: usize) -> (usize, usize) {
         ..FetchOptions::default()
     };
     let fetch = tokio::spawn(async move { fetch_on_stream(ours, &key, &opts, false).await });
-    let mut hello = [0u8; HANDSHAKE_LEN];
-    theirs.read_exact(&mut hello).await.unwrap();
-    theirs
-        .write_all(&message::handshake(&key.0, b"-PW0001-firstrequest", true))
-        .await
-        .unwrap();
-    let ext = message::our_extended_handshake(Some(size));
-    let mut frame = ((ext.len() + 2) as u32).to_be_bytes().to_vec();
-    frame.extend([20, 0]);
-    frame.extend(ext);
-    theirs.write_all(&frame).await.unwrap();
-    let got = timeout(Duration::from_secs(10), rx)
-        .await
-        .expect("peer-wire reserves at the extended handshake")
-        .unwrap();
+    // One deadline for the whole exchange, so a fetch that stops
+    // talking fails the test instead of hanging it.
+    let got = timeout(Duration::from_secs(10), async {
+        let mut hello = [0u8; HANDSHAKE_LEN];
+        theirs.read_exact(&mut hello).await.unwrap();
+        theirs
+            .write_all(&message::handshake(&key.0, b"-PW0001-firstrequest", true))
+            .await
+            .unwrap();
+        let ext = message::our_extended_handshake(Some(size));
+        let mut frame = ((ext.len() + 2) as u32).to_be_bytes().to_vec();
+        frame.extend([20, 0]);
+        frame.extend(ext);
+        theirs.write_all(&frame).await.unwrap();
+        rx.await.unwrap()
+    })
+    .await
+    .expect("peer-wire reserves at the extended handshake, within 10 s");
     fetch.abort();
     got
 }
@@ -550,6 +554,6 @@ async fn peer_wire_reserves_these_first() {
             "a dict of {size}: first"
         );
     }
-    assert_eq!(first_of(6 * p + PEX_BOUND), FIRST_REQUEST);
-    assert_eq!(first_of(5 * p + PEX_BOUND), FIVE_PIECE_FIRST);
+    assert_eq!(first_of(6 * p + PEX_BOUND), FIRST_REQUEST_BYTES);
+    assert_eq!(first_of(5 * p + PEX_BOUND), FIVE_PIECE_FIRST_BYTES);
 }
