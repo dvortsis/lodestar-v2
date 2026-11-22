@@ -1513,8 +1513,18 @@ fn a_long_list_reads_fewer_names_per_group() {
 }
 
 #[test]
+fn few_documents_can_give_fewer_samples() {
+    // Two van der Corput points share a rank only below seven documents;
+    // `sample_ranks` drops the repeat rather than invent a rank.
+    assert_eq!(sample_ranks(5, 5), vec![0, 1, 2, 3]);
+    assert_eq!(sample_ranks(6, 6), vec![0, 1, 2, 3, 4]);
+    assert_eq!(sample_ranks(7, 7), vec![0, 1, 2, 3, 4, 5, 6]);
+    assert_eq!(sample_ranks(0, 3), vec![0]);
+}
+
+#[test]
 fn spellings_are_found_as_words() {
-    let cases: [(&str, &str, Option<&str>); 19] = [
+    let cases: [(&str, &str, Option<&str>); 21] = [
         ("Movie.2020.1080p-RARBG", "rarbg", Some("RARBG")),
         // The last word of its own wins over an earlier one.
         ("Rarbg.Pack.Movie-RARBG", "rarbg", Some("RARBG")),
@@ -1551,6 +1561,9 @@ fn spellings_are_found_as_words() {
         ("Show-\u{212B}NGSTROM", "ångstrom", None),
         // A fit spelling elsewhere in the name still wins.
         ("KING-\u{212A}ING", "king", Some("KING")),
+        // Two whole-word spellings: the last one is taken.
+        ("-S.s", "s", Some("s")),
+        ("-s.S", "s", Some("S")),
     ];
     for (name, value, want) in cases {
         assert_eq!(spelling_in(name, value), want, "{name:?} {value:?}");
@@ -1636,6 +1649,11 @@ mod label_props {
         ) {
             let word = recased(&value, &mask);
             prop_assume!(super::super::fit_label(&word, &value));
+            // Only the word may spell the value: `spelling_in` takes the
+            // last match, so another spelling in the surrounding text
+            // (`-S.s` for `s`) would rightly win over it.
+            prop_assume!(spelling_in(&before, &value).is_none());
+            prop_assume!(spelling_in(&after, &value).is_none());
             // Mid-name or at the end.
             let name = if after.is_empty() {
                 format!("{before}-{word}")
@@ -1655,7 +1673,14 @@ mod label_props {
             prop_assert!(few.iter().all(|r| many.contains(r)));
             prop_assert!(few.windows(2).all(|w| w[0] < w[1]));
             prop_assert!(few.iter().all(|r| *r < total.max(1)));
-            prop_assert_eq!(few.len() as u64, (k as u64).min(total));
+            // All `k` (or `total`) ranks are distinct from seven documents
+            // on; below that two points can share a rank (5 of 5 gives 4),
+            // and none at all gives the one rank 0.
+            if total >= 7 {
+                prop_assert_eq!(few.len() as u64, (k as u64).min(total));
+            } else {
+                prop_assert!(few.len() as u64 <= (k as u64).min(total).max(1));
+            }
             // Spread: the middle document always, and from three on,
             // documents in both halves and no two within total/16.
             if total >= 64 {
