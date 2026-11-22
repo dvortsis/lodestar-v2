@@ -515,7 +515,7 @@ async fn it_is_served_open_as_generated() {
 const QUERY_WITHOUT_400: &[(&str, &str, &str)] = &[(
     "GET",
     "/feeds/{id}",
-    "`token` is read by the key guard, not `Query<T>`: a malformed or conflicting token is a 401 and an id that isn't a saved search's a 404. It declares no query 400, apart from `bad_path` for a path segment that isn't valid UTF-8",
+    "`token` is read by the key guard, not `Query<T>`: a malformed or conflicting token is a 401 and an id that isn't a saved search's a 404. It can answer no query 400; its only 400 is the undocumented `bad_path`, for a path segment that isn't valid UTF-8",
 )];
 
 /// Every operation that reads its query documents its 400: a parameter
@@ -525,22 +525,33 @@ const QUERY_WITHOUT_400: &[(&str, &str, &str)] = &[(
 fn every_query_route_declares_a_400() {
     let doc = doc();
     let ops = operations(&doc);
-    let stale: Vec<String> = QUERY_WITHOUT_400
-        .iter()
-        .filter(|(m, p, _)| ops.iter().filter(|(om, op, _)| om == m && op == p).count() != 1)
-        .map(|(m, p, _)| format!("{m} {p}"))
-        .collect();
+    let takes_query = |op: &Value| {
+        op["parameters"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["in"] == "query"))
+    };
+    // Each entry names one operation that still takes a query, and is
+    // listed once; anything else is stale.
+    let mut seen = BTreeSet::new();
+    let mut stale = Vec::new();
+    for (m, p, _) in QUERY_WITHOUT_400 {
+        let used = ops
+            .iter()
+            .any(|(om, op, o)| om == m && op == p && takes_query(o));
+        if !used {
+            stale.push(format!("{m} {p}: no operation that takes a query"));
+        } else if !seen.insert((m, p)) {
+            stale.push(format!("{m} {p}: listed more than once"));
+        }
+    }
     assert!(
         stale.is_empty(),
-        "QUERY_WITHOUT_400 entries that match no operation (or several): {stale:#?}"
+        "stale QUERY_WITHOUT_400 entries: {stale:#?}"
     );
     let mut missing = Vec::new();
     let mut checked = 0;
     for (method, path, op) in ops {
-        let takes_query = op["parameters"]
-            .as_array()
-            .is_some_and(|ps| ps.iter().any(|p| p["in"] == "query"));
-        if !takes_query {
+        if !takes_query(op) {
             continue;
         }
         checked += 1;
