@@ -80,6 +80,7 @@ fn run() -> ExitCode {
     let config_path = cli.config;
     let command = cli.command.unwrap_or(Command::Serve {
         fixture: None,
+        fixture_variant: None,
         child: false,
     });
     // Root is dropped first: before the config file (in the data directory)
@@ -91,8 +92,14 @@ fn run() -> ExitCode {
     let scope = match command {
         // `fixture::serve` drops it for the fixture's own folder, once it
         // has checked that folder; the data directory is never touched.
+        // A stray `--fixture-variant` is refused below, before anything is
+        // touched.
         Command::Serve {
             fixture: Some(_), ..
+        }
+        | Command::Serve {
+            fixture_variant: Some(_),
+            ..
         } => None,
         Command::Serve { fixture: None, .. }
         | Command::ImportBitmagnet(_)
@@ -167,10 +174,23 @@ fn run() -> ExitCode {
             Err(e) => cli::report(&e),
         },
         Command::Serve {
-            fixture: Some(dir), ..
-        } => fixture::serve(dir, config_path.as_deref()),
+            fixture: Some(dir),
+            fixture_variant,
+            ..
+        } => fixture::serve(dir, fixture_variant, config_path.as_deref()),
+        // `--fixture-variant` needs `--fixture` (clap refuses it without),
+        // and plain `serve` never takes one even if a parse let it through.
         Command::Serve {
             fixture: None,
+            fixture_variant: Some(_),
+            ..
+        } => {
+            eprintln!("lodestar serve: --fixture-variant needs --fixture");
+            ExitCode::from(2)
+        }
+        Command::Serve {
+            fixture: None,
+            fixture_variant: None,
             child,
         } => {
             let config = match load(config_path.clone()) {

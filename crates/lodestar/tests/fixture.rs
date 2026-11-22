@@ -405,3 +405,105 @@ fn funnel_codes_match_the_sources_crate() {
     }
     assert_eq!(losses.len(), 10);
 }
+
+/// One JSON write; the raw response.
+fn post(port: u16, path: &str, cookie: &str, body: &str) -> String {
+    request(
+        port,
+        &format!("POST {path} HTTP/1.0\r\nCookie: {cookie}\r\nContent-Type: application/json"),
+        body,
+    )
+    .unwrap_or_default()
+}
+
+/// X-fixture-updates-on through the binary: `--fixture-variant updates-on`
+/// serves Updates on (a release, a check at the anchor, pausing that
+/// works) with nothing installable and every other write the default
+/// fixture's `409 updates_unavailable`; the folder records its variant and
+/// is refused (exit 3, untouched) when a later run asks for another.
+#[test]
+fn the_updates_on_variant_serves_updates_and_installs_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("fx");
+    let shown = dir.to_string_lossy().into_owned();
+    let mut server = spawn(
+        &["--fixture", &shown, "--fixture-variant", "updates-on"],
+        &[("LODESTAR_FIXTURE_PASSWORD", PASSWORD)],
+    );
+    server.ready();
+    let m = manifest(&dir);
+    assert_eq!(m["variant"], "updates-on");
+    let anchor = m["anchor"].as_i64().unwrap();
+    let cookie = server.login();
+    let port = server.port;
+
+    let s = json(port, "/api/v1/updates", &cookie);
+    assert_eq!(s["unavailable"], Value::Null, "{s}");
+    assert_eq!(s["status"]["state"], "ok");
+    assert_eq!(s["status"]["checked_at"], anchor);
+    assert_eq!(s["policy"]["mode"], "notify");
+    assert_eq!(s["capability"]["can_install"], false);
+    assert_eq!(s["capability"]["reason"], "fixture");
+    assert_eq!(s["rollback"]["available"], false);
+    assert_eq!(s["releases"].as_array().unwrap().len(), 1, "{s}");
+    let system = json(port, "/api/v1/system", &cookie);
+    assert_eq!(system["fixture"], true, "{system}");
+
+    let paused = post(port, "/api/v1/updates/pause", &cookie, r#"{"days":7}"#);
+    assert!(paused.starts_with("HTTP/1.0 200"), "{paused}");
+    let s = json(port, "/api/v1/updates", &cookie);
+    assert!(
+        s["policy"]["paused_until"].as_i64().unwrap() > anchor,
+        "{s}"
+    );
+    assert_eq!(s["releases"][0]["blocked_by"][0]["code"], "paused");
+    let resumed = post(port, "/api/v1/updates/pause", &cookie, r#"{"days":0}"#);
+    assert!(resumed.starts_with("HTTP/1.0 200"), "{resumed}");
+    let s = json(port, "/api/v1/updates", &cookie);
+    assert_eq!(s["policy"]["paused_until"], Value::Null, "{s}");
+
+    let version = s["releases"][0]["version"].as_str().unwrap().to_string();
+    for (path, body) in [
+        ("/api/v1/updates/check", String::new()),
+        (
+            "/api/v1/updates/install",
+            format!(r#"{{"version":"{version}","when":"now","confirm_manual":true}}"#),
+        ),
+        (
+            "/api/v1/updates/skip",
+            format!(r#"{{"version":"{version}"}}"#),
+        ),
+        (
+            "/api/v1/updates/rollback",
+            r#"{"confirm":true}"#.to_string(),
+        ),
+        ("/api/v1/updates/history/clear", String::new()),
+    ] {
+        let r = post(port, path, &cookie, &body);
+        assert!(r.starts_with("HTTP/1.0 409"), "{path}: {r}");
+        assert!(
+            r.contains("updates_unavailable") && r.contains("(fixture)"),
+            "{path}: {r}"
+        );
+    }
+    server.stop();
+
+    // The same folder without the variant: refused, untouched.
+    let before = std::fs::read_to_string(dir.join(data::MANIFEST)).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_lodestar"))
+        .args(["serve", "--fixture", &shown])
+        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
+        .env_remove("LODESTAR_DATA_DIR")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("refusing") && stderr.contains("updates-on"),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join(data::MANIFEST)).unwrap(),
+        before
+    );
+}
