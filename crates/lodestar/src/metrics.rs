@@ -2564,9 +2564,13 @@ mod tests {
                 "docs/metrics.md has no row for {family}"
             );
         }
+        let row = doc
+            .lines()
+            .find(|l| l.starts_with("| `dht_sample_cooling_reason"))
+            .expect("the reason row");
         for reason in lodestar_dht::node::CoolingReason::ALL {
             assert!(
-                doc.contains(&format!("`{}`", reason.as_str())),
+                row.contains(&format!("`{}`", reason.as_str())),
                 "docs/metrics.md doesn't name the reason {}",
                 reason.as_str()
             );

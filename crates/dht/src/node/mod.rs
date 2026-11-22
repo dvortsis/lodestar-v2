@@ -746,9 +746,11 @@ impl TargetKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CoolingReason {
-    /// An answer's cooldown: the node's interval.
+    /// An answer's cooldown: the node's interval, times
+    /// `dht.sample_interval_scale`.
     Interval,
-    /// A reply without the BEP 51 fields, or a KRPC 204.
+    /// A reply without both BEP 51 fields or with an interval over 6 h, or
+    /// a KRPC 204.
     Unsupported,
     /// No reply: the full backoff.
     Timeout,
@@ -760,7 +762,9 @@ pub enum CoolingReason {
     FirstFailure,
     /// A restriction restored by the restart proof.
     Restored,
-    /// A sample in flight at a clean stop, sealed by the restart proof.
+    /// A sample in flight at a clean stop, sealed by the restart proof
+    /// (after the last maintenance tick, so rarely seen; after a restart
+    /// these are `Restored`).
     Sealed,
 }
 
