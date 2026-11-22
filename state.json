@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T21:38:35Z",
+    "updated": "2026-11-22T22:39:00Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhn9gdfgFDtyqmPYioHq",
         "model": "sonnet",
         "since": "2026-11-22T18:01:33Z",
-        "doing": "PR 1 built locally; size calls given (Compare raise to measured, actions-menu entry); waits for .size-limit.mjs after X-insights-story-stages"
+        "doing": "#1078 merged; .size-limit.mjs handed over 22:3xZ; merging main, size calls, PR 1"
       },
       {
         "slot": 2,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhnCUfvFAhDBHWuB237x",
         "model": "opus",
         "since": "2026-11-22T20:03:11Z",
-        "doing": "go (A); merging main after #1077, then ready"
+        "doing": "#1079 ready bd09289e; fresh Opus review + CI running"
       },
       {
         "slot": 3,
@@ -10680,16 +10680,16 @@
         "agent": "session_01MMjhnBkkHF4KZqpjuV2Dmn",
         "model": "sonnet",
         "since": "2026-11-22T21:22:54Z",
-        "doing": "go given 21:3xZ; building"
+        "doing": "#1080 ready cf9a8951; baselines via CI, then final head for review"
       },
       {
         "slot": 4,
-        "slice": "X-insights-story-stages",
-        "role": "slice",
-        "agent": "session_01MMjhn91TUNsrnanuJrszsr",
+        "slice": "X-shell-home",
+        "role": "build",
+        "agent": "session_01MMjhn9bmyCJJen821FeiDs",
         "model": "sonnet",
-        "since": "2026-11-22T17:19:17Z",
-        "doing": ".size-limit.mjs handed over after #1077; merging main, entries, PR"
+        "since": "2026-11-22T22:38:32Z",
+        "doing": "launched; step 0 (brief 7b06c228)"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
