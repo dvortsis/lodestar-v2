@@ -231,11 +231,11 @@ class CompanionPins(unittest.TestCase):
 
 class Advisories(unittest.TestCase):
     def test_the_lockfile_deny_toml_and_the_ci_files_apply(self):
-        for f in ["Cargo.lock", "deny.toml", ".github/workflows/ci.yml", ".github/scripts/ci_changes.py"]:
+        for f in ["Cargo.lock", "fuzz/Cargo.lock", "deny.toml", ".github/workflows/ci.yml", ".github/scripts/ci_changes.py"]:
             self.assertTrue(ci_changes.ADVISORIES.match(f), f)
 
     def test_near_misses_dont(self):
-        for f in ["Cargo.toml", "crates/store/Cargo.toml", "fuzz/Cargo.lock", "Cargo.lock.orig", "deny.toml.bak",
+        for f in ["Cargo.toml", "crates/store/Cargo.toml", "fuzz/Cargo.toml", "fuzz/Cargo.lock.orig", "Cargo.lock.orig", "deny.toml.bak",
                   "docs/deny.toml", ".github/workflows/web.yml", ".github/scripts/test_ci_changes.py",
                   "crates/store/src/lib.rs", "docs/decisions/2026-11-13-X-ci-advisories.md"]:
             self.assertFalse(ci_changes.ADVISORIES.match(f), f)
@@ -330,6 +330,12 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(self.run_pr({f: "x"})["infra"], "false", f)
 
     def test_a_lockfile_only_pr_runs_the_advisory_check(self):
+        self.check_lockfile_only_pr("Cargo.lock")
+
+    def test_a_fuzz_lockfile_only_pr_runs_the_advisory_check(self):
+        self.check_lockfile_only_pr("fuzz/Cargo.lock")
+
+    def check_lockfile_only_pr(self, lockfile):
         with tempfile.TemporaryDirectory() as tmp:
             env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
@@ -340,7 +346,8 @@ class EndToEnd(unittest.TestCase):
             git("init", "-q")
             git("commit", "-q", "--allow-empty", "-m", "base")
             base = git("rev-parse", "HEAD")
-            (Path(tmp) / "Cargo.lock").write_text("# lock\n")
+            (Path(tmp) / lockfile).parent.mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / lockfile).write_text("# lock\n")
             git("add", ".")
             git("commit", "-q", "-m", "lock")
             head = git("rev-parse", "HEAD")

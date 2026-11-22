@@ -138,8 +138,9 @@ COMPANION_PINS = re.compile(
 
 # The RustSec advisory check (X-ci-advisories): what it reads (the lockfile and
 # deny.toml), and what decides how it runs. A Cargo.toml change that moves a
-# version also changes Cargo.lock.
-ADVISORIES = re.compile(r"^(Cargo\.lock|deny\.toml|\.github/workflows/ci\.yml|\.github/scripts/ci_changes\.py)$")
+# version also changes Cargo.lock. fuzz/ is its own workspace with its own
+# lockfile, and the same job checks it (X-fuzz-advisories).
+ADVISORIES = re.compile(r"^(Cargo\.lock|fuzz/Cargo\.lock|deny\.toml|\.github/workflows/ci\.yml|\.github/scripts/ci_changes\.py)$")
 
 # The Unraid templates and their validator. The validator and its tests live beside
 # the templates, so one prefix covers all of them.
