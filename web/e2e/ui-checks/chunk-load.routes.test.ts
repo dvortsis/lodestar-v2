@@ -34,9 +34,10 @@ async function blockChunk(page: Page, marker: string) {
 				await route.fulfill({ response, body: text });
 			}
 		} catch (error) {
-			// The page closed while the request was in flight (the end of the test, or a Reload
-			// that replaced it); there is nothing left to answer. Anything else is a real failure.
-			if (!page.isClosed() && !String(error).includes('closed')) throw error;
+			// The page closed, or the response was disposed with it, while the request was in
+			// flight (the end of the test, or a Reload that replaced the page); there is nothing
+			// left to answer. Anything else is a real failure.
+			if (!page.isClosed() && !/closed|disposed/i.test(String(error))) throw error;
 		}
 	});
 	return gate;
