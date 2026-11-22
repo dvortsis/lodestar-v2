@@ -1,9 +1,9 @@
 {
 	"settings_find_source_default": "默认值",
 	"settings_find_secret_unset": "未设置",
-	"settings_find_failed": "无法加载搜索。请使用分区列表。",
+	"settings_find_failed": "无法加载搜索。清空搜索框以使用分区列表。",
 	"settings_find_loading": "正在加载…",
-	"settings_find_count": "{count} 个结果",
+	"settings_find_count": "结果：{count}",
 	"settings_find_results": "匹配的设置",
 	"settings_find_advanced": "高级",
 	"settings_find_none": "没有与“{query}”匹配的设置。",

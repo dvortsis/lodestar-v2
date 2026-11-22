@@ -196,6 +196,8 @@ export interface StartRow {
 	/** Absent when the settings already read say nothing about it (backups, the password). */
 	state?: 'none' | 'set' | 'off' | 'skipped';
 	count?: number;
+	/** The update mode chosen (`updates.mode`), for the state in words. */
+	mode?: string;
 	/** Something is already chosen, so the action reads "Open" and not the first-time wording. */
 	configured: boolean;
 }
@@ -233,7 +235,8 @@ export function startHere(
 			id: 'updates',
 			screen: 'updates',
 			state: updatesOff ? 'off' : 'set',
-			configured: !updatesOff
+			configured: !updatesOff,
+			...(!updatesOff && typeof updates?.value === 'string' ? { mode: updates.value } : {})
 		},
 		{ id: 'backups', screen: 'general', configured: false },
 		{ id: 'password', screen: 'security', configured: true }

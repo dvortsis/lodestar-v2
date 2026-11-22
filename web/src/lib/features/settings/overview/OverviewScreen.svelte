@@ -12,11 +12,11 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { statusIcons, statusInk } from '$lib/ui/status';
 	import { displayValue } from '../form/display';
-	import { fieldLabel, loadMessages } from '../form/messages';
+	import { fieldLabel, loadMessages, settingText } from '../form/messages';
 	import { fieldAnchor, loadSettingsIndex } from '../form/schema';
 	import { getSection } from '../form/requests';
 	import type { SectionValues } from '../form/types';
-	import { screens } from '../shell/screens';
+	import { INERT, screens } from '../shell/screens';
 	import {
 		changedFromDefault,
 		needsAttention,
@@ -80,7 +80,11 @@
 			// The skipped first-run steps are the wizard's own progress, kept in this tab.
 			const skipped = skippedSteps();
 			start = startHere(values as SectionValues[], skipped);
-			groups = changedFromDefault((key) => index.spec(key), values as SectionValues[], screenOf)
+			groups = changedFromDefault(
+				(key) => (INERT.has(key) ? undefined : index.spec(key)),
+				values as SectionValues[],
+				screenOf
+			)
 				.map((g) => ({ ...g, title: titleOf(g.id) }))
 				.sort((a, b) => order(a.id) - order(b.id));
 		})().catch((e: unknown) => {
@@ -129,7 +133,7 @@
 					? m.settings_find_start_client_set({ count: formatCount(r.count ?? 0) })
 					: r.id === 'notifications'
 						? m.settings_find_start_notifications_set()
-						: titleOf('updates');
+						: ((r.mode && settingText(`settings.updates.mode.option.${r.mode}`)) ?? r.mode ?? '');
 			case 'off':
 				return m.settings_find_start_updates_off();
 			case 'skipped':
@@ -139,6 +143,7 @@
 		}
 	};
 	const startAction = (r: StartRow) => {
+		if (r.id === 'password') return m.settings_find_start_password_action();
 		if (r.configured) return m.settings_find_start_open();
 		switch (r.id) {
 			case 'client':

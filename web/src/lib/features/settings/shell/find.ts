@@ -3,6 +3,7 @@
 // locale. It holds labels, help, group names, `config.toml` keys, `LODESTAR_*` names and keywords,
 // never a value: a result's value is read when it is shown (`describe`), and a secret's only as
 // "Set" or "Not set". This whole module loads on demand; the shell carries none of it.
+import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
 import { displayValue } from '../form/display';
 import { loadMessages, fieldHelp, fieldLabel, settingText } from '../form/messages';
@@ -89,9 +90,12 @@ function fieldEntry(spec: FieldSpec, screen: Screen, group: string | undefined):
 }
 
 let built: Promise<FindEntry[]> | undefined;
+let builtFor: string | undefined;
 
-/** Every screen and every field, once per tab and locale. A failure isn't kept, so the next call retries. */
+/** Every screen and every field, once per locale (a language switch builds it again). A failure isn't kept, so the next call retries. */
 export function loadFindIndex(): Promise<FindEntry[]> {
+	if (builtFor !== currentLocale()) built = undefined;
+	builtFor = currentLocale();
 	built ??= (async () => {
 		const index = await loadSettingsIndex();
 		const names = index.sections.map((s) => s.section);

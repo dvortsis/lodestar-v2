@@ -27,7 +27,7 @@
 		void (lazy = import('./find-keys')).then((mod) => {
 			if (!live) return;
 			icons = mod.NAV_ICONS;
-			off = mod.registerFindKey(() => input?.focus());
+			off = mod.registerFindKey(() => input);
 		});
 		return () => {
 			live = false;

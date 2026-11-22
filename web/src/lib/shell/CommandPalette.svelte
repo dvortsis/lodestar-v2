@@ -30,10 +30,8 @@
 	let found = $state.raw<Row[]>([]);
 	$effect(() => {
 		const q = query;
-		if (!open || !q.trim()) {
-			found = [];
-			return;
-		}
+		found = [];
+		if (!open || !q.trim()) return;
 		let live = true;
 		void import('$lib/features/settings/shell/find-palette').then(
 			async (f) => {

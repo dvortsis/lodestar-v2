@@ -7,8 +7,20 @@ import type { Route } from '$lib/shell/nav';
 import { highlight, loadFindIndex, search } from './find';
 
 /** The fields that match, as palette options; none when the index can't load (signed out, offline). */
+let failedAt = 0;
+
 export async function settingsRows(query: string) {
-	return search(await loadFindIndex(), query, 8).map((entry) => ({
+	// After a failure (signed out, offline) the index isn't asked for again for a while, so typing
+	// doesn't repeat the request on every key.
+	if (Date.now() - failedAt < 30_000) return [];
+	let entries;
+	try {
+		entries = await loadFindIndex();
+	} catch {
+		failedAt = Date.now();
+		return [];
+	}
+	return search(entries, query, 8).map((entry) => ({
 		id: `settings:${entry.href}`,
 		title: m.settings_find_palette_title({ label: entry.label }),
 		section: entry.trail,

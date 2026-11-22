@@ -119,6 +119,32 @@ test.describe('keyboard: Settings search', () => {
 		await expect(page.locator('[data-field="crawler.paused"]').getByRole('switch')).toBeFocused();
 	});
 
+	test('Start here names each basic with one action', async ({ page, go }) => {
+		await go('/settings');
+		const rows = page.getByTestId('start-row');
+		await expect(rows).toHaveCount(5);
+		await expect(rows.nth(0)).toContainText('Download client');
+		await expect(rows.nth(1)).toContainText('In the app only');
+		await expect(rows.nth(2)).toContainText(/Off\s*·\s*Choose/);
+		await expect(rows.nth(3)).toContainText('Set a schedule');
+		await expect(rows.nth(4)).toContainText('Admin password');
+		await expect(rows.nth(4).getByRole('link', { name: 'Change' })).toBeVisible();
+	});
+
+	test('on a phone, typing in the box puts the results above what needs attention', async ({
+		page,
+		go,
+		kbd
+	}) => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await go('/settings');
+		await focusBoxWithSlash(page, kbd);
+		await page.keyboard.type('pause');
+		const option = await page.getByRole('option').first().boundingBox();
+		const attention = await page.getByRole('heading', { name: 'Needs attention' }).boundingBox();
+		expect(option!.y).toBeLessThan(attention!.y);
+	});
+
 	test('the current item is shaded, not only bold', async ({ page, go }) => {
 		await go('/settings/crawler');
 		const current = page.getByRole('link', { name: 'Crawler', exact: true });

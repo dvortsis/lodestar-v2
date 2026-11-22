@@ -5,6 +5,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onDestroy } from 'svelte';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import type { Route } from '$lib/shell/nav';
 	import type { FieldKey } from '../form/types';
@@ -31,7 +32,11 @@
 	let selected = $state(0);
 	let values = $state.raw<Record<string, Described | undefined>>({});
 
+	// The index is built for the locale in use, and tried again after a failure when the text changes.
 	$effect(() => {
+		void currentLocale();
+		if (failed && !query.trim()) return;
+		failed = false;
 		let live = true;
 		loadFindIndex().then(
 			(entries) => live && (index = entries),
@@ -46,10 +51,13 @@
 	const active = $derived(Math.min(selected, results.length - 1));
 	const id = (i: number) => `find-option-${i}`;
 
-	// Selection starts at the top whenever the text changes.
+	// Selection starts at the top whenever the text changes; an emptied box forgets the values read.
 	$effect(() => {
-		void query;
 		selected = 0;
+		if (!query.trim()) {
+			forgetValues();
+			values = {};
+		}
 	});
 
 	// The value of each result, read as the list changes.
@@ -120,6 +128,15 @@
 	});
 </script>
 
+<!-- One live region, always on the page, so a change in it is announced. -->
+<p class="sr-only" role="status">
+	{!query.trim() || !index || failed
+		? ''
+		: results.length
+			? m.settings_find_count({ count: results.length })
+			: m.settings_find_none({ query: query.trim() })}
+</p>
+
 {#if query.trim()}
 	<div class="find-list">
 		{#if failed}
@@ -164,14 +181,14 @@
 				{/each}
 			</ul>
 		{:else}
-			<p role="status" class="text-small">{m.settings_find_none({ query: query.trim() })}</p>
+			<p class="text-small">{m.settings_find_none({ query: query.trim() })}</p>
 		{/if}
 	</div>
 {/if}
 
 <style>
-	/* Below 1024 px the Overview's list of screens comes last (SettingsShell). */
+	/* Below 1024 px the results sit right under the box, before what needs attention (SettingsShell). */
 	.find-list {
-		order: 3;
+		order: 1;
 	}
 </style>

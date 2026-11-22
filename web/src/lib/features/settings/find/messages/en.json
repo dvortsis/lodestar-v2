@@ -1,9 +1,9 @@
 {
 	"settings_find_source_default": "Default",
 	"settings_find_secret_unset": "Not set",
-	"settings_find_failed": "Search couldn't load. Use the list of sections.",
+	"settings_find_failed": "Search couldn't load. Clear the box to use the list of sections.",
 	"settings_find_loading": "Loading…",
-	"settings_find_count": "{count} results",
+	"settings_find_count": "Results: {count}",
 	"settings_find_results": "Matching settings",
 	"settings_find_advanced": "Advanced",
 	"settings_find_none": "No setting matches “{query}”.",
