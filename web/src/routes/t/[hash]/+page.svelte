@@ -4,7 +4,6 @@
 	// instead (features/detail/DetailHost). The page is the shared frame (ui/layout), up to 80 rem; its header and summary keep --manuscript-width.
 	import { onMount, untrack } from 'svelte';
 	import { resolve } from '$app/paths';
-	import IconBack from '~icons/ph/arrow-left-bold';
 	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
 	import DetailActions from '$lib/features/detail/DetailActions.svelte';
@@ -60,8 +59,7 @@
 				class="ls-focus link inline-flex items-center gap-1 text-body"
 				href={resolve('/search')}
 				onclick={back}
-				data-testid="detail-back-search"
-				><IconBack class="size-(--icon-size-row)" aria-hidden="true" />{m.detail_back_search()}</a
+				data-testid="detail-back-search">{m.detail_back_search()}</a
 			>
 			<header
 				class="flex max-w-(--manuscript-width) flex-wrap items-start justify-between gap-x-4 gap-y-2"
