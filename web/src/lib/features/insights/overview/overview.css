@@ -22,6 +22,12 @@
 	flex-direction: column;
 	gap: calc(var(--spacing) * 6);
 }
+.ins-exceptions {
+	order: -1;
+}
+.ins-movement {
+	order: 1;
+}
 @media (min-width: 64rem) {
 	.ins-story {
 		display: grid;
@@ -29,9 +35,11 @@
 		gap: calc(var(--spacing) * 6);
 	}
 	.ins-exceptions {
+		order: 0;
 		grid-area: 1 / 9 / 2 / 13;
 	}
 	.ins-movement {
+		order: 0;
 		grid-area: 1 / 1 / 2 / 9;
 	}
 	.ins-funnel {

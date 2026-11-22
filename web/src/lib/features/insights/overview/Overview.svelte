@@ -282,10 +282,29 @@
 					<KpiRow kpi={overview.kpi} annotations={overview.annotations} />
 				</section>
 
-				<!-- §10.9.6. The DOM is the narrow order (exceptions, funnel, trend), so keyboard and
-				     screen-reader order match what a single column shows. Wide screens place trend 8 +
-				     needs attention 4, then the funnel 12, with the grid (overview.css). -->
+				<!-- §10.9.6. The DOM is the wide order (trend, needs attention, funnel), so focus follows
+				     what a keyboard user on a wide screen sees (WCAG 2.4.3). On a narrow screen CSS order
+				     puts needs attention and the funnel before the trend, as the plan shows. -->
 				<div class="ins-story" data-calm={overview.exceptions.length === 0 ? '' : undefined}>
+					<section
+						id="insights-movement"
+						class="ins-section ins-movement"
+						aria-labelledby="insights-movement-heading"
+					>
+						<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
+							{m.insights_overview_movement_title()}
+						</h2>
+						<p class="ins-sub">
+							{m.insights_overview_movement_time({
+								tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
+							})}
+						</p>
+						<Lazy
+							load={() => import('./Movement.svelte')}
+							props={{ overview, query, rangeText }}
+							height="ins-sk-movement"
+						/>
+					</section>
 					<section
 						id="insights-exceptions"
 						class="ins-section ins-exceptions"
@@ -318,25 +337,6 @@
 							load={() => import('./Funnel.svelte')}
 							props={{ overview, query, rangeText }}
 							height="ins-sk-funnel"
-						/>
-					</section>
-					<section
-						id="insights-movement"
-						class="ins-section ins-movement"
-						aria-labelledby="insights-movement-heading"
-					>
-						<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
-							{m.insights_overview_movement_title()}
-						</h2>
-						<p class="ins-sub">
-							{m.insights_overview_movement_time({
-								tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
-							})}
-						</p>
-						<Lazy
-							load={() => import('./Movement.svelte')}
-							props={{ overview, query, rangeText }}
-							height="ins-sk-movement"
 						/>
 					</section>
 				</div>

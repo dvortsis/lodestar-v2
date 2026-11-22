@@ -35,7 +35,7 @@
 		onresume: () => void;
 		onintensity: (level: Intensity) => void;
 		/** The level Undo restores for a few seconds after a change (U26); `onundo` restores it. */
-		undo?: { level: Intensity; note: 'set' | 'undone' };
+		undo?: { level: Intensity };
 		onundo?: () => void;
 		/** Focus entered or left the Undo line: the 10 s wait pauses while it is inside. */
 		onundohold?: (held: boolean) => void;
@@ -275,9 +275,7 @@
 			onfocusout={() => onundohold?.(false)}
 		>
 			{#if undo && crawler}
-				{undo.note === 'set'
-					? m.insights_overview_intensity_undo_text({ level: nameOf(undo.level) })
-					: m.insights_overview_intensity_undone({ level: nameOf(undo.level) })}
+				{m.insights_overview_intensity_undo_text({ level: nameOf(undo.level) })}
 				<Button
 					dense
 					onclick={() => onundo?.()}

@@ -1751,6 +1751,15 @@ export default [
 		// X-insights-source-names: 40,975 → 40,655 B, the plugin-name table gone (the API sends names).
 		'40.66 KB'
 	),
+	// X-insights-story (runner §2.26): the overview's first view (`/insights`): its own JS and CSS,
+	// the panels that mount after first paint included. uPlot, the print layout and the privacy
+	// banner load on their own and have entries of their own. Main measured 62.75 kB with this entry
+	// definition; this slice 65.06 → 65.01 kB (limit = measured rounded up to 0.01 kB).
+	entry(
+		'Insights overview (own JS + CSS)',
+		own('/insights', { onDemand: [/uplot/i, /insights\/print\/PrintReport/, /privacy\/door/] }),
+		'65.01 KB'
+	),
 	entry(
 		'Insights stage charts (uPlot, on demand)',
 		onDemandOf('/insights/[stage]', stageLazy),

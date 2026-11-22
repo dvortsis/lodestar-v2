@@ -112,11 +112,8 @@ export function createInsights() {
 		to: Intensity;
 	}
 	let undoStack = $state<Step[]>([]);
-	// What the line names: the level now in force and whether the last step was a change or an undo.
-	let undoShown = $state<{ level: Intensity; note: 'set' | 'undone' }>({
-		level: 'balanced',
-		note: 'set'
-	});
+	// What the line names: the level now in force.
+	let undoShown = $state<Intensity>('balanced');
 	let undoTimer: ReturnType<typeof setTimeout> | undefined;
 	let undoHeld = false;
 	let disposed = false;
@@ -138,7 +135,7 @@ export function createInsights() {
 			const ok = await act('intensity', () => api.patch('/crawler', { body: { intensity } }));
 			if (!ok || disposed || from === undefined || from === intensity) return;
 			undoStack = [...undoStack, { from, to: intensity }];
-			undoShown = { level: intensity, note: 'set' };
+			undoShown = intensity;
 			armUndo();
 		} finally {
 			intensityBusy = false;
@@ -156,7 +153,7 @@ export function createInsights() {
 			// The line may have expired while the request ran: then nothing is announced.
 			if (!ok || disposed || undoStack.at(-1) !== step) return;
 			undoStack = undoStack.slice(0, -1);
-			undoShown = { level: step.from, note: 'undone' };
+			undoShown = step.from;
 			if (undoStack.length) armUndo();
 			else dropUndo();
 		} finally {
@@ -251,8 +248,8 @@ export function createInsights() {
 		setIntensity,
 		undoIntensity,
 		/** The level Undo would restore, and whether the last step was a change or an undo. */
-		get undo(): { level: Intensity; note: 'set' | 'undone' } | undefined {
-			return undoStack.length ? undoShown : undefined;
+		get undo(): { level: Intensity } | undefined {
+			return undoStack.length ? { level: undoShown } : undefined;
 		},
 		holdUndo,
 		/** `'pending'` while the all-time check is unanswered; `'failed'` when it errored. */

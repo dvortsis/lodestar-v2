@@ -39,7 +39,7 @@ describe('Undo for the intensity click (U26)', () => {
 	it('restores the previous level exactly, then offers nothing', async () => {
 		const { s, off } = await ready();
 		await s.setIntensity('aggressive');
-		expect(s.undo).toEqual({ level: 'aggressive', note: 'set' });
+		expect(s.undo).toEqual({ level: 'aggressive' });
 		await s.undoIntensity();
 		expect(level).toBe('balanced');
 		expect(s.undo).toBeUndefined();
@@ -54,7 +54,7 @@ describe('Undo for the intensity click (U26)', () => {
 		expect(s.undo?.level).toBe('low');
 		await s.undoIntensity();
 		expect(level).toBe('aggressive');
-		expect(s.undo).toEqual({ level: 'aggressive', note: 'undone' });
+		expect(s.undo).toEqual({ level: 'aggressive' });
 		await s.undoIntensity();
 		expect(level).toBe('balanced');
 		expect(s.undo).toBeUndefined();
@@ -82,10 +82,10 @@ describe('Undo for the intensity click (U26)', () => {
 	it('names the level that was set and the level put back', async () => {
 		const { s, off } = await ready();
 		await s.setIntensity('aggressive');
-		expect(s.undo).toEqual({ level: 'aggressive', note: 'set' });
+		expect(s.undo).toEqual({ level: 'aggressive' });
 		await s.setIntensity('low');
 		await s.undoIntensity();
-		expect(s.undo).toEqual({ level: 'aggressive', note: 'undone' });
+		expect(s.undo).toEqual({ level: 'aggressive' });
 		off();
 	});
 
@@ -106,7 +106,7 @@ describe('Undo for the intensity click (U26)', () => {
 		await s.setIntensity('aggressive');
 		patch.mockRejectedValueOnce(new Error('no'));
 		await s.undoIntensity();
-		expect(s.undo).toEqual({ level: 'aggressive', note: 'set' });
+		expect(s.undo).toEqual({ level: 'aggressive' });
 		off();
 	});
 

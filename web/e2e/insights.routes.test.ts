@@ -33,9 +33,9 @@ test.describe('the story', () => {
 		const h2 = await page.locator('main h2').allTextContents();
 		expect(h2).toEqual([
 			'Status',
+			'Movement',
 			'Needs attention',
 			'Where torrents are lost',
-			'Movement',
 			'What is arriving',
 			'Serve',
 			'Detail'
@@ -425,7 +425,7 @@ test.describe('crawler controls', () => {
 		const line = page.getByTestId('insights-intensity-undo');
 		await expect(line).toHaveAttribute('role', 'status');
 		// It names the level that was set, not whatever the last refetch returned.
-		await expect(line).toContainText('Crawler intensity set to Aggressive.');
+		await expect(line).toContainText('Crawler intensity is now Aggressive.');
 		await undo.focus();
 		await page.keyboard.press('Enter');
 		await expect.poll(() => mock.calls('patchCrawler').length).toBe(2);
@@ -455,6 +455,37 @@ test.describe('crawler controls', () => {
 			'Set by LODESTAR_INTENSITY'
 		);
 		await expect(page.getByRole('radio', { name: 'Low' })).toHaveCount(0);
+	});
+});
+
+test.describe('layout (wide)', () => {
+	test.use({ viewport: { width: 1440, height: 900 } });
+	test('Tab goes trend, then needs attention, then the funnel: focus follows what is seen', async ({
+		page,
+		mock,
+		go
+	}) => {
+		serve(mock);
+		await go('/insights');
+		await expect(page.locator('#insights-funnel')).toBeVisible();
+		await expect(page.locator('#insights-movement').getByRole('button').first()).toBeVisible();
+		const order = ['insights-movement', 'insights-exceptions', 'insights-funnel'];
+		await page.locator('#insights-movement-heading').focus();
+		const seen: number[] = [];
+		for (let i = 0; i < 60; i++) {
+			await page.keyboard.press('Tab');
+			const id = await page.evaluate(
+				(ids) =>
+					ids.find((x) => document.getElementById(x)?.contains(document.activeElement)) ?? '',
+				order
+			);
+			if (id) seen.push(order.indexOf(id));
+			if (id === 'insights-funnel' && seen.length > 3) break;
+		}
+		expect(seen).toContain(0);
+		expect(seen).toContain(1);
+		expect(seen).toContain(2);
+		expect(seen).toEqual([...seen].sort((a, b) => a - b));
 	});
 });
 
