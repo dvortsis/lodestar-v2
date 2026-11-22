@@ -7,7 +7,7 @@
 - **Both success checks are exposed** to the same mechanism.
 - **Reproduced on `main` (73bb8b68):** the test binary run 300 times with `--test-threads 16` failed 14 times. With its output printed, the tool said "in use: a running Lodestar holds …/index/.lock" right after the test dropped that lock. The same test alone (`--exact`) failed 0 of 300 times.
 
-## The mechanism (Linux; possibly macOS)
+## The mechanism (Linux; macOS by the same reasoning)
 - **Both locks are `flock` locks:**
   - the tool's check (`File::try_lock_shared`, `bench/src/bin/relevance/data_dir.rs` `hold_locks`);
   - the lock tantivy takes (`MmapDirectory::acquire_lock`, fs4 `try_lock_exclusive`).
@@ -16,7 +16,7 @@
 - **A spawn copies that whole table into the child:** glibc's `posix_spawn` (`clone` with `CLONE_VFORK`), or fork then exec. The copy includes other tests' lock-file descriptors, until exec closes them as close-on-exec.
 - **So a lock a test drops while another test's child is between clone and that close stays held a moment longer.** The tool the test runs next is refused.
 - **tantivy's own release is synchronous.** The writer lock lives in the `IndexWriter`, which `wait_merging_threads` consumes. A `DirectoryLock` closes its file on drop.
-- **Reproduced on Linux.** macOS is possibly affected, but it wasn't observed there: XNU's `posix_spawn` closes close-on-exec descriptors before it returns, so only a fork-then-exec fallback would show it (runner records r10).
+- **Reproduced on Linux.** macOS follows from the same fork and exec reasoning, but it wasn't observed there.
 - **On Windows this mechanism doesn't apply:** Rust opens handles non-inheritable, and `CreateProcess` copies only inheritable ones.
 - **A different, unobserved risk remains on Windows** (the self-review).
   - The locks there are `LockFileEx`, released by closing the handle or by the process exiting, not by `UnlockFileEx`. Microsoft's documentation says the time that release takes "depends upon available system resources".
