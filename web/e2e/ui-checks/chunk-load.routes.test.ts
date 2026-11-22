@@ -4,7 +4,7 @@
 // has, so no hashed file name is pinned), shows the page's own error, then lets the chunk through
 // and follows its Retry or Reload. Waits are conditions with a 10 s deadline; no fixed sleeps.
 // Ported from the review's flows; named `.routes.test.ts` so the `core` project picks it up.
-import type { Page } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
 import { body, hits, indexState, row, rowOf, server } from '../search-results.fixtures';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
 import {
@@ -21,13 +21,32 @@ const expect = baseExpect.configure({ timeout: 10_000 });
  * Aborts the app's JS chunks whose source contains `marker` while `gate.blocked` is true, and
  * lets everything else through. The marker is a test id or message key only that chunk carries.
  */
+/**
+ * Fetches a chunk from the preview server. Under parallel load it can reset a connection
+ * (`ECONNRESET`), so a reset is retried at once, up to three tries. Returns undefined if every
+ * try was reset; any other error is thrown.
+ */
+async function fetchChunk(route: Route) {
+	for (let tries = 0; tries < 3; tries++) {
+		try {
+			return await route.fetch();
+		} catch (error) {
+			if (!/ECONNRESET|socket hang up/i.test(String(error))) throw error;
+		}
+	}
+	return undefined;
+}
+
 async function blockChunk(page: Page, marker: string) {
 	// `seen` counts the marker chunk's responses, blocked or not; `pending` the chunk requests in flight.
 	const gate = { blocked: true, hit: 0, seen: 0, pending: 0 };
 	await page.route('**/_app/immutable/**/*.js', async (route) => {
 		gate.pending++;
 		try {
-			const response = await route.fetch();
+			const response = await fetchChunk(route);
+			// The preview server dropped the connection every time: the page sees a failed request,
+			// as it would from the network, instead of the test throwing from its own handler.
+			if (!response) return await route.abort('connectionreset');
 			const text = await response.text();
 			if (text.includes(marker)) gate.seen++;
 			if (gate.blocked && text.includes(marker)) {
