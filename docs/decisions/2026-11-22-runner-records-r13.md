@@ -8,32 +8,33 @@ The runner's records PR after r12 (#1068). It records the runner's calls on 2026
   - **The config doesn't rebuild.** A size check must not replace `build/`, which other steps may be using.
   - This PR updates the docs that still named `npx size-limit` as the check: `docs/handoff.md`, `docs/architecture.md` §17, `infra/dev-vm/linux-lane.md`, `runner/standards.md`, and the search and shell READMEs.
   - Older records, briefs and review files keep their wording.
+  - **`CLAUDE.md` is left for the owner.** Its "Before pushing" list still names `npx size-limit`, which now stops with an error. The runner proposes `npm run size:ci` in its place and doesn't edit the file.
 - **X-vm-status-mode (#1070):**
   - vm-status reads the mode with `load_block_env`, the same reader arm-switch and copy-off use, in a subshell. It emits one `block_mode_<abba|on|unknown>` count.
-  - **A correction to its decisions file:** a NUL byte doesn't make a record read `unknown`. Bash's `read` drops it, so `MO\0DE=on` reads as `MODE=on`, and both the reader and status say `on`. #1070's test pins that case as `on`. The file's other `unknown` cases stand.
+  - **A correction to `2026-11-22-X-vm-status-mode.md`:** a NUL byte doesn't make a record read `unknown`. Bash's `read` drops it, so `MO\0DE=on` reads as `MODE=on`, and both the reader and status say `on`. #1070's test pins that case as `on`. The file's other `unknown` cases stand.
 - **X-pool-past-cap-room (#1071), option (d), a runner call under §2.26:**
   - **The cause is order, not room.** A claim held back by its network's share left the partial queue and rejoined at the back, up to eight times in one seed.
-  - **The fix:** it keeps its place, and the head is the oldest claim whose network isn't full. No bound moves.
+  - **The fix:** it keeps its place, and the head is the oldest claim whose network's share has room for it. No bound moves.
   - **Results over 640 seeds:**
     - at the 1 MB test budget, no claim waits past the bound, and the worst wait is 19.94 s;
     - at the worker budget, the worst is 6.68 s;
     - the 64-seed run asserts that nothing waits past the bound.
   - It also fixes a lost wake-up in `settle` that was there before this slice.
   - **Declined:**
-    - (a) and (b): they cut coverage to the worker's metadata limits;
-    - (a'): it loosens the floor against slow peers, which is the owner's call (owner question n 34).
+    - (a) and (b): they cut coverage, to the worker's metadata limits, and (b) also lowers the main node's `MAX_METADATA_MIB` from 47 to 36;
+    - (a'): it loosens the floor against slow peers, and only the owner may loosen such a bound.
 - **X-fuzz-advisories (#1072):**
   - `fuzz/Cargo.lock` moves ctutils from 0.4.2 to 0.4.8 (RUSTSEC-2026-0385).
   - CI's advisories job checks `fuzz/Cargo.lock` too.
-  - `deny.toml`'s header now says so.
+  - This PR updates `deny.toml`'s header to say so.
   - **Two nits wait for the next edit of `ci_changes.py`:** re-wrap the docstring at line 35, and say "the lockfiles" at lines 139–140.
 
 ## Calls in running slices
-- **One owner per file.** Owner question n 30, which would let two slices share a file through additive lines, is still open. So `web/.size-limit.mjs` has one owner among the running slices: X-search-toolbar.
-  - X-insights-story's new overview entry moves to X-insights-story-stages.
+- **One owner per file.** The owner's rule is that running slices' owns never overlap. Owner question n 30 asks for a narrow exception (additive lines in shared crawler files) and is still open; it wouldn't cover this file anyway. So `web/.size-limit.mjs` has one owner among the running slices: X-search-toolbar.
+  - X-insights-story's new overview entry moves to X-insights-story-stages. The overview has no size entry on main today, so PR 1 lands unbudgeted, with its measured size in the PR, and that size is PR 2's baseline.
   - X-settings-find sends a measured size for its on-demand chunk, if no entry covers it, and the runner adds that entry after X-search-toolbar lands.
 - **X-search-toolbar:**
-  - **One view switcher (List, Compact, Table, Cards)** replaces the density control and the view toggle. This refines §10.2 and §10.4, and old `density=` and `view=` URLs map to it.
+  - **One view switcher (List, Compact, Table, Cards)** replaces the density control and the view toggle. This refines §10.2 and §10.4, and old `density=` and `view=` URLs map to it. §10.10's per-account Appearance density preference stays, and sets the switcher's default.
   - **The index-growing banner stays undismissible,** because it says results are incomplete. Under 640 px it's one compact line.
   - **Size calls:**
     - Search cards rises to the measured 8.11 kB, from 8.01 kB;
@@ -65,7 +66,7 @@ The runner's records PR after r12 (#1068). It records the runner's calls on 2026
   - **No direct-change palette commands.**
   - **Owns gain:**
     - `security/SecurityScreen.svelte` (P17 only) and the per-screen icon files (P3 only);
-    - the Settings messages, and new `settings_find_*` keys in `web/messages`;
+    - the Settings messages (`settings/messages/en.json` and `zh.json`), where its new `settings_find_*` keys go. `web/messages/` is generated, so nothing is committed there;
     - two e2e specs and its decisions file.
 
 ## Cloud testing
@@ -81,5 +82,5 @@ The runner's records PR after r12 (#1068). It records the runner's calls on 2026
 - **No new sampler-counter slice is needed.** `dht_sample_failures_total` and `dht_sample_cooling_reason` were added by X-sample-cooling-metric, after the lanes' build.
 
 ## New slices
-- **X-insights-story-stages:** X-insights-story's 03-q, the stage pages reconciled with the overview. The same session builds it after PR 1 merges. It also adds the Insights overview size entry, and never runs beside another slice that owns `web/.size-limit.mjs`.
+- **X-insights-story-stages:** X-insights-story's 03-q, the stage pages reconciled with the overview. The same session builds it after PR 1 merges. It also adds the Insights overview size entry, may edit the `[stage]` route, and never runs beside another slice that owns `web/.size-limit.mjs`.
 - **X-hit-resolution (core):** search results carry the release's resolution (null when none), and the table view gets I15's Resolution column. `SearchHit` has no such field today. It runs after X-units-typed and X-search-toolbar, which own the files it touches.
