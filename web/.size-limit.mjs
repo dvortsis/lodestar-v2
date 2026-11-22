@@ -1315,9 +1315,11 @@ const actionsMenu = ownChunk(
 	engagedSearch
 );
 // The shared Menu (bits-ui) loads on demand for the results' row menu too, so "Detail sections"
-// leaves its chunks out, by the chunk names the build gives them.
+// leaves its chunks out, by the chunk names the build gives them (the Menu, bits-ui's index-client,
+// scroll-lock and the popper/floating-layer pieces).
 const MENU_CHUNKS = new Set([
 	'Menu',
+	'index-client',
 	'scroll-lock',
 	'popper-layer-force-mount',
 	'floating-layer-anchor'
@@ -1769,9 +1771,13 @@ export default [
 		[
 			...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])
 		].filter(
-			(f) => !adultSection.includes(f) && !identifiedSection.includes(f) && !menuOnly.includes(f)
+			(f) =>
+				!adultSection.includes(f) &&
+				!identifiedSection.includes(f) &&
+				!menuOnly.includes(f) &&
+				!actionsMenu.includes(f)
 		),
-		'49.74 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		'47.44 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
@@ -1783,7 +1789,7 @@ export default [
 	entry(
 		'Detail actions menu (on demand)',
 		requireMeasuredJs('Detail actions menu (on demand)', actionsMenu),
-		'1.41 KB'
+		'0.68 KB'
 	),
 	entry('Detail identified-as section (on demand)', identifiedSection, '2.84 KB'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
