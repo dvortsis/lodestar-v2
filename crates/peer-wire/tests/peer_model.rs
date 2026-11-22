@@ -12,10 +12,12 @@
 //!
 //! Both ways the test reads everything the fetch sends and checks that each
 //! piece is asked for once, in order, within the announced size, with a
-//! bounded number outstanding, and none past the first window before the
+//! bounded number outstanding, and none past the first request before the
 //! whole result is reserved; that with a reservation hook set, nothing is
 //! asked for before the first reservation, which covers the first request
-//! (the window and one more piece) and no more; and that a result fits its reservation.
+//! (the window, and one more piece for a dict over five pieces) and no
+//! more; that the whole is reserved only once the window is in; and that a
+//! result fits its reservation.
 //!
 //! The peer always ends by closing. The fetch keeps real deadlines (its
 //! timeout, the pace a large dict must keep, the first window's 4 s), so
@@ -46,9 +48,19 @@ const EXTENDED: u8 = 20;
 const MAX_METADATA: usize = 2 << 20;
 /// Pieces a fetch may ask for before the whole result is reserved.
 const FIRST_PIECES: usize = 4;
-/// Pieces asked for, and reserved, before the window is in: the window
-/// and one more.
+/// Pieces asked for, and reserved, before the window is in, for a dict
+/// over five pieces: the window and one more.
 const FIRST_REQUEST: usize = FIRST_PIECES + 1;
+
+/// The first request's pieces for a dict of `size` bytes: a five-piece
+/// dict asks for the window alone, so no whole claim passes one window.
+fn first_request(size: usize) -> usize {
+    if size > FIRST_REQUEST * PIECE {
+        FIRST_REQUEST
+    } else {
+        FIRST_PIECES
+    }
+}
 /// Piece requests a fetch keeps outstanding at most.
 const WINDOW: usize = 64;
 const MAX_PEX: usize = 200;
@@ -544,10 +556,11 @@ async fn watch(
                 "piece {piece} asked for before anything was reserved"
             ));
         }
-        // Past the first window only with the whole result reserved (or
+        // Past the first request only with the whole result reserved (or
         // no reservation hook at all: `reserved` stays empty).
         let whole = s.reserved.last().is_none_or(|(now, total)| now == total);
-        if piece >= FIRST_REQUEST && !whole {
+        let first = s.announced.map_or(FIRST_PIECES, first_request);
+        if piece >= first && !whole {
             s.wrong.push(format!(
                 "piece {piece} asked for before the whole was reserved"
             ));
@@ -568,7 +581,13 @@ fn reserve_hook(seen: Shared) -> Reserve {
                 // The first step covers the first request (or all of a
                 // smaller dict) and no more: what's left is the rest of the
                 // dict.
-                let rest = size - size.min(FIRST_REQUEST * PIECE);
+                let rest = size - size.min(first_request(size) * PIECE);
+                // A whole claim is never more than one window of dict (the
+                // pool's small claims).
+                if now == total && size > FIRST_PIECES * PIECE {
+                    s.wrong
+                        .push(format!("a dict of {size} reserved whole at once ({now})"));
+                }
                 if total.checked_sub(now) != Some(rest) {
                     s.wrong.push(format!(
                         "first reservation ({now}, {total}) for {size} leaves {:?}, not {rest}",

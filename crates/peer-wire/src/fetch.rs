@@ -109,14 +109,18 @@ impl std::fmt::Debug for Deny {
 /// sends no request the reservation doesn't cover until the returned future
 /// completes. A reservation that waits pauses the download, and the fetch's
 /// deadline still runs.
-/// - **At the extended handshake:** `now` covers the first request window
-///   (its first 4 pieces, 64 KiB of the dict, or all of a smaller one).
-/// - **Once the whole first window has arrived**, if the dict is larger:
-///   `now == total`, before any request past the window.
+/// - **At the extended handshake:** `now` covers the first request. For a
+///   dict of more than 5 pieces that's the first window and one more piece
+///   (pieces 0–4, 80 KiB of the dict). For one of 5 pieces it's the window
+///   alone (pieces 0–3, 64 KiB), and a dict of 4 pieces or fewer is covered
+///   whole. So a whole claim is never more than 64 KiB of dict.
+/// - **Once the first window (pieces 0–3) has arrived**, if the dict is
+///   larger than the first request: `now == total`, before any request past
+///   it. The extra piece needn't have arrived.
 ///
-/// A peer that announces a large size can therefore hold at most one
-/// window of the budget until it has sent that window's 64 KiB, not its
-/// whole claim for nothing.
+/// A peer that announces a large size can therefore hold at most its first
+/// request's share of the budget (80 KiB of dict) until it has sent the
+/// window's 64 KiB, not its whole claim for nothing.
 ///
 /// The promise: a [`Fetched`] from that attempt has `info.capacity()`,
 /// `pex.capacity() × size_of::<SocketAddr>()` and the client name's
@@ -160,7 +164,22 @@ pub(crate) const FIRST_WINDOW: usize = FIRST_PIECES * METADATA_PIECE;
 /// retransmit timeout. The window's deadline and [`Error::FirstWindow`]
 /// still count only the window's [`FIRST_PIECES`]; a peer that won't send
 /// pins 80 KiB for that time instead of 64 KiB.
+///
+/// Only dicts of more than this many pieces get it ([`first_request`]): a
+/// five-piece dict asks for the window alone, as before, so no whole claim
+/// is larger than one window (the pool's small claims).
 const FIRST_REQUEST: usize = FIRST_PIECES + 1;
+
+/// The pieces asked for, and reserved, before the window is in, for a dict
+/// of `size` bytes: [`FIRST_REQUEST`] for a dict larger than that, else the
+/// window ([`FIRST_PIECES`], or all of a smaller dict).
+fn first_request(size: usize) -> usize {
+    if size > FIRST_REQUEST * METADATA_PIECE {
+        FIRST_REQUEST
+    } else {
+        FIRST_PIECES
+    }
+}
 
 /// The heap bytes a [`Fetched`] can hold, for [`Reserve`]: the dict at
 /// `dict` bytes, the client name, and a full PEX list.
@@ -730,13 +749,15 @@ where
                     .filter(|s| *s > 0 && *s <= opts.max_metadata)
                     .ok_or(Error::MetadataSize(size.max(0) as u64))?;
                 their_metadata_id = Some(id);
-                // The first request's bytes (the window and one more piece,
-                // `FIRST_REQUEST`) are reserved before any is requested, so a
-                // full budget pauses here, not after the download. The rest
-                // waits until the peer has sent the window.
+                // The first request's bytes (`first_request`: the window and
+                // one more piece for a dict over five pieces) are reserved
+                // before any is requested, so a full budget pauses here, not
+                // after the download. The rest waits until the peer has sent
+                // the window.
+                let first_pieces = first_request(size);
                 if let Some(reserve) = &opts.reserve {
                     let total = result_bound(size, client.as_ref());
-                    let first = FIRST_REQUEST * METADATA_PIECE;
+                    let first = first_pieces * METADATA_PIECE;
                     let now = result_bound(size.min(first), client.as_ref());
                     reserve.reserve(now, total).await;
                     if now < total {
@@ -747,7 +768,7 @@ where
                 // outside the reservation, in the socket's working memory.
                 let mut a = Assembly::new(size);
                 if unreserved.is_some() {
-                    a.limit = FIRST_REQUEST;
+                    a.limit = first_pieces;
                 }
                 while let Some(piece) = a.next_request() {
                     let request = message::metadata_request(piece);
@@ -1593,10 +1614,12 @@ mod tests {
         }
     }
 
-    /// A dict of five pieces fits the first request: it's reserved whole
-    /// and asked for in full, and served whole it's fetched.
+    /// A dict of five pieces asks for the window alone, as before the extra
+    /// piece: pieces 0–3 and 64 KiB reserved up front (a partial claim, so
+    /// no whole claim passes one window), then the whole and piece 4 once
+    /// the window is in.
     #[tokio::test(start_paused = true)]
-    async fn a_five_piece_dict_is_reserved_and_asked_for_whole() {
+    async fn a_five_piece_dict_asks_for_the_window_then_grows() {
         let size = 5 * METADATA_PIECE;
         let info: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
         let key = InfoHash(Sha1::digest(&info).into());
@@ -1621,8 +1644,25 @@ mod tests {
         assert_eq!(got.info, info);
         assert_eq!(*asked.lock().unwrap(), [0, 1, 2, 3, 4]);
         let calls = calls.lock().unwrap().clone();
-        assert_eq!(calls.len(), 1, "{calls:?}");
-        assert_eq!(calls[0].0, calls[0].1, "reserved whole at once");
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        let (now, total) = calls[0];
+        assert_eq!(total - now, size - FIRST_WINDOW, "the window first");
+        assert_eq!(calls[1], (total, total), "then the whole");
+        peer.abort();
+
+        // Its first request stops at the window: a peer that sends nothing
+        // is asked for pieces 0–3 only.
+        let (ours, theirs) = tokio::io::duplex(1 << 20);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let peer = tokio::spawn(recording(theirs, info, vec![], asked.clone()));
+        let got = timeout(
+            Duration::from_secs(8),
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await
+        .expect("it ends at the window");
+        assert!(matches!(got, Err(Error::FirstWindow)), "{got:?}");
+        assert_eq!(*asked.lock().unwrap(), [0, 1, 2, 3]);
         peer.abort();
     }
 

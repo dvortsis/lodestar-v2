@@ -59,7 +59,7 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
 - The loss model's rate is now a parameter (`Loss::at`). At 15% it draws exactly as before, so `fetches_over_a_lossy_link` and every other test run as they did.
 
 ## (d): the first request is the window and one more piece
-- **The change** (`FIRST_REQUEST`, `fetch.rs`). For a dict larger than five pieces, the first request asks for pieces 0–4 and reserves 80 KiB up front, instead of pieces 0–3 and 64 KiB.
+- **The change** (`FIRST_REQUEST` and `first_request`, `fetch.rs`). For a dict larger than five pieces, the first request asks for pieces 0–4 and reserves 80 KiB of dict up front, instead of pieces 0–3 and 64 KiB.
 - **What stays as it was:**
   - the window is still pieces 0–3;
   - the 4 s deadline and `Error::FirstWindow` count only those four.
@@ -71,29 +71,38 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
   - a peer that sends the window but withholds piece 4 is held to the pace like any other (`the_window_is_still_its_four_pieces`).
   - **Changed while building:** the step-0 version waited for every requested piece before moving on, and that would have let such a peer skip every pace check until the fetch deadline.
 - **What it costs:**
-  - **The hostile-peer worst case** is 80 KiB pinned for 4 s, against 64 KiB, by a peer that announces a large dict and sends nothing.
+  - **The hostile-peer worst case** is 80 KiB of dict pinned for 4 s, against 64 KiB, by a peer that announces a large dict and sends nothing.
+  - **In the pool's units** (`weigh`: the dict, the client name, a full PEX list and the `FetchedKey`), a waiting first request is about 87 KiB against about 71 KiB. That ratio is where "about 20% fewer" comes from.
   - **The global reserve budget is unchanged.** About 20% fewer first requests fit in it at once when it binds.
   - **Every time bound is unchanged** for every peer, slow, silent or hostile.
   - **What the reserve protects is unchanged:** every requested byte is still reserved before it's requested.
-- **Smaller dicts:**
-  - **four pieces or fewer:** unchanged;
-  - **exactly five pieces:** now fits the first request, so it's reserved whole (80 KiB) and asked for in full. Today it reserves 64 KiB and asks for piece 4 once the window is in.
+- **Smaller dicts are unchanged:**
+  - **four pieces or fewer:** reserved and asked for whole, as before;
+  - **exactly five pieces:** asks for the window alone and reserves 64 KiB of dict, then grows and asks for piece 4 once the window is in, as before.
+  - **Why five pieces don't get the extra piece** (the review, the runner's call under §2.26): a five-piece dict's first request would be all of it, a whole claim of 80 KiB plus the bound, over the pool's `SMALL_CLAIM` (80 KiB). The pool counts such a claim as large (`KIND_LARGE`), admitted with no floor, grown-cap or network-share check. The reviewer's scratch test had 11 such claims from one /24 take 973,038 of a 1,000,000 budget. So no whole claim may be larger than one window of dict, and the peer model checks that.
 - **Its limit:** the gain depends on the remote peer's uTP stack fast-retransmitting on duplicate or selective ACKs, as libtorrent does. The test's fake peer uses ours. TCP has no first-window misses at these loss levels and gains nothing.
+- **The pool's partial-claim rules don't assume a size** (checked for the review):
+  - `room`, `beside_floor`, `net_partials_full` (`partial_nets`), the partial admission (`partial + want + need <= room`), the front-fits check during a growth's wait, `small_room` and `starved` (`crates/sources/src/pool.rs`, `Budget` and `Reservation::grant`) all work in the claim's own bytes;
+  - `SMALL_CLAIM` and `small_room` apply only to whole claims;
+  - so ~87 KiB partial claims change how many fit, not whether a rule holds.
+  - **One invariant uses `SMALL_CLAIM` as the size of one partial claim:** `pool_budget_model.rs`, `held <= share + SMALL_CLAIM` per network. It still holds (one ~87 KiB claim is under share + 80 KiB at both budgets the model runs), but its slack now means "one first request", not "one small claim".
+  - `tests/pool_wire_model.rs` drives the real fetch's reserve hook and passes.
 - **Tests:**
   - `the_first_request_is_the_window_and_one_more_piece` (6 and 8 pieces);
-  - `a_five_piece_dict_is_reserved_and_asked_for_whole`;
+  - `a_five_piece_dict_asks_for_the_window_then_grows`: pieces 0–3 and 64 KiB first, then the whole; a peer that sends nothing is asked for pieces 0–3 only;
   - `the_window_is_still_its_four_pieces`;
   - every existing first-window and pace test is unchanged;
   - `tests/fetch.rs`'s up-front reservation is 5 pieces (`a_large_claim_reserves_its_first_window_until_the_window_arrives`; the runner approved that file for this slice).
   - **The peer model** (`tests/peer_model.rs`, `fetches_end_right_whatever_the_peer_sends`; the runner approved that file for this slice):
-    - it checks that the first reservation is the first request (5 pieces, or all of a smaller dict) and that the whole is reserved only once pieces 0–3 are served;
+    - it checks that the first reservation is the first request (5 pieces for a dict over five, the window for one of five, all of a smaller dict), that no dict over one window is reserved whole at once, and that the whole is reserved only once pieces 0–3 are served;
     - it has a case for a dict of exactly five pieces;
     - it has a stalling peer that serves every piece but piece 4, which must end with the whole reserved, the rest asked for, and `Behind` or `Timeout`;
     - `PEER_MODEL_SEEDS` sets the seed count. Before this change to the model, seed 4 failed on the old 4-piece expectation.
-    - **Default run, 1,500 seeds:** all pass. The stalled fetches ended 66 first window, 38 behind, 115 timeout, and 16 withheld-piece-4, all behind.
-    - **10× run, 15,000 seeds:** all pass. The stalled fetches ended 752 first window, 320 behind, 1,222 timeout, and 215 withheld-piece-4, all behind.
+    - **Default run, 1,500 seeds:** all pass. The stalled fetches ended 63 first window, 41 behind, 115 timeout, and 16 withheld-piece-4, all behind.
+    - **10× run, 15,000 seeds:** all pass. The stalled fetches ended 703 first window, 369 behind, 1,222 timeout, and 215 withheld-piece-4, all behind.
   - Mutation-checked:
-    - dropping the extra piece fails all three new tests and the peer model (seed 4);
+    - dropping the extra piece fails `the_first_request_is_the_window_and_one_more_piece`, `the_window_is_still_its_four_pieces` and the peer model;
+    - giving the extra piece to a five-piece dict too (a whole claim of 80 KiB) fails `a_five_piece_dict_asks_for_the_window_then_grows` and the peer model (seed 4: "reserved whole at once");
     - waiting for every requested piece fails `the_window_is_still_its_four_pieces`, two existing pace tests and the peer model's withheld-piece-4 case (seed 101).
 
 ## The candidates and their cost
