@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T07:48:17Z",
+    "updated": "2026-11-22T09:21:00Z",
     "items": [
       {
         "slot": 1,
@@ -10662,25 +10662,25 @@
         "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
         "model": "opus",
         "since": "2026-11-22T07:48:17Z",
-        "doing": "#1055 merged; step 0 (brief 211d660f)"
+        "doing": "#1056 review APPROVE; merging main after #1051, then push and ready"
       },
       {
         "slot": 2,
-        "slice": "X-fixture-updates-on",
-        "role": "build",
-        "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
-        "model": "opus",
-        "since": "2026-11-22T03:15Z",
-        "doing": "#1051 main merged 520bf522; CI"
+        "slice": "X-infra-filter-workflows",
+        "role": "slice",
+        "agent": "session_01MMjhnAtTMJUdkNfg1nuMEj",
+        "model": "sonnet",
+        "since": "2026-11-22T09:21:00Z",
+        "doing": "launched; step 0 (brief 9e6b4feb)"
       },
       {
         "slot": 3,
-        "slice": "X-search-chunk-retry",
+        "slice": "X-block-on-only-mode",
         "role": "slice",
-        "agent": "session_01MMjhnCq2XSL5oRQU72AcxH",
+        "agent": "session_01MMjhn9FudTFDiafHhoEKK1",
         "model": "opus",
-        "since": "2026-11-22T07:18:44Z",
-        "doing": "step 0 go: no cap raise, find >=60 B; building"
+        "since": "2026-11-22T09:21:00Z",
+        "doing": "launched; step 0 (brief 9e6b4feb)"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
         "since": "2026-11-22T04:35Z",
-        "doing": "#1054 review CHANGES (measure with the product reserve); re-measuring, then step-0 update"
+        "doing": "#1054 go (a), follow-up for pool docs; building"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
