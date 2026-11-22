@@ -3,26 +3,28 @@
 The runner's records PR after r7 (#1020). It records the runner's calls from later on 2026-11-21. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
 ## Calls in merged slices
+
 - **X-labels (#1023):**
   - **Release groups pass through as the index holds them.** The index stores tag terms lower-cased, so the facet rail shows "rarbg", not "RARBG". No client formatter can recover the case. Fixing it is X-facet-group-case (below). Compare already gets the parser's case and shows it.
   - **Per-field label modules** (`format/label-*.ts`), not one barrel, so each screen loads only the names it shows.
   - **Two lazy passes were measured and reverted.**
-    - *Builder:* loading the value names on demand grew the Builder to 8,722 B and five other entries by 20–100 B, because the bundler regrouped the chunks. Search loads the same module before anyone opens the Builder, so the lazy load saved no user anything.
-    - *Insights stage pages:* a separate type-name table in `label-type` was measured and reverted, because it made every entry that shows types larger.
+    - _Builder:_ loading the value names on demand grew the Builder to 8,722 B and five other entries by 20–100 B, because the bundler regrouped the chunks. Search loads the same module before anyone opens the Builder, so the lazy load saved no user anything.
+    - _Insights stage pages:_ a separate type-name table in `label-type` was measured and reverted, because it made every entry that shows types larger.
   - **Size limits,** each the measured size rounded up to 0.01 kB:
 
-    | Entry | Limit |
-    |---|---|
-    | Builder | 8.43 kB |
-    | Facet rail | 18.83 kB |
+    | Entry                | Limit    |
+    | -------------------- | -------- |
+    | Builder              | 8.43 kB  |
+    | Facet rail           | 18.83 kB |
     | Insights stage pages | 40.85 kB |
-    | Detail sections | 38.82 kB |
-    | Detail drawer | 28.31 kB |
-    | `/t/[hash]` | 22.13 kB |
-    | Search results | 40.83 kB |
-    | Search cards | 8.01 kB |
+    | Detail sections      | 38.82 kB |
+    | Detail drawer        | 28.31 kB |
+    | `/t/[hash]`          | 22.13 kB |
+    | Search results       | 40.83 kB |
+    | Search cards         | 8.01 kB  |
 
     The final round's extra bytes are behaviour the review asked for: the facet "Find" box matches the code as well as the label, and flags read "Yes"/"No" in the Builder as they do in the rail.
+
   - **Wording:** type names use the glossary's singular names everywhere, and a share reads "82% video", in lower case.
   - **The Discover CSV keeps plugin ids.** It's the server's export, and its `key` column is the plugin id. Names there are X-insights-source-names (below).
 - **X-api-openapi-repeated (#1021):**
@@ -39,6 +41,7 @@ The runner's records PR after r7 (#1020). It records the runner's calls from lat
   - **A file over the cap gets its own message,** saying it isn't a database Lodestar can import, because the generic advice to import a copy wouldn't help.
 
 ## Calls in running slices
+
 - **X-safety-undo-danger, rescoped.** The slice found that Undo's server preview was always all zeros, marked as an estimate, so no preview field could tell a loosening apart. The runner chose to fix the server in the same slice:
   - **Undo's preview is computed** by comparing the kept previous rule set with the current one. If the comparison can't be made, it falls back to today's estimate, and the Undo still works.
   - **`Assessment.loosens_child_safety`, a new boolean:**
@@ -49,12 +52,13 @@ The runner's records PR after r7 (#1020). It records the runner's calls from lat
   - **Undo's own Apply label** reads "Undo and loosen child safety" (zh 撤销并放宽儿童安全保护) when the flag is set. In the other danger flows, the cue beyond colour is Apply's label naming the action. With the flag alone, every count can be 0, so without its own label colour would be the only signal.
   - **Size limits,** each the measured size rounded up to 0.01 kB:
 
-    | Entry | Limit | Why |
-    |---|---|---|
-    | Filters dialogs | 36.04 kB | +133 B: the flag check and the Apply label |
-    | Filters pack panels | 7.92 kB | already 1 B over on `main`, plus 1 B of drift |
+    | Entry               | Limit    | Why                                           |
+    | ------------------- | -------- | --------------------------------------------- |
+    | Filters dialogs     | 36.04 kB | +133 B: the flag check and the Apply label    |
+    | Filters pack panels | 7.92 kB  | already 1 B over on `main`, plus 1 B of drift |
 
     Settings InsightsScreen and NotificationsScreen no longer drift once the branch takes in `main`, so their limits stay.
+
   - **The slice's own `runner/slices.yaml` entry** gains `crates/api/src/filters.rs`, `openapi.json` and `schema.d.ts` in its PR, so the yaml keeps other slices that own those files apart from it.
 - **CR-SAMPLE-BACKOFF-ESCALATE:**
   - **The switch has a fixed name:** config key `dht.sample_backoff_escalate`, environment variable `LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE`, off by default.
@@ -65,6 +69,7 @@ The runner's records PR after r7 (#1020). It records the runner's calls from lat
 - **X-page-frame:** most page headings and outer padding live inside the feature screens, not the route files, so the slice's owns widen to the header and outer-wrapper lines of those screens. Nothing inside a screen changes. `features/filters/**` stays out while X-safety-undo-danger runs there; if the Filters page still doesn't line up, that's a follow-up.
 
 ## New slices
+
 - **X-facet-group-case:** release-group facet values show their display case. The facet still matches on the lower-cased term. The display form comes from data the index already holds; if that needs a schema version bump, it rides the next one.
 - **X-insights-source-names:**
   - The Insights by-source rows carry the plugin's display name from the server, as the provenance rows already do.

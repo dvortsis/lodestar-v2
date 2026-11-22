@@ -18,6 +18,7 @@
   - the detail drawer loaded with a plain `import()` instead of the `import.meta.glob` that stood in until `DetailHost.svelte` existed. It is the same lazy chunk, and the Detail drawer sizes don't move.
 
   **Measured with `npm run size:ci`: 44,847 B of 45,000 B, so 153 B of headroom** (44,955 B before the route-only Retry key) for the next slice that touches the Search route. Search route CSS (19.79 kB) and Search results (lazy) (40,822 B) don't change.
+
 - **Lighthouse's first-load weight: comments out of `app.html`, not a higher limit (runner, §2.26).** Lighthouse checks `total-byte-weight` on bare `/search` against 102,400 B (`web/lighthouserc*.json`, §10.1's 100 KB first load).
   - **This PR alone went over:** 102,468 B on CI at 052815ff (102,443 B locally). `main` measures about 102,228 B locally, worked out from the files that differ.
   - **The alert can't move out of the route:** it must show exactly when lazy chunks fail, so its cost stays on the first load.

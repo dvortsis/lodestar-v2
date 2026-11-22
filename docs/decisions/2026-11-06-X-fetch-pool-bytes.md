@@ -3,12 +3,14 @@
 Runner brief 2026-11-06T21:50Z. It comes from WK-7's review (`docs/decisions/2026-11-06-WK-7.md`, "Not bounded by WK-7"). Architecture §18.4 (the fetch pool), §6 (hostile-peer limits), §3 (budgets). Owner §1.6.5: a worker uses at most 256 MB.
 
 ## The finding
+
 - **Finished fetches piled up while the pool waited on its output.**
   - **Before:** `on_result` awaited `out.send` inside the pool's loop. While a slow consumer held that send, every fetch still running finished into the `JoinSet` and kept its info dict. After each send, `dispatch` refilled the free socket, so the set stayed full of finished results.
   - **The cost:** up to `max_sockets` × `max_metadata` (400 × 16 MiB ≈ 6.3 GiB), plus the 64-slot channel (up to 1 GiB).
   - **A side effect:** the pool answered no command and no shutdown while a send waited.
 
 ## The budget
+
 - **`PoolConfig::max_held_bytes`, 64 MiB by default (`MAX_HELD_BYTES`).** The pool counts what it holds in finished fetches. Each result is weighed by `pool::weigh`: an upper estimate, the `FetchedKey` plus the capacity of its dict, PEX list and client name. It counts from the moment the fetch finishes until the consumer takes the result from the output channel:
   - **finished, not yet joined:** the fetch task adds its weight to a shared counter as it finishes, and joining takes it off;
   - **joined, waiting for a channel slot:** a new outbox, oldest first;
@@ -43,13 +45,15 @@ Runner brief 2026-11-06T21:50Z. It comes from WK-7's review (`docs/decisions/202
 - **Periodic snapshots include the outbox.** `PoolHandle::snapshot` lists results waiting for a slot as well as unfetched keys. Before, a finished, unjoined fetch kept its entry and was saved, so a crash lost at most the channel's contents and the one being sent. Without this, a crash would silently lose every result in the outbox (up to `max_sockets`). A result stored after the save is skipped on restore, as a key fetching at the save always was. Results in the channel are the consumer's, as before.
 
 ## What's still open (runner, 2026-11-06T21:52Z)
+
 - **The peak with this PR at today's defaults** is `max_held_bytes + max_sockets × max_metadata`: 64 MiB + 400 × 16 MiB = 6,464 MiB, about 6.3 GiB. At the aggressive preset's 1,000 sockets it's 64 MiB + 16,000 MiB, about 15.7 GiB.
   - **That's a transient, not a steady state.** The estimate shrinks the in-flight count once large dicts arrive, and the budget then holds what's finished at about 64 MiB.
   - **Before this PR, the same bytes were the steady state** under a slow consumer: 400 × 16 MiB in finished tasks plus 64 × 16 MiB in the channel, about 7.3 GiB.
-- **Reaching the peak needs peers that actually send that many bytes:** every socket at once on a hostile peer, each delivering a full 16 MiB verified dict. Peer-wire never allocates before the bytes arrive (architecture §6), so a peer that only *announces* a large size costs nothing.
+- **Reaching the peak needs peers that actually send that many bytes:** every socket at once on a hostile peer, each delivering a full 16 MiB verified dict. Peer-wire never allocates before the bytes arrive (architecture §6), so a peer that only _announces_ a large size costs nothing.
 - **The hard cap is follow-up slice `X-fetch-meta-reserve`** (runner): peer-wire plus the `Fetcher` trait. See its note below.
 
 ## Numbers (the runner decides them, §2.26)
+
 - **`max_held_bytes` = 64 MiB on a single machine.**
   - **Normal traffic never reaches it:** about 1,000–6,000 ordinary dicts, against at most 400–1,000 sockets plus 64 channel slots of 10–60 KB each, about 25–65 MB.
   - **The steady worst case:** a slow writer's worst steady state falls from about 7.3 GiB to 64 MiB, plus the in-flight overshoot above.
@@ -58,6 +62,7 @@ Runner brief 2026-11-06T21:50Z. It comes from WK-7's review (`docs/decisions/202
 - **The per-fetch estimate starts at 64 KiB** and reacts to 1/16 of each result.
 
 ## `max_metadata` (16 MiB): keep it for single machines, 4 MiB proposed for workers
+
 - **The evidence:**
   - **Real dicts are mostly small:** architecture §3 puts them at 10–60 KB, dominated by `pieces`.
   - **Legitimate large dicts exist, though:** 20 B a piece means a 1 TiB torrent with 256 KiB pieces carries about 80 MiB of `pieces`. A 100k-file pack with long paths reaches several MiB.
@@ -66,17 +71,19 @@ Runner brief 2026-11-06T21:50Z. It comes from WK-7's review (`docs/decisions/202
 - **What a lower cap would buy:** it shrinks the in-flight worst case directly. At 400 sockets:
 
   | `max_metadata` | In-flight worst case | Peak with a 64 MiB budget |
-  | --- | --- | --- |
-  | 16 MiB (today) | 6,400 MiB | about 6.3 GiB |
-  | 8 MiB | 3,200 MiB | about 3.2 GiB |
-  | 4 MiB | 1,600 MiB | about 1.6 GiB |
+  | -------------- | -------------------- | ------------------------- |
+  | 16 MiB (today) | 6,400 MiB            | about 6.3 GiB             |
+  | 8 MiB          | 3,200 MiB            | about 3.2 GiB             |
+  | 4 MiB          | 1,600 MiB            | about 1.6 GiB             |
 
   **None of these makes the single-machine worst case fit its 1 GB RSS budget.** Only the reservation does (`X-fetch-meta-reserve`).
+
 - **What it would cost:** a 4 MiB cap refuses any dict with more than about 200,000 pieces, for example 200 GiB at 1 MiB pieces. Such torrents exist (full-season packs, datasets). The soaks didn't record the size distribution of fetched dicts, so the number of extra oversize losses can't be estimated from the docs.
 - **What would settle it:** a soak database's `torrents.info_size` can give the p99.9, p99.99 and maximum of what was fetched. If fewer than about 1 in 100,000 fetched dicts are over 4 MiB, the runner can lower the single-machine default with that measured loss.
 - **For a worker it's different (below):** its whole budget is 256 MB, so 4 MiB (WK-7's `FETCHED_BYTES`) is proposed.
 
 ## For X-fetch-meta-reserve
+
 - **Where the size is known:** `fetch.rs`'s extended-handshake branch reads `metadata_size`, checks it against `max_metadata` and only then builds the `Assembly` and requests pieces. That's the point to reserve, before the first `metadata_request`.
 - **What to reserve against:** the pool's `finished` counter is the natural place, or a reservation the pool hands to the fetch. A reservation taken at the handshake would replace the post-finish `fetch_add` in `dispatch`'s task wrapper. The join and send paths already release by `weigh`, so the reservation should be in the same units: the announced size plus `size_of::<FetchedKey>()`, adjusted to `weigh` on success.
 - **Waiting or failing:** a fetch that can't reserve should wait, holding its socket, or fail as a new `FailureKind` that retries the key later. Waiting is simpler, but it pins a socket and a peer connection, and the fetch's 8 s deadline still runs. Failing keeps sockets free, but it needs a funnel reason. Either way, the first reservation must always succeed when nothing is held, as `has_room` does, or a dict over the budget never arrives.
@@ -84,6 +91,7 @@ Runner brief 2026-11-06T21:50Z. It comes from WK-7's review (`docs/decisions/202
 - **The estimate becomes unnecessary once sizes are reserved,** and can go. `held_full` keeps its meaning.
 
 ## For WK-10
+
 - **Set a worker's `max_held_bytes` tight,** for example 4 MiB, the same as WK-7's `FETCHED_BYTES`. The pool's channel holds one item on a worker (`Queues::worker()`), so the held bytes are mostly finished results waiting for that one slot.
 - **Cap the in-flight overshoot.** Until peer-wire reports announced sizes, a worker's worst case is `max_held_bytes + max_sockets × max_metadata`. Either:
   - set a worker `max_metadata` of at most `FETCHED_BYTES`, which WK-7 already asks for, with `max_sockets` sized so that `max_sockets × max_metadata` fits the 256 MB; or
@@ -92,11 +100,14 @@ Runner brief 2026-11-06T21:50Z. It comes from WK-7's review (`docs/decisions/202
 - **Nothing to change in WK-7's or WK-10's code:** `PoolConfig` gains one field, and every construction uses `..PoolConfig::default()`. `FetchedKey` and the output channel type are unchanged.
 
 ## Files outside the slice's `owns`
+
 Approved by the runner (2026-11-06T21:52Z message to this session, which adds both to the slice's owns):
+
 - `crates/lodestar/src/metrics.rs`: `fetch_held_bytes` and `fetch_held_full_total`, with a test that both are documented;
 - `docs/metrics.md`: the "Fetch pool held bytes" section.
 
 ## Checks
+
 - `crates/sources/tests/pool.rs`, all on paused tokio time, with condition waits under 60 s deadlines and no sleep that assumes work has finished:
   - **`a_stalled_consumer_pauses_fetching_within_the_budget`:** 64 keys of 1 MiB, an 8-socket pool, a 4 MiB budget and a 16-slot channel, with the consumer stalled. The budget stops fetching, and nothing more starts over 120 s. The held bytes stay within `budget + sockets × weight`. Once the consumer moves, every key arrives once, within the same bound.
   - **`a_dict_over_the_budget_passes_alone`:** 4 MiB dicts against a 1 MiB budget are delivered, and only one is held at a time.

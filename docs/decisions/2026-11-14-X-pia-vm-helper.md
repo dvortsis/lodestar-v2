@@ -3,6 +3,7 @@
 Part (b) of the #632 split (`docs/owner-decisions.md` §2.71; the runner's split and sudo model in `docs/decisions/2026-11-14-runner-trackq-order.md`). Built from `main`; #632 stays the owner's branch and was only read. Flagged to the owner by the runner (§2.19) where a bullet says so.
 
 ## What was taken from #632
+
 - **The root-owned helper** `/usr/local/sbin/lodestar-vpn-helper`, with its fixed verb list. Its source is a plain script, `cloud-init/lodestar-vpn-helper.sh`. `main.tf` passes it as `base64gzip(file(...))`, and cloud-init writes it with `encoding: gz+b64`, a standard `write_files` encoding, so the user data stays well under Linode's limit (see Checks). It takes exactly one verb and refuses anything else. Its tunnel gate is #632's ten checks (health, image, handshake, transfer, PIA endpoint and CA, firewall, DNS, egress, ISP, crawler namespace), and `write-config` keeps #632's typed `wg0.conf` schema and PIA server-list and CA binding.
 - **Its sudoers rule**, `lodestar ALL=(root) NOPASSWD: /usr/local/sbin/lodestar-vpn-helper`, in `/etc/sudoers.d/90-lodestar-vpn-helper` (root:root 0440). The same file sets the helper's own `secure_path` (`Defaults!/usr/local/sbin/lodestar-vpn-helper`), limited to root-owned system directories. The helper also runs as `#!/bin/bash` from `/`, and gives compose its project directory.
 - **The root-owned stack:** `/etc/lodestar/vpn/compose.yaml` (from `pia-example/compose.vpn.yaml`) and `/etc/lodestar/vpn/ca.rsa.4096.crt`, both root:root 0644. `wg0.conf` lives in `/run/lodestar/vpn` (root 0700, tmpfs), as in #632.
@@ -11,6 +12,7 @@ Part (b) of the #632 split (`docs/owner-decisions.md` §2.71; the runner's split
 - **The privilege-boundary test** (`tests/test_linux_privilege_boundary.sh`): its real-user, sudoers and network-namespace checks, now behind `--privileged`.
 
 ## What was left out, and why
+
 - **#632's narrower sudo model** (sudo for the helper only, `users.sudo` removed). The runner kept main's model (below).
 - **#632's `main.tf` removal of `linode_id`** from `fleet_hosts`: the fleet control plane reads it.
 - **#632's compose changes that would undo main's:** gluetun v3.40.0 in place of main's v3.41.3, and dropping Lodestar's post-rules (the X-gluetun-leak fix). The compose stays on main's digest and post-rules; a test in `infra/fleet/tests/test_steps.py` already holds it to the fleet's.
@@ -22,11 +24,13 @@ Part (b) of the #632 split (`docs/owner-decisions.md` §2.71; the runner's split
 - Everything else in #632 (scripts, the bridge, the PowerShell, `infra/aws/**`, `infra/fleet/**`) belongs to X-pia-bridge-manual and X-pia-bridge-docs, or is dropped for main's (part a).
 
 ## Left for other slices
+
 - **Text that still names the old mount.** `compose.vpn.yaml` now mounts `/run/lodestar/vpn/wg0.conf`, not `./secrets/wg0.conf`. Three places outside this slice still say `./secrets`: `infra/akamai/terraform/README.md` (X-pia-bridge-docs), the comment on `WG_CONF` in `infra/pia-bridge/deliver.py` (X-pia-bridge-manual, or X-fleet-sudo-narrow, which owns `infra/pia-bridge/**`), and `docs/decisions/2026-11-09-OP-2b.md` (superseded here for the pia-example mount only). Nothing breaks: deliver-pia writes into the fleet's own stack (`/home/lodestar/lodestar/secrets`, `infra/fleet/steps/vm/compose.yaml`), which is unchanged.
 - **User-data budget.** Linode takes at most 65,535 base64 characters, and the test fails past that. With the helper gzipped, the worst case is about 35,400: the primary key and both extra keys at about 120 characters each, and a real-length host key. That leaves about 30,000 for X-fleet-sudo-narrow's helpers, which can use the same `gz+b64` route. `variables.tf`, outside this slice, doesn't bound the length of key comments; a bound there would make the worst case firm.
 - **`verify-tunnel` prints the VM's real public IP** in its JSON. X-pia-bridge-manual must keep that output out of public logs (the fleet's public-log rules).
 
 ## The sudo model kept (the runner's decision, flagged to the owner)
+
 - **Main's grant stays:** `users.sudo: "ALL=(ALL) NOPASSWD:ALL"` for `lodestar`, password locked. The fleet steps and deliver-pia keep running as root through `sudo -n`, unchanged. The helper's rule is added beside it. With the broad grant still there, the helper is no boundary today; it becomes one when X-fleet-sudo-narrow drops the grant.
 - **The tie test:** the offline check reads every `sudo` use in `infra/fleet/steps/**`, `infra/pia-bridge/**` and `infra/akamai/terraform/scripts/**` (tests excluded), and checks each is allowed without a password by the template's sudoers lines, as sudo would match them (secure_path, `NOPASSWD`, run-as root, arguments).
   - **What it reads:**
@@ -44,6 +48,7 @@ Part (b) of the #632 split (`docs/owner-decisions.md` §2.71; the runner's split
 - **Follow-up: X-fleet-sudo-narrow** moves every fleet step and deliver-pia behind root-owned fixed-verb helpers, then drops the broad grant. Then the tie test proves nothing still needs it.
 
 ## Changes to #632's helper
+
 - **The Ubuntu 24.04 awk fix (§2.71 (b)).** Ubuntu 24.04's `awk` is mawk 1.3.4-20240123. It panics on #632's endpoint pattern `^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{1,5}$` (`REcompile() - panic: values still on machine stack`), so `write-config` refused every config. Every awk program now avoids `{m,n}` intervals and the `^` power operator (busybox awk on Ubuntu has no math support), using `split`, plain character classes and a doubling loop. The test runs the validators under mawk, gawk and busybox awk, whichever are installed, and requires mawk on Ubuntu 24.04.
 - **Main's post-rules pass the firewall check, and are required in order.** #632's rule check refused any rule it didn't know, so main's `CONNMARK` post-rule would have failed every gate. Now the first three `-A` rules must be post-rules 1, 2 and 3 exactly, in that order (they're inserted at 1, 2 and 3, so they lead the chain; the rule 2 DROP works only ahead of gluetun's ESTABLISHED accept). A gluetun without the leak fix, or with it reordered, fails closed. The namespace test checks the real `iptables -S` text of the three rules.
 - **A rule is DROP or REJECT by its final target only.** #632's check skipped any line containing `-j DROP`, so `-m comment --comment "-j DROP " -j ACCEPT` passed (self-review). Rules with `--comment`, `-g` or `--goto` are refused outright.
@@ -59,6 +64,7 @@ Part (b) of the #632 split (`docs/owner-decisions.md` §2.71; the runner's split
 - **Kernel WireGuard is required in `start-vpn`** as well as `preflight`, and gluetun is set to `WIREGUARD_IMPLEMENTATION: kernelspace`, since the gate reads the tunnel with the host's `wg` over netlink. IPv6 is turned off inside gluetun (sysctls), which the gate checks.
 
 ## Checks
+
 - **Offline (`--offline`, the default):** no root, network, cloud or terraform; runs on stock Ubuntu 24.04 with bash, python3 and python3-yaml. It renders the template with a small renderer (checked byte for byte against Terraform 1.10.5's `templatefile` while building this), parses it, runs `cloud-init schema` where installed, the tie test, visudo, `bash -n`, shellcheck, the verb list, the path and digest ties, the base64 size of the user data against Linode's 65,535 characters (about 35,400 at the worst case above), the round trip of the gzipped helper through cloud-init's own `write_files` decoder where cloud-init is installed, and the validators under each awk. While building this, Terraform 1.10.5's `base64gzip` output was also decoded by cloud-init 26.2 back to the file byte for byte.
   - The schema's one finding is main's `ssh_genkeytypes: []` (OP-2: generate no other host key). cloud-init reads an empty list as none, so the test allows that line only.
 - **Privileged (`--privileged`):** #632's test, rewritten to use documentation addresses (203.0.113.10) and a stubbed PIA. It runs only as root, in CI or with `LODESTAR_ALLOW_PRIVILEGED_TESTS=1`, and restores what it changed. It passed in a disposable Ubuntu 24.04 container while building this.

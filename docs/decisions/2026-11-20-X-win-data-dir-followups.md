@@ -3,6 +3,7 @@
 Follows X-win-data-dir-unusable-log (#983), whose review left these items. The runner queued them. Calls not marked as the runner's are this PR's, and the runner flags them to the owner (`docs/owner-decisions.md` §2.19). This file adds to `2026-11-20-X-win-data-dir-unusable-log.md`; it doesn't replace it.
 
 ## A data folder the service can't write to (runner's brief)
+
 - **Before:** a data folder the service could list but not write to passed #983's checks. The service then stopped with error 1 and no Event Log entry.
 - **Now:** it's refused as `Problem::Unwritable`, under the same Event Log ID 6 and exit code 3. The note says the folder "can't be written to by the service account".
   - **The fix for the default folder** is Repair, as for "can't be read": Repair resets the folder's permissions.
@@ -17,17 +18,20 @@ Follows X-win-data-dir-unusable-log (#983), whose review left these items. The r
   - **After the existing checks,** in this order: is it a file, can it be read, create it if it's missing, then write.
 
 ## Review optionals from #983
+
 - **The fix text for "can't be created"** now says to move away any file in the folder's path, then create the folder. "Create that folder" alone can't work when a file is in the way. The temp log already names the file.
 - **The can't-create test** asserts that the service's own folder doesn't exist when the ACL step runs. This shows the check before that step never creates it.
 - **`load_guarded` is test-only** (`#[cfg(test)]`). Its documentation moved to `load_checked`, and the intra-doc links now name `load_checked`. The one mention outside this file (`cli/mod.rs`) is plain text and outside this PR's paths, so it's unchanged.
 
 ## User guide
+
 - **§6.2 of `docs/user/06-troubleshooting.md`** describes event ID 6: what it means, the setting it names, and a table of the four problems with the fix for each.
   - **The safe recommendation:** use the default folder, which the service keeps private. Someone keeping their own folder is shown how to make it private to SYSTEM, Administrators and `NT SERVICE\Lodestar` with `icacls /inheritance:r /grant:r`, how to check it, how to remove a deny entry, and how to undo it.
   - **For the default folder,** the guide says not to create it by hand: a hand-made folder inherits shared permissions and the ACL step refuses it (ID 3). Repair, or the service's next start, creates it private.
   - **The "stops at once" row** in the table at the top of the page now looks for event ID 3, 5 or 6.
 
 ## Tests
+
 - **`the_service_refuses_a_data_folder_it_cant_write`:** a folder created fresh through `LODESTAR_DATA_DIR` passes, with nothing left in it. A write-denied folder is refused through `LODESTAR_DATA_DIR`, and the service's own folder is refused after the ACL step.
   - **Write is denied** with `icacls /deny Everyone:(WD)` on Windows and mode 555 on Unix. The test is skipped where permissions don't apply (root), and the deny is lifted on drop.
   - **It fails with the probe removed** (checked by disabling it, as an unprivileged user).
@@ -36,7 +40,9 @@ Follows X-win-data-dir-unusable-log (#983), whose review left these items. The r
 - **Every new message** is covered by the existing note test, which now includes `Unwritable`.
 
 ## The runner's review (#985 at 428a77ee)
+
 The runner decided these fixes go in this PR.
+
 - **Only a denied write is a permission problem.** The probe reports `Problem::Unwritable` only for a permission error. Any other error, such as a full or write-protected drive, is a new `Problem::WriteFailed`, still under Event Log ID 6.
   - The note says the folder "can't take new files" and gives no permission fix. The phrase isn't a prefix of the permission row's, so the two can't be confused.
   - It says to free space on the drive or make it writable, and that the temp log names the system's error. For `LODESTAR_DATA_DIR` or `data_dir`, it also offers a folder on another drive.
@@ -55,6 +61,7 @@ The runner decided these fixes go in this PR.
 - **Checked against the installer:** the installer's own script refuses any Deny entry. So the guide tells the reader to look for one in `icacls` output, which they can check, rather than quoting a Repair message.
 
 ## The runner's delta review (#985 at 8f5c7051)
+
 - **`a_probe_that_fails_otherwise_is_write_failed`** reaches the `WriteFailed` mapping in two ways: a probe in a plain file (not a folder on Unix, not found on Windows), and a folder where all 16 probe names are taken. It fails when the mapping is reverted to `Unwritable`, which I checked by reverting it.
 - **The guide:**
   - Controlled folder access moved to the "can't be written to" row, because it blocks writes.

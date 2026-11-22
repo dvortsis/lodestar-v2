@@ -3,6 +3,7 @@
 A follow-up to X-cmp09-starting-status (#903), and the runner's UX call. When a companion Lodestar runs is still starting, detection and the guided steps say so, with Try again, instead of "The companion didn't answer". This file says what the code now does (`docs/security/v1/README.md` §5). Calls not marked as the runner's are this PR's, and the runner flags them to the owner (`docs/owner-decisions.md` §2.19).
 
 ## A distinct adapter state, at the source
+
 - **Chosen: a new `AdapterError::Starting`**, set where Lodestar knows the port is its own: `CompanionHttp`, for a managed port that isn't ready.
   - **Not chosen: mapping at the guided-steps layer.** That layer can't tell a managed port from a hand-run companion that didn't answer, so it would have to guess.
 - **What `CompanionHttp` now answers** for a port a companion Lodestar runs holds (`Bindings::managed`) that isn't ready:
@@ -21,11 +22,13 @@ A follow-up to X-cmp09-starting-status (#903), and the runner's UX call. When a 
 - **A crash loop** reads as starting while it backs off between starts, and as not ready once it gives up and waits for you.
 
 ## "Not here" stays "not here"
+
 - **Detection** (`not_found_or`) still reads unreachable as "not here". `Starting` and `NotReady` only come from a managed port, so a loopback or container target with nothing managed there still reads "not here".
 - **At a managed port,** detection now says "starting" or "not ready" instead of "not here". This replaces #903's decision to keep that refusal `Unreachable` on purpose, which named this slice as its follow-up.
 - **Health and `listening`** read `Starting` as unreachable, as they do `NotReady`.
 
 ## What the API and the web app say
+
 - **Detection** (`POST /companions/detect`) answers `starting`, a list of the companions that answered `Starting`.
   - The list is in probe order, with each companion once, and never one that was found.
   - Any other failure is still "not here".
@@ -40,6 +43,7 @@ A follow-up to X-cmp09-starting-status (#903), and the runner's UX call. When a 
 - **Not changed:** paste doesn't probe, and the plan and confirm steps aren't in the web app yet, so they show nothing new. Their codes come through the same mapping.
 
 ## Tests
+
 - **`crates/companions/tests/detect.rs`:**
   - at a managed port held by a start and not ready, what carries something and a bare probe that finds nothing are `Starting`, and detection there answers `Starting`;
   - while it waits for you after a crash loop, and once released, they're `NotReady`;

@@ -198,3 +198,27 @@ test('on a phone the controls fit one row above the first result, and More is a 
 	await expect(more).toBeFocused();
 	await expectNoA11yViolations(page);
 });
+
+test('the Appearance density sets the view of a bare link: no extra history entry, no second search', async ({
+	page,
+	mock
+}) => {
+	server(mock, () => body(hits(3), { total: 3 }));
+	// `go` adds the project's density to the URL, which would name a view: load the bare link.
+	await page.goto('/search?q=lantern');
+	await expect(row(page, 1)).toHaveAttribute('data-density', 'comfortable');
+	// The shell applies the saved preference with the first interaction, after the page starts
+	// (Chrome.svelte): set what it sets, `<html data-density>`, once the rows are up.
+	await page.evaluate(() => (document.documentElement.dataset.density = 'compact'));
+	await expect(row(page, 1)).toHaveAttribute('data-density', 'compact');
+	await expect(page).toHaveURL(/density=compact/);
+	await expect(page.getByTestId('view-select')).toHaveValue('compact');
+	// replaceState: Back leaves the page for the one before it, and the query ran once.
+	expect(await page.evaluate(() => history.length)).toBeLessThanOrEqual(2);
+	expect(resultsCalls(mock)).toHaveLength(1);
+	// A chosen List sticks, though the preference says Compact.
+	await page.getByTestId('view-select').selectOption('list');
+	await expect(page).toHaveURL(/density=comfortable/);
+	await expect(row(page, 1)).toHaveAttribute('data-density', 'comfortable');
+	expect(resultsCalls(mock)).toHaveLength(1);
+});

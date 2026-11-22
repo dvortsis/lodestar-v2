@@ -3,12 +3,15 @@
 The 2026-10-30 master plan (`docs/build-plan.md` §0, `docs/decisions/2026-10-30-master-plan.md`) finished its lanes by 11-01: L, F, S and D are done, the crawler candidates are built behind switches, IMP-0..5 are merged, M5 exited (#352) and v0.5.1 is at rc.2. This update replaces §0 with the plan from here to the v0.6 tag and beyond. It also trims the rest of `docs/build-plan.md`: the finished P0–P2 detail and the old §9 "First steps" collapse into a short "Done" summary (git history keeps the text; P1's "the client never computes counts" rule lives on in `runner/standards.md` §4), and P3–P7 are annotated with what's already built. It adds `docs/handoff.md` so any agent can continue when the current sessions stop, and brings `runner/slices.yaml` up to date. Docs only.
 
 ## Owner answers in this session (2026-11-02; recorded as `docs/owner-decisions.md` §2.27)
+
 - **The v0.6 crawler gate stays at ≥ 100 verified torrents/min, with a decision checkpoint.** Measured today: 12.3/min (CR-0 24 h final). The owner chose to keep the gate and add Checkpoint 1 over decoupling the tag or setting an interim bar. Checkpoint 1 comes after the CR-ADM and CR-4 live A/B results and the bitmagnet comparator. If the projection falls short, the runner reports the ceiling, the dominant limiter and the options before CR-5, and the owner re-decides. The runner never loosens the gate (build-plan §0.5).
 - **The handoff serves both a restarted Claude runner and a non-Claude agent** (`docs/handoff.md` §4, §5).
 - **Scope:** the build plan, the slice graph, the handoff and this file, in one docs PR, plus a one-line pointer to the handoff in `CLAUDE.md` and the owner's answers as `docs/owner-decisions.md` §2.27.
 
 ## Runner refinements (flagged under `docs/owner-decisions.md` §2.19 and §2.26)
+
 None of these reverses or loosens an owner decision, weakens a security or content-safety decision, or changes an owner-set number.
+
 - **The crawler order follows the evidence.** Of CR-0's 389,644 fetch failures, 74 % timed out, 15 % were unreachable and 11 % refused, and the DHT actor refused 95.6M peer requests for capacity. That points at H3 (transport and reachability) and H2 (admission) before H1. So the live A/B order is CR-ADM, then CR-4 (uTP, then route backoff), then the H1 candidates (CR-1a-S, CR-1a-H, CR-1b, CR-1c). CR-ADM is also the only candidate whose CR-SIM gain cleared the noise in every scenario.
 - **The bitmagnet comparator runs early,** before tuning, on the same host and IP. It shows what 100/min means on that connection, so Checkpoint 1 compares against a measured reference rather than a guess. The 2026-10-30 rules for it are unchanged: its own day, fresh data, version pinned.
 - **SB-6: one search schema bump for M7, before the 10M pilot.** The one-bump-per-milestone rule (build-plan §1.3) already sends SRC-3's fields to the M7 bump. SB-6 makes that bump a slice of its own that fixes every M7 field at once: `verified:`/`source:`/`network:`, `payload_sig` and grouping, the trigram field, file category and `pieces_root`, and `size` in the file index (X-search-files-3's fix is an index format change, so it rides SB-6). SB-6 waits on SRC-2 only, not on E-M7's expansion, since an epic is never "merged". Landing it before the 10M import means its blue/green rebuild is measured at 10M and the 50M corpus is indexed once, instead of rebuilt at 50M with about 2× the index disk. SRC-3 now depends on SB-6, replacing `ext:m7-schema-bump`.
@@ -34,6 +37,7 @@ None of these reverses or loosens an owner decision, weakens a security or conte
   - Externals: `v051-soak-verdict`, `v051-tagged`, `experiment-host`, `owner-checkpoint-1`, `import-host`, `owner-50m-approval`, `owner-upload-exception`, `owner-import-server-surface`, `release-after-parser`.
 
 ## Left for the owner
+
 - **#362's egress trade-off** (owner queue 4b): blocklist list fetches go through the SSRF guard and ignore `HTTPS_PROXY`, though §20.13 said they use the proxy egress. The runner recommends accepting it for v0.6.
 
 The owner queue is in build-plan §0.3. `docs/owner-decisions.md` §3 ("Points still open") predates the v0.6 Sources questions. It's the owner's file, so this update doesn't edit it.

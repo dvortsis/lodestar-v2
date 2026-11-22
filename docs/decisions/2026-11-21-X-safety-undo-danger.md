@@ -3,10 +3,12 @@
 Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo gets a real preview (option A, in this slice), and an explicit `Assessment.loosens_child_safety` flag. It follows X-safety-toggles (#1019): a change that loosens child safety gets the danger style. Undo was the gap. Styling only, plus what the style reads: what Undo does, its requests, the password and the warning are unchanged (owner §2.39).
 
 ## Why the server changed
+
 - **Undo's assessment couldn't tell.** `assess_tracked` set `weakening` and `estimate` and left every count at 0, so nothing could tell an Undo that loosens child safety from one that strengthens. `weakening` and `confirm` are true for every Undo, and its warning is a fixed text. The session stopped as the brief asked.
 - **Counts alone weren't enough** (runner, on this slice). A CS rule Undo turns off that caught nothing in 30 days gives `core_caught_30d` 0, and its dialog would stay ordinary while the rule's own "Turn off" button is danger. So the server says it outright, with a new flag, and the counts become a real preview.
 
 ## `Assessment.loosens_child_safety`
+
 - **What it means** (`crates/api/src/dto/filters.rs`, `Assessment`): the change turns a child-safety core rule off or weakens one, takes entries off the locked floor, or releases or marks as a false positive a hold by a child-safety rule. That's #1019's danger rule, set wherever `assess_tracked` already knows:
   - `core_switch` off, when stored on (every `CoreRule` is a CS rule, `crates/filter/src/core.rs`, `CoreRule::ALL`);
   - `add_exception` to a CS rule;
@@ -24,6 +26,7 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
 - **It's style only.** `weakening`, `confirm` and the warning are as before for every change.
 
 ## Undo's preview and flag
+
 - **The comparison** (`FiltersApi::undo_preview`, `loosened`, `crates/api/src/filters.rs`): the kept rule set (`Previous::parse`, which `undo()` now uses too, so apply restores exactly what it did before), with the current pack versions copied in (Undo never restores them), against the current set.
   - **Both sides are read as stored,** core switches included, as the rest of `assess_tracked` reads them. The engine can lag the store after an apply that failed part-way, and Undo restores against the store, so the current side is the engine reloaded from the stored set and switches.
   - **`Previous::parse` decodes hex by bytes,** so a corrupt (non-ASCII) stored value no longer panics. It used to run only in apply, and now runs in every Undo preview. An ASCII value decodes exactly as before.
@@ -41,6 +44,7 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
 - **Fallback:** with nothing kept, or a kept or current set that can't be read, it's the old all-zero `estimate: true` preview with the flag false. The preview never fails an Undo. Apply still refuses "nothing to undo" as before.
 
 ## The dialog
+
 - **`loosensChildSafety(assessment)`** (`flows/changes.ts`) is true for the flag, and, as a supporting signal, for `core_caught_30d` > 0 or `removed_from_floor` > 0. Those two counts can only be non-zero when the server sets the flag, and they keep a server without the flag right where it can be.
 - **Only Undo reads it.** `ChangeDialog` uses the danger style when the caller passes `danger` (the #1019 flows, unchanged), or when the change on screen is an `undo` whose assessment loosens child safety.
 - **Before the preview arrives, and after it fails,** the dialog has no assessment and no Apply button, and nothing in it uses the danger style. The style never comes from a guess.
@@ -48,6 +52,7 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
 - **Not colour alone** (a UX call, approved by the runner under §2.26). In the other danger flows, Apply's label names the loosening action ("Turn off …", "Remove from the floor"). A danger Undo's Apply now reads "Undo and loosen child safety" (撤销并放宽儿童安全保护), a new message, `filters_undo_apply_loosens`. Otherwise it's "Apply", as before. No existing message said this, and with the flag alone every count can be 0, so the preview table can't carry the cue.
 
 ## Tests
+
 - **Server** (`crates/api/src/filters.rs`, `mod tests`):
   - an Undo that switches CS-3a back off reports its catches and the flag;
   - one that switches off a CS rule that caught nothing, or puts back an exception that matched nothing, sets the flag with zero counts;
@@ -72,12 +77,13 @@ Runner brief, 2026-11-21Z, with the runner's two rescopes the same day: Undo get
 - No e2e spec or snapshot changed: the specs don't open an Undo that loosens child safety.
 
 ## Sizes
+
 gzip, main 175b7fbb → this branch, each new limit the measured size rounded up to 0.01 kB (runner, §2.26).
 
-| Entry | main | branch | Limit before | Limit after |
-|---|---|---|---|---|
-| Filters dialogs (on demand) | 35,898 B | 36,031 B | 35.9 kB | 36.04 kB |
-| Filters pack panels (on demand) | 7,911 B | 7,912 B | 7.91 kB | 7.92 kB |
+| Entry                           | main     | branch   | Limit before | Limit after |
+| ------------------------------- | -------- | -------- | ------------ | ----------- |
+| Filters dialogs (on demand)     | 35,898 B | 36,031 B | 35.9 kB      | 36.04 kB    |
+| Filters pack panels (on demand) | 7,911 B  | 7,912 B  | 7.91 kB      | 7.92 kB     |
 
 - **The dialogs' +133 B** is Undo's loosening derivation and its own Apply label. The chunk already loads only when needed.
 - **The pack panels were already 1 B over on main;** the extra byte is chunk-hash and gzip drift. Insights and Notifications drifted before the merge with main and don't now, so their limits are unchanged.

@@ -3,6 +3,7 @@
 CLI commands run on a Windows MSI install now find its data folder with no environment variable. Found on X-test-vm (AWS Windows, `main` bd239634, the same on v0.5.1): from an elevated PowerShell, `& 'C:\Program Files\Lodestar\lodestar.exe' backup --to C:\bk` printed `no store at data\lodestar.db`, and so did `stats` and `import status`. The runner gave the slice and its goal. The resolution below is the service's own rule, so no new user-visible choice is made. Calls not marked as the runner's are this PR's, and the runner flags them to the owner (`docs/owner-decisions.md` §2.19).
 
 ## Where the CLI looks
+
 - **The service** finds its folder in `windows::service`. Its `config.toml` is `--config`, else `config.toml` in `LODESTAR_DATA_DIR` or in `%ProgramData%\Lodestar` if present. Its data folder is `%ProgramData%\Lodestar` unless the config file or `LODESTAR_DATA_DIR` chose another. The MSI passes the service no folder of its own: `LodestarServiceArgs` is `serve` or `worker`.
 - **The CLI, run from the MSI's executable,** now does the same (`cli::load_config`, `cli::msi_data_dir`). The MSI's executable is `%ProgramFiles%\Lodestar\lodestar.exe`, compared as Windows compares paths: case-insensitively, on the real path. It's the only place the MSI installs (`main.wxs` `WrongInstallFolder`), and the sign the update check already uses for an MSI install. `%ProgramFiles%` comes from `update::windows::msi::system_program_files`, which reads the registry when the variable is unset.
 - **What still wins, in order:**
@@ -18,6 +19,7 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
 - **`worker` never defaults to the service's folder (runner's call).** A worker's folder is the installer's to set up (`join-worker.ps1` gives its files to the worker's service account), so `worker` keeps `data` unless `--data` or `LODESTAR_DATA_DIR` names one. The worker's own folder creation is never reached for the service's folder.
 
 ## The folder must be private first (S8-07, from the runner's reviews)
+
 - **The CLI checks the service's folder is private, as the service does,** before it uses it (`cli::check_service_dir`). It's the read-only half of the service's `acl::secure_dir`: the same inspection and the same verdict (`acl::verdict`), with the service's SID. It never creates the folder and changes no permission.
 - **One guard for every hand-run command** (`cli::ServiceGuard`): the maintenance commands (`cli::load_config`), and `serve` and `healthcheck` run by hand (`cli::load_serve_config`, from `main`) share it, so they can't drift apart. The service the SCM starts keeps its own check and never comes here. The Windows start-up hook, which reads the config for its priority and port checks before `main`, goes through the same loader but never checks or reads the service's folder itself. When the folder would need a check, the hook leaves both to `main`: `main` checks the folder, refuses if it isn't private, and otherwise runs the start-up checks itself (`windows::STARTUP`). They run exactly once either way.
 - **`serve --fixture`** goes through the same guard (`cli::check_fixture`) before anything is read or written: a fixture folder that is the service's, or a `--config` inside it, is checked first.
@@ -37,11 +39,13 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
 - **Follow-up, X-win-service-path-hardening (runner's call):** making the path comparison stricter for more ways of spelling a folder, checking a data folder inside the service's folder as well as the folder itself (in the CLI and the service), and the service's own order of reading and checking, are left to that slice.
 
 ## When there's no store
+
 - `no store at <db>` now goes on to name the data folder looked in, and how to point at another: `LODESTAR_DATA_DIR`, or `--config` with a `data_dir`.
 - This is the same for the read-only commands (`stats`, `import status`), the commands that lock the store, and `reindex`.
 - `import`'s own "start Lodestar once" refusal is unchanged.
 
 ## The guide
+
 - **`docs/user/03-keep-lodestar-safe.md` §3.7** gets "Back up and restore on Windows":
   - backing up from an administrator's PowerShell with the MSI's `lodestar.exe`, with no variable, then copying the folder somewhere private;
   - deleting the copy left in the `backups` folder once it's safe elsewhere;
@@ -52,6 +56,7 @@ CLI commands run on a Windows MSI install now find its data folder with no envir
 - **`docs/user/04-install-on-windows-and-linux.md`, "Install the MSI", step 4:** the log has a token line per start and only the newest works, so the command ends in `Select-Object -Last 1`.
 
 ## Tests
+
 - **`cli::tests::the_msi_executable_finds_the_services_data_folder`**, with injected paths and environment and no real Program Files or ProgramData:
   - with nothing set, the service's folder;
   - its `config.toml` is read, and a `data_dir` there wins;

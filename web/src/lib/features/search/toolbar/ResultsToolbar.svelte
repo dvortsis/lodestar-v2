@@ -31,7 +31,14 @@
 	const sorts = $derived(SORTS.map((s) => ({ value: s.value, label: s.label() })));
 	const sort = $derived(sortValue(search.sort));
 	// The account's Appearance density (set on <html> by the shell) is the default view.
-	const pref = prefOf(document.documentElement.dataset.density);
+	// It arrives with the saved preferences, after the page starts, so it is watched.
+	let pref = $state(prefOf(document.documentElement.dataset.density));
+	$effect(() => {
+		const root = document.documentElement;
+		const mo = new MutationObserver(() => (pref = prefOf(root.dataset.density)));
+		mo.observe(root, { attributes: true, attributeFilter: ['data-density'] });
+		return () => mo.disconnect();
+	});
 	const view = $derived(viewOf(page.url, pref));
 	// A link that names no view gets the preference's, written to the URL (replacing the entry) so the
 	// rows and the table read the same view.

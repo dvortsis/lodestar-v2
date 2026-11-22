@@ -3,6 +3,7 @@
 This closes the gap that `2026-11-13-X-gluetun-host-guard.md` (#841) lists under "A reboot or an iptables flush mid-block". Either one drops the host guard while the marker still records a running block, and Docker restarts gluetun by itself (`restart: unless-stopped`). Before this change, nothing re-held the guard until the next start-block.
 
 ## The change
+
 - **One check, `guard_resume`, in `block-lib.sh`.** While a guard is expected, it makes sure the guard for the endpoint in `wg0.conf` is in INPUT. Expected means a recorded block; at boot it also means a block that ended (arm-switch after the last segment removes the marker) but isn't copied off yet, because copy-off is what releases the guard.
   - **Present:** nothing happens.
   - **Gone:** it's put back first, then recorded.
@@ -34,6 +35,7 @@ This closes the gap that `2026-11-13-X-gluetun-host-guard.md` (#841) lists under
 - **The watcher never stops Lodestar.** As before, an outage makes the segment invalid and the analyzer judges it. The one thing the watcher now stops is gluetun, and only when the guard can't be held.
 
 ## The evidence
+
 - **Every record is a line in `$BLOCK/outages`.** copy-off's scrubbed document counts those lines as `outages`, so a block with a dropped guard never reads as clean. The lines are:
   - `host_guard_dropped`: no copy was left;
   - `host_guard_lost`: it couldn't be held. This is recorded once, together with `$BLOCK/damaged`. A `host_guard_dropped` from the same failure is recorded with it, also once; later failed checks stop gluetun again but record nothing more.
@@ -42,6 +44,7 @@ This closes the gap that `2026-11-13-X-gluetun-host-guard.md` (#841) lists under
 - **Nothing prints or records the endpoint.** Output is fixed names and counts only, and the boot check prints nothing at all. The tests check that the address isn't in any output.
 
 ## Tests
+
 - **`test_block.py`, `GuardResume`:**
   - marker present and guard gone: put back, recorded once, the segment noted, gluetun left alone;
   - another endpoint's copy is kept, and the new copy is added without a record;
@@ -58,7 +61,9 @@ This closes the gap that `2026-11-13-X-gluetun-host-guard.md` (#841) lists under
 - **`test_block.py`, `CopyOff`:** the watcher stops before the guard comes off.
 
 ## The runner's calls on the outside-owns items (2026-11-13)
+
 The runner approved all four for this PR (§2.26, §2.33):
+
 1. **`infra/fleet/steps/run.py`:** the `outage-watcher` step's timeout goes from 60 s to 180 s. In the worst case, `guard_resume` takes about 15 s for the lock, 4 s of retries, then 15 + 30 + 15 + 30 s to keep gluetun down (update, stop, kill, inspect) and 30 s for the note. A test pins the value.
 2. **`copy-off.sh`:** the watcher now stops before the guard is released. A watcher check can no longer put a guard back after copy-off has removed it. A test checks the order.
 3. **`docs/operations/cloud-fleet-runbook.md` §3.5–§3.7:** now names the new lines and what to do about each.
@@ -67,6 +72,7 @@ The runner approved all four for this PR (§2.26, §2.33):
    - **(b) The boot guard that Docker requires.** If the guard can't be held at boot, Docker stays down on that VM, which fails closed. vm-status reports it as `fail boot_guard_held` (from `systemctl is-failed`), so a tester sees why `docker_up` fails.
 
 ## Left as it is (for the runner)
+
 - **Between the last segment and copy-off.** arm-switch's segment-4 end stops the watcher and removes the marker. A flush in that window isn't re-held until a reboot runs the boot guard, which still expects a guard until copy-off.
 - **A Docker restart while the watcher holds the lock.** If Docker starts again while the watcher is in `guard_lost` (stopping gluetun, up to about 90 s) and holds `.guard.lock`, the boot check gives up after 15 s and fails, so Docker stays down. That fails closed, and it's accepted.
 - **The boot window is closed, apart from boot itself.** From power-on until the boot guard runs, the host has no guard, and the endpoint's leftover UDP for the old session can be answered then. That happens before the network is configured, and the first check records it as a drop, so the block doesn't read as clean.

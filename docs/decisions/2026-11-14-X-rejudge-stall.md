@@ -3,6 +3,7 @@
 The core re-judge (§20.5, `crates/pipeline/src/core_rejudge.rs`) no longer stalls on a batch its breaker stops. The breaker (`BREAKER_ROWS`) fails a batch when more than half of its stored torrents, and more than 16, won't read, for example on a damaged dictionary. Before, the whole pass retried that batch from the same place indefinitely, so nothing after it was ever judged again.
 
 ## What the code does
+
 - **The breaker's range is kept, and the pass moves past it.**
   - **What's kept:** the batch's phase, the id it started after, its last id, and how many stored torrents it covered.
   - **Where:** the settings key `filter.core.stalled` (`STALLS_KEY`), with the core version it's for: `v<version>;<phase>:<after>:<to>:<rows>;…`. Ids and counts only. This uses the existing text-settings calls, so the store crate and its schema are unchanged (no migration).
@@ -24,6 +25,7 @@ The core re-judge (§20.5, `crates/pipeline/src/core_rejudge.rs`) no longer stal
   - **`pipeline.core_rejudge_failed`** is now only for other store errors.
 
 ## Choices (the runner's call to confirm)
+
 - **Ranges are per phase.** A torrent's first-phase range is judged again in the first phase. Its second-phase pass over the same ids may stop a second range there, which is kept separately.
 - **The list is bounded.** A range that follows one of its phase extends it; the same range again is kept once. Past 1,024 ranges (`MAX_STALLS`), a new one widens the last range of its phase. Widening only judges again torrents already judged, which changes nothing they show.
 - **A value that won't read** is taken as every torrent of the pass, in both phases (after the pass's start, to the end), so a damaged key never lets a range be skipped. Ranges kept for another core version belong to a pass that's gone (a new pass judges every torrent again), and are dropped.
@@ -32,14 +34,17 @@ The core re-judge (§20.5, `crates/pipeline/src/core_rejudge.rs`) no longer stal
 - **The fallback for a value that won't read** (every torrent of the pass) counts 0 rows in the gauge, because how many it covers isn't known without counting the store. The ranges gauge still shows 2.
 
 ## Accepted (the runner's call)
+
 - **An older build of the same core version** reads the third phase as the end of its second, and finishes the pass with stalled ranges left. This only happens on a downgrade that keeps the core version; a downgrade to an older core judges every torrent again anyway.
 
 ## Not changed
+
 - **A missing compression dictionary** isn't the breaker: it's a store error, retried from the same place with the existing backoff, then one torrent at a time (`a_missing_dictionary_fails_the_batch`). The brief covered the breaker only; the runner can queue the missing-dictionary case if it wants it handled the same way.
 - **A few unreadable torrents among many that read** are still held as unjudgeable, one by one, as before.
 - **The store crate** isn't touched (#879 owns it).
 
 ## Also in this PR
+
 - `update/supervisor.rs`: `child_args`'s doc comment moved back above `child_args` (the runner's nit from #869).
 - **Required for the new log events,** outside the brief's paths: the event catalogue golden, the generated web event names and the English and Chinese name and help (`web/src/lib/features/settings/logging/`).
 - **The pipeline event-names chunk's size budget** (`web/.size-limit.mjs`) goes from 2,560 B to 3,010 B: measured 2,704 B with the two new events, plus 300 B, by the rule `X-event-names-split` recorded. The chunk had used up its room for new events. A size budget is the runner's call (`docs/owner-decisions.md` §2.26).

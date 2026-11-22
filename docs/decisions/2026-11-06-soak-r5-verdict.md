@@ -3,6 +3,7 @@
 **Verdict: PASS.** The runner recorded it from the analyzer's own output, after the acceptance review that `collector_window_complete_review_required` asks for (below). The gate rule is in `docs/decisions/2026-10-30-CR-0-acceptance.md`: gate evidence yes, and the upper 95% bound of the `private_bytes` slope over baseline hours 12–24 at or below 2.0 MiB/h.
 
 ## The run
+
 - **Build:** v0.5.1-rc.4 (`dba1a5c0f94dddfe68e0965de54ac6f3c5ed1c41`, tag `v0.5.1-rc.4`), Linux Docker on the owner's Unraid host. It was started from the rc.4 image: `run.json` records image digest `sha256:4d9d611a…cb6f3` and binary SHA-256 `1cd506c1…3a238`.
 - **Protocol:**
   - 6 h of sampling suppression, a 30 min warm-up, then a 24 h baseline;
@@ -19,6 +20,7 @@
   - The evidence stays private on the owner's host.
 
 ## The analyzer's lines
+
 - Gate evidence: yes.
 - Stop reason: `baseline_window_complete`.
 - Clean shutdown: yes, exit code 0 in 1.31 s.
@@ -44,6 +46,7 @@
 - **For comparison:** r4 on rc.3 failed at 29.35 MiB/h [28.75, 29.96].
 
 ## The acceptance review
+
 - **`collector_window_complete_review_required`:** this is the analyzer's status for any run whose collector reports a complete window. It asks for this review, and isn't a defect.
   - The stop reason is the collector's own: `status.json` and `result.json` were written by `collect.py` in the evidence root.
   - The final report was written by the owner's agent with its own script after its unattended runner stopped. That script only read the evidence. The gate figures above are the analyzer's.
@@ -52,9 +55,11 @@
 - **Provisional fits:** the early provisional fits read high, at 6.58 MiB/h over hours 12–14.6 and 1.92 [1.22, 2.63] at 20.8 h. Each was labelled provisional and none was treated as the verdict, as the r3 rule requires.
 
 ## To watch
+
 Private memory rose from 244.55 MiB at hour 16 to 298.84 MiB at hour 24 (stored 11,795 → 17,244). End to end, that's about 6.8 MiB an hour over those 8 hours, roughly three times the bar, although the series swings by tens of MiB from sample to sample. The gate is the fitted slope over hours 12–24, which passes with room to spare, so the verdict stands. The runner flags the late rise to the owner. The 1.0 soak (M8 OQ4, 24 h on the RC) should compare its hours 16–24 against this.
 
 ## What follows
+
 - **`ext:v051-soak-verdict` holds.** E-M6, E-v06-workers, E-v06-companions and the slices that wait only on the verdict are unheld. The runner launches them at up to four slots (owner §2.42), critical path first.
 - **Still needed for the v0.5.1 go:**
   - the gluetun leg on rc.4. The owner started it about 2026-11-06T15:00Z; it runs about 8.5 h.

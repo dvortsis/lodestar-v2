@@ -3,6 +3,7 @@
 Installer pins in the companion catalogue: qBittorrent's official Windows installer gets a pin, so CMP-11's guided install can show a checked version and SHA-256 (owner cq4; `docs/decisions/2026-11-11-CMP-11.md`, "The format can't hold this pin yet"). It also carries CMP-13's two optional follow-ups (runner, 2026-11-11). These are the slice's decisions under §2.33. The pin-time source is a runner call (§2.26, §2.33), flagged to the owner. Nothing here loosens a run-time rule: Lodestar still never downloads or runs the installer.
 
 ## The catalogue format (`crates/companions/src/catalogue.rs`)
+
 - **An artifact may name its own `release` folder, and only an installer may.** Every other kind still takes its pins from `native.release` on the entry's fetch `hosts`; a `release` on one is refused (`source`).
 - **The folder's host must be in a new compiled-in list, `INSTALLER_SOURCES`** (`downloads.sourceforge.net`). It must also be outside both `DOWNLOAD_HOSTS` and the entry's `hosts`, so the two lists can't meet in either direction (`host_not_allowed`). A test checks the constants are disjoint.
   - Adding an installer source is a code change with its own review, like `DOWNLOAD_HOSTS`.
@@ -14,6 +15,7 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
 - **`Artifact::release`** is public, `None` for everything but a pinned (or folder-naming) installer, so CMP-11's guide can name where the file came from if it wants to. CMP-11 still shows only `DOWNLOAD_PAGE`.
 
 ## The pin-time source (runner, 2026-11-11, approved as recommended)
+
 - **What upstream publishes:**
   - qBittorrent's installers are official only on SourceForge and FossHub. Run time never fetches from either (runner, 2026-11-11).
   - SourceForge's `qbittorrent-win32/qbittorrent-<version>/` folder carries a detached OpenPGP signature beside each installer (`qbittorrent_5.3.0_x64_setup.exe.asc`, `qbittorrent_5.3.0_lt12_x64_setup.exe.asc`). The runner checked this from its side; this session's network couldn't reach SourceForge.
@@ -63,6 +65,7 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   - **The feed's format is untested against the live site** (403 here). The tests use a fixture built from its documented RSS and Media RSS shape. The first real pin run is the live check, and any other shape fails closed.
 
 ## The pin tool (`tools/companion-pins`)
+
 - **An installer is pinned only with an OpenPGP policy:** an installer with an `Unsigned` policy is refused (`installer`). The recipe names its folder (`installer_release`) and the version's sub-folder (`installer_dir`, `qbittorrent-{version}`).
   - The tool's copy of `INSTALLER_SOURCES` is checked against the Rust one (drift test), and the folder may not be one of the entry's hosts.
 - **Pin-time hosts are their own kind** (`PinTimeHosts`): exact names plus one mirror label. Every other fetch still refuses SourceForge and FossHub outright (`NEVER_HOSTS`, CMP-13). A test shows `downloads.sourceforge.net` is still refused on a normal fetch even when it's listed.
@@ -78,6 +81,7 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   - an unsigned installer policy (`installer`).
 
 ## CMP-13's follow-ups
+
 - **The deadline holds during the body** (self-review B1, I1; runner review I1).
   - **A hard wall-clock watchdog:** when the 30 minutes are up, a timer shuts the socket down, so no read can outlast them. That covers a chunk-size line, which `read1` reads with many recvs. A body cut short that way is refused (`timeout`), never taken as complete.
   - **Within that,** reads are `read1`, and the socket's timeout is cut to what's left (at most 60 s) before each one. A socket already closed at the end of the body is ignored.
@@ -92,11 +96,13 @@ Installer pins in the companion catalogue: qBittorrent's official Windows instal
   The registry token isn't sent there.
 
 ## Not changed
+
 - `crates/companions/README.md`'s `native.release` row doesn't yet mention the installer folder. It's outside this slice's paths; the runner is told.
 - CMP-11's guide shows the official download page, as before. Showing `Artifact::release` is CMP-11's choice to make.
 - The CMP-13 decisions file still says the installer is refused; it's the record of that slice.
 
 ## Tests
+
 - **Loader** (`tests/catalogue.rs`):
   - a pinned installer read from its own folder;
   - an unpinned installer with no folder, and the builtin catalogue with none;

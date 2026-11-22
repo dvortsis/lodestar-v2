@@ -3,6 +3,7 @@
 CR-LOOKUP-END is r5 "Path to 100" item 3 (`docs/build-plan.md` §0.5), from the review's blind spot 1 (`docs/reviews/2026-11-20-path-to-100-review.md` §3). It sits behind `dht.lookup_end`, or `LODESTAR_DHT_LOOKUP_END`, and is **off by default**. With the switch off, lookups end and start exactly as before.
 
 ## What changes with the switch on
+
 Throughout, a **network** is a source as `limits::source()` keys it: an IPv4 /24 or an IPv6 /48.
 
 - **End on values.** A peer request ends, and frees its slot, as soon as it holds `ENOUGH_VALUES` = **8** distinct, validated values, and replies carrying values have come from at least `VALUE_RESPONDERS` = **2** distinct networks.
@@ -22,6 +23,7 @@ Throughout, a **network** is a source as `limits::source()` keys it: an IPv4 /24
   - Each start's queries still go through the query rate and the outstanding cap (`admit_query`). A throttled query waits for a later drive, as before. A test sends one request with an empty bucket and one with a full cap; neither sends anything over the limit.
 
 ## The constants
+
 - **`ENOUGH_VALUES` = 8.** It's a candidate default, accepted by the runner and flagged to the owner (§2.19). Tune it from `dht_lookup_values` once CR-AB-LC has run.
   - **What a fetch uses** (CR-0, `docs/build-plan.md` §0.5): about 4.7 metadata attempts a second for 1.286 admitted lookups a second, so about 3.7 fetch attempts per lookup.
   - **Why 8:** it's about twice that, which leaves room for the dead and NATed peers that make up most failures (H3), yet one or two replies can reach it (an honest reply usually lists up to about 16 values; an inbound reply is cut at 64).
@@ -40,9 +42,11 @@ Throughout, a **network** is a source as `limits::source()` keys it: an IPv4 /24
   - **Mixed address families:** the source that counts is the responder's, never its values'. A reply's values count toward `ENOUGH_VALUES` whatever their family (IPv4 and IPv6 peers alike, once validated). The responder that sent them counts once, by its own address: an IPv4 address by its /24, an IPv6 address by its /48, and an IPv4-mapped IPv6 address as its IPv4 /24, so a node can't count twice by answering in both forms. A dual-stack request's two legs share one count, so an IPv4 responder and an IPv6 responder are two sources, even if one operator runs both. That's accepted: it takes two addresses in different families, and a single responder still can't end a lookup on its own.
 
 ## What doesn't change, either way
+
 `LOOKUP_DEADLINE` (25 s), the 64-query cap, `ALPHA` (3), the query rate, the outstanding cap and the 32 lookup slots are unchanged.
 
 ## Ledger
+
 - `enough_values` is added to `dht_lookup_ended_total` and `dht_lookup_residence_seconds_total`. Its `docs/metrics.md` row and the render test cover it.
 - Every early end goes through `finish_lookup`, so each request still ends exactly once. Purposes still sum to `dht_queries_out_total`.
 - #975's optional review items are folded in:
@@ -51,6 +55,7 @@ Throughout, a **network** is a source as `limits::source()` keys it: an IPv4 /24
   - both gauges are zeroed at shutdown.
 
 ## Tests
+
 - **Actor tests on tokio's paused clock** (`node/lookup_end_tests.rs`):
   - enough values from two networks end a request before it converges;
   - one network's values never end it;
@@ -70,22 +75,23 @@ Throughout, a **network** is a source as `limits::source()` keys it: an IPv4 /24
 - **Equivalence with the switch off:** the existing dht suite passes unchanged, and every CR-SIM golden is byte-identical with the switch off (the packet-level check). `lookup_end_runs_deterministically` shows a run with it on is deterministic and ends some lookups on values.
 
 ## Screen (CR-SIM): kept
+
 The calibrated `live-lookup` scenario (X-crawler-sim-calibrate, #974), 8 seeds (`SCREEN_SEEDS`), switch off against on. Run it with `cargo test -p lodestar-crawler-sim --test sim lookup_end_screen -- --ignored --nocapture`. `W` is `W_little` (`L / λ`, the calibrated `W`). `q` is CR-LEDGER's `peer_lookup` and `hint` queries per ended lookup. `y` is stored per admitted lookup. Per query means stored over every DHT query sent.
 
-| 8-seed mean | Off | On | Change |
-|---|---|---|---|
-| Stored per minute | 13.13 | 18.64 | +42 % |
-| Stored per slot-second (`stored/s ÷ L`) | 0.0071 | 0.0101 | +42 % |
-| Stored per DHT query | 0.0028 | 0.0038 | +36 % |
-| `W` (`W_little`) | 23.1 s | 16.2 s | −30 % |
-| `W` (CR-LEDGER residence per end) | 23.0 s | 16.8 s | −27 % |
-| `q` (lookup queries per lookup) | 24.4 | 19.4 | −20 % |
-| `q_all` (every query per admitted lookup) | 58.0 | 43.0 | −26 % |
-| `y` | 0.164 | 0.164 | none |
-| Admitted lookups a second | 1.33 | 1.89 | +42 % |
-| `L` (slots occupied) | 30.8 | 30.7 | none |
-| Lookups ending at the deadline | 82 % | 56 % | |
-| Lookups ending on enough values | 0 % | 32 % | |
+| 8-seed mean                               | Off    | On     | Change |
+| ----------------------------------------- | ------ | ------ | ------ |
+| Stored per minute                         | 13.13  | 18.64  | +42 %  |
+| Stored per slot-second (`stored/s ÷ L`)   | 0.0071 | 0.0101 | +42 %  |
+| Stored per DHT query                      | 0.0028 | 0.0038 | +36 %  |
+| `W` (`W_little`)                          | 23.1 s | 16.2 s | −30 %  |
+| `W` (CR-LEDGER residence per end)         | 23.0 s | 16.8 s | −27 %  |
+| `q` (lookup queries per lookup)           | 24.4   | 19.4   | −20 %  |
+| `q_all` (every query per admitted lookup) | 58.0   | 43.0   | −26 %  |
+| `y`                                       | 0.164  | 0.164  | none   |
+| Admitted lookups a second                 | 1.33   | 1.89   | +42 %  |
+| `L` (slots occupied)                      | 30.8   | 30.7   | none   |
+| Lookups ending at the deadline            | 82 %   | 56 %   |        |
+| Lookups ending on enough values           | 0 %    | 32 %   |        |
 
 - **Every seed improved:** stored per minute rose on all 8 (+3.1 to +8.1 a minute; sign test `Better`), and so did stored per slot-second and stored per DHT query. Both keep conditions hold, so the change is kept.
 - **The mechanism is the one predicted:** about a third of lookups now end on values, `W` and `q` fall, the slots stay full, so more lookups run, and `y` is unchanged.
@@ -99,5 +105,6 @@ The calibrated `live-lookup` scenario (X-crawler-sim-calibrate, #974), 8 seeds (
 - **#974's other review items:** the README no longer says CR-LEDGER isn't on `main`. It names what each ledger line reads and says the `sim` test takes about 26 s, not 20 s. `docs/decisions/2026-11-20-X-crawler-sim-calibrate.md` still says about 20 s; it's #974's own file, so this note is the correction.
 
 ## Files outside the brief's list
+
 - `crates/dht/src/node/lookup_end_tests.rs` holds the actor tests, following `hint_tests.rs` and `ledger_tests.rs`. The runner accepted it into the owns.
 - `crates/lodestar/src/metrics.rs`: one line in the ledger render test, for the new `enough_values` label. The brief asks for the render test to cover it.

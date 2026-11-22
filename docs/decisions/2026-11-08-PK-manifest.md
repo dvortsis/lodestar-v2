@@ -3,6 +3,7 @@
 `release.yml` sets `LODESTAR_VERSION` in every build and publishes the signed format-1 update manifest (architecture §12.2; `crates/update/README.md`; plan `docs/plan/2026-11-06-m6-gap-audit.md` §2.5, §3, §4.3, Q8; the B-update-r2 follow-up). Calls marked "runner" were decided by the runner on 2026-11-08 (§2.33); the owner can veto them (§2.19).
 
 ## Versions
+
 - **Tags build as the tag's version; nightlies as `<base>-nightly.<YYYYMMDD>.<run number>`; anything else as `<base>-dev.<run number>.g<sha7>`** (runner). `<base>` is `Cargo.toml`'s version, which `build.rs` requires as the core. Semver orders numeric identifiers as numbers, so nightlies rise by date, then by run number (a schedule and a manual run on one day), and `semver::Version`, which the update engine compares with, agrees. The nightly is the schedule plus manual runs on `main`, the runs that publish the `:nightly` image. The `g` keeps an all-digit short SHA (`0123456`) from being a numeric identifier with a leading zero, which isn't semver, so `build.rs` would fall back.
 - **Every shipped build gets it:** both tarballs, the MSI and the portable zip (job `env`), and the image (the Dockerfile's `ARG LODESTAR_VERSION`, from `package-gate`). `package-linux` and `package-windows` fail if the binary doesn't contain the version string, since `build.rs` only warns when it falls back.
 - **`LODESTAR_CHANNEL` is set too** (runner; B2c planned it with P-release and it was never done). Unset, `build.rs` builds as `dev`, and the update engine refuses to install anything on a dev build (`update/mod.rs` `dev`, `engine.rs` `Reason::DevBuild`), so without it no build would take the manifests this slice publishes. `package-gate` outputs `stable` for a `v*` tag without `-`, `beta` for an `-rc.N`/`-beta.N` tag, `nightly` for the schedule and manual runs on `main`, and `dev` for everything else, pull requests included. The package jobs export it beside `LODESTAR_VERSION`; the Dockerfile has `ARG LODESTAR_CHANNEL=` (the only other line it gains).
@@ -11,6 +12,7 @@
 - **v0.5.1 shipped as `dev`** (and v0.5.2 too, unless it's rebuilt with this change), so those installs can't update themselves: they need one manual update to the first release built with this change. The runner flags this to the owner; the release notes and the guide must say it plainly.
 
 ## The manifest
+
 - **Format 1, unchanged; `crates/update/src` untouched.** `.github/scripts/update_manifest.py` (standard library only) writes the body in the README's field order, compact, with each artifact's URL, SHA-256 and size read from the real file, and refuses (never cuts) anything over a cap: 384 KiB body, 64 statements, 64 releases, 8 artifacts, 16 KiB notes, 64-byte strict semver versions, unique versions and target/kind pairs, `https` URLs on the download allowlist of at most 512 bytes, sizes from 1 byte to 256 MiB, `expires` 30 days after `timestamp`. It never sees a key: release.yml signs between `build` and `envelope`. The envelope is `{"manifest": {...}, "freshness": null}`, which `freshness.yml` reads (`jq .manifest.body`, `.manifest.minisig`) and re-signs weekly.
 - **Artifacts:** the two Linux musl `binary` entries, the `msi` and the `portable` zip. Docker updates through the musl overlay, so it has no entry. **The `binary` kind is the bare executable** (runner, call C): the engine stages the downloaded file itself as the overlay binary (`update/install.rs`), and the release had tarballs only. So `package-linux` also writes `lodestar-<version>-<arch>-linux-musl` with its `.sha256`, and the draft-release file list gains that one glob, the only change to the draft-release step. `SHA256SUMS` picks it up through the existing `*.sha256`.
 - **Every URL is under `https://github.com/dvortsis/lodestar-v2/releases/download/`, and this release's under `…/<this tag>/`** (runner); the builder refuses anything else, carried-forward releases included, and `--repo` must be that repository.
@@ -26,6 +28,7 @@
 - **The key** is written only to a `mktemp` directory under `$RUNNER_TEMP` with `umask 077`, removed by a `trap` and again right after signing. Secrets appear only as `${{ secrets.* }}` in the step's `env`, in the `release` (tags) or `nightly` (`main`) environment. The job never runs on a pull request.
 
 ## What the owner does at a release (changed by this slice; the runner updates the checklist)
+
 1. Before tagging, the runner commits `docs/releases/v<version>.update.json` (not needed for an `-rc.N`).
 2. Push the tag. Approve `draft GitHub release` as before; the draft appears.
 3. Check the draft, edit its text if needed (it becomes the manifest's notes), then **publish it**.
@@ -33,10 +36,12 @@
 5. The summary says which channels were published. Updates on Stable and Beta see the release from then on.
 
 ## Nightly (Q8)
+
 - **Inert in this slice.** The step needs `NIGHTLY_SIGNING_KEY` (and optionally `NIGHTLY_SIGNING_KEY_PASSWORD`, names approved by the runner) in the `nightly` environment and `packaging/keys/lodestar-nightly.pub`; without both it logs a notice and exits 0. Even with both, nightly files have no public home (they're workflow artifacts, which need a login and expire), so it logs a second notice and publishes nothing. The builder already handles the nightly channel (`--tag nightly`, a nightly version, `--keep`).
 - **Proposal, follow-up `PK-nightly-host`, pending the owner** (runner): a rolling `nightly` pre-release (never "latest") holding each nightly's two bare binaries, MSI and zip under versioned names. The MSI is copied to `lodestar-<full version>-x86_64.msi`, because its own name has only `MAJOR.MINOR.PATCH` and nightlies would collide. The nightly manifest lists the newest two nightlies (`--keep 2`), and files no manifest names are deleted after each upload. It's a new public distribution of untested builds, so it's the owner's call. Note for PK-win-upd: every nightly MSI also has the same `ProductVersion` (`MAJOR.MINOR.PATCH`), so a Windows update between two nightlies needs more than this.
 
 ## Tests
+
 - `.github/scripts/test_update_manifest.py`: field values and order, hashes and sizes from real files, every cap, a missing or empty artifact, URLs outside the tag, metadata rules, carry-forward and `--keep`, the re-run exit, the envelope and extract round trip, and that no secret reaches stdout, stderr or any written file (the builder reads no environment at all).
 - **The round trip** (`ci.yml` job `update-manifest`, gated by `ci_changes.py` on the builder, its tests, `release.yml` and `crates/update/`; in `ci-ok`): a throwaway minisign key pair made in `$RUNNER_TEMP`, the builder, the minisign CLI exactly as release.yml signs, the envelope, then `crates/update/examples/verify_envelope.rs`, which runs `lodestar_update::check` and `install` for every artifact with only those throwaway keys trusted. It covers an RC on Beta, the release on Stable and Beta with carry-forward, and an idempotent re-run.
 - **The step's own shell logic isn't run in CI** (it needs the `release` environment): only locally, as below.

@@ -3,6 +3,7 @@
 The owner asked for the roadmap dashboard to show progress from agents other than Claude, with a live connection to GitHub. `tools/status-connector/` adds a read-only MCP server (a Cloudflare Worker) that reads GitHub and returns the plan's tables. Nothing in the crawler, store, search or UI changes.
 
 ## Decisions
+
 - **Progress comes from GitHub, not from the runner.** A branch `slice/<id>` or an open PR titled `<id>: …` means in progress; the PR merged into `main` means done. This is the Path B rule in `docs/handoff.md` §5, so any agent or person is counted the same. `runner-state/state.json` is read only as a fallback for older statuses, because it lags and only the Claude runner writes it (`docs/handoff.md` §2).
 - **Attribution is by PR body and branch,** not by account, because every PR here is opened from the owner's account. A Claude Code footer or a `claude/` branch means Claude; anything else shows as "Not Claude".
 - **The connector is read-only and authless, with the secret in the URL path.** claude.ai custom connectors take either OAuth or no authentication (runner §2.19 call, accepted). The GitHub token stays in the Worker, is read-only and is scoped to this repository. The URL exposes slice names and PR titles to anyone who has it.
@@ -13,10 +14,12 @@ The owner asked for the roadmap dashboard to show progress from agents other tha
 - **`package-lock.json` is committed,** so the deploy is reproducible. It makes this PR larger than the usual line target without adding code to review (stated reason, `CLAUDE.md` working conventions).
 
 ## Operating it
+
 - **Rotate the URL secret:** `npx wrangler secret put PATH_SECRET` with a new random value of at least 32 characters (`openssl rand -hex 24`), then change the URL of the `Lodestar status` connector in claude.ai. Until both are done the dashboard falls back to its snapshot.
 - **Replace the GitHub token:** create a new read-only fine-grained token for this repository, `npx wrangler secret put GITHUB_TOKEN`, then revoke the old one on GitHub.
 - **If the URL leaks:** rotate the URL secret first. The worst a reader can do is read slice names and PR titles and spend GitHub API quota (see the caching limits above).
 - **Stop it:** delete the connector in claude.ai and the Worker in Cloudflare, and revoke the token.
 
 ## Not decided here
+
 - Whether the dashboard's plan structure (`src/meta.json`, the rules in `src/plan.ts`) should be generated from `docs/build-plan.md` instead of copied. Today they are hand-written and drift if the plan changes.

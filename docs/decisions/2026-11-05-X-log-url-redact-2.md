@@ -3,7 +3,9 @@
 A security fix in `crates/log/src/url.rs`, the URL credential scrubbers (architecture §12.1, B12's "For the logging slice", B-log1). It closes the classes that X-log-url-redact (#432) found and left out of scope ("Known gaps for X-log-url-redact-2" in `docs/decisions/2026-11-04-X-log-url-redact.md`). Each one leaks on `main` and on every release so far. The rule is the brief's: never too little. Over-redaction is accepted when it's named here, and nothing `main` hides may show.
 
 ## Design: two stages, monotone by construction (runner's call, §2.33)
+
 Three review rounds found shapes where a heuristic this slice added changed the context `main`'s heuristics relied on, so the PR showed a secret `main` hid. Fixing them one by one didn't converge. So the runner chose a structure that rules them out.
+
 - **Stage 1 is `main`'s scrubber, unchanged** (`scrub_floor`, `scrub_text_floor`; only the two entry points are renamed). Its output is the floor.
 - **The wider rules run beside it on the original text** (`mod wide`): every class and fix below. They decide only what more to hide.
 - **`only_more` hides in stage 1's output each word the wide rules' output doesn't hold.** A word is a run of letters, digits and `_`; `[redacted]`'s own word is never hidden again.
@@ -14,6 +16,7 @@ Three review rounds found shapes where a heuristic this slice added changed the 
 - **The public `scrub_text` and `scrub` are the two stages and `only_more`.** Every other function is stage 1's or the wide rules'.
 
 ## The wide rules, by class
+
 - **A password holding URL syntax, with the URL standing alone** (class 1). This one needed the userinfo look-ahead to cross the next `://`.
   - **Cause.** The look-ahead stopped at the next `://`, because that bound kept `scrub_text` linear.
   - **Fix.** An index of every `@` (`Ats`) gives the last `@` in a window in constant time. So the window can now run over any number of `://` and stay linear.
@@ -52,7 +55,9 @@ Three review rounds found shapes where a heuristic this slice added changed the 
 - **A Debug field's name inside a raw password** (added to the scope by the runner, from rc.4's delta report). `scrub_debug_forms` read `path: "`, `fragment: Some("` and the others inside a URL's password as a new field, and the value it hid held the userinfo's `@`. What came before it then showed as a host. A hidden value that held an `@` now keeps one after it (`[redacted]@`), so the URL rules still find the userinfo. The fuzz's case 25 plants a field's name in a password four ways; this PR shows none, and `main` shows 17,972 per 300,000.
 
 ## Review round (self-review and `/security-review`)
+
 Both found shapes where this PR showed a secret `main` hid. Each is fixed, and each input is a test.
+
 - **The separator pass split a credential's value into a URL** (security review). Examples: `secret=https%3A%2F%2Fh/<s>`, `{"token":"https:\/\/h\/<s>"}`, `token%3A%2F%2F<s>`, `passkey=Zq%3A%2F%2F<s>`.
   - The pass now skips any separator that touches a value `redact_secrets` would hide. `secret_cuts` is that function's cut-finding, split out so both use it.
   - A `//` is rewritten only when no such value starts before its `@`.
@@ -74,7 +79,9 @@ Both found shapes where this PR showed a secret `main` hid. Each is fixed, and e
   - When the look-ahead ran over a `://` and the "hide up to the next `://`" branch is taken, the next URL goes too, to its first hard stop.
 
 ## Runner's review (head 259115b)
+
 Its own differential harness found secrets this PR showed that `main` hid: 310 in 7,000,000 token-soup inputs, all in `scrub_text`. This slice's own token soup (below) then found more of the same families. Each is fixed, and the runner's repros are tests (`the_runner_s_review_cases_keep_no_secret`).
+
 - **What `main` didn't know is scrubbed in a second pass over the first pass's output:** the forms without `://`, rewritten with one, and percent-encoded magnets.
   - Found in the first pass, a rewritten `://` bounded the URL before it (`ftp://<s>") "h#http%3A%2F%2F@`). An encoded magnet's span split a value the credential rules hid whole (`token: "a magnet%3A%3Fxt=b <s>"`).
   - The first pass finds only what `main` found. The second can only hide more, since what the first hid is gone. It runs only when the first's output holds such a form.
@@ -91,6 +98,7 @@ Its own differential harness found secrets this PR showed that `main` hid: 310 i
 - **With a later `://`, an extra `]` after an IPv6 literal ends the scan,** as on `main` (`s3://[::1]]?'<s>ws://`).
 
 ## Over-redaction accepted ("never too little")
+
 - **A URL followed by any `@` on the same line, within 512 bytes and before the next `://`, loses its host and path,** whether it has userinfo or not.
   - `see https://a.example/p and me@x` shows as `see https://[redacted] [redacted] [redacted]`. #432 kept that path.
   - A line break still ends the window when nothing marks userinfo: `see https://a.example/p\nme@x` is unchanged.
@@ -104,7 +112,9 @@ Its own differential harness found secrets this PR showed that `main` hid: 310 i
 - **A Debug field's name the wide rules hid with a value** goes in stage 1's output too: `password: "…"` after a run-on value can show as `[redacted]: "[redacted]"`.
 
 ## Known gaps left
+
 Each one leaks on `main` too.
+
 - **A username-only userinfo (no `:` or other sign) holding a raw line break** (`ssh://<secret>\n@h`). It can't be told from a URL at a line's end with an address on the next line, and hiding every such URL loses too much. About 200 of the fuzz's 300,000 inputs per seed hit this.
 - **A single-slash form behind an unknown scheme** (`x:/u:p@h`). Taking any word before `:/` would turn `C:/Users` into a URL.
 - **A `Debug` value holding a raw, unescaped `"` where a password sits** (the fuzz's cases 7 and 8 plant them). `Debug` never writes one; the values a real `Debug` writes are covered above.
@@ -118,16 +128,19 @@ Each one leaks on `main` too.
   - `token=<//u:\n<s>@h`.
 
 ## Follow-up: X-log-url-redact-3
+
 - **The runner withdrew its two narrowings (§2.26) when it chose the two-stage design: security first.** They might come back in a slice of their own, with its own proof:
   - the unmarked userinfo window ending at the later of the first `/` and the first whitespace;
   - a magnet whose `dn` or `kt` holds a space ending at a later parameter's word.
 - **A fast path:** a line with no `://`, `magnet`, `@`, `%` or Debug field could skip the wide rules, since they'd hide nothing more there. The runner left it for that slice: a shortcut on the security path needs its own proof.
 
 ## Cost
+
 - **Both stages run on every line,** and the wide rules run twice on a line with a form without `://` or an encoded magnet. In a release build that's about 3 to 6 times `main`'s time on the adversarial units (`a://` 3.3×, `http:/` 5.3×). `only_more` keeps a set of the wide output's words, so it's linear.
 - **`Ats` takes 4 bytes per byte of text** (4 MiB for a 1 MiB line), for the time a line is scrubbed. It's built only when the text holds an `@`.
 
 ## Tests
+
 - **Deterministic tests, one per class.** The class tests' inputs leak on `main`. The review rounds' tests are different: `a_credential_s_value_is_never_split_into_a_url` and some inputs of `a_debug_field_name_in_a_password_keeps_its_at` pass on `main` too, since they guard against regressions this PR once had.
   - `a_raw_password_with_url_syntax_goes_whole`
   - `a_magnet_runs_on_past_a_space_in_its_name`
@@ -153,6 +166,7 @@ Each one leaks on `main` too.
 - **No panics:** none in the fuzz on either side. The new magnet cut panicked on an empty URL during development; its seed is kept in `proptest-regressions/url.txt`.
 
 ## Differential fuzz against `main`
+
 - **Five harnesses, each comparing this PR with `origin/main` at e62a8b3,** on `scrub_text`, `scrub` (absolute) and `scrub` (request):
   - **The runner's token soup (`soup2`)** strings 2 to 31 tokens from the runner's list around a planted secret `AAQ{k}x<sep>yBBQ{k}z`, in the runner's 15 slots and 19 separators. It counts either half shown, and minimises each regression by chunk deletion.
   - **The labelled harness** is #432's (`reviews/432/round4-harness-labelled.rs` on `runner-state`), with ten cases added for this slice: 16 to 24 for the brief's classes, and 25 for a Debug field's name in a password.
@@ -162,16 +176,16 @@ Each one leaks on `main` too.
 - **A regression is a planted secret this PR shows that `main` hides.** With the two-stage design it's 0 by construction, and every run below confirms it.
 - **Final code, two-stage design:**
 
-| Run | Seeds | Inputs per seed | Regressions | Shown by PR | Shown by `main` | Panics (PR / `main`) |
-|---|---|---|---|---|---|---|
-| Runner's token soup (`soup2`) | 1, 2 | 1,200,000 | 0 | 594,763 / 594,600 | 1,303,750 / 1,303,682 | 0 / 0 |
-| Labelled, original cases 0–15 | 2, 5, 9, 13 | 1,000,000 | 0 | 6,467–6,654 | 50,085–50,984 | 0 / 0 |
-| Labelled, new cases 16–24 | 2, 5, 9, 31 | 1,000,000 | 0 | 8,797–8,901 | 578,660–579,616 | 0 / 0 |
-| Labelled, case 25 (Debug field in a password) | 7, 11 | 1,000,000 | 0 | 0 | 60,680–60,927 | 0 / 0 |
-| Credential harness (`fz2`) | 1–4 | 1,000,000 | 0 | 1,678,174–1,680,665 | 1,828,170–1,830,674 | 0 / – |
-| Token soup | 11–14 | 1,000,000 | 0 | 1,133,277–1,135,414 | 1,542,480–1,546,286 | 0 / 0 |
-| Long token soup | 21–23 | 1,000,000 | 0 | 839,189–840,707 | 1,271,398–1,271,981 | 0 / 0 |
-| `review-diff-harness.rs` | 7 | 1,000,000 | 0 | 6,547 | 50,197 | 0 / 0 |
+| Run                                           | Seeds       | Inputs per seed | Regressions | Shown by PR         | Shown by `main`       | Panics (PR / `main`) |
+| --------------------------------------------- | ----------- | --------------- | ----------- | ------------------- | --------------------- | -------------------- |
+| Runner's token soup (`soup2`)                 | 1, 2        | 1,200,000       | 0           | 594,763 / 594,600   | 1,303,750 / 1,303,682 | 0 / 0                |
+| Labelled, original cases 0–15                 | 2, 5, 9, 13 | 1,000,000       | 0           | 6,467–6,654         | 50,085–50,984         | 0 / 0                |
+| Labelled, new cases 16–24                     | 2, 5, 9, 31 | 1,000,000       | 0           | 8,797–8,901         | 578,660–579,616       | 0 / 0                |
+| Labelled, case 25 (Debug field in a password) | 7, 11       | 1,000,000       | 0           | 0                   | 60,680–60,927         | 0 / 0                |
+| Credential harness (`fz2`)                    | 1–4         | 1,000,000       | 0           | 1,678,174–1,680,665 | 1,828,170–1,830,674   | 0 / –                |
+| Token soup                                    | 11–14       | 1,000,000       | 0           | 1,133,277–1,135,414 | 1,542,480–1,546,286   | 0 / 0                |
+| Long token soup                               | 21–23       | 1,000,000       | 0           | 839,189–840,707     | 1,271,398–1,271,981   | 0 / 0                |
+| `review-diff-harness.rs`                      | 7           | 1,000,000       | 0           | 6,547               | 50,197                | 0 / 0                |
 
 - **What `main` shows and this PR hides** is `main`'s count less this PR's, since this PR shows nothing `main` hides: about 709,000 per seed in the runner's soup, and about 570,000 per seed in the new class cases.
 - **Linear sweep (the runner's spec):** 3,100 random units of 1 to 6 runner tokens, each repeated to 32 KiB, 128 KiB and 256 KiB.
@@ -181,5 +195,6 @@ Each one leaks on `main` too.
 - **Earlier rounds' runs found the regressions listed under the review rounds.** Each one was fixed in the wide rules, and the design now rules the class out.
 
 ## Released builds
+
 - **Every class leaks on v0.5.1-rc.1 to rc.4,** since they share `main`'s scrubber.
 - **The change is this one file, with no crawler change.** The runner decides whether it's backported to `release/v0.5.1`.

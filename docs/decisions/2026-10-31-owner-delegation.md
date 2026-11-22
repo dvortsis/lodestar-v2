@@ -12,5 +12,6 @@ On 2026-10-31 the owner told the runner to follow its own recommendations on per
   - p95 discovery-to-searchable within 10 minutes.
 
   A strict rolling 60-minute minimum would fail on daily network cycles alone (the CR-0 soak checkpoint stored between 558 and 741 torrents per hour, hour to hour). The 70/min floor still catches a crawler that stalls for an hour.
+
 - **The first start is suppressed for 6 h, as on every start** (`docs/decisions/2026-10-30-master-plan.md`, "CR-0d", which left the first start to the owner as a product choice). It's kept as product behaviour. A new install can't tell whether its IP address sampled the network before, and BEP 51 obligations belong to the address, not to the install, so suppression is the polite choice. Only BEP 51 sampling waits; the rest of the crawler runs. The first-run wizard and the user guide must say plainly that the first hours are slow, and when full speed starts.
 - **Branch clean-up.** The owner deletes the 153 branches that descend from the old root `15620683`, along with `next` (merged into `main`) and `measure/windows-nrt`. The owner's backup of every ref (§2.25) keeps the old history recoverable. Ports of the paused slices are saved on `runner-state` under `ports/`. `release/v0.5.0` goes too: v0.5.0 was never tagged, and v0.5.1 is the first release.

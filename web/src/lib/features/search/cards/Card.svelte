@@ -9,7 +9,6 @@
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import UnverifiedBadge from '../unverified/UnverifiedBadge.svelte';
-	import Mono from '$lib/ui/labels/Mono.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import {
 		ADULT_LABELS as ADULT,
@@ -33,8 +32,6 @@
 
 	const locale = $derived(currentLocale());
 	const title = $derived(showBidi(hit.title ?? hit.name));
-	// The raw name tells apart versions that share a title.
-	const raw = $derived(hit.title !== null && hit.title !== hit.name ? showBidi(hit.name) : null);
 	const type = $derived(
 		hit.content_type === 'adult' && hit.adult_kind
 			? ADULT[hit.adult_kind]?.()
@@ -79,9 +76,6 @@
 	onkeydown={key}
 >
 	<div class="cd-title" data-testid="{id}-title">{title}</div>
-	{#if raw}<div class="rr-raw">
-			<Mono class="rr-raw-name"><span data-testid="{id}-raw">{raw}</span></Mono>
-		</div>{/if}
 	{#if type || flags.length}
 		<div class="cd-badges" data-testid="{id}-badges">
 			{#if type}<span class="cd-badge" data-testid="{id}-badge-type">{type}</span>{/if}

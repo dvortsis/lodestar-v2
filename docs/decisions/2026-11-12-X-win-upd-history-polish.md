@@ -15,12 +15,15 @@ From the runner's review of #722 (`rv-722-d038d17e`). The code is in `crates/lod
 - **Left for X-win-upd-first-rollback:** a `rollback_halted` answer still gets the `install_failed` notice.
 
 ## Supersedes
+
 In `2026-11-12-X-win-upd-history.md` (#722), as of main at 1acd0e35:
+
 - **Line 35, the portable key:** it's the journal's `attempt` id now, and the hash only for a journal written before the field.
 - **Line 38, "looked at again at the next start":** a failed entry's answer is kept in memory and tried at the next look (every status, every check-loop wake, before a hand-over), not just at the next start.
 - **Line 53, the residual on the portable key:** gone for journals with an `attempt` id. For older ones it holds as written.
 
 ## Checks
+
 - **Mutation-checked, all killed:**
   - Off never waking;
   - the failed answer not kept;

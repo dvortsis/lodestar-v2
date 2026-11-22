@@ -3,13 +3,17 @@
 A supervised companion never sends traffic outside its chosen route, not even in the seconds before CMP-8b configures it (#660's review, `reviews/rv-660-c54df896.md` on runner-state; plan Q8, Q18; architecture §18.4, §18.10). These are the slice's decisions under §2.33. None loosens an owner decision or a security decision. The runner flags them to the owner (§2.19).
 
 ## The window
+
 - **What #660 left:** a companion on a SOCKS5 route (Prowlarr; qBittorrent and FlareSolverr refuse SOCKS5) was started, then configured through its API. Until then its own proxy setting was empty, so its startup requests (the update check, the indexer-definition sync, telemetry) went direct. It first became reachable in CMP-5g-3, and nothing reached it yet: every catalogue pin is null.
 
 ## Why not `config.xml` (the brief's preferred way)
+
 Checked against Prowlarr's source (`develop`, `src/`, which targets `net10.0`; released `master` targets `net8.0`, `global.json` 8.0.421; there's no pinned version to check yet):
+
 - **Prowlarr's proxy isn't a `config.xml` setting.** `ConfigFileProvider.cs`, which reads `config.xml`, has no proxy key. `ProxyEnabled`, `ProxyType`, `ProxyHostname`, `ProxyPort` and the rest are properties of `ConfigService.cs`, read from its SQLite `Config` table through `IConfigRepository`. So nothing written into `config.xml` sets it. Writing its database before the first start isn't an option either: its migrations create it, and its schema is Prowlarr's own.
 
 ## What's done instead: the route is in the launch environment
+
 - **What Prowlarr reads at boot:** with its own proxy setting empty, `ManagedHttpDispatcher.CreateHttpClient` builds a `SocketsHttpHandler` with no `Proxy` and `UseProxy` at its default (`true`). .NET then uses `HttpClient.DefaultProxy`.
   - That reads `ALL_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` first on every platform: `SystemProxyInfo.Unix.cs`, and `SystemProxyInfo.Windows.cs`, which tries `HttpEnvironmentProxy.TryCreate` before the system settings (dotnet/runtime, `main` and `release/8.0`).
   - It accepts `socks5://`, and `SocksHelper.cs` sends a host name to a SOCKS5 proxy as a name, so the proxy resolves it.
@@ -49,6 +53,7 @@ Checked against Prowlarr's source (`develop`, `src/`, which targets `net10.0`; r
   - re-run the searches above. The runner carries this into CMP-13's `slices.yaml` notes.
 
 ## #660's L1: the follower waits for the slot
+
 - **Only while it's still running:** once it has the slot, a companion that stopped running meanwhile (held for its route, say) isn't configured then. It's configured when it runs again, so a route that dropped while it waited doesn't leave it stopped for good (self-review I1).
 - **A failure stops only this run:** a later run an operation began meanwhile is left alone (P1). The follower holds the manager only for each look at the slot, never while it waits (P2).
 - A companion that has to be configured once it runs, while an operation holds its slot, used to be left running unconfigured. The follower now waits for the slot, polling every 250 ms, for as long as its run is current.
@@ -58,9 +63,11 @@ Checked against Prowlarr's source (`develop`, `src/`, which targets `net10.0`; r
 - Tested with an update still downloading when the companion starts running. The update fails before it touches the companion, and the companion is then configured and shows healthy.
 
 ## Deadline
+
 - `configure_now`, every configuration the manager makes after a start, is bounded by `LIVE_DEADLINE`; past it, it fails `timed_out`. That includes the follower's configuration, which had no bound before.
 
 ## Tests
+
 - `crates/companions/tests/supervised.rs`: the launch environment for SOCKS5 (each variable, IPv6 in brackets), for direct (none), and for kinds with no launch form (refused). A held Prowlarr is launched with its proxy, read back from the spec the sandbox passes on. A SOCKS5 route with no known proxy isn't started.
 - `crates/companions/tests/manager.rs`: the L1 case above.
 - `crates/lodestar/src/companions.rs`: `CompanionRoutes` hands the proxy it configures for to the launch, and none for a route it couldn't describe.
@@ -70,6 +77,8 @@ Checked against Prowlarr's source (`develop`, `src/`, which targets `net10.0`; r
 - **Mutation-checked:** removing each of these fails a test: the slot wait (giving up at once), its deadline, the stop when it expires, `configure_now`'s deadline, the launch environment, the route-not-expressible refusal, the runtime check, and the framework part of it.
 
 ## Self-review (fresh reviewer)
+
 1 blocking, 3 important and 7 polish findings.
+
 - **Fixed:** B1 (the deadlines and the stop past them are tested, through a test-only setter); I1, I2, I3, P1 to P5 (above); P6 (`launched_env` is test-only; an assertion that checked nothing is gone).
 - **Left:** P6's question on the `Routes` trait. It's a crate-internal Rust trait, not the HTTP API, which is unchanged. P7: `route_not_expressible` has no message yet, and CMP-9a and CMP-10 should show it as "Can't follow your VPN setting", as `cant_follow_route` is.

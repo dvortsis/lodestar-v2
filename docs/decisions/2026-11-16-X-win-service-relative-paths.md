@@ -3,6 +3,7 @@
 A follow-up from X-win-service-cwd-fallback (#956), queued by the runner. Calls not marked as the runner's are this PR's, and the runner flags them to the owner (`docs/owner-decisions.md` §2.19).
 
 ## The service refuses a setting that isn't a full path
+
 - **Before:** the service the SCM starts (`windows::service::load_guarded`) resolved an empty or relative `LODESTAR_DATA_DIR`, and a relative `--config`, against its working folder, which is the system folder under the SCM. For example, `LODESTAR_DATA_DIR=""` read `System32\config.toml`. Only an administrator can set these.
 - **Now:** the service refuses them, and doesn't start. The reason names the setting and its value, and asks for a full path, such as `D:\Lodestar`.
   - **`LODESTAR_DATA_DIR` empty or relative, or `--config` relative:** refused before anything is read or checked.
@@ -16,10 +17,12 @@ A follow-up from X-win-service-cwd-fallback (#956), queued by the runner. Calls 
 - **The CLI is unchanged (runner's brief).** It keeps relative paths: a portable install uses `data` beside the executable, and the tests set a working folder (`Install::working`). The CLI is started from a folder its user chose, so a relative path there means what they meant.
 
 ## Amends #956's "Not covered" line
+
 - **#956's decisions file** (`2026-11-15-X-win-service-cwd-fallback.md`) says a service folder whose path isn't valid UTF-8 keeps the old load.
 - **Added: that case can't arise.** The service folder comes from `std::env::var("ProgramData")` (`windows::service::default_data_dir`). `std::env::var` returns an error for a value that isn't valid Unicode, and the service then uses its fixed fallback, which is valid UTF-8. So `default_dir.to_str()` always succeeds in the service. (A relative value is now refused; see above.)
 
 ## Tests
+
 - **`windows::service::tests::the_service_refuses_a_setting_that_isnt_a_full_path`** runs on every platform:
   - an empty `LODESTAR_DATA_DIR`, and `data`, `./data` and `../Lodestar` as `LODESTAR_DATA_DIR` and under `--config`, are refused with `NotFullPath`, naming the setting, before the folder check runs (that check panics if called);
   - on Windows, `\Lodestar`, `D:Lodestar` and `C:` too;

@@ -27,14 +27,14 @@ One Settings implementation, built on the owner's `848e10a0` (`work/soak-setting
 
 Every Settings budget is met by splitting code; no Settings limit was raised. The only limits that changed are the three below, outside Settings, by owner ruling. Measured with `npm run build` on this branch, gzipped:
 
-| Entry | Before (848e10a0 on main) | Now | Limit |
-|---|---|---|---|
-| Settings overview (own JS + CSS) | 9.9 KB | 11.19 KB | 45 KB |
-| Settings section (own JS + CSS) | 50.67 KB | 41.32 KB | 45 KB |
-| Settings controls (on demand) | 56.5 KB | 35.91 KB | 38 KB |
-| Settings edit chunk (on demand), **new** | — | 10.25 KB | 11.3 KB |
-| Settings KeyboardScreen (first view), **new** | — | 34.92 KB | 45 KB (the §10.1 route cap) |
-| Settings screen extras (on demand), **new** | — | 22.7 KB | 25 KB |
+| Entry                                         | Before (848e10a0 on main) | Now      | Limit                       |
+| --------------------------------------------- | ------------------------- | -------- | --------------------------- |
+| Settings overview (own JS + CSS)              | 9.9 KB                    | 11.19 KB | 45 KB                       |
+| Settings section (own JS + CSS)               | 50.67 KB                  | 41.32 KB | 45 KB                       |
+| Settings controls (on demand)                 | 56.5 KB                   | 35.91 KB | 38 KB                       |
+| Settings edit chunk (on demand), **new**      | —                         | 10.25 KB | 11.3 KB                     |
+| Settings KeyboardScreen (first view), **new** | —                         | 34.92 KB | 45 KB (the §10.1 route cap) |
+| Settings screen extras (on demand), **new**   | —                         | 22.7 KB  | 25 KB                       |
 
 - **The save pipeline loads on demand, as one edit chunk (owner, 2026-10-24: option A, relayed by the runner).**
   - The runner checked this against the owner's own session and recorded it in runner-state's `state.json` (`owner_decision_settings_split`): "draft/conflict code loads on first edit; 45 KB limit kept".
@@ -65,12 +65,11 @@ Every Settings budget is met by splitting code; no Settings limit was raised. Th
     - Moving Toggle back into the Alerts chunk would make Settings load Alerts code.
   - **The owner's ruling (option (a), 2026-10-30):**
 
-    | Entry | Old limit | New limit | Measured with `main` at `fa836c4e` merged |
-    |---|---|---|---|
-    | Alerts route (own JS + CSS) | 29 KB | 29.1 KB | 29.03 KB |
-    | Alert route (own JS + CSS) | 45 KB | 45.8 KB | 45.76 KB |
-    | Detail sections (on demand) | 33.9 KB | 34.5 KB | 34.41 KB |
-
+    | Entry                       | Old limit | New limit | Measured with `main` at `fa836c4e` merged |
+    | --------------------------- | --------- | --------- | ----------------------------------------- |
+    | Alerts route (own JS + CSS) | 29 KB     | 29.1 KB   | 29.03 KB                                  |
+    | Alert route (own JS + CSS)  | 45 KB     | 45.8 KB   | 45.76 KB                                  |
+    | Detail sections (on demand) | 33.9 KB   | 34.5 KB   | 34.41 KB                                  |
     - No other limit changed. `.size-limit.mjs` cites the ruling and the cause next to the three entries.
     - Alert route has about 40 B of headroom. A later change that adds to it goes back to the owner.
 

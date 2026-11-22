@@ -3,6 +3,7 @@
 Follow-ups to PK-win-restart (#605) from its review: the portable successor starts before the 202, the portable launcher's message, a fixed-port relaunch test, and the relaunch flake. Brief: runner, 2026-11-09T02:54Z.
 
 ## The portable successor starts before the 202
+
 - **`SystemApi::prepare_restart`** (`crates/api/src/system.rs`) runs before `POST /system/restart` answers. An error is `409 restart_failed`, and nothing stops. By default there's nothing to ready, so other implementations are unchanged.
 - **The message is fixed text:** "Lodestar couldn't start the new copy that takes over, so it's still running. Close Lodestar and start it again to restart it." The error kind is in the log (`app.restart_failed`), never in the answer.
 - **`Restart::prepare`** (`crates/lodestar/src/system/restart.rs`) runs the portable build's step (start the new copy) for `relaunch` only, once. Later calls, and the `Restart::request` that the answer's drop makes, don't run it again.
@@ -17,6 +18,7 @@ Follow-ups to PK-win-restart (#605) from its review: the portable successor star
   - **A real failed spawn isn't simulated on Windows CI.** The only way would be renaming the running `.exe` out from under `current_exe()`, and what Windows reports then couldn't be checked from this session. The fake and the unit test cover that path.
 
 ## `Start Lodestar.cmd`
+
 - **The portable build now exits with 80 after a hand-over** (`EXIT_RELAUNCHED` in `restart.rs`), not 0. 80 is the Unix supervisor's `EXIT_RESTART` and the service's code, so "80" means a restart on every platform.
 - **The launcher checks it.** On 80 it says "Lodestar restarted and keeps running in this window." and how to stop it, and ends without `pause`. On anything else it says "Lodestar stopped." and pauses, as before.
 - **No labels** (an `if`/`else` block instead): `cmd` can miss a `goto` label in a file with Unix line endings, which this file has in the repository.
@@ -27,10 +29,12 @@ Follow-ups to PK-win-restart (#605) from its review: the portable successor star
   - Closing the window with its X still kills the new copy without a graceful shutdown, as PK-win-restart recorded. PK-guide-3 should say to use Ctrl+C.
 
 ## A fixed-port relaunch test
+
 - **`a_portable_restart_serves_again_on_the_same_port`** (`crates/lodestar/tests/windows_service.rs`) runs the same relaunch with HTTP on a fixed port (a free one picked by the test). The new copy must serve on that same port, so the wait for the old process's exit really releases it.
 - **Both tests share `portable_restart`.** They also check the old process's exit code is 80.
 
 ## The relaunch flake (`a_portable_restart_starts_a_new_copy`, "no new copy served")
+
 - **Diagnostics first, as asked.** On any failure after the start, the test now prints the console (stderr, which the relaunched copy shares, so its start error shows) and `lodestar.jsonl`.
 - **The likely cause.** It couldn't be reproduced here: this session has no Windows, and the failure logs from #636 and #637 have only the assertion. The evidence:
   - The search index takes its root lock non-blocking (`crates/search/src/rebuild.rs` `lock_root`). A busy lock is `Error::Locked`, and the start fails at once. The store doesn't fail that way: SQLite has a busy timeout.
@@ -55,6 +59,7 @@ Follow-ups to PK-win-restart (#605) from its review: the portable successor star
 - **The failure dump stays in the test,** so a future failure still shows its cause.
 
 ## For PK-win-portable-upd
+
 - **Children inheriting `LODESTAR_RELAUNCH_TOKEN` is harmless.** `icacls` and other children of a relaunched copy inherit it unless it's removed, but the variable does nothing without a pipe that delivers the same token, and a console stdin skips the wait.
 - **Any code that starts `lodestar.exe` itself must remove the marker** (`env_remove(windows::relaunch::MARKER)`) or go through `relaunch::command`. Otherwise the child waits for a hand-over that never comes, and ends.
 - **The relaunch now exits with 80, and `POST /system/restart` starts the copy before answering.** An updater calling `Restart::request` directly still starts it there, as before.

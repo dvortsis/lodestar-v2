@@ -13,6 +13,7 @@ From the Windows re-test (X-test-vm, on 0728f0a9). The Windows service's refusal
   - the file in the way of a data folder that can't be created, which the user guide (Fix Windows service error 3) tells users to move.
 
   No other `{:?}` in `windows/*.rs` formats a user-facing path. `priority.rs` quotes a priority name, which isn't a path, so it's left as it was. `acl.rs`'s own reasons in the same log were never `Debug`: `acl::refusal` drops unprintable characters, and `secure_dir`'s "reading …'s permissions" and "creating …" show the folder plainly. They're left to `acl.rs`, which this slice doesn't own.
+
 - **Nothing unprintable is written raw, and no escape reads as path text.** A value can come from a config file, so every control character, a `"`, and every character `acl::invisible` lists (Unicode's Cf, Zl and Zp: bidi controls, zero-width characters, the BOM, line and paragraph separators) is written as `\u{…}`. Accents and other visible text stay as they are.
   - **Not `Debug`'s `\t` or `\n`** (the self-review's blocking finding). Among single backslashes they read as path text. A TOML basic string `data_dir = "D:\temp"` holds a TAB, and the service rightly refuses it, but `"D:\temp"` in the log would look like the full path it isn't. It now shows `"D:\u{9}emp"` (tested).
   - A `"` is `\u{22}`, so the quotes around a value are always its own.

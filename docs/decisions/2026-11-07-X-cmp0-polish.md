@@ -4,7 +4,7 @@ Follow-ups from the CMP-0 review (#548), recorded in `runner/slices.yaml`'s `X-c
 
 - **FlareSolverr names are compared whole, and such an entry needs only `challenge_solver`** (owner §2.47, Q21).
   - **What `main` already did:** since 9dd3c54d it compared the id, the container name and the image's last segment exactly. So `my-flaresolverr-fork` was already another companion. A regression test now pins that.
-  - **What's new, a runner-approved refinement (owner §2.33; runner, 2026-11-07T05:15Z):** an entry named FlareSolverr was accepted if `needed_for` *contained* `challenge_solver`. So `["challenge_solver", "indexer_manager"]` passed, and the entry could pick up another role's defaults. Now `needed_for` must be exactly `["challenge_solver"]`, reported at `.needed_for`.
+  - **What's new, a runner-approved refinement (owner §2.33; runner, 2026-11-07T05:15Z):** an entry named FlareSolverr was accepted if `needed_for` _contained_ `challenge_solver`. So `["challenge_solver", "indexer_manager"]` passed, and the entry could pick up another role's defaults. Now `needed_for` must be exactly `["challenge_solver"]`, reported at `.needed_for`.
   - **Only the image's last segment counts, on purpose.** `ghcr.io/flaresolverr/solver` isn't FlareSolverr: an owner's other images are other programs. A test pins that choice.
 - **A path refuses an escape wherever it refuses the literal byte, in either case.** Both `RequestPath` and `EnteredUrl`'s base path now decode every `%` escape and refuse:
   - `;` (`%3b`), the review's case;
@@ -13,6 +13,7 @@ Follow-ups from the CMP-0 review (#548), recorded in `runner/slices.yaml`'s `X-c
   - any byte from `0x80`, as before.
 
   **Allowed on purpose:** the escapes of printable bytes that are refused literally but mean nothing to a path once decoded: space, `"`, `<`, `>`, `^`, `` ` ``, `{`, `|`, `}`, `[`, `]` and `@`. An escape is how a path carries those bytes as data (`/a%20b`). In the query, `;` and its escape are data, not path parameters, so they're allowed.
+
 - **Config templates are tied to the companion's id as well as its role.** `qbittorrent_conf` needs the `qbittorrent` entry and `prowlarr_config_xml` needs the `prowlarr` entry. Another download client or indexer manager is refused, because the writer for one program's config file is wrong for another.
 - **A release folder is exactly `/<owner>/<project>/releases/download/`,** and a pin inside it is exactly `<tag>/<file>`. Before, the rule was "at least two segments and a closing `/`". That accepted `/<owner>/<project>/archive/` (source archives, not published builds) and extra segments before `releases`. The folder is compared exactly, so `Releases/Download` is refused, even though GitHub itself doesn't care about the case of owner and project names.
   - **For CMP-13's pin tool:** a tag that contains `/` (`release/v1`) can't be pinned, because a pin is `<tag>/<file>` with no deeper path. Today's upstreams don't use such tags.

@@ -3,6 +3,7 @@
 The runner's records PR after r8 (#1025). It records the runner's calls from 2026-11-21Z to 2026-11-22Z. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
 ## Calls in merged slices
+
 - **X-safety-undo-danger (#1027):** final sizes Filters dialogs 36.04 kB and Filters pack panels 7.92 kB, as r8 said. r8's table also said Settings InsightsScreen and NotificationsScreen drifted; they didn't once the branch took in `main`, and their limits stayed.
 - **X-page-frame (#1028), option C:**
   - **Shared class constants** in `ui/layout/classes.ts`, not `PageFrame` or `PageHeader` components. A compiled component cost about 0.75 kB per route: option A pushed 7 views past 45 kB, and option B broke Search's 45 kB cap (§10.1).
@@ -45,6 +46,7 @@ The runner's records PR after r8 (#1025). It records the runner's calls from 202
   - **Fix main first:** X-backoff-escalate-passthrough passes the switch through the fleet VM stack and the soak collector (off unless set), keeps the tests that iterate the switches green, and widens the `INFRA` filter. It adds its own `slices.yaml` entry. Until it lands, any PR that touches `infra/` fails `ci-ok` for a reason that isn't its own (§2.18).
 
 ## Calls in running slices
+
 - **X-ui-checks is split into four parts.** The umbrella entry is now `expanded` in `dashboard.yaml`.
   - **-1:** chunk failure, focus return and the Settings save gap. Merged as #1036.
   - **-2:** overlay timings and radius, rebuild and paused states, and the phone alert-and-Send flow. The layout-shift (CLS) check is dropped: Lighthouse already gates first paint, and the navigation case adds little.
@@ -65,9 +67,11 @@ The runner's records PR after r8 (#1025). It records the runner's calls from 202
   - When it lands, CLAUDE.md and `runner/standards.md` say to measure with `npm run size:ci`. Those files are the runner's, so that change goes in a runner PR.
 
 ## Release notes (for the composer)
+
 - **The Insights CSV export gains a `name` column after `key`,** in both `segments.by_source` and `discover.by_source` (X-insights-source-names). A tool that reads columns by name keeps working. One that reads them by position will find the later columns moved one place right.
 
 ## New slices
+
 - **X-search-chunk-retry:** a retry state and message when the Search results chunk fails, and a `.catch` on `loadResults()`. It flips #1036's expected-gap case to assert the retry state.
 - **X-group-chip-label:** group chips, Builder rows and facet-click rows show the facet rail's label when one is known. The query text stays lower-cased, under the same S1-20 rule. Low priority.
 - **X-checksum-wrap:** the install dialog's 64-character checksum wraps 63+1 in its 478 px column. That predates #1034. Split it evenly, 32+32.
