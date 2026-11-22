@@ -322,6 +322,63 @@ CRAWLER_SWITCHES=(
   LODESTAR_DHT_LOOKUP_END LODESTAR_DHT_PRESET_SLOTS LODESTAR_DHT_HINT_FIRST LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT
   LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE
 )
+# The treatment keys and the crawler switches each turns on: the collector's
+# TREATMENT_SWITCHES (docs/soak/tools/linux/collect.py), in CRAWLER_SWITCHES'
+# names. A stage's TREATMENT is one key; WINNERS (X-fleet-stacked-arms) are the
+# earlier stages' winning keys, joined by '-' (the step arguments' shape has no
+# comma), on in both arms. Every switch here is a boolean (crates/lodestar's
+# config.rs), so an arm sets each to true or false.
+TREATMENT_KEYS='adm|utp|route|lc|hint|split'
+switches_of() {
+  case $1 in
+    adm) echo LODESTAR_DHT_COORDINATED_ADMISSION ;;
+    utp) echo LODESTAR_DHT_UTP ;;
+    route) echo LODESTAR_DHT_ROUTE_BACKOFF ;;
+    lc) echo LODESTAR_DHT_LOOKUP_END LODESTAR_DHT_PRESET_SLOTS ;;
+    hint) echo LODESTAR_DHT_HINT_FIRST ;;
+    split) echo LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT ;;
+    *) return 1 ;;
+  esac
+}
+is_crawler_switch() {
+  local s
+  for s in "${CRAWLER_SWITCHES[@]}"; do [[ $s == "$1" ]] && return 0; done
+  return 1
+}
+# stacking TREATMENT WINNERS: sets TREATMENT_VARS and WINNER_VARS, or fails
+# with the reason on stdout (unknown_key, repeated_winner, winner_is_treatment,
+# not_a_switch). WINNERS is empty or keys joined by '-'.
+stacking() {
+  local treatment=$1 winners=$2 k v seen=" "
+  TREATMENT_VARS=() WINNER_VARS=()
+  [[ $treatment =~ ^($TREATMENT_KEYS)$ ]] || { echo unknown_key; return 1; }
+  read -ra TREATMENT_VARS <<<"$(switches_of "$treatment")"
+  if [[ -n $winners ]]; then
+    [[ $winners =~ ^($TREATMENT_KEYS)(-($TREATMENT_KEYS))*$ ]] || { echo unknown_key; return 1; }
+    for k in ${winners//-/ }; do
+      [[ $seen == *" $k "* ]] && { echo repeated_winner; return 1; }
+      [[ $k == "$treatment" ]] && { echo winner_is_treatment; return 1; }
+      seen+="$k "
+      for v in $(switches_of "$k"); do WINNER_VARS+=("$v"); done
+    done
+  fi
+  for v in "${TREATMENT_VARS[@]}" "${WINNER_VARS[@]}"; do
+    is_crawler_switch "$v" || { echo not_a_switch; return 1; }
+  done
+  # A switch both a winner and the treatment's: the arms couldn't differ in it.
+  for v in "${WINNER_VARS[@]}"; do
+    [[ " ${TREATMENT_VARS[*]} " == *" $v "* ]] && { echo winner_is_treatment; return 1; }
+  done
+  return 0
+}
+# arm_env segment: the crawler switches start_lodestar sets for segment's arm,
+# one NAME=value per line: the winners on, the treatment's on in B and off in A.
+arm_env() {
+  local value=false v
+  [[ $(arm_of "$1") == treatment ]] && value=true
+  for v in "${WINNER_VARS[@]}"; do printf '%s=true\n' "$v"; done
+  for v in "${TREATMENT_VARS[@]}"; do printf '%s=%s\n' "$v" "$value"; done
+}
 # Start Lodestar (alone: gluetun isn't recreated) with segment $1's arm. Every
 # switch but the treatment's stays at its shipped default, whatever the caller's
 # environment holds; safe restart is on for the whole block, so each later start
@@ -371,14 +428,14 @@ data_dirs_ready() {  # [fresh]
   done
 }
 start_lodestar() {  # $1 segment, $2 "fresh" to recreate whatever compose thinks
-  local value=false recreate=() image
+  local recreate=() image switches
   [[ ${2:-} == fresh ]] && recreate=(--force-recreate)
-  [[ $(arm_of "$1") == treatment ]] && value=true
   image=$(lodestar_image)
+  mapfile -t switches < <(arm_env "$1")
   (
     unset "${CRAWLER_SWITCHES[@]}"
     export LODESTAR_IMAGE="$image" LODESTAR_DHT_SAFE_RESTART=true \
-      "$TREATMENT_ENV=$value" DOCKER_GID=unused
+      "${switches[@]}" DOCKER_GID=unused
     timeout 240 docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
       --profile block up -d --pull never --no-deps "${recreate[@]}" lodestar >/dev/null 2>&1
   )
@@ -482,12 +539,13 @@ collector_ok() {
 load_block_env() {
   local f=$BLOCK/block.env k v
   [[ -f $f ]] || return 1
-  unset IMAGE_DIGEST LOCAL_IMAGE_ID  # only the file's pin counts, never the environment's
+  unset IMAGE_DIGEST LOCAL_IMAGE_ID WINNERS  # only the file's pin and winners count, never the environment's
   while IFS='=' read -r k v; do
     case $k in
       IMAGE_DIGEST | LOCAL_IMAGE_ID) [[ $v =~ ^[0-9a-f]{64}$ ]] || return 1 ;;
       LODESTAR_COMMIT | SPEC_COMMIT | RULES_COMMIT) [[ $v =~ ^[0-9a-f]{40}$ ]] || return 1 ;;
-      TREATMENT) [[ $v =~ ^(adm|utp|route)$ ]] || return 1 ;;
+      TREATMENT) [[ $v =~ ^($TREATMENT_KEYS)$ ]] || return 1 ;;
+      WINNERS) [[ $v =~ ^(($TREATMENT_KEYS)(-($TREATMENT_KEYS))*)?$ ]] || return 1 ;;  # empty: none
       SEGMENT_HOURS) [[ $v =~ ^[23]$ ]] || return 1 ;;
       ROLE) [[ $v =~ ^(main|worker)$ ]] || return 1 ;;
       *) return 1 ;;
@@ -498,12 +556,7 @@ load_block_env() {
   [[ -z ${IMAGE_DIGEST:-} && -n ${LOCAL_IMAGE_ID:-} || -n ${IMAGE_DIGEST:-} && -z ${LOCAL_IMAGE_ID:-} ]] || return 1
   [[ -n ${LODESTAR_COMMIT:-} && -n ${SPEC_COMMIT:-} && -n ${TREATMENT:-} \
     && -n ${SEGMENT_HOURS:-} && -n ${ROLE:-} ]] || return 1
-  case $TREATMENT in
-    adm) TREATMENT_ENV=LODESTAR_DHT_COORDINATED_ADMISSION ;;
-    utp) TREATMENT_ENV=LODESTAR_DHT_UTP ;;
-    route) TREATMENT_ENV=LODESTAR_DHT_ROUTE_BACKOFF ;;
-    *) return 1 ;;
-  esac
+  stacking "$TREATMENT" "${WINNERS:-}" >/dev/null
 }
 watcher_active() { systemctl is-active --quiet "$WATCHER_UNIT" 2>/dev/null; }
 # The boot guard: a oneshot that Docker requires (a drop-in), run before the

@@ -38,12 +38,13 @@ fail() {
 
 # The arguments, already checked by the control side; checked again here.
 # Only the arguments' image pin counts, never one from the environment.
-unset IMAGE_DIGEST LOCAL_IMAGE_ID
+unset IMAGE_DIGEST LOCAL_IMAGE_ID WINNERS
 while IFS='=' read -r k v; do
   case $k in
     IMAGE_DIGEST | LOCAL_IMAGE_ID) [[ $v =~ ^[0-9a-f]{64}$ ]] ;;
     LODESTAR_COMMIT | SPEC_COMMIT | RULES_COMMIT) [[ $v =~ ^[0-9a-f]{40}$ ]] ;;
-    TREATMENT) [[ $v =~ ^(adm|utp|route)$ ]] ;;
+    TREATMENT) [[ $v =~ ^($TREATMENT_KEYS)$ ]] ;;
+    WINNERS) [[ $v =~ ^(($TREATMENT_KEYS)(-($TREATMENT_KEYS))*)?$ ]] ;;  # empty: none
     SEGMENT_HOURS) [[ $v =~ ^[23]$ ]] ;;
     ROLE) [[ $v =~ ^(main|worker)$ ]] ;;
     NOTICE_VERSION) [[ $v =~ ^[1-9][0-9]{0,5}$ ]] ;;
@@ -57,6 +58,12 @@ for k in LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT SEGMENT_HOURS ROLE N
 done
 # Exactly one image pin: the registry digest (the default) or a local image ID.
 [[ -n ${IMAGE_DIGEST:-} && -z ${LOCAL_IMAGE_ID:-} || -z ${IMAGE_DIGEST:-} && -n ${LOCAL_IMAGE_ID:-} ]] || fail args_valid
+# The stage's switches (X-fleet-stacked-arms): every winner and the treatment a
+# known key whose switches are crawler switches, no winner twice, and none the
+# treatment. Refused here, before anything starts, with the reason.
+if ! why=$(stacking "$TREATMENT" "${WINNERS:-}"); then
+  echo "fail stacking_$why"; fail args_valid
+fi
 echo "ok args_valid"
 for tool in docker systemctl iptables flock; do
   command -v "$tool" >/dev/null 2>&1 || fail "tool_missing_${tool//-/_}"
@@ -102,7 +109,7 @@ echo "ok boot_guard_installed"
 printf 'block=%s\nsegment=1\nstate=starting\n' "$BLOCK_ID" | marker_write || fail marker_written
 echo "ok marker_written"
 {
-  for k in IMAGE_DIGEST LOCAL_IMAGE_ID LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT SEGMENT_HOURS ROLE; do
+  for k in IMAGE_DIGEST LOCAL_IMAGE_ID LODESTAR_COMMIT SPEC_COMMIT RULES_COMMIT TREATMENT WINNERS SEGMENT_HOURS ROLE; do
     if [[ -n ${!k:-} ]]; then printf '%s=%s\n' "$k" "${!k}"; fi
   done
 } >"$BLOCK/block.env" && load_block_env || fail block_env
