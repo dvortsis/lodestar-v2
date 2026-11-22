@@ -91,9 +91,9 @@
 			key: String(c.cohort),
 			label: formatDateFull(c.cohort, locale, { timeZone: tz, bucket }),
 			value: c.stages.harvested,
-			text: formatCount(c.stages.harvested, locale),
-			sub: m.insights_overview_cohort_searchable({
-				count: formatCount(c.stages.searchable, locale)
+			text: m.insights_overview_cohort_summary({
+				harvested: formatCount(c.stages.harvested, locale),
+				searchable: formatCount(c.stages.searchable, locale)
 			}),
 			hatched: !c.final,
 			tag: c.final ? undefined : m.incomplete()

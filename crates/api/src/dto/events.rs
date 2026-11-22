@@ -267,7 +267,8 @@ pub struct UpdatesEvent {
 /// takes it.
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct SearchLiveRequest {
-    /// The query text. Send `q` or `ast`, not both.
+    /// The query text, as `/search` takes it (sizes read as typed: `GB`
+    /// is 10^9 bytes). Send `q` or `ast`, not both.
     pub q: Option<String>,
     /// A query AST, as `/parse` returns it; it must be one the parser
     /// could produce.

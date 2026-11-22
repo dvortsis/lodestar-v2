@@ -171,13 +171,19 @@ for (const mode of ['light', 'dark'] as const) {
 		for (const width of [1366, 390]) {
 			test(`the bulk bar over the list and the table at ${width} px`, async ({ page, go }) => {
 				await page.setViewportSize({ width, height: 900 });
+				// Below 640 px Select is in the toolbar's More popover.
+				const select = async () => {
+					if (width >= 640) return page.getByTestId('select-mode').click();
+					await page.getByTestId('results-toolbar').getByRole('button', { name: 'More' }).click();
+					await page.locator('.tb-pop').getByRole('button', { name: 'Select' }).click();
+				};
 				await go('/search?q=lantern');
-				await page.getByTestId('select-mode').click();
+				await select();
 				await pick(page, 1).check();
 				await expect(page.getByTestId('bulk-bar')).toBeVisible();
 				await expectNoA11yViolations(page);
 				await go('/search?q=lantern&view=table');
-				await page.getByTestId('select-mode').click();
+				await select();
 				await page.getByTestId('table-select-1').check();
 				await expect(page.getByTestId('bulk-bar')).toBeVisible();
 				await expect(count(page)).toHaveText('1 selected');

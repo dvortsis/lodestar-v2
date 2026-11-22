@@ -5310,7 +5310,8 @@ export interface components {
              */
             hidden: boolean | null;
             /**
-             * @description The query text, as `/search` takes it.
+             * @description The query text, as `/search` takes it (sizes read as typed:
+             *     `GB` is 10^9 bytes).
              * @default null
              */
             q: string | null;
@@ -5393,8 +5394,8 @@ export interface components {
                 [key: string]: number;
             };
             /**
-             * @description The query text, as `/search` takes it. Send `q` or `ast`, not
-             *     both.
+             * @description The query text, as `/search` takes it (sizes read as typed:
+             *     `GB` is 10^9 bytes). Send `q` or `ast`, not both.
              * @default null
              */
             q: string | null;
@@ -7102,7 +7103,7 @@ export interface components {
          *         "of": [],
          *         "op": "and"
          *       },
-         *       "canonical": "res:2160p type:movie year:2020 size:>=10GiB",
+         *       "canonical": "res:2160p type:movie year:2020 size:>=10GB",
          *       "chips": [
          *         {
          *           "from": {
@@ -7124,7 +7125,10 @@ export interface components {
          */
         NaturalProposal: {
             ast: components["schemas"]["AstNode"];
-            /** @description The proposed query; it always parses back to `ast`. */
+            /**
+             * @description The proposed query; it parses back to the same AST under the
+             *     typed reading (`10GB` is 10^9 bytes), as `q` does.
+             */
             canonical: string;
             /** @description The recognised clauses, in the order they appear. */
             chips: components["schemas"]["NaturalChip"][];
@@ -8419,7 +8423,8 @@ export interface components {
             paused?: boolean | null;
             /**
              * @description The query text. Send `q` or `ast`, not both; with neither it
-             *     matches everything.
+             *     matches everything. Sizes read as typed: `GB` is 10^9 bytes, `GiB`
+             *     2^30. It's stored as the AST's canonical text, not as sent.
              */
             q?: string | null;
             /** @description Serve the hits as an RSS feed. */
@@ -8445,7 +8450,7 @@ export interface components {
              */
             paused: boolean | null;
             /**
-             * @description Send `q` or `ast`, not both.
+             * @description Send `q` or `ast`, not both. Read as `SavedSearchCreate.q` is.
              * @default null
              */
             q: string | null;
@@ -8499,7 +8504,12 @@ export interface components {
             name: string;
             /** @description Skipped by the notifier; its channels are kept. */
             paused: boolean;
-            /** @description The query text. */
+            /**
+             * @description The query as the user would type it, printed from the stored AST
+             *     every time (sizes in a decimal unit where one fits, `size:>10GB`).
+             *     `/search?q=` reads it back as the same AST. What's stored is
+             *     canonical text in bytes or IEC units.
+             */
             q: string;
             /** @description Serve the hits as an RSS feed. */
             rss: boolean;
@@ -8865,7 +8875,10 @@ export interface components {
             ast?: null | components["schemas"]["AstNode"];
             /** @description Include torrents a filter rule hid (§20.3), as `/search` does. */
             hidden?: boolean | null;
-            /** @description The query text. Send `q` or `ast`, not both. */
+            /**
+             * @description The query text, as `/search` takes it (sizes read as typed: `GB`
+             *     is 10^9 bytes). Send `q` or `ast`, not both.
+             */
             q?: string | null;
             /**
              * Format: int32
@@ -8933,7 +8946,9 @@ export interface components {
              */
             offset: number | null;
             /**
-             * @description The query text. Send `q` or `ast`, not both.
+             * @description The query text. Send `q` or `ast`, not both. Sizes read as typed:
+             *     `GB` is 10^9 bytes, `GiB` 2^30 (on `size:` and `largest:`; stored
+             *     filter rules keep the 1,024 reading).
              * @default null
              */
             q: string | null;
@@ -8956,7 +8971,11 @@ export interface components {
         };
         /** @description `GET`/`POST /search`. */
         SearchResponse: {
-            /** @description The query as the server understood it. */
+            /**
+             * @description The query as the server understood it, as the user would type it
+             *     (sizes in the unit typed, `size:>10GB`): it reads back the same
+             *     as `q`.
+             */
             canonical: string;
             /** @description Why `collapse=group` came back ungrouped; absent otherwise. */
             collapse_unavailable?: components["schemas"]["CollapseUnavailable"];
@@ -15457,7 +15476,11 @@ export interface operations {
     parseQuery: {
         parameters: {
             query?: {
-                /** @description The query text; empty matches everything. */
+                /**
+                 * @description The query text; empty matches everything. Sizes read as typed:
+                 *     `GB` is 10^9 bytes, `GiB` 2^30 (on `size:` and `largest:`; stored
+                 *     filter rules keep the 1,024 reading).
+                 */
                 q?: string;
                 /**
                  * @description Also read `q` as natural phrasing ("4k movies from 2020 over

@@ -135,3 +135,13 @@
 		min-height: var(--target-min);
 	}
 }
+
+.rt-raw {
+	display: block;
+	max-width: calc(var(--spacing) * 72);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--font-mono);
+	font-size: var(--text-caption);
+}

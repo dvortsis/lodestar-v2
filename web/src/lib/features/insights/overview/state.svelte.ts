@@ -82,25 +82,97 @@ export function createInsights() {
 		}
 	}
 
-	async function act(action: CrawlerAction, run: () => Promise<unknown>) {
+	async function act(action: CrawlerAction, run: () => Promise<unknown>): Promise<boolean> {
 		busy = action;
 		crawlerError = undefined;
 		try {
 			await run();
 			await Promise.all([fetchCrawler(), fetchOverview(query, true)]);
+			return true;
 		} catch (e) {
 			if (!isAbort(e)) {
 				crawlerError = { action, message: e instanceof ApiError ? e.message : '' };
 				// Show what the server really has, not the level that was clicked.
 				await fetchCrawler();
 			}
+			return false;
 		} finally {
 			busy = undefined;
 		}
 	}
 
+	// Undo for the intensity click (UI review U26): the change applies at once; for UNDO_MS after the
+	// last change, Undo puts back the level before it. Each change pushes `{from, to}`, so two
+	// changes in a row undo one step at a time. Intensity actions run one at a time (the control and
+	// Undo are disabled meanwhile), so a step is never undone out of order. The 10 s wait pauses
+	// while focus is on the Undo line. Nothing here changes what a level does.
+	const UNDO_MS = 10_000;
+	interface Step {
+		from: Intensity;
+		to: Intensity;
+	}
+	let undoStack = $state<Step[]>([]);
+	// What the line names: the level now in force.
+	let undoShown = $state<Intensity>('balanced');
+	let undoTimer: ReturnType<typeof setTimeout> | undefined;
+	let undoHeld = false;
+	let disposed = false;
+	function armUndo() {
+		clearTimeout(undoTimer);
+		if (disposed || undoHeld) return;
+		undoTimer = setTimeout(dropUndo, UNDO_MS);
+	}
+	function dropUndo() {
+		clearTimeout(undoTimer);
+		undoStack = [];
+		// The line is gone, so nothing inside it can hold focus: Firefox sends no `focusout` when the
+		// focused button is removed, and a stale hold would stop the next line from expiring.
+		undoHeld = false;
+	}
+	let intensityBusy = false;
+	async function setIntensity(intensity: Intensity) {
+		if (intensityBusy) return;
+		intensityBusy = true;
+		try {
+			const from = crawler?.intensity;
+			const ok = await act('intensity', () => api.patch('/crawler', { body: { intensity } }));
+			if (!ok || disposed || from === undefined || from === intensity) return;
+			undoStack = [...undoStack, { from, to: intensity }];
+			undoShown = intensity;
+			armUndo();
+		} finally {
+			intensityBusy = false;
+		}
+	}
+	async function undoIntensity() {
+		if (intensityBusy) return;
+		const step = undoStack.at(-1);
+		if (step === undefined) return;
+		intensityBusy = true;
+		try {
+			const ok = await act('intensity', () =>
+				api.patch('/crawler', { body: { intensity: step.from } })
+			);
+			// The line may have expired while the request ran: then nothing is announced.
+			if (!ok || disposed || undoStack.at(-1) !== step) return;
+			undoStack = undoStack.slice(0, -1);
+			undoShown = step.from;
+			if (undoStack.length) armUndo();
+			else dropUndo();
+		} finally {
+			intensityBusy = false;
+		}
+	}
+	/** Focus is on the Undo line: keep it; the 10 s starts again when focus leaves. */
+	function holdUndo(held: boolean) {
+		undoHeld = held;
+		if (held) clearTimeout(undoTimer);
+		else if (undoStack.length) armUndo();
+	}
+
 	/** Subscribes to the live feed; returns the unsubscribe. */
 	function start(): () => void {
+		disposed = false;
 		// Called from an effect: reading state here must not make the effect depend on it.
 		return untrack(subscribe);
 	}
@@ -125,6 +197,8 @@ export function createInsights() {
 		return () => {
 			offCrawler();
 			offInsights();
+			disposed = true;
+			dropUndo();
 			overviewSlot.cancel();
 			allSlot.cancel();
 			crawlerSlot.cancel();
@@ -174,8 +248,19 @@ export function createInsights() {
 		},
 		pause: () => act('pause', () => api.post('/crawler/pause')),
 		resume: () => act('resume', () => api.post('/crawler/resume')),
-		setIntensity: (intensity: Intensity) =>
-			act('intensity', () => api.patch('/crawler', { body: { intensity } }))
+		setIntensity,
+		undoIntensity,
+		/** The Undo line while it shows: the level now in force (a change or an undo alike). */
+		get undo(): { level: Intensity } | undefined {
+			return undoStack.length ? { level: undoShown } : undefined;
+		},
+		holdUndo,
+		/** `'pending'` while the all-time check is unanswered; `'failed'` when it errored. */
+		get startupCheck(): 'pending' | 'failed' | undefined {
+			if (!overview) return undefined;
+			if (startupState(query.range, overview, all) !== 'check') return undefined;
+			return allFailed ? 'failed' : 'pending';
+		}
 	};
 }
 

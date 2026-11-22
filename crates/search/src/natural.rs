@@ -1,6 +1,6 @@
 //! Natural phrasing (§10.4, B7): plain words like "4k movies from 2020
 //! over 10gb" read as the query `res:2160p type:movie year:2020
-//! size:>=10GiB`, for the UI to preview as chips. The server never applies
+//! size:>=10GB`, for the UI to preview as chips. The server never applies
 //! it; `/parse` only proposes it.
 //!
 //! It's deterministic and rule-based: each rule recognises a few words
@@ -21,11 +21,16 @@
 //! Input the strict parser rejects isn't read (`/parse` answers it with
 //! the syntax error).
 //!
-//! Sizes: "over"/"under" are inclusive (`size:>=10GiB`), since a byte
+//! Sizes: "over"/"under" are inclusive (`size:>=10GB`), since a byte
 //! either way means nothing; years and counts keep the strict sense
-//! ("after 2010" is `year:>=2011`).
+//! ("after 2010" is `year:>=2011`). Natural phrasing is text the user
+//! types now, so sizes take the typed-unit reading (§10.12, U12): "10 GB"
+//! is 10 × 1000³ bytes, "10 GiB" 10 × 1024³; single letters (`10g`) stay
+//! 1,024-based, as in the query language. Syntax inside it is read with
+//! [`Units::Typed`] too, and the proposal's `canonical` and chips echo
+//! decimal sizes ([`Node::to_query_typed`]).
 
-use crate::query::{self, DateField, Node, NumField, TagKey, TextField, When};
+use crate::query::{self, DateField, Node, NumField, TagKey, TextField, Units, When};
 use crate::suggest::caret::{self, Raw, RawKind};
 use crate::suggest::chip_nodes;
 
@@ -204,13 +209,20 @@ fn comparison(w: &[W]) -> Option<(usize, Cmp)> {
     })
 }
 
+/// A size unit word, in bytes, as typed now ([`Units::Typed`]): the
+/// decimal names count in 1,000s, the IEC names and single letters in
+/// 1,024s.
 fn unit(s: &str) -> Option<u64> {
     Some(match s {
         "b" | "byte" | "bytes" => 1,
-        "k" | "kb" | "kib" | "kilobytes" => 1 << 10,
-        "m" | "mb" | "mib" | "meg" | "megs" | "megabytes" => 1 << 20,
-        "g" | "gb" | "gib" | "gig" | "gigs" | "gigabytes" => 1 << 30,
-        "t" | "tb" | "tib" | "terabytes" => 1 << 40,
+        "kb" | "kilobyte" | "kilobytes" => 1_000,
+        "mb" | "meg" | "megs" | "megabyte" | "megabytes" => 1_000_000,
+        "gb" | "gig" | "gigs" | "gigabyte" | "gigabytes" => 1_000_000_000,
+        "tb" | "terabyte" | "terabytes" => 1_000_000_000_000,
+        "k" | "kib" | "kibibytes" => 1 << 10,
+        "m" | "mib" | "mebibytes" => 1 << 20,
+        "g" | "gib" | "gibibytes" => 1 << 30,
+        "t" | "tib" | "tebibytes" => 1 << 40,
         _ => return None,
     })
 }
@@ -228,15 +240,16 @@ fn number(s: &str) -> Option<f64> {
 /// A size at `w` (`10gb` or `10 gb`): words used and bytes.
 fn size(w: &[W]) -> Option<(usize, u64)> {
     let a = &w.first()?.low;
-    let bytes = |n: f64, m: u64| {
-        let v = n * m as f64;
-        (0.0..1e18).contains(&v).then_some(v as u64)
+    // Exact, not through a float: "1.15 GB" is 1,150,000,000 bytes.
+    let bytes = |n: &str, m: u64| {
+        number(n)?;
+        query::scaled(n, m).filter(|&v| v < 1_000_000_000_000_000_000)
     };
     let split = a
         .find(|c: char| !(c.is_ascii_digit() || c == '.'))
         .unwrap_or(a.len());
     let (n, u) = a.split_at(split);
-    let n = number(n)?;
+    number(n)?;
     if !u.is_empty() {
         return Some((1, bytes(n, unit(u)?)?));
     }
@@ -558,16 +571,16 @@ pub fn natural(input: &str) -> Result<Natural, NaturalError> {
     let (pieces, chips, text, read, strict) = build(input)?;
     // The pieces read together as the proposal; should they not (a rule
     // emptied a run between operators), the query stands as typed.
-    match query::parse(&join(&pieces, None)) {
+    match query::parse_with(&join(&pieces, None), Units::Typed) {
         Ok(ast) => Ok(Natural {
-            canonical: ast.to_query(),
+            canonical: ast.to_query_typed(),
             ast,
             chips,
             text,
             read,
         }),
         Err(_) => Ok(Natural {
-            canonical: strict.to_query(),
+            canonical: strict.to_query_typed(),
             ast: strict,
             chips: Vec::new(),
             text: Vec::new(),
@@ -664,7 +677,7 @@ fn build(input: &str) -> Result<Built, NaturalError> {
     if toks.len() > MAX_NATURAL_WORDS {
         return Err(NaturalError::TooManyWords);
     }
-    let strict = query::parse(input).map_err(|_| NaturalError::Syntax)?;
+    let strict = query::parse_with(input, Units::Typed).map_err(|_| NaturalError::Syntax)?;
     // Segments in order: runs of plain words (with the top-level AND
     // group they're in, between `OR`s) and syntax as written. Each group
     // also notes the fields its own top-level syntax names.
@@ -707,7 +720,11 @@ fn build(input: &str) -> Result<Built, NaturalError> {
             } else if t.kind == RawKind::Word {
                 // A field named anywhere in the group, in brackets too
                 // (`-(type:tv)`).
-                if let Some(k) = query::parse(text).ok().as_ref().and_then(key_of) {
+                if let Some(k) = query::parse_with(text, Units::Typed)
+                    .ok()
+                    .as_ref()
+                    .and_then(key_of)
+                {
                     taken.last_mut().expect("a group").push(k);
                 }
             }
@@ -920,7 +937,7 @@ fn read_group(runs: &[(&[W], usize)], taken: &[Key]) -> Read {
             };
             leading = false;
             out.chips.push(NaturalChip {
-                text: node.to_query(),
+                text: node.to_query_typed(),
                 from,
             });
             nodes.push(node);
@@ -985,6 +1002,34 @@ mod tests {
         assert_eq!(decade("20s"), Some(2020));
         assert_eq!(year("1899"), None);
         assert_eq!(year_span("2010-2000"), None);
+    }
+
+    /// Natural phrasing is typed now: GB counts in 1,000s, GiB and single
+    /// letters in 1,024s, exactly (§10.12, U12).
+    #[test]
+    fn sizes_take_the_typed_reading() {
+        let lo = |q: &str| match natural(q).unwrap().ast {
+            Node::Range { lo, .. } => lo,
+            n => panic!("{q}: {n:?}"),
+        };
+        assert_eq!(lo("over 10gb"), Some(10_000_000_000));
+        assert_eq!(lo("over 10 GB"), Some(10_000_000_000));
+        assert_eq!(lo("over 10 gigs"), Some(10_000_000_000));
+        assert_eq!(lo("over 1.15gb"), Some(1_150_000_000));
+        assert_eq!(lo("over 10gib"), Some(10 << 30));
+        assert_eq!(lo("over 10g"), Some(10 << 30));
+        let n = natural("over 10gb").unwrap();
+        assert_eq!(n.canonical, "size:>=10GB");
+        assert_eq!(n.chips[0].text, "size:>=10GB");
+        // Syntax inside natural phrasing reads as typed too.
+        let n = natural("size:>10GB dune").unwrap();
+        assert_eq!(n.canonical, "size:>10GB dune");
+        assert_eq!(
+            n.ast,
+            query::parse_with("size:>10GB dune", Units::Typed).unwrap()
+        );
+        let n = natural("between 1 and 2 gb").unwrap();
+        assert_eq!(n.canonical, "size:1GB..2GB");
     }
 
     #[test]
