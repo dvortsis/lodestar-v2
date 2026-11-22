@@ -1,4 +1,4 @@
-# X-group-chip-label decisions (#PR)
+# X-group-chip-label decisions (#1046)
 
 Runner brief, 2026-11-22Z, with the runner's §2.26 calls on step 0. It follows X-builder-group-case (#1037) and #1033's `FacetValue.label`. UX polish: only what's displayed changes.
 
