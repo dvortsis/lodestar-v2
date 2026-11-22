@@ -42,6 +42,7 @@
 
 	const LABEL: Record<ColumnId, () => string> = {
 		name: m.search_table_col_name,
+		raw: m.search_table_col_raw,
 		type: m.search_table_col_type,
 		size: m.search_table_col_size,
 		files: m.search_table_col_files,

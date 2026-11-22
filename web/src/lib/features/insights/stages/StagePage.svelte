@@ -54,6 +54,7 @@
 		trackerTable,
 		understandBars,
 		type BarsSpec,
+		type ChartSpec,
 		type Metric,
 		type StageId,
 		type StageModel,
@@ -262,12 +263,33 @@
 		approx ? approxCount(v ?? null, locale) : formatCount(v, locale);
 	const previousLabel = (label: string) => `${label} · ${m.insights_overview_previous_period()}`;
 	// A snapshot chart is readings at the end of each bucket, so it has no "per hour" unit.
-	const summaryOf = (c: { title: string; snapshot?: boolean }) =>
+	const summaryOf = (c: ChartSpec) =>
 		c.snapshot
 			? m.insights_stage_chart_summary_snapshot({ title: c.title, range: rangeText })
-			: m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText });
-	const noData = (series: { values: (number | null)[] }[]) =>
-		series.every((s) => s.values.every((v) => v === null));
+			: (c.cohort ? m.insights_stage_chart_summary_harvest : m.insights_overview_chart_summary)({
+					title: c.title,
+					unit,
+					range: rangeText
+				});
+	// How many buckets have any value: none is "nothing measured", one is a reading, not a line.
+	const measured = (series: { values: (number | null)[] }[]) =>
+		(series[0]?.values ?? []).filter((_, i) => series.some((s) => s.values[i] != null)).length;
+	// With Compare on, a previous period that has data keeps the chart: a sentence would hide it.
+	const hasPrevious = (c: ChartSpec) =>
+		query.compare && c.series.some((s) => s.previous?.some((v) => v != null));
+	const unitOf = (c: ChartSpec) =>
+		c.snapshot ? (c.snapshotUnit ?? m.insights_stage_unit_torrents()) : unit;
+	const reading = (c: ChartSpec) =>
+		c.series
+			.filter((s) => measured([s]))
+			.map(
+				(s) =>
+					`${s.label}: ${fmtPoint(
+						c.approx,
+						s.values.find((v) => v != null)
+					)} ${unitOf(c)}`
+			)
+			.join('; ');
 
 	const metricText = (x: Metric, v: number | null | undefined) => formatMetric(x, v, locale);
 	const hasPrev = (x: Metric) => query.compare && x.previous !== undefined;
@@ -379,7 +401,7 @@
 				<section class="ins-section" aria-labelledby="ins-s-kpi">
 					<h2 id="ins-s-kpi" class="ins-heading">{m.insights_stage_kpis()}</h2>
 					<p class="ins-sub">{m.insights_stage_time_kpis({ tz })}</p>
-					<div class="ins-kpis" data-testid="insights-stage-kpis">
+					<div class="ins-kpis ins-kpis-fit" data-testid="insights-stage-kpis">
 						{#each model.kpis as x (x.key)}
 							<div class="ins-card" data-testid="insights-stage-kpi-{x.key}">
 								<span class="ins-muted">{x.label}</span>
@@ -419,11 +441,17 @@
 						<p class="ins-sub">
 							{c.snapshot
 								? m.insights_stage_time_snapshot({ tz })
-								: m.insights_stage_time_event({ tz })}
+								: c.cohort
+									? m.insights_overview_stage_time_harvest()
+									: m.insights_stage_time_event({ tz })}
 						</p>
-						{#if noData(c.series)}
+						{#if !measured(c.series) && !hasPrevious(c)}
 							<p class="ins-sentence" data-testid="insights-chart-{c.id}-empty">
 								{m.insights_stage_nothing_measured()}
+							</p>
+						{:else if measured(c.series) === 1 && !hasPrevious(c)}
+							<p class="ins-sentence" data-testid="insights-chart-{c.id}-thin">
+								{m.insights_stage_one_reading({ readings: reading(c) })}
 							</p>
 						{:else}
 							<ChartPanel
@@ -471,7 +499,7 @@
 											: [])
 									])}
 									label={summaryOf(c)}
-									unit={c.snapshot ? (c.snapshotUnit ?? m.insights_stage_unit_torrents()) : unit}
+									unit={unitOf(c)}
 									format={c.approx ? approxCount : formatCount}
 									axisFormat={formatCompact}
 									{bucket}
@@ -582,7 +610,7 @@
 
 				<section class="ins-section" aria-labelledby="ins-s-more">
 					<h2 id="ins-s-more" class="ins-heading">{m.insights_stage_more()}</h2>
-					<div class="ins-card">
+					<div>
 						<dl class="ins-list" data-testid="insights-stage-more">
 							{#each model.more as x (x.key)}
 								<div class="ins-item-row" data-testid="insights-stage-more-{x.key}">
@@ -649,6 +677,15 @@
 </div>
 
 <style>
+	/* The tiles share the row: as many as fit at the tile size, each growing to fill it, so three
+	   tiles do not leave two columns empty (§10.9.2's five fixed columns are the overview's). The
+	   tile may shrink from 12 rem to 9.5 rem so that five (Index, with imports) share the 976 px
+	   row at 1024 px, as the shared rule did; the shared two-column layout stays below 40 rem. */
+	@media (min-width: 40rem) {
+		.ins-kpis-fit {
+			grid-template-columns: repeat(auto-fit, minmax(min(12rem, max(9.5rem, 19%)), 1fr));
+		}
+	}
 	/* The current stage, range and Compare state are shown, not only exposed to assistive tech:
 	   weight and underline carry it, not colour. */
 	:global(.ins-link[aria-current]) {

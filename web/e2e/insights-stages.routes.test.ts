@@ -62,6 +62,115 @@ for (const p of pages) {
 	});
 }
 
+// The KPI tiles share the row (I25): at wide widths the last tile reaches the row's right edge,
+// whatever the page's tile count (3 to 5), and a phone shows no sideways scroll.
+for (const width of [1440, 1024]) {
+	for (const p of pages) {
+		test(`${p.stage}: the KPI tiles fill the row at ${width} px`, async ({ page, mock, go }) => {
+			await page.setViewportSize({ width, height: 900 });
+			mock.on(p.op, p.fixture());
+			await go(`/insights/${p.stage}`);
+			const row = page.getByTestId('insights-stage-kpis');
+			await expect(row).toBeVisible();
+			const rowBox = (await row.boundingBox())!;
+			const tiles = row.locator('> div');
+			const edges = await tiles.evaluateAll((els) =>
+				els.map((e) => {
+					const b = e.getBoundingClientRect();
+					return { top: b.top, right: b.right };
+				})
+			);
+			// Tiles on the first line: the right-most reaches the row's right edge (within a pixel).
+			const first = edges.filter((e) => Math.abs(e.top - edges[0]!.top) < 2);
+			expect(Math.max(...first.map((e) => e.right))).toBeGreaterThan(rowBox.x + rowBox.width - 2);
+		});
+	}
+}
+
+test('index with imports: five tiles share one row at 1024 px', async ({ page, mock, go }) => {
+	await page.setViewportSize({ width: 1024, height: 900 });
+	const base = indexFixture();
+	mock.on('getInsightsIndex', indexFixture({ kpi: { ...base.kpi, new_searchable_imported: 900 } }));
+	await go('/insights/index');
+	const tiles = page.getByTestId('insights-stage-kpis').locator('> div');
+	await expect(tiles).toHaveCount(5);
+	const tops = await tiles.evaluateAll((els) =>
+		els.map((e) => Math.round(e.getBoundingClientRect().top))
+	);
+	expect(new Set(tops).size).toBe(1);
+});
+
+test('a phone shows no sideways scroll on any stage page', async ({ page, mock, go }) => {
+	await page.setViewportSize({ width: 390, height: 800 });
+	for (const p of pages) {
+		mock.on(p.op, p.fixture());
+		await go(`/insights/${p.stage}`);
+		await expect(page.getByTestId('insights-stage-kpis')).toBeVisible();
+		expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+			true
+		);
+	}
+});
+
+test('discover: the harvested chart names the same time base as its tile', async ({
+	page,
+	mock,
+	go
+}) => {
+	mock.on('getInsightsDiscover', discoverFixture());
+	await go('/insights/discover');
+	const section = page.locator('section', { has: page.locator('#ins-discover-harvested-h') });
+	await expect(section.locator('.ins-sub')).toContainText('By first harvest');
+	await expect(section).toContainText('by first harvest.');
+	await expect(section).not.toContainText('by event time');
+});
+
+test('discover: Harvested says it counts by first harvest', async ({ page, mock, go }) => {
+	mock.on('getInsightsDiscover', discoverFixture());
+	await go('/insights/discover');
+	await expect(page.getByTestId('insights-stage-harvested-help')).toHaveText('By first harvest');
+	await expect(page.getByTestId('insights-stage-reported-help')).toHaveCount(0);
+});
+
+test('one measured bucket reads as a sentence with its unit, not a plot with one tick', async ({
+	page,
+	mock,
+	go
+}) => {
+	const base = discoverFixture();
+	mock.on(
+		'getInsightsDiscover',
+		discoverFixture({
+			trend: base.trend.map((p, i) => (i === 11 ? p : { ...p, harvested: null }))
+		})
+	);
+	await go('/insights/discover');
+	const thin = page.getByTestId('insights-chart-discover-harvested-thin');
+	await expect(thin).toContainText('Only one reading in this range.');
+	await expect(thin).toContainText('≈');
+	await expect(thin).toContainText('per hour');
+	await expect(page.getByTestId('insights-chart-discover-harvested')).toHaveCount(0);
+	await expectNoA11yViolations(page);
+});
+
+test('with Compare on, a previous period keeps the chart instead of the one-reading sentence', async ({
+	page,
+	mock,
+	go
+}) => {
+	const base = discoverFixture();
+	mock.on(
+		'getInsightsDiscover',
+		discoverFixture({
+			trend: base.trend.map((p, i) => (i === 11 ? p : { ...p, harvested: null })),
+			previous: { kpi: base.kpi, range: base.range, trend: base.trend }
+		})
+	);
+	await go('/insights/discover?compare=1');
+	await expect(page.getByTestId('insights-chart-discover-harvested-thin')).toHaveCount(0);
+	await expect(page.getByTestId('insights-chart-discover-harvested')).toBeVisible();
+});
+
 test('a missing series reads "Not available yet", never 0', async ({ page, mock, go }) => {
 	mock.on('getInsightsFetch', fetchFixture());
 	await go('/insights/fetch');

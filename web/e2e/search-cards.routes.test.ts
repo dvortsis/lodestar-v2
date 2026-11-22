@@ -39,7 +39,7 @@ test('a tile opens the drawer with Enter and the density control switches views'
 	await expect(page).toHaveURL(/\/t\//);
 	await page.goto('/search?q=lantern&density=cards');
 	await expect(row(page, 1)).toBeVisible();
-	await page.getByRole('radio', { name: 'Compact' }).check();
+	await page.getByTestId('view-select').selectOption('compact');
 	await expect.poll(() => new URL(page.url()).searchParams.get('density')).toBe('compact');
 	await expect(page.locator('.cd-row')).toHaveCount(0);
 });

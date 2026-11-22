@@ -10,6 +10,36 @@
 	gap: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
 	min-height: var(--control-height-dense);
 }
+/* Below x-large the Filters button (the rail's host) is out of flow in every state, so nothing moves
+   when the toolbar arrives: it sits over the results track's top-left, and ResultsToolbar, alive in
+   every state, sets two lengths on #results from its measured box (--tb-inset: its width and a gap,
+   --tb-rail-h: its height and the grid's gap, which an empty host still leaves). The region's first child, the
+   toolbar or an alert above it (Details couldn't load), starts after the button; with no toolbar
+   (the empty and cold-start states) the panel starts below it, as it did when the host was in flow.
+   One row of controls above the first result on a phone. Here, not in results.css: that chunk has no
+   headroom. */
+@media (width < 64rem) {
+	#search-rail {
+		position: absolute;
+		inset-block-start: 0;
+		inset-inline-start: 0;
+		z-index: 1;
+	}
+	#results > :first-child {
+		margin-inline-start: var(--tb-inset, 0);
+	}
+	#results > .rp:first-child {
+		margin-inline-start: 0;
+		margin-block-start: var(--tb-rail-h, 0);
+	}
+}
+/* L3: on a wide screen the controls follow the rows, not the far edge of the track. */
+@media (width >= 128rem) {
+	.tb {
+		justify-content: flex-start;
+		max-width: calc(var(--spacing) * 240);
+	}
+}
 /* Reserved while the count is out, so nothing moves when it arrives. */
 .tb-count {
 	margin: 0;
@@ -23,9 +53,66 @@
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
 }
-.tb-sort {
+/* "Still growing" stays visible, as one compact line on a phone: caption size, tight padding, and a
+   16 px icon (status is icon and text). */
+@media (width < 40rem) {
+	.rp-growing {
+		padding: var(--spacing) calc(var(--spacing) * 2);
+		font-size: var(--text-caption);
+		line-height: var(--text-caption--line-height);
+		> svg {
+			inline-size: var(--icon-size-row);
+			block-size: var(--icon-size-row);
+			margin-block: 0;
+		}
+	}
+}
+/* Below 640 px Select and Save move into the More popover; labels stay for screen readers only. */
+.tb-narrow {
+	display: none;
+}
+.tb-lbl {
 	display: flex;
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
 	white-space: nowrap;
+}
+.tb-more {
+	anchor-name: --tb-more;
+}
+.tb-pop {
+	position-area: block-end span-inline-start;
+	position-anchor: --tb-more;
+	inset: auto;
+	margin: var(--spacing) 0 0;
+	padding: calc(var(--spacing) * 2);
+	border: var(--border) solid var(--color-field-border);
+	border-radius: var(--radius-box);
+	background: var(--color-base-100);
+	color: var(--color-base-content);
+	&:popover-open {
+		display: flex;
+		flex-direction: column;
+		gap: calc(var(--spacing) * 2);
+	}
+}
+@media (width < 40rem) {
+	.tb-narrow {
+		display: block;
+	}
+	.tb-wide {
+		display: none;
+	}
+	.tb-count {
+		text-align: start;
+		order: 1;
+		flex-basis: 100%;
+	}
+	.tb-lbl > span {
+		position: absolute;
+		overflow: hidden;
+		width: 1px;
+		height: 1px;
+		clip-path: inset(50%);
+	}
 }

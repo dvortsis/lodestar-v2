@@ -47,6 +47,14 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+it('skips the heading of a group with only Advanced fields, and keeps its disclosure (I18)', async () => {
+	mount();
+	await loaded();
+	// Crawler has an essential field and a heading; Transport has only an Advanced one.
+	expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(1);
+	expect(screen.getByTestId('settings-advanced-count')).toBeTruthy();
+});
+
 it('saves two API sections atomically with their own revisions', async () => {
 	mount();
 	await loaded();

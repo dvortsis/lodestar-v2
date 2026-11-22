@@ -254,7 +254,7 @@
 		<div class="flex flex-wrap items-center gap-3">
 			<Button
 				type="submit"
-				variant="primary"
+				variant={changed ? 'primary' : 'secondary'}
 				loading={busy}
 				aria-disabled={!changed || busy || undefined}
 				data-testid="security-proxy-save">{m.settings_security_proxy_save()}</Button
