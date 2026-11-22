@@ -476,6 +476,7 @@ placement:
   - X-flake-ops-pause
   - X-flake-query-token-style
   - X-flake-relevance-lock
+  - X-relevance-finish-flake
   - X-flake-utp-lossy
   - X-flake-utp-lossy-win
   - X-snapshot-claims-nits

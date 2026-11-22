@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::SystemTime;
 
 use lodestar_bencode::{OwnedValue, to_vec};
@@ -168,11 +168,39 @@ fn judgments(f: &Fixture) -> tempfile::TempDir {
     dir
 }
 
+/// Read-held by every run of the tool, from spawn to exit; write-held while
+/// a test drops a lock it then expects free. A spawned child holds a copy of
+/// every descriptor in this process, other tests' flock lock files included,
+/// until its exec closes them, which can be after `spawn` returns. A lock
+/// dropped meanwhile stays held. So no child may exist while one is dropped
+/// (docs/decisions/2026-11-22-X-relevance-finish-flake.md).
+static CHILDREN: RwLock<()> = RwLock::new(());
+
+/// A test that failed while holding a guard doesn't fail the others.
+fn running() -> RwLockReadGuard<'static, ()> {
+    CHILDREN
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn no_children() -> RwLockWriteGuard<'static, ()> {
+    CHILDREN
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn relevance(args: &[&std::ffi::OsStr]) -> Output {
+    let _running = running();
     Command::new(env!("CARGO_BIN_EXE_relevance"))
         .args(args)
         .output()
         .unwrap()
+}
+
+/// The run succeeded; on failure, says what it printed.
+fn succeeded(o: &Output) {
+    let (out, err) = text(o);
+    assert!(o.status.success(), "{:?}\n{out}\n{err}", o.status);
 }
 
 fn run_on(data: &Path, set: &Path, extra: &[&str]) -> Output {
@@ -256,7 +284,7 @@ fn a_skipped_query_still_checks_forbidden_results() {
     );
     // It counts as forbidden, so the gate fails on it.
     let o = run_on(data.path(), set.path(), &["--gate"]);
-    assert!(!o.status.success());
+    assert!(!o.status.success(), "{:?}", text(&o));
 }
 
 /// Every path under `dir`, and each file's length and modification time.
@@ -305,8 +333,8 @@ fn opening_changes_nothing_and_the_baseline_gates() {
     let changed = std::fs::read_to_string(&j).unwrap() + "# edited\n";
     std::fs::write(&j, changed).unwrap();
     let o = run_on(data.path(), set.path(), &["--gate"]);
-    assert!(!o.status.success());
-    assert!(text(&o).0.contains("judgments changed"));
+    assert!(!o.status.success(), "{:?}", text(&o));
+    assert!(text(&o).0.contains("judgments changed"), "{:?}", text(&o));
 }
 
 /// A test's own copy of the fixture's data directory.
@@ -331,7 +359,7 @@ fn copy_of(f: &Fixture) -> tempfile::TempDir {
 fn refused(o: &Output, needle: &str) {
     let (out, err) = text(o);
     assert!(!o.status.success(), "{out}\n{err}");
-    assert!(err.contains(needle), "{needle:?} not in {err}");
+    assert!(err.contains(needle), "{needle:?} not in {out}\n{err}");
 }
 
 #[test]
@@ -342,15 +370,22 @@ fn refused_while_a_server_holds_it() {
     let root = data.path().join("index");
     let held = server_lock(&root).unwrap();
     refused(&run_on(data.path(), set.path(), &[]), "in use");
-    drop(held);
-    assert!(run_on(data.path(), set.path(), &[]).status.success());
+    // Released while no child holds a copy of its descriptor (`CHILDREN`).
+    {
+        let _quiet = no_children();
+        drop(held);
+    }
+    succeeded(&run_on(data.path(), set.path(), &[]));
 
     let index = SearchIndex::open(&index_dir(&root)).unwrap();
     let writer = index.writer(64 << 20).unwrap();
     refused(&run_on(data.path(), set.path(), &[]), "in use");
-    writer.finish().unwrap();
-    drop(index);
-    assert!(run_on(data.path(), set.path(), &[]).status.success());
+    {
+        let _quiet = no_children();
+        writer.finish().unwrap();
+        drop(index);
+    }
+    succeeded(&run_on(data.path(), set.path(), &[]));
 }
 
 #[test]
@@ -451,7 +486,7 @@ fn held_out_errors_name_only_the_line() {
     .unwrap();
     let o = run_on(data.path(), set.path(), &["--held-out"]);
     let (out, err) = text(&o);
-    assert!(!o.status.success());
+    assert!(!o.status.success(), "{out}\n{err}");
     assert_eq!(
         err.trim(),
         "error: judgments.txt:3: expected a 40-hex-digit info hash"
@@ -463,7 +498,7 @@ fn held_out_errors_name_only_the_line() {
     std::fs::write(set.path().join("judgments.txt"), bad_query).unwrap();
     let o = run_on(data.path(), set.path(), &["--held-out"]);
     let (out, err) = text(&o);
-    assert!(!o.status.success());
+    assert!(!o.status.success(), "{out}\n{err}");
     assert_eq!(err.trim(), "error: judgments.txt:1: the query failed");
     assert!(!format!("{out}{err}").contains("sise"));
 
@@ -475,13 +510,13 @@ fn held_out_errors_name_only_the_line() {
 
     for extra in ["--all", "--gate", "--write-baseline"] {
         let o = run_on(data.path(), set.path(), &["--held-out", extra]);
-        assert_eq!(o.status.code(), Some(2), "{extra}");
+        assert_eq!(o.status.code(), Some(2), "{extra}: {:?}", text(&o));
     }
     let o = run_on(data.path(), set.path(), &["--held-out", "--worst", "3"]);
-    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.status.code(), Some(2), "{:?}", text(&o));
     // --held-out and --data-dir each need their partner.
     let o = relevance(&["--held-out".as_ref()]);
-    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.status.code(), Some(2), "{:?}", text(&o));
     let o = relevance(&["--data-dir".as_ref(), data.path().as_os_str()]);
-    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(o.status.code(), Some(2), "{:?}", text(&o));
 }
