@@ -1,7 +1,7 @@
 // The toolbar against stand-ins: W5's state, the results store and kit's page. The count is
 // visual only; sort goes to W5, density to the URL, and Save opens the alerts' dialog.
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hit } from '../results/fixtures';
 
 vi.setConfig({ testTimeout: 20_000 });
@@ -127,5 +127,31 @@ describe('the More popover (below 640 px)', () => {
 			'Select',
 			'Save search'
 		]);
+	});
+});
+
+describe('the account density preference', () => {
+	afterEach(() => delete document.documentElement.dataset.density);
+
+	it('sets the view of a link that names none, in the URL, replacing the entry', async () => {
+		document.documentElement.dataset.density = 'compact';
+		render(ResultsToolbar);
+		await waitFor(
+			() =>
+				expect(goto).toHaveBeenCalledWith('/search?q=lantern&density=compact', {
+					replaceState: true,
+					keepFocus: true,
+					noScroll: true
+				}),
+			WAIT
+		);
+	});
+
+	it('leaves a link that names a view alone', async () => {
+		document.documentElement.dataset.density = 'cards';
+		visit('/search?q=lantern&density=comfortable');
+		render(ResultsToolbar);
+		expect((screen.getByLabelText('View') as HTMLSelectElement).value).toBe('list');
+		expect(goto).not.toHaveBeenCalled();
 	});
 });

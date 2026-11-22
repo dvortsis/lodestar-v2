@@ -14,14 +14,36 @@
 	import { ensureSearchPath } from '../query/path';
 	import { results } from '../results/results.svelte';
 	import { selection } from '../bulk/selection.svelte';
-	import { SORTS, VIEWS, sortValue, viewHref, viewOf, type View } from './toolbar';
+	import {
+		SORTS,
+		VIEWS,
+		prefOf,
+		sortValue,
+		viewHref,
+		viewOf,
+		viewUnset,
+		type View
+	} from './toolbar';
 
 	const id = $props.id();
 	const locale = $derived(currentLocale());
 
 	const sorts = $derived(SORTS.map((s) => ({ value: s.value, label: s.label() })));
 	const sort = $derived(sortValue(search.sort));
-	const view = $derived(viewOf(page.url));
+	// The account's Appearance density (set on <html> by the shell) is the default view.
+	const pref = prefOf(document.documentElement.dataset.density);
+	const view = $derived(viewOf(page.url, pref));
+	// A link that names no view gets the preference's, written to the URL (replacing the entry) so the
+	// rows and the table read the same view.
+	$effect(() => {
+		if (pref !== 'comfortable' && page.url.pathname === '/search' && viewUnset(page.url))
+			// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewHref() keeps this page's own path
+			void goto(viewHref(page.url, viewOf(page.url, pref), pref), {
+				replaceState: true,
+				keepFocus: true,
+				noScroll: true
+			});
+	});
 	const views = $derived(VIEWS.map((v) => ({ value: v, label: viewLabels[v]() })));
 	const viewLabels: Record<View, () => string> = {
 		list: m.search_table_view_list,
@@ -56,7 +78,11 @@
 		ensureSearchPath();
 		// A view parameter, not a search: it replaces the entry, so Back still walks searches.
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewHref() keeps this page's own path
-		void goto(viewHref(page.url, next), { replaceState: true, keepFocus: true, noScroll: true });
+		void goto(viewHref(page.url, next, pref), {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true
+		});
 	}
 
 	let Dialog = $state<typeof import('$lib/features/alerts/SaveSearchDialog.svelte').default>();

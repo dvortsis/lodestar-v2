@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readUrl } from '$lib/state/search.svelte';
-import { SORTS, VIEWS, sortValue, viewHref, viewOf } from './toolbar';
+import { SORTS, VIEWS, prefOf, sortValue, viewHref, viewOf, viewUnset } from './toolbar';
 
 describe('the toolbar’s sorts', () => {
 	it('are all ones W5 keeps in the URL, each field both ways', () => {
@@ -56,4 +56,36 @@ describe('viewOf: every old density and view combination lands on one option', (
 		['view=list&density=cards', 'cards'],
 		['view=list&density=compact', 'compact']
 	])('%s -> %s', (q, v) => expect(of(q)).toBe(v));
+});
+
+describe('the default view: the URL first, then the account preference, then the List', () => {
+	const of = (q: string, pref?: 'compact' | 'cards' | 'comfortable') =>
+		viewOf(new URL('http://x/search?' + q), pref);
+	it('uses the preference only when the URL names no view', () => {
+		expect(of('q=a')).toBe('list');
+		expect(of('q=a', 'compact')).toBe('compact');
+		expect(of('q=a', 'cards')).toBe('cards');
+		expect(of('q=a&density=bogus', 'cards')).toBe('cards');
+	});
+	it('lets an explicit view or density win over the preference', () => {
+		expect(of('q=a&view=table', 'cards')).toBe('table');
+		expect(of('q=a&density=compact', 'cards')).toBe('compact');
+		expect(of('q=a&density=comfortable', 'cards')).toBe('list');
+		expect(of('q=a&density=cards', 'compact')).toBe('cards');
+	});
+	it('maps the preference one to one, and reads anything else as comfortable', () => {
+		expect(prefOf('compact')).toBe('compact');
+		expect(prefOf('cards')).toBe('cards');
+		expect(prefOf('comfortable')).toBe('comfortable');
+		expect(prefOf(undefined)).toBe('comfortable');
+		expect(prefOf('x')).toBe('comfortable');
+	});
+	it('says when the URL is silent, and writes the List out when the preference is not List', () => {
+		expect(viewUnset(new URL('http://x/search?q=a'))).toBe(true);
+		expect(viewUnset(new URL('http://x/search?q=a&density=comfortable'))).toBe(false);
+		expect(viewUnset(new URL('http://x/search?q=a&view=table'))).toBe(false);
+		const u = new URL('http://x/search?q=a&density=cards');
+		expect(viewHref(u, 'list', 'cards')).toBe('/search?q=a&density=comfortable');
+		expect(viewHref(u, 'list', 'comfortable')).toBe('/search?q=a');
+	});
 });

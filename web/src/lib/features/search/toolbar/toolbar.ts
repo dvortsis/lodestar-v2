@@ -23,23 +23,39 @@ export function sortValue(sort: string): string {
 export type View = 'list' | 'compact' | 'table' | 'cards';
 export const VIEWS: readonly View[] = ['list', 'compact', 'table', 'cards'];
 
+/** The account's Appearance density (§10.10), which sets the default view; it has no Table. */
+export type Pref = 'comfortable' | 'compact' | 'cards';
+const PREF_VIEW: Record<Pref, View> = { comfortable: 'list', compact: 'compact', cards: 'cards' };
+export const prefOf = (v: unknown): Pref => (v === 'compact' || v === 'cards' ? v : 'comfortable');
+
 /**
- * The one view the two URL parameters mean. Table wins over any density (the table has none), then
- * Cards and Compact; anything else is the List (§10.2's Comfortable). Old links keep working.
+ * The one view the URL means: an explicit `view=table`, then an explicit `density=` (`comfortable`
+ * is the List), then the account preference, then the List. Old links keep working.
  */
-export function viewOf(url: URL): View {
+export function viewOf(url: URL, pref: Pref = 'comfortable'): View {
 	const p = url.searchParams;
 	if (p.get('view') === 'table') return 'table';
 	const d = p.get('density');
-	return d === 'cards' || d === 'compact' ? d : 'list';
+	if (d === 'cards' || d === 'compact') return d;
+	return d === 'comfortable' ? 'list' : PREF_VIEW[pref];
 }
 
-/** This page with `view` chosen: it clears both parameters, then sets the one that view needs. */
-export function viewHref(url: URL, view: View): string {
+/** True when the URL says nothing about the view, so the account preference decides. */
+export const viewUnset = (url: URL) =>
+	url.searchParams.get('view') !== 'table' &&
+	!['cards', 'compact', 'comfortable'].includes(url.searchParams.get('density') ?? '');
+
+/**
+ * This page with `view` chosen: it clears both parameters, then sets the one that view needs. With a
+ * non-default preference the List is written out (`density=comfortable`), or the preference would
+ * bring the old view back.
+ */
+export function viewHref(url: URL, view: View, pref: Pref = 'comfortable'): string {
 	const u = new URL(url);
 	u.searchParams.delete('density');
 	u.searchParams.delete('view');
 	if (view === 'table') u.searchParams.set('view', 'table');
 	else if (view !== 'list') u.searchParams.set('density', view);
+	else if (pref !== 'comfortable') u.searchParams.set('density', 'comfortable');
 	return u.pathname + u.search + u.hash;
 }
