@@ -74,16 +74,26 @@ const stableNames: Plugin = {
 				b < 200 ? 'BCD'.charAt(b % 3) : d.subarray(9, 10).toString('base64url').charAt(0);
 			return first + d.subarray(1).toString('base64url').slice(0, 7);
 		};
+		const cssByName = new Map<string, string | Uint8Array>();
 		const name = (c: { moduleIds: readonly string[]; name: string }) => stable(c.moduleIds, c.name);
 		// CSS too: importers embed its file name, so a content hash there moved their sizes
-		// (X-size-ci-script). Named from its source files, or its name (unique per build) when
-		// rolldown gives none. Fonts and images keep content hashes: code changes don't touch them.
+		// (X-size-ci-script). Keyed on the module rolldown names as its origin (the chunk's facade),
+		// or on the asset's name when it gives none; two stylesheets on one name key throw. Fonts
+		// and images keep content hashes: code changes don't touch them.
 		return {
 			...opts,
 			entryFileNames: (c) => `${pre}/${c.name}.${name(c)}.js`,
 			chunkFileNames: (c) => `${pre}/chunks/${name(c)}.js`,
 			assetFileNames: (a) => {
 				if (!a.names.some((n) => n.endsWith('.css'))) return assets;
+				if (!a.originalFileNames.length) {
+					const key = a.names.join('\n');
+					const seen = cssByName.get(key);
+					if (seen !== undefined && seen !== a.source) {
+						throw new Error(`stable names: two stylesheets share the name key ${key}`);
+					}
+					cssByName.set(key, a.source);
+				}
 				return `${pre}/assets/[name].${stable(a.originalFileNames, a.names.join('\n'))}[extname]`;
 			}
 		};

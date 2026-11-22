@@ -38,7 +38,7 @@ Runner brief, 2026-11-21Z: size-limit numbers moved by 5–20 B gzip on routes a
 **The limits are not exact shipped bytes.** size-limit measures a build whose chunk names differ from the shipped build's. On main d42b71c6, the measured size sits between **−18 and +32 B** of the same tree built with content-hash names (table below). Read a limit as a budget on that measurement, not as the byte count users download.
 
 The table is main d42b71c6, both columns built with `LODESTAR_BUILD_VERSION=0000000`; the last column is the limit on main at 73bb8b68, #1038's merge.
-- **The range depends on the tree.** #1038's review measured **−19 to +33 B** on d6c83c56 (the largest, Settings KeyboardScreen, 36,201 → 36,234 B), and X-size-ci-script measured −35 to +12 B on 73bb8b68. The offset is a property of the names, so it moves as the code does; X-size-ci-script (`docs/decisions/2026-11-22-X-size-ci-script.md`) gives stylesheets stable names too and runs the measurement as `npm run size:ci`.
+- **The range depends on the tree.** #1038's review measured **−19 to +33 B** on d6c83c56 (the largest, Settings KeyboardScreen, 36,201 → 36,234 B), and X-size-ci-script measured −19 to +33 B on 73bb8b68 with these names (−19 to +35 B with its stylesheet names too). The offset is a property of the names, so it moves as the code does; X-size-ci-script (`docs/decisions/2026-11-22-X-size-ci-script.md`) gives stylesheets stable names too and runs the measurement as `npm run size:ci`.
 - **Over its current limit:** one entry, Settings messages (on demand), 4,247 → 4,259 B against 4.25 kB. It goes to 4.26 kB in `web/.size-limit.mjs` (runner, §2.26), with a comment naming the offset. This slice took the file into its owns after #1033 merged.
 - **Search cards (lazy)** goes back from #1033's stopgap 8.02 kB to 8.01 kB (runner): 7,998 B with stable names, 7,992 B with content hashes. No other entry changes.
 - **Re-measured after merging main (d6c83c56)** with the CI steps (`npm run build`, then `LODESTAR_BUILD_VERSION=0000000 npx vite build` with and without `LODESTAR_STABLE_NAMES=1`, then `npx size-limit`). The numbers match the table: Settings messages 4,247 / 4,259 B and Search cards 7,992 / 7,998 B (content-hash / stable names).
@@ -118,7 +118,7 @@ The table is main d42b71c6, both columns built with `LODESTAR_BUILD_VERSION=0000
 | Appearance theme editor (on demand) | 11,859 | 11,867 | +8 | 13,000 |
 | Filters dialogs (on demand) | 36,022 | 36,018 | -4 | 36,040 |
 | Filters review queue (on demand) | 2,807 | 2,807 | +0 | 3,100 |
-| Filters rule names (on demand) | 4,013 | 4,013 | +0 | 4,019 |
+| Filters rule names (on demand) | 4,013 | 4,013 | +0 | 4,020 |
 | Filters packs list (on demand) | 1,555 | 1,546 | -9 | 1,560 |
 | Filters pack panels (on demand) | 7,910 | 7,893 | -17 | 7,920 |
 | Filters pack impact (on demand) | 2,140 | 2,142 | +2 | 2,400 |
