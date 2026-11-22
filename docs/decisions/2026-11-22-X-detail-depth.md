@@ -18,3 +18,7 @@ Runner brief, 2026-11-22Z, split into two PRs by the runner (`runner/` r14): thi
 - **Favorite, Hide, Labels, Fix parse and "Not this one"** have no door to call yet, so the menu holds Open full page and Block this…. They join when their doors exist.
 - **Per-tracker label** (only the host is known) and a "last check" per tracker beyond `at` are all the API offers.
 - **`/alerts/{id}` back link** is outside this slice's paths: a follow-up.
+
+## Size
+- **Compare's size-limit figure rose with no real bytes added** (runner, §2.26). Compare loads the same 24 modules before and after, and their summed gzip moves 48,830 → 48,843 B (+13 B, chunk-name noise). The reported +0.25 KB is `own()`'s credit for chunks shared with other routes, which shifted when the new lazy detail modules joined the graph. Compare's limit is raised to the measured size on the merged tree, only if the module set is still unchanged.
+- **"Detail sections (on demand)" excludes `ui/overlays/Menu.svelte` and bits-ui,** as the row menu does: RowActions already loads the shared Menu on demand. "Detail actions menu (on demand)" counts only `ActionsMenu`'s own chunk.
