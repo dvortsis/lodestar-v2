@@ -288,13 +288,21 @@ async fn default_options_stay_on_tcp() {
 struct Loss {
     rng: StdRng,
     dropped_last: bool,
+    /// The chance of a drop after a delivery: `rate / (1 - rate)`.
+    after_delivery: f64,
 }
 
 impl Loss {
     fn new(seed: u64) -> Loss {
+        Loss::at(seed, 0.15)
+    }
+
+    /// A link losing `rate` of its packets (below 50%: never two in a row).
+    fn at(seed: u64, rate: f64) -> Loss {
         Loss {
             rng: StdRng::seed_from_u64(seed),
             dropped_last: false,
+            after_delivery: rate / (1.0 - rate),
         }
     }
 
@@ -302,7 +310,7 @@ impl Loss {
         // Always draw, so the pattern depends only on the seed and the
         // packet count. A drop allowed only after a delivery, with chance
         // p, loses p / (1 + p) of packets: 15% for p = 0.15 / 0.85.
-        let drop = self.rng.random_bool(0.15 / 0.85) && !self.dropped_last;
+        let drop = self.rng.random_bool(self.after_delivery) && !self.dropped_last;
         self.dropped_last = drop;
         drop
     }
@@ -336,11 +344,16 @@ impl PacketSink for LossySink {
 
 /// A client socket on a link that loses and reorders in both directions.
 fn lossy_client(seed: u64) -> UtpSocket {
+    lossy_client_at(seed, 0.15)
+}
+
+/// [`lossy_client`] at another loss rate.
+fn lossy_client_at(seed: u64, rate: f64) -> UtpSocket {
     let std = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     std.set_nonblocking(true).unwrap();
     let sink = Arc::new(LossySink {
         udp: Arc::new(std.try_clone().unwrap()),
-        loss: Mutex::new(Loss::new(seed)),
+        loss: Mutex::new(Loss::at(seed, rate)),
     });
     let utp = UtpSocket::with_sink(
         sink,
@@ -352,7 +365,7 @@ fn lossy_client(seed: u64) -> UtpSocket {
     let udp = tokio::net::UdpSocket::from_std(std).unwrap();
     let feeder = utp.clone();
     tokio::spawn(async move {
-        let mut loss = Loss::new(seed ^ 0xff);
+        let mut loss = Loss::at(seed ^ 0xff, rate);
         let mut buf = vec![0u8; 65_536];
         while let Ok((n, from)) = udp.recv_from(&mut buf).await {
             if !loss.drops() {
@@ -395,5 +408,96 @@ async fn fetches_over_a_lossy_link() {
         assert_eq!(got.encrypted, mode == Encryption::Require);
         let resent = utp.stats().retransmits + peer.utp().map_or(0, |p| p.stats().retransmits);
         assert!(resent > 0, "the link really lost packets");
+    }
+}
+
+/// One honest fetch over a lossy link: its outcome and how long it took.
+async fn lossy_fetch(
+    seed: u64,
+    rate: f64,
+    first_window: Duration,
+) -> (Result<(), String>, Duration, bool) {
+    let info = info_dict(120_000);
+    let s = Seed::v1(info.clone());
+    let hash = InfoHash(s.info_hash);
+    let utp = lossy_client_at(seed, rate);
+    let peer = FakePeer::spawn_utp(vec![s], Accept::Both, Behavior::Honest, vec![]).await;
+    let o = FetchOptions {
+        allow_private: true,
+        timeout: Duration::from_secs(30),
+        connect_timeout: Duration::from_secs(10),
+        first_window_deadline: first_window,
+        ..utp_opts(utp, Encryption::Disable)
+    };
+    let start = std::time::Instant::now();
+    let got = fetch(peer.addr(), hash, &o).await;
+    let took = start.elapsed();
+    let window = matches!(got, Err(Error::FirstWindow));
+    (got.map(|_| ()).map_err(|e| e.to_string()), took, window)
+}
+
+/// CR-UTP-FIRST-WINDOW's measurement: honest fetches over the lossy link
+/// at 5, 10, 15 and 20% loss, each seed run with the product's 4 s first
+/// window and again with 20 s, 16 at a time. Prints, per loss rate, the
+/// first-window misses at 4 s, other failures, and the 20 s runs' total
+/// times. `cargo test -p lodestar-peer-wire --test utp first_window_miss_rates -- --ignored --nocapture`
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "measurement: a few minutes of wall time"]
+async fn first_window_miss_rates() {
+    let n: u64 = std::env::var("FIRST_WINDOW_FETCHES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+    for rate in [0.05, 0.10, 0.15, 0.20] {
+        for (label, window) in [
+            ("4s", Duration::from_secs(4)),
+            ("20s", Duration::from_secs(20)),
+        ] {
+            let mut results = Vec::new();
+            for chunk in (0..n).collect::<Vec<_>>().chunks(16) {
+                let mut set = tokio::task::JoinSet::new();
+                for &i in chunk {
+                    set.spawn(lossy_fetch(10_000 + i, rate, window));
+                }
+                while let Some(r) = set.join_next().await {
+                    results.push(r.unwrap());
+                }
+            }
+            let ok: Vec<f64> = results
+                .iter()
+                .filter(|r| r.0.is_ok())
+                .map(|r| r.1.as_secs_f64())
+                .collect();
+            let missed = results.iter().filter(|r| r.2).count();
+            let other: Vec<&String> = results
+                .iter()
+                .filter_map(|r| r.0.as_ref().err())
+                .filter(|e| !e.contains("first window"))
+                .collect();
+            let mut t = ok.clone();
+            t.sort_by(f64::total_cmp);
+            let q = |p: f64| {
+                t.get(((t.len() as f64 - 1.0) * p) as usize)
+                    .copied()
+                    .unwrap_or(0.0)
+            };
+            let over4 = t.iter().filter(|x| **x > 4.0).count();
+            println!(
+                "loss {:.0}% window {label}: fetches {} ok {} first_window_missed {} other_failures {} | total s p50 {:.2} p90 {:.2} p99 {:.2} max {:.2} | ok over 4 s {}",
+                rate * 100.0,
+                results.len(),
+                ok.len(),
+                missed,
+                other.len(),
+                q(0.5),
+                q(0.9),
+                q(0.99),
+                t.last().copied().unwrap_or(0.0),
+                over4,
+            );
+            for e in other.iter().take(3) {
+                println!("  other: {e}");
+            }
+        }
     }
 }
