@@ -103,6 +103,17 @@
 	padding: 0;
 	list-style: none;
 }
+.rp-health {
+	margin: 0;
+	min-height: 1lh;
+}
+.rp-empty-note {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	margin: 0;
+}
 .rp-link {
 	color: var(--color-primary);
 	text-decoration: underline;

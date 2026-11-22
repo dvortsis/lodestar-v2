@@ -15,6 +15,11 @@
 	import { shell } from './shell-state.svelte';
 	import { statusRef } from './status-ref.svelte';
 
+	// The palette button: the keys it answers to on a keyboard, a magnifier on touch (no ⌘ there).
+	// Decided once, before the first frame, so the bar never changes size.
+	const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+	const keys = isMacPlatform() ? m.shell_palette_keys_mac() : m.shell_palette_keys_other();
+
 	let navOpen = $state(false);
 	afterNavigate(() => (navOpen = false));
 	const hrefFor = (href: string) => withDensity(href, page.url.searchParams);
@@ -118,13 +123,14 @@
 			{/if}
 			<button
 				type="button"
-				class="btn btn-ghost btn-square {FOCUS_RING} {TARGET_MIN}"
+				class="btn btn-ghost {touch ? 'btn-square' : 'px-2 text-small'} {FOCUS_RING} {TARGET_MIN}"
 				aria-label={m.shell_palette_open()}
 				aria-keyshortcuts={isMacPlatform() ? 'Meta+K' : 'Control+K'}
 				data-testid="palette-button"
 				onclick={() => (shell.paletteOpen = true)}
 			>
-				<Glyph name="command" />
+				{#if touch}<Glyph name="magnifying-glass" />{:else}<span aria-hidden="true">{keys}</span
+					>{/if}
 			</button>
 			{#if More}
 				<More openNow {hrefFor} />

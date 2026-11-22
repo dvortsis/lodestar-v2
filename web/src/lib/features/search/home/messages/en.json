@@ -1,0 +1,13 @@
+{
+	"search_home_title": "Search {count} torrents",
+	"search_home_title_unknown": "Search torrents",
+	"search_home_lead": "Lodestar finds torrents on the network by itself and lets you search them. Type a few words in the box above, or try one of these:",
+	"search_home_recent": "Your recent searches",
+	"search_home_recent_clear": "Clear recent searches",
+	"search_home_recent_note": "Kept in this browser only.",
+	"search_home_saved": "Saved searches",
+	"search_home_health_working": "Lodestar is working and finding new torrents.",
+	"search_home_health_ready": "Lodestar is ready and waiting for new torrents.",
+	"search_home_health_paused": "The crawler is paused. Open Insights to resume it.",
+	"search_home_health_attention": "Something needs attention. Open Insights to see what."
+}

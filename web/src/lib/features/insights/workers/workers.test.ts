@@ -107,7 +107,7 @@ describe('fleet pill', () => {
 				'· 3 workers · 1 paused · 2 offline · 4.2K/h'
 			)
 		);
-		expect(screen.getByTestId('status-pill').textContent).toContain('Crawling');
+		expect(screen.getByTestId('status-pill').textContent).toContain('Working');
 		a.unmount();
 		get.mockResolvedValue({ fleet: { ...fleet, paused: 0, offline: 0 } });
 		const b = render(StatusPill, { state: { kind: 'crawling', ...none } });
