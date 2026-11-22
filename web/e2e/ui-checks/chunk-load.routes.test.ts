@@ -39,7 +39,14 @@ async function fetchChunk(route: Route) {
 
 async function blockChunk(page: Page, marker: string) {
 	// `seen` counts the marker chunk's responses, blocked or not; `pending` the chunk requests in flight.
-	const gate = { blocked: true, hit: 0, seen: 0, pending: 0 };
+	// `hold`, while set, delays the marker chunk's response until it resolves.
+	const gate = {
+		blocked: true,
+		hit: 0,
+		seen: 0,
+		pending: 0,
+		hold: undefined as Promise<void> | undefined
+	};
 	await page.route('**/_app/immutable/**/*.js', async (route) => {
 		gate.pending++;
 		try {
@@ -53,6 +60,7 @@ async function blockChunk(page: Page, marker: string) {
 				gate.hit++;
 				await route.abort('connectionrefused');
 			} else {
+				if (gate.hold && text.includes(marker)) await gate.hold;
 				await route.fulfill({ response, body: text });
 			}
 		} catch (error) {
@@ -254,12 +262,25 @@ test.describe('a lazy chunk fails to load', () => {
 		await box.click();
 		const failed = page.locator('#results [role="alert"]');
 		await expect(failed).toBeVisible();
+		// The reload's own load starts at mount; its chunk is held until typing has begun, so it
+		// settles while the bar has focus, and only the "nothing else has focus" guard keeps it there.
+		let release!: () => void;
+		gate.hold = new Promise((resolve) => (release = resolve));
 		gate.blocked = false;
+		const seen = gate.seen;
 		await failed.getByRole('button', { name: 'Retry' }).click();
-		// After the reload the load starts with the click into the bar, so it settles while typing.
-		await expect(box).toBeVisible();
+		await expect.poll(() => gate.seen).toBeGreaterThan(seen); // the held request has arrived
 		await box.click();
-		await page.keyboard.type('abcdef', { delay: 50 });
+		await page.keyboard.type('abc', { delay: 50 });
+		release();
+		// The held load has settled: the empty state, or the list once the bar wrote `abc`.
+		await expect(
+			page
+				.getByTestId('results-empty')
+				.or(page.getByRole('grid', { name: 'Matching torrents' }))
+				.first()
+		).toBeVisible();
+		await page.keyboard.type('def', { delay: 50 });
 		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
 		await expect(box).toBeFocused();
 		await expect(box).toHaveText('abcdef');

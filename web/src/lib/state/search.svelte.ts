@@ -141,8 +141,10 @@ export function createSearchState(nav: Nav = kitNav) {
 					});
 				}));
 		if (canonical === undefined || t !== text) return; // superseded, or typed on meanwhile
-		due = false;
 		await commit(canonical ?? t, false);
+		// Only once the URL holds it: a Retry during the commit still waits for a write. Text typed
+		// meanwhile stays due.
+		if (t === text) due = false;
 	}
 
 	async function commit(q: string, push: boolean, over: Partial<UrlState> = {}) {
@@ -219,7 +221,7 @@ export function createSearchState(nav: Nav = kitNav) {
 		flush(within = FLUSH_PARSE_MS): Promise<void> {
 			if (flushing) return flushing;
 			if (!due) return Promise.resolve();
-			slot.cancel();
+			// The write's parse supersedes one in flight (`latest()` aborts the previous run).
 			return (flushing = write(within).finally(() => (flushing = undefined)));
 		},
 
@@ -307,6 +309,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			if (q === written) return;
 			written = q;
 			clearTimeout(timer);
+			due = false; // the URL's text is the draft now: Retry has nothing to write
 			text = q;
 			void parse(q);
 		}

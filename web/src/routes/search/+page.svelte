@@ -92,8 +92,11 @@
 	}
 	async function reload() {
 		await bar?.flush();
-		window.name = 'retry';
-		location.reload();
+		// Left Search while the flush waited (up to 1 s): no reload, and no marker to leak.
+		if (location.pathname == '/search') {
+			window.name = 'retry';
+			location.reload();
+		}
 	}
 	$effect(() => {
 		// QueryBar's own test, written the same way so the two compress together.
@@ -130,11 +133,13 @@
 	let Host = $state<Component>();
 	let hostFailed = $state<boolean>();
 	$effect(() => {
-		if (drawerOpen && !Host)
+		if (drawerOpen && !Host) {
+			hostFailed = false; // a refetch in flight never shows an earlier failure
 			import('$lib/features/detail/DetailHost.svelte').then(
 				(mod) => (Host = mod.default),
 				() => (hostFailed = true)
 			);
+		}
 	});
 </script>
 
@@ -157,6 +162,19 @@
 			</div>
 			<!-- S-search-3: the results toolbar; S-search-2: the results list. -->
 			<div id="results">
+				{#if drawerOpen && hostFailed && !Host}
+					<div
+						class="sticky top-0 z-10 flex flex-wrap items-center gap-4 p-6 rounded-box border border-base-300 bg-base-100"
+						role="alert"
+					>
+						{m.search_page_detail_failed()}<button
+							class="btn btn-primary"
+							onclick={() => location.reload()}>{m.search_page_retry()}</button
+						><button class="btn" onclick={() => (history.back(), focusResults())}
+							>{m.search_page_close()}</button
+						>
+					</div>
+				{/if}
 				{#if Toolbar}<Toolbar />{/if}
 				{#if Results}<Results focusBar={() => bar?.focusEnd()} />{:else if failed}
 					<div class="flex flex-col gap-4 p-6" role="alert">
@@ -168,19 +186,7 @@
 			</div>
 			<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->
 			<div id="search-drawer">
-				{#if Host}<Host />{:else if drawerOpen && hostFailed}
-					<div
-						class="flex flex-wrap items-center gap-4 p-6 fixed inset-x-4 bottom-4 z-50 bg-base-100 shadow large:left-auto"
-						role="alert"
-					>
-						{m.search_page_detail_failed()}<button
-							class="btn btn-primary"
-							onclick={() => location.reload()}>{m.search_page_retry()}</button
-						><button class="btn" onclick={() => (history.back(), focusResults())}
-							>{m.search_page_close()}</button
-						>
-					</div>
-				{/if}
+				{#if Host}<Host />{/if}
 			</div>
 		</div>
 	</div>
