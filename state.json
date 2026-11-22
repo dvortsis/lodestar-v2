@@ -10653,16 +10653,17 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T12:45:00Z",
+    "updated": "2026-11-22T12:55:00Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-fixture-server-kill-on-drop",
+        "slice": null,
         "role": "slice",
-        "agent": "session_01MMjhnBz8wp7vhYwCUkGhA6",
+        "agent": null,
         "model": "sonnet",
-        "since": "2026-11-22T11:32:00Z",
-        "doing": "#1066 rv1066 APPROVE 0a03b662; CI running, then merge"
+        "since": "2026-11-22T12:55:00Z",
+        "doing": "#1066 merged 45d52af8; waits for r12 placements",
+        "status": "idle"
       },
       {
         "slot": 2,
