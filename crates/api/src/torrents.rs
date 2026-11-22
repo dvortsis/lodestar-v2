@@ -753,6 +753,7 @@ pub(crate) async fn detail(
     ),
     responses(
         (status = 200, body = FilesPage),
+        (status = 400, body = ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`offset` or `limit` isn't a whole number) or `bad_hash` (not a 40-character hex info hash). Each names the parameter at fault in `field` where there is one."),
         (status = 404, body = ErrorEnvelope, description = "`torrent_not_found`, or `adult_hidden`: an Adult torrent while \"Show adult content\" is off."),
     )
 )]
