@@ -59,9 +59,10 @@
 	let Results = $state<Panel>();
 	let Toolbar = $state<Bar>();
 	let Facets = $state<Host>();
-	// A failed set clears the cached promise, so a new query calls `import()` again (Chromium 157
-	// refetches; 153 keeps the failure for the module graph). Retry, and Enter in the bar, reload
-	// the page at the current URL, as Insights does; `#results` sends focus to the results after.
+	// A failed set shows an alert in #results. It clears the cached promise, so a new query calls
+	// `import()` again (Chromium 157 refetches; 153 keeps the failure for the module graph). Retry
+	// reloads the page at the current URL, as Insights does, and `#results` then sends focus to
+	// the results. The alert node stays while a retry fails again, so it is announced once.
 	let loadingResults: Promise<unknown> | undefined;
 	let failed = $state<boolean>();
 	function loadResults() {
