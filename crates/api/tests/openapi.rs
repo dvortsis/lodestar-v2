@@ -515,7 +515,7 @@ async fn it_is_served_open_as_generated() {
 const QUERY_WITHOUT_400: &[(&str, &str, &str)] = &[(
     "GET",
     "/feeds/{id}",
-    "`token` is read by the key guard, not `Query<T>`: a malformed or conflicting token is a 401, a bad id a 404",
+    "`token` is read by the key guard, not `Query<T>`: a malformed or conflicting token is a 401 and an id that isn't a saved search's a 404. It declares no query 400, apart from `bad_path` for a path segment that isn't valid UTF-8",
 )];
 
 /// Every operation that reads its query documents its 400: a parameter
@@ -524,9 +524,19 @@ const QUERY_WITHOUT_400: &[(&str, &str, &str)] = &[(
 #[test]
 fn every_query_route_declares_a_400() {
     let doc = doc();
+    let ops = operations(&doc);
+    let stale: Vec<String> = QUERY_WITHOUT_400
+        .iter()
+        .filter(|(m, p, _)| ops.iter().filter(|(om, op, _)| om == m && op == p).count() != 1)
+        .map(|(m, p, _)| format!("{m} {p}"))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "QUERY_WITHOUT_400 entries that match no operation (or several): {stale:#?}"
+    );
     let mut missing = Vec::new();
     let mut checked = 0;
-    for (method, path, op) in operations(&doc) {
+    for (method, path, op) in ops {
         let takes_query = op["parameters"]
             .as_array()
             .is_some_and(|ps| ps.iter().any(|p| p["in"] == "query"));
