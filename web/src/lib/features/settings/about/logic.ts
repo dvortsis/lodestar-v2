@@ -19,6 +19,17 @@ export function isStale(ui: string | null | undefined, server: string | null | u
 	return !!ui && !!server && ui !== server;
 }
 
+/**
+ * The "Interface build" row's value, or null to hide the row: the dev placeholder `0.0.0` and an id
+ * that only repeats the server's own version or commit say nothing the rows above don't.
+ */
+export function showUiBuild(id: string | null | undefined, info: System): string | null {
+	const v = (id ?? '').trim();
+	if (v === '' || v === '0.0.0') return null;
+	const same = [info.version, info.build.commit].filter((x): x is string => !!x);
+	return same.some((x) => x === v || x.startsWith(v) || v.startsWith(x)) ? null : v;
+}
+
 /** `https://host/owner/repo` from the build's `repository`, or null when it isn't a plain https URL. */
 export function repoBase(repository: string | null | undefined): string | null {
 	const raw = (repository ?? '')

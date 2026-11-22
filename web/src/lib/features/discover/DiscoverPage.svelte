@@ -127,21 +127,32 @@
 	});
 
 	const linkButton = `btn btn-outline border-field-border ${FOCUS_RING} ${TARGET_MIN}`;
-	const sections: { id: string; group: HitGroup | null; title: () => string; how: () => string }[] =
-		$derived([
-			{
-				id: 'rising',
-				group: d.rising,
-				title: () => m.discover_rising(),
-				how: () => m.discover_rising_how()
-			},
-			{
-				id: 'resolved',
-				group: d.resolved,
-				title: () => m.discover_resolved(),
-				how: () => m.discover_resolved_how()
-			}
-		]);
+	const allSections: {
+		id: string;
+		group: HitGroup | null;
+		title: () => string;
+		how: () => string;
+	}[] = $derived([
+		{
+			id: 'rising',
+			group: d.rising,
+			title: () => m.discover_rising(),
+			how: () => m.discover_rising_how()
+		},
+		{
+			id: 'resolved',
+			group: d.resolved,
+			title: () => m.discover_resolved(),
+			how: () => m.discover_resolved_how()
+		}
+	]);
+	// A section the server can't build yet (every `needs_*` reason) is left out, not shown as an empty
+	// shell (§10.7, X-narrow-states). `search_disabled` never gets here: it is the page's own empty state.
+	const sections = $derived(
+		allSections.filter(
+			(s) => !(s.group?.status === 'unavailable' && s.group.reason?.startsWith('needs_'))
+		)
+	);
 </script>
 
 {#snippet failure()}
@@ -163,6 +174,7 @@
 			<h1 class={PAGE_H1} tabindex="-1">{m.discover_title()}</h1>
 
 			<nav aria-label={m.discover_tabs_label()} class="dsc-tabs-box">
+				<p class="sr-only">{m.discover_tabs_more()}</p>
 				<ul class="dsc-tabs">
 					{#each tabs as t (t ?? 'all')}
 						<li>
@@ -202,7 +214,7 @@
 					{/snippet}
 				</EmptyState>
 			{:else}
-				<div class="dsc-grid">
+				<div class="dsc-grid" class:dsc-solo={sections.length === 0}>
 					<section class="dsc-panel" aria-labelledby="discover-newest-h" aria-busy={d.loading}>
 						<header class="dsc-panel-head">
 							<h2 id="discover-newest-h" class="dsc-panel-title">{m.discover_newest()}</h2>
@@ -325,62 +337,62 @@
 						{/if}
 					</section>
 
-					<div class="dsc-side">
-						{#each sections as s (s.id)}
-							<section
-								class="dsc-panel"
-								aria-labelledby="discover-{s.id}-h"
-								data-testid="discover-{s.id}"
-							>
-								<header class="dsc-panel-head">
-									<h2 id="discover-{s.id}-h" class="dsc-panel-title">{s.title()}</h2>
-								</header>
-								{#if s.group === null}
-									{#if d.loading}<div class="dsc-skeletons">
-											<Skeleton class="dsc-skeleton-row" />
-										</div>{/if}
-								{:else if s.group.status === 'unavailable'}
-									{@const why = s.group.reason ? unavailableText(s.group.reason) : null}
-									<div class="dsc-unavailable" data-testid="discover-{s.id}-unavailable">
-										<Info class="dsc-icon" aria-hidden="true" />
-										<div>
-											<p class="dsc-caption">{m.discover_unavailable_label()}</p>
-											{#if why}<p>{why.text}</p>
-												{#if why.action}<a
-														class="dsc-inline-link target {FOCUS_RING}"
-														href={resolve(why.action.href as Route)}>{why.action.label}</a
-													>{/if}
-											{/if}
-										</div>
-									</div>
-								{:else}
-									<p class="dsc-how">{s.how()}</p>
-									<ul class="dsc-plain" aria-label={s.title()}>
-										{#each s.group.hits as hit (hit.hash)}
-											{@const href = torrentHref(hit.hash, search)}
-											<li style:height="{rowHeight}px">
-												{#if href}
-													<a
-														href={resolve(href as Route)}
-														class="dsc-row-link {FOCUS_RING}"
-														data-testid="discover-{s.id}-{hit.hash}"
-														><ResultRow
-															{hit}
-															{density}
-															testid="discover-{s.id}-row-{hit.hash}"
-														/></a
-													>
-												{:else}
-													<ResultRow {hit} {density} testid="discover-{s.id}-row-{hit.hash}" />
+					{#if sections.length}<div class="dsc-side">
+							{#each sections as s (s.id)}
+								<section
+									class="dsc-panel"
+									aria-labelledby="discover-{s.id}-h"
+									data-testid="discover-{s.id}"
+								>
+									<header class="dsc-panel-head">
+										<h2 id="discover-{s.id}-h" class="dsc-panel-title">{s.title()}</h2>
+									</header>
+									{#if s.group === null}
+										{#if d.loading}<div class="dsc-skeletons">
+												<Skeleton class="dsc-skeleton-row" />
+											</div>{/if}
+									{:else if s.group.status === 'unavailable'}
+										{@const why = s.group.reason ? unavailableText(s.group.reason) : null}
+										<div class="dsc-unavailable" data-testid="discover-{s.id}-unavailable">
+											<Info class="dsc-icon" aria-hidden="true" />
+											<div>
+												<p class="dsc-caption">{m.discover_unavailable_label()}</p>
+												{#if why}<p>{why.text}</p>
+													{#if why.action}<a
+															class="dsc-inline-link target {FOCUS_RING}"
+															href={resolve(why.action.href as Route)}>{why.action.label}</a
+														>{/if}
 												{/if}
-											</li>
-										{/each}
-									</ul>
-									{#if s.group.truncated}<p class="dsc-how">{m.discover_truncated()}</p>{/if}
-								{/if}
-							</section>
-						{/each}
-					</div>
+											</div>
+										</div>
+									{:else}
+										<p class="dsc-how">{s.how()}</p>
+										<ul class="dsc-plain" aria-label={s.title()}>
+											{#each s.group.hits as hit (hit.hash)}
+												{@const href = torrentHref(hit.hash, search)}
+												<li style:height="{rowHeight}px">
+													{#if href}
+														<a
+															href={resolve(href as Route)}
+															class="dsc-row-link {FOCUS_RING}"
+															data-testid="discover-{s.id}-{hit.hash}"
+															><ResultRow
+																{hit}
+																{density}
+																testid="discover-{s.id}-row-{hit.hash}"
+															/></a
+														>
+													{:else}
+														<ResultRow {hit} {density} testid="discover-{s.id}-row-{hit.hash}" />
+													{/if}
+												</li>
+											{/each}
+										</ul>
+										{#if s.group.truncated}<p class="dsc-how">{m.discover_truncated()}</p>{/if}
+									{/if}
+								</section>
+							{/each}
+						</div>{/if}
 				</div>
 			{/if}
 		</div>
@@ -390,9 +402,31 @@
 <style>
 	@reference '../../../app.css';
 
+	/*
+	 * The tab strip scrolls sideways on a narrow screen. A fade on its trailing edge says there is
+	 * more; scroll-driven, so it is gone once the end is reached and absent when nothing overflows.
+	 * Without scroll-driven animations there is no fade and the strip still scrolls.
+	 */
+	@property --dsc-fade {
+		syntax: '<length>';
+		inherits: false;
+		initial-value: 0px;
+	}
+	@keyframes dsc-fade {
+		from {
+			--dsc-fade: calc(var(--spacing) * 10);
+		}
+		to {
+			--dsc-fade: 0px;
+		}
+	}
 	.dsc-tabs-box {
 		max-width: 100%;
 		overflow-x: auto;
+		animation: dsc-fade linear both;
+		animation-timeline: scroll(self inline);
+		animation-range: 0 calc(var(--spacing) * 10);
+		mask-image: linear-gradient(to right, black calc(100% - var(--dsc-fade)), transparent);
 		border-bottom: var(--border) solid var(--color-base-300);
 	}
 	.dsc-tabs {
@@ -437,7 +471,7 @@
 		align-items: start;
 	}
 	@variant x-large {
-		.dsc-grid {
+		.dsc-grid:not(.dsc-solo) {
 			grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
 		}
 	}
