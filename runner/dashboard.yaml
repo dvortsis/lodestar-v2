@@ -351,6 +351,7 @@ placement:
   - X-safety-undo-danger
   - X-undo-danger-tests
   - X-web-build-determinism
+  - X-size-ci-script
   - X-filters-dialog-test-timeout
   - X-ui-plan-r5
   - X-page-frame
@@ -476,6 +477,7 @@ placement:
   - X-flake-ops-pause
   - X-flake-query-token-style
   - X-flake-relevance-lock
+  - X-relevance-finish-flake
   - X-flake-utp-lossy
   - X-flake-utp-lossy-win
   - X-snapshot-claims-nits
