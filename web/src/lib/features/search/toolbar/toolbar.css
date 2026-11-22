@@ -92,6 +92,7 @@
 		display: none;
 	}
 	.tb-count {
+		text-align: start;
 		order: 1;
 		flex-basis: 100%;
 	}
