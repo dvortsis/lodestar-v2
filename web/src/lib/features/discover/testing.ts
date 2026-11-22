@@ -31,6 +31,7 @@ export function hit(n: number, over: Partial<SearchHit> = {}): SearchHit {
 		metadata_at: 1_700_000_050,
 		name: `Raw.Name.${n}.2160p`,
 		piece_len: 262144,
+		resolution: null,
 		resolved_via: null,
 		score: 0,
 		seeders: 12,

@@ -620,6 +620,9 @@ fn nullability_follows_the_field_contract() {
         }
     }
     let hit = schema("SearchHit");
+    // The release resolution: always sent, null when the name has none.
+    assert!(required(&hit).contains("resolution"));
+    assert!(nullable(&hit, "resolution"));
     assert!(!required(&hit).contains("matched_files"));
     assert!(!nullable(&hit, "matched_files"));
     let detail = schema("TorrentDetail");
