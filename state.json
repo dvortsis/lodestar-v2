@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-22T09:38:42Z",
+  "updated_at": "2026-11-22T12:38:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-22T09:38:42Z",
+  "last_heartbeat": "2026-11-22T12:38:49Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T11:35:00Z",
+    "updated": "2026-11-22T12:38:49Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhnBz8wp7vhYwCUkGhA6",
         "model": "sonnet",
         "since": "2026-11-22T11:32:00Z",
-        "doing": "#1061 merged 85daac75; building (brief briefs/X-fixture-server-kill-on-drop.md)"
+        "doing": "#1066 rv1066 APPROVE 0a03b662; CI running, then merge"
       },
       {
         "slot": 2,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhnAtTMJUdkNfg1nuMEj",
         "model": "sonnet",
         "since": "2026-11-22T10:27:00Z",
-        "doing": "#1062 rv1062 APPROVE; fixes local, pushes after #1064 lands (RustSec url)"
+        "doing": "#1062 rv1062 APPROVE; fixes local, pushes after #1064 (url RustSec fix) lands"
       },
       {
         "slot": 3,
@@ -10680,7 +10680,7 @@
         "agent": "session_01MMjhn9GaKErH14DpxeLZZo",
         "model": "sonnet",
         "since": "2026-11-22T10:45:00Z",
-        "doing": "#1063 f93da609 review fixes; CI running, then merge"
+        "doing": "#1063 rv1063 APPROVE + fixes f93da609; CI running, then merge"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhn9moy1oBVXSpM5GdsK",
         "model": "opus",
         "since": "2026-11-22T09:45:00Z",
-        "doing": "#1065 rv1065 APPROVE; one push of review fixes + ECONNRESET"
+        "doing": "#1065 rv1065b fixes 284e2dde (runner checked the change); CI running, then merge"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -10780,7 +10780,7 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-22T09:38:42Z",
+  "heartbeat": "2026-11-22T12:38:49Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
