@@ -58,22 +58,34 @@ const stableNames: Plugin = {
 		if (entries !== `${pre}/[name].[hash].js`) {
 			throw new Error(`stable names: SvelteKit's entry pattern changed (${entries})`);
 		}
+		const assets = opts.assetFileNames;
+		if (assets !== `${pre}/assets/[name].[hash][extname]`) {
+			throw new Error(`stable names: SvelteKit's asset pattern changed (${String(assets)})`);
+		}
 		// 8 base64url characters, the first like rolldown's (mostly B, C or D), so each name costs
 		// gzip about what a real one does and the measured size stays close to the shipped one.
-		const name = (c: { moduleIds: readonly string[]; name: string }) => {
-			const ids = c.moduleIds.map((m) => m.replace(import.meta.dirname, '')).sort();
+		const stable = (ids: readonly string[], fallback: string) => {
+			const key = ids.map((m) => m.replace(import.meta.dirname, '')).sort();
 			const d = createHash('sha256')
-				.update(ids.join('\n') || c.name)
+				.update(key.join('\n') || fallback)
 				.digest();
 			const b = d.readUInt8(0);
 			const first =
 				b < 200 ? 'BCD'.charAt(b % 3) : d.subarray(9, 10).toString('base64url').charAt(0);
 			return first + d.subarray(1).toString('base64url').slice(0, 7);
 		};
+		const name = (c: { moduleIds: readonly string[]; name: string }) => stable(c.moduleIds, c.name);
+		// CSS too: importers embed its file name, so a content hash there moved their sizes
+		// (X-size-ci-script). Named from its source files, or its name (unique per build) when
+		// rolldown gives none. Fonts and images keep content hashes: code changes don't touch them.
 		return {
 			...opts,
 			entryFileNames: (c) => `${pre}/${c.name}.${name(c)}.js`,
-			chunkFileNames: (c) => `${pre}/chunks/${name(c)}.js`
+			chunkFileNames: (c) => `${pre}/chunks/${name(c)}.js`,
+			assetFileNames: (a) => {
+				if (!a.names.some((n) => n.endsWith('.css'))) return assets;
+				return `${pre}/assets/[name].${stable(a.originalFileNames, a.names.join('\n'))}[extname]`;
+			}
 		};
 	}
 };

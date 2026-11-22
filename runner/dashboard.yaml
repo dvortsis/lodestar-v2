@@ -351,6 +351,7 @@ placement:
   - X-safety-undo-danger
   - X-undo-danger-tests
   - X-web-build-determinism
+  - X-size-ci-script
   - X-filters-dialog-test-timeout
   - X-ui-plan-r5
   - X-page-frame

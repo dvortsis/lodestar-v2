@@ -37,16 +37,17 @@ Runner brief, 2026-11-21Z: size-limit numbers moved by 5–20 B gzip on routes a
 ## Sizes: content-hash names → module-set names
 **The limits are not exact shipped bytes.** size-limit measures a build whose chunk names differ from the shipped build's. On main d42b71c6, the measured size sits between **−18 and +32 B** of the same tree built with content-hash names (table below). Read a limit as a budget on that measurement, not as the byte count users download.
 
-Same tree, main d42b71c6, `LODESTAR_BUILD_VERSION=0000000`.
+The table is main d42b71c6, both columns built with `LODESTAR_BUILD_VERSION=0000000`; the last column is the limit on main at 73bb8b68, #1038's merge.
+- **The range depends on the tree.** #1038's review measured **−19 to +33 B** on d6c83c56 (the largest, Settings KeyboardScreen, 36,201 → 36,234 B), and X-size-ci-script measured −35 to +12 B on 73bb8b68. The offset is a property of the names, so it moves as the code does; X-size-ci-script (`docs/decisions/2026-11-22-X-size-ci-script.md`) gives stylesheets stable names too and runs the measurement as `npm run size:ci`.
 - **Over its current limit:** one entry, Settings messages (on demand), 4,247 → 4,259 B against 4.25 kB. It goes to 4.26 kB in `web/.size-limit.mjs` (runner, §2.26), with a comment naming the offset. This slice took the file into its owns after #1033 merged.
 - **Search cards (lazy)** goes back from #1033's stopgap 8.02 kB to 8.01 kB (runner): 7,998 B with stable names, 7,992 B with content hashes. No other entry changes.
 - **Re-measured after merging main (d6c83c56)** with the CI steps (`npm run build`, then `LODESTAR_BUILD_VERSION=0000000 npx vite build` with and without `LODESTAR_STABLE_NAMES=1`, then `npx size-limit`). The numbers match the table: Settings messages 4,247 / 4,259 B and Search cards 7,992 / 7,998 B (content-hash / stable names).
 - **Once stable,** limits can sit at their measured size. Only a change to an entry's own chunks moves it.
 
-| Entry | Content-hash names | Module-set names | Change | Limit now |
+| Entry | Content-hash names | Module-set names | Change | Limit on main at 73bb8b68 |
 |---|---|---|---|---|
 | Search route JS (initial) | 44,684 | 44,685 | +1 | 45,000 |
-| CSS | 19,780 | 19,780 | +0 | 19,790 |
+| CSS | 19,780 | 19,780 | +0 | 19,800 |
 | Route table (app.js) | 1,806 | 1,806 | +0 | 1,900 |
 | Search vendor chunk | 30,980 | 30,979 | -1 | 31,100 |
 | Total first load | 87,562 | 87,562 | +0 | 100,000 |
@@ -64,7 +65,7 @@ Same tree, main d42b71c6, `LODESTAR_BUILD_VERSION=0000000`.
 | Insights digest preview (on demand) | 1,708 | 1,706 | -2 | 1,900 |
 | Insights print layout (on demand) | 1,563 | 1,563 | +0 | 1,620 |
 | Privacy banner (on demand) | 3,375 | 3,376 | +1 | 3,710 |
-| Settings messages (on demand) | 4,247 | 4,259 | +12 | 4,250 (over) |
+| Settings messages (on demand) | 4,247 | 4,259 | +12 | 4,260 |
 | Settings connection messages (on demand) | 4,129 | 4,134 | +5 | 4,300 |
 | Settings connection screens (on demand) | 12,567 | 12,563 | -4 | 14,200 |
 | Settings security parts (on demand) | 24,605 | 24,599 | -6 | 26,000 |
@@ -139,7 +140,7 @@ Same tree, main d42b71c6, `LODESTAR_BUILD_VERSION=0000000`.
 | Search recovery counts (on demand) | 742 | 744 | +2 | 840 |
 | Search index-state banners (on demand) | 4,014 | 4,007 | -7 | 4,100 |
 | Search Block settle (on demand) | 478 | 477 | -1 | 600 |
-| Facet rail (lazy) | 18,816 | 18,819 | +3 | 18,830 |
+| Facet rail (lazy) | 18,816 | 18,819 | +3 | 18,850 |
 | Results toolbar (lazy) | 4,285 | 4,282 | -3 | 4,600 |
 | Search live banner (lazy) | 2,574 | 2,578 | +4 | 2,580 |
 | Search cards (lazy) | 7,992 | 7,998 | +6 | 8,010 |
@@ -149,7 +150,7 @@ Same tree, main d42b71c6, `LODESTAR_BUILD_VERSION=0000000`.
 | Search row checkboxes (on demand) | 1,690 | 1,695 | +5 | 1,700 |
 | Search assist (on demand) | 6,363 | 6,360 | -3 | 6,590 |
 | Natural phrasing (on demand) | 1,714 | 1,711 | -3 | 1,750 |
-| Builder (on demand) | 8,421 | 8,423 | +2 | 8,440 |
+| Builder (on demand) | 8,421 | 8,423 | +2 | 8,450 |
 | Detail drawer (own JS + CSS) | 28,286 | 28,275 | -11 | 28,310 |
 | /t/[hash] route (own JS + CSS) | 22,074 | 22,058 | -16 | 22,130 |
 | Detail sections (on demand) | 38,792 | 38,810 | +18 | 38,820 |
