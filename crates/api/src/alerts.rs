@@ -178,7 +178,7 @@ pub fn announce(
     params(("id" = i64, Path, description = "The saved search's id."), AlertsQuery),
     responses(
         (status = 200, body = AlertsPage),
-        (status = 400, body = ErrorEnvelope, description = "`bad_cursor`: a cursor this server didn't give out."),
+        (status = 400, body = ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`limit` isn't a whole number) or `bad_cursor` (a cursor this server didn't give out). Each names the parameter at fault in `field` where there is one."),
         (status = 404, body = ErrorEnvelope, description = "`saved_search_not_found`."),
     )
 )]
