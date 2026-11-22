@@ -358,7 +358,14 @@ class Rules(unittest.TestCase):
                               "a string": "utp", "free text": ["utp; reboot"], "a number": [1],
                               "a nested list": [["utp"]], "null": None}.items():
             with self.subTest(name), self.assertRaises(remote.StepRefused):
-                rules.parse(json.dumps({**RULES, "winners": winners}).encode())
+                rules.parse(json.dumps({**RULES, "treatment": "lc", "winners": winners}
+                                       if name != "the treatment itself" else {**RULES, "winners": winners}).encode())
+        # A stage-1 treatment takes no winners (r5.1 A2), but may say so with [].
+        for t in ("adm", "utp", "route"):
+            with self.subTest(stage1=t), self.assertRaises(remote.StepRefused):
+                rules.parse(json.dumps({**RULES, "treatment": t,
+                                        "winners": ["hint" if t != "adm" else "utp"]}).encode())
+            rules.parse(json.dumps({**RULES, "treatment": t, "winners": []}).encode())
 
     def test_read_at_the_rules_commit(self):
         repo, c = make_repo()
@@ -1651,6 +1658,57 @@ class Scrubber(unittest.TestCase):
                 self.assertNotIn("winners", out)
                 self.assertNotIn(PRIVATE[0], scrub.dumps(out).decode())
 
+    def test_a_reports_winners_are_switch_names_exactly(self):
+        for w in ([], ["coordinated_admission", "utp"], ["lookup_end", "preset_slots"]):
+            with self.subTest(winners=w):
+                doc = {**self.doc(), "segments": [{"segment": 1, "arm": "control", "result": raw_result(),
+                                                   "report": {**raw_report(), "winners": w}}]}
+                self.assertEqual(scrub.scrub(doc)["segments"][0]["report"]["winners"], w)
+        for w in (["adm"], ["utp", "utp"], ["safe_restart"], "utp", [PRIVATE[0]], [["utp"]]):
+            with self.subTest(winners=w):
+                doc = {**self.doc(), "segments": [{"segment": 1, "arm": "control", "result": raw_result(),
+                                                   "report": {**raw_report(), "winners": w}}]}
+                report = scrub.scrub(doc)["segments"][0]["report"]
+                self.assertNotIn("winners", report)
+                self.assertNotIn(PRIVATE[0], scrub.dumps(scrub.scrub(doc)).decode())
+
+    def test_a_stacked_block_is_analysed_against_its_winners(self):
+        """X-fleet-stacked-arms (review): analyze_cr refuses a stacked treatment's segment
+        without --winners, so collect() writes the winners, by switch name, and passes them;
+        a stage-1 treatment gets none, as analyze_cr requires."""
+        for treatment, winners, names in (("lc", "adm-utp", ["coordinated_admission", "utp"]),
+                                          ("hint", "lc", ["lookup_end", "preset_slots"]),
+                                          ("split", "", []), ("adm", "", None)):
+            with self.subTest(treatment=treatment, winners=winners):
+                tmp = Path(tempfile.mkdtemp())
+                self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+                block, out = tmp / "block", tmp / "out"
+                (block / "evidence" / "seg-2").mkdir(parents=True)
+                (block / "tools").mkdir()
+                out.mkdir()
+                env = {"IMAGE_DIGEST": DIGEST, "LODESTAR_COMMIT": LC, "SPEC_COMMIT": SC, "RULES_COMMIT": RC,
+                       "TREATMENT": treatment, "SEGMENT_HOURS": "2", "ROLE": "main",
+                       **({"WINNERS": winners} if winners else {})}
+                (block / "block.env").write_text("".join(f"{k}={v}\n" for k, v in env.items()))
+                seen = []
+
+                def run(argv, **_):
+                    seen.append(argv)
+                    if "--winners" in argv:
+                        seen.append(json.loads(Path(argv[argv.index("--winners") + 1]).read_text()))
+                    Path(argv[argv.index("--output") + 1]).write_text(json.dumps(raw_report()))
+                    return subprocess.CompletedProcess(argv, 0)
+
+                doc = scrub.collect(block, out, run=run)
+                argv = seen[0]
+                self.assertEqual(doc["segments"][0]["report"]["verdict"], "valid")
+                if names is None:
+                    self.assertNotIn("--winners", argv)
+                else:
+                    self.assertIn("--winners", argv)
+                    self.assertTrue(Path(argv[argv.index("--winners") + 1]).is_relative_to(out))
+                    self.assertEqual(seen[1], {"winners": names})
+
     def test_a_stacked_blocks_switches_are_kept(self):
         report = raw_report()
         report["identity"]["switches"] = {"lookup_end": True, "preset_slots": True, "hint_first": False,
@@ -2164,6 +2222,33 @@ class StackedArms(Base):
         self.assertEqual(list(rules.TREATMENTS), list(table))
         self.assertEqual(list(scrub.TREATMENT_KEYS), list(table))
 
+    def test_scrubs_winner_names_are_block_libs(self):
+        """scrub.py's WINNER_NAMES (the --winners names copy-off passes) is block-lib's table,
+        in the collector's switch names; its STACKED_KEYS are block-lib's and the collector's."""
+        name_of = {var: name for name, var in _collector_constant("SWITCH_ENV").items()}
+        self.assertEqual({k: list(v) for k, v in scrub.WINNER_NAMES.items()},
+                         {k: [name_of[v] for v in vs] for k, vs in block_lib_table().items()})
+        stacked = re.search(r"^STACKED_KEYS='([a-z|]+)'$", (VM / "block-lib.sh").read_text(), re.M).group(1)
+        self.assertEqual(stacked.split("|"), list(scrub.STACKED_KEYS))
+        self.assertEqual(list(rules.STACKED), list(scrub.STACKED_KEYS))
+        self.assertEqual(set(_collector_constant("STACKED")), set(scrub.STACKED_KEYS))
+
+    def test_a_shared_switch_is_refused_with_a_patched_table(self):
+        """Defence in depth: no two keys share a switch today, so a patched table, where
+        hint also turns on lc's LOOKUP_END, shows the overlap check refuses."""
+        lib = (VM / "block-lib.sh").read_text().replace(
+            "    hint) echo LODESTAR_DHT_HINT_FIRST ;;",
+            "    hint) echo LODESTAR_DHT_HINT_FIRST LODESTAR_DHT_LOOKUP_END ;;")
+        self.assertIn("LODESTAR_DHT_HINT_FIRST LODESTAR_DHT_LOOKUP_END", lib)
+        patched = self.tmp / "patched-block-lib.sh"
+        patched.write_text(lib)
+        for script, want in ((patched, "winner_is_treatment 1"), (VM / "block-lib.sh", "0")):
+            with self.subTest(script=script.name):
+                r = subprocess.run(["bash", "-c", f'. "{script}"; why=$(stacking hint lc); echo $why $?'],
+                                   capture_output=True, text=True, timeout=30)
+                self.assertEqual(r.stdout.split()[-2:] if want != "0" else r.stdout.split()[-1:],
+                                 want.split())
+
     def test_the_runbooks_mapping_is_block_libs(self):
         """The runbook's key table (3.3.1) names, for each key, exactly block-lib's
         switches, as analyze_cr's --winners names them (the collector's SWITCH_ENV)."""
@@ -2201,9 +2286,13 @@ class StackedArms(Base):
                     self.assertEqual(set(arm), {"LODESTAR_DHT_SAFE_RESTART", *won, *own})
 
     def test_start_block_refuses_bad_stacking_before_anything_starts(self):
-        for over, why in (({"WINNERS": "turbo"}, "args_valid"), ({"WINNERS": "utp-utp"}, "stacking_repeated_winner"),
-                          ({"WINNERS": "utp-adm"}, "stacking_winner_is_treatment"),
+        for over, why in (({"WINNERS": "turbo"}, "args_valid"),
+                          ({"TREATMENT": "lc", "WINNERS": "utp-utp"}, "stacking_repeated_winner"),
+                          ({"TREATMENT": "hint", "WINNERS": "utp-hint"}, "stacking_winner_is_treatment"),
                           ({"TREATMENT": "lc", "WINNERS": "lc"}, "stacking_winner_is_treatment"),
+                          # A stage-1 treatment takes no winners (r5.1 A2).
+                          ({"WINNERS": "utp"}, "stacking_winners_need_stacked_treatment"),
+                          ({"TREATMENT": "route", "WINNERS": "adm-utp"}, "stacking_winners_need_stacked_treatment"),
                           ({"WINNERS": "utp;reboot"}, "args_valid"), ({"TREATMENT": "turbo"}, "args_valid")):
             with self.subTest(over=over):
                 self.setUp()
@@ -2229,8 +2318,8 @@ class StackedArms(Base):
                           "LODESTAR_DHT_LOOKUP_END": "false", "LODESTAR_DHT_PRESET_SLOTS": "false"})
 
     def test_a_block_env_with_bad_stacking_is_refused_mid_block(self):
-        for env in ({"WINNERS": "adm"}, {"WINNERS": "turbo"}, {"WINNERS": "utp-utp"},
-                    {"TREATMENT": "lc", "WINNERS": "utp-lc"}):
+        for env in ({"WINNERS": "adm"}, {"WINNERS": "turbo"}, {"TREATMENT": "lc", "WINNERS": "utp-utp"},
+                    {"TREATMENT": "lc", "WINNERS": "utp-lc"}, {"WINNERS": "utp"}):
             with self.subTest(env=env):
                 self.setUp()
                 self.make_block(segment=1, **env)

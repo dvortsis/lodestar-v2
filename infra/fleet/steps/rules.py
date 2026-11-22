@@ -13,14 +13,16 @@ JSON with exactly these keys:
       "lodestar_commit": "<40 hex>",             # the source commit the image was built from
       "spec_commit": "<40 hex>",                 # the collector's --spec-commit (CR-SPEC in force)
       "treatment": "adm",                        # adm | utp | route | lc | hint | split
-      "winners": ["utp"],                        # optional: earlier winners, on in both arms (X-fleet-stacked-arms)
+      "winners": [],                             # optional, non-empty for lc/hint/split only: earlier winners
       "segment_hours": 2,                        # 2 or 3 (screen rule 3)
       "notice_version": 4                        # the Legal Notice version start-block accepts (4 on main, 2026-11-11)
     }
 
 `winners` (X-fleet-stacked-arms) lists treatment keys, each at most once and
-none the treatment: a stacked stage tests its treatment on top of them. It's
-optional; absent or empty, the arms differ only in the treatment, as before.
+none the treatment: a stacked stage (lc, hint or split) tests its treatment on
+top of them. Only those take winners: a stage-1 treatment runs against the
+shipped defaults (r5.1 A2). It's optional; absent or empty, the arms differ
+only in the treatment, as before.
 
 The image is pinned by digest, in the one repository the project publishes;
 both commits must also be ancestors of main. Anything else refuses with a
@@ -47,6 +49,8 @@ KEYS = {"version", "screen", "lodestar_image", "lodestar_commit", "spec_commit",
 OPTIONAL = {"winners"}
 # The treatment keys (block-lib.sh's TREATMENT_KEYS; the collector's TREATMENT_SWITCHES).
 TREATMENTS = ("adm", "utp", "route", "lc", "hint", "split")
+# The stacked ones (the collector's STACKED): only they take winners (r5.1 A2).
+STACKED = ("lc", "hint", "split")
 MAX_BYTES = 4096
 
 
@@ -74,6 +78,7 @@ def parse(text: bytes) -> dict:
           and doc["treatment"] in TREATMENTS
           and isinstance(winners, list) and all(w in TREATMENTS for w in winners)
           and len(set(winners)) == len(winners) and doc["treatment"] not in winners
+          and (not winners or doc["treatment"] in STACKED)
           and _int(doc["segment_hours"]) and doc["segment_hours"] in (2, 3)
           and _int(doc["notice_version"]) and 1 <= doc["notice_version"] <= 999999)
     if not ok:

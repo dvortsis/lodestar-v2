@@ -329,6 +329,10 @@ CRAWLER_SWITCHES=(
 # comma), on in both arms. Every switch here is a boolean (crates/lodestar's
 # config.rs), so an arm sets each to true or false.
 TREATMENT_KEYS='adm|utp|route|lc|hint|split'
+# The stacked treatments (the collector's STACKED): only they take winners. A
+# stage-1 treatment runs against the shipped defaults (r5.1 A2), so its
+# segments would be void with any switch but its own on.
+STACKED_KEYS='lc|hint|split'
 switches_of() {
   case $1 in
     adm) echo LODESTAR_DHT_COORDINATED_ADMISSION ;;
@@ -346,8 +350,9 @@ is_crawler_switch() {
   return 1
 }
 # stacking TREATMENT WINNERS: sets TREATMENT_VARS and WINNER_VARS, or fails
-# with the reason on stdout (unknown_key, repeated_winner, winner_is_treatment,
-# not_a_switch). WINNERS is empty or keys joined by '-'.
+# with the reason on stdout (unknown_key, winners_need_stacked_treatment,
+# repeated_winner, winner_is_treatment, not_a_switch). WINNERS is empty or keys
+# joined by '-'.
 stacking() {
   local treatment=$1 winners=$2 k v seen=" "
   TREATMENT_VARS=() WINNER_VARS=()
@@ -355,6 +360,7 @@ stacking() {
   read -ra TREATMENT_VARS <<<"$(switches_of "$treatment")"
   if [[ -n $winners ]]; then
     [[ $winners =~ ^($TREATMENT_KEYS)(-($TREATMENT_KEYS))*$ ]] || { echo unknown_key; return 1; }
+    [[ $treatment =~ ^($STACKED_KEYS)$ ]] || { echo winners_need_stacked_treatment; return 1; }
     for k in ${winners//-/ }; do
       [[ $seen == *" $k "* ]] && { echo repeated_winner; return 1; }
       [[ $k == "$treatment" ]] && { echo winner_is_treatment; return 1; }
@@ -366,22 +372,26 @@ stacking() {
     is_crawler_switch "$v" || { echo not_a_switch; return 1; }
   done
   # A switch both a winner and the treatment's: the arms couldn't differ in it.
+  # No two keys share a switch in today's table, so this can't fire yet: it's
+  # defence in depth for a table that one day does (tested with a patched one).
   for v in "${WINNER_VARS[@]}"; do
     [[ " ${TREATMENT_VARS[*]} " == *" $v "* ]] && { echo winner_is_treatment; return 1; }
   done
   return 0
 }
 # arm_env segment: the crawler switches start_lodestar sets for segment's arm,
-# one NAME=value per line: the winners on, the treatment's on in B and off in A.
+# one NAME=value per line. The winners are on in both arms; the treatment's are
+# on in B (segments 2 and 3) and off in A (1 and 4).
 arm_env() {
   local value=false v
   [[ $(arm_of "$1") == treatment ]] && value=true
   for v in "${WINNER_VARS[@]}"; do printf '%s=true\n' "$v"; done
   for v in "${TREATMENT_VARS[@]}"; do printf '%s=%s\n' "$v" "$value"; done
 }
-# Start Lodestar (alone: gluetun isn't recreated) with segment $1's arm. Every
-# switch but the treatment's stays at its shipped default, whatever the caller's
-# environment holds; safe restart is on for the whole block, so each later start
+# Start Lodestar (alone: gluetun isn't recreated) with segment $1's arm
+# (arm_env): the winners on in both arms, the treatment's switches by arm, and
+# every other crawler switch at its shipped default, whatever the caller's
+# environment holds. Safe restart is on for the whole block, so each later start
 # is a resumed one.
 # The image Lodestar runs: the registry's, pinned by digest (the default), or,
 # for a test run, a locally built image pinned by its image ID (LOCAL_IMAGE_ID, the
