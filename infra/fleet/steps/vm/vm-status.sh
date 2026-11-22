@@ -22,20 +22,14 @@ NAME=lodestar_running; say running lodestar
 # delivery can be running now).
 NAME=run_clean; say test ! -e "$PIA_RUN"
 
-# The block's mode (X-vm-status-mode), read from block.env, never sourced. The
-# control side keeps only the grammar's lines, so the mode is a count line
-# whose name carries it: block_mode_abba, block_mode_on or block_mode_unknown,
-# each 1. A missing MODE is abba (the default; only on-only writes it). Any
-# other value is unknown, whatever the file holds.
-block_mode() {  # prints the bare mode word, for a count line
-  local f=$BLOCK/block.env n m
-  [[ -f $f && -r $f ]] || { printf unknown; return; }  # a marker without its block.env is a fault, not abba
-  n=$(grep -c '^MODE=' "$f" 2>/dev/null)
-  if [[ $n == 0 ]]; then printf abba; return; fi  # no MODE key: the default
-  [[ $n == 1 ]] || { printf unknown; return; }
-  m=$(sed -n 's/^MODE=//p' "$f" 2>/dev/null)
-  case $m in on | abba) printf '%s' "$m" ;; *) printf unknown ;; esac
-}
+# The block's mode (X-vm-status-mode). It comes from load_block_env, the same
+# reader arm-switch and copy-off use, run in a subshell so nothing it sets
+# leaks: a record it rejects, for any reason, is unknown, and a valid one with
+# no MODE is abba. The control side keeps only the grammar's lines, so the mode
+# is a count line whose name carries it: block_mode_abba, block_mode_on or
+# block_mode_unknown, each 1.
+block_mode() { ( load_block_env >/dev/null 2>&1 || { printf unknown; exit 0; }
+  [[ ${MODE:-} == on ]] && printf on || printf abba ); }
 
 # The block marker (OP-3b): a recorded block, and its segment.
 case $(block_state) in

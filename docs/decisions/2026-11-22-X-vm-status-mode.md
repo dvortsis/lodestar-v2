@@ -1,4 +1,4 @@
-# X-vm-status-mode: vm-status shows a block's mode
+# X-vm-status-mode decisions (#1070)
 
 2026-11-22Z. Runner brief `X-vm-status-mode`; a refinement, with no owner decision changed.
 
@@ -11,5 +11,8 @@
 Rules, the arms, the leak test, copy-off and every stop condition.
 
 ## Edge cases
-- A marker with no readable `block.env`, more than one `MODE=` line, or any value but `on` or `abba` reads `unknown`. Only a readable file with no `MODE` key is `abba`.
-- `MODE=abba` in `block.env` reads `abba`, as the brief asks, although `block-lib.sh`'s `load_block_env` rejects it (start-block never writes it). `unknown` stays for what vm-status can't vouch for.
+- The mode comes from `load_block_env` (`block-lib.sh`), the reader arm-switch and copy-off use, run in a subshell. So status can't disagree with them: a record it rejects for any reason (a missing or unreadable file, a bad `ROLE`, a NUL byte, `MODE=abba`, a padded or lower-case line, CRLF) is `unknown`; a valid record with `MODE=on` is `on`; a valid one with no `MODE` is `abba`.
+- `MODE=abba` in `block.env` is therefore `unknown`: start-block never writes it, and the reader rejects it.
+
+## Scope
+The runbook's §3.5 (the vm-status reference) also gains the new counter and what `unknown` means. The runner approved that edit beyond the brief's §3.3.2 check.
