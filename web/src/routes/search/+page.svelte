@@ -3,7 +3,7 @@
 	//   QueryBar (S-search-1): the search landmark, the query bar and the active-filter strip;
 	//   #search-rail (S-search-2): the facet rail;
 	//   #results (S-search-3's toolbar, then S-search-2's list);
-	//   #search-drawer (S-detail): the detail drawer, mounted from a lazy glob below.
+	//   #search-drawer (S-detail): the detail drawer, a lazy import below.
 	// Regions stay empty, with no landmark role, until their slice fills them.
 	import { onMount, type Component } from 'svelte';
 	import { page } from '$app/state';
@@ -20,6 +20,10 @@
 	// listener is added first, so the command exists when the shell replays that first key. With no
 	// interaction, the shell attaches its keys after 30 s: register at the same moment, so the first
 	// `/` after that finds the command too.
+	// Then the first-run check: a fresh instance, a signed-out visitor or a pending Legal Notice
+	// can't search yet, so one check after mount sends the browser to setup or sign-in
+	// (X-first-run-search-gate). It has no imports, so the bare first load gains one small
+	// response; navigation loads only to leave. (One mount for both: the first load's bytes.)
 	const KEYS_AFTER_MS = 30_000;
 	onMount(() => {
 		let off: (() => void) | undefined;
@@ -32,20 +36,12 @@
 				() => {}
 			); // Shortcuts only: search works without them.
 		}, KEYS_AFTER_MS);
+		void checkFirstRun(() => !gone && location.pathname === '/search');
 		return () => {
 			gone = true;
 			stop();
 			off?.();
 		};
-	});
-
-	// A fresh instance, a signed-out visitor or a pending Legal Notice can't search yet: one check
-	// after mount sends the browser to setup or sign-in (X-first-run-search-gate). The check has no
-	// imports, so the bare first load gains one small response; navigation loads only to leave.
-	onMount(() => {
-		let mounted = true;
-		void checkFirstRun(() => mounted && location.pathname === '/search');
-		return () => (mounted = false);
 	});
 
 	// S-search-2's results: lazy, never on the bare first load. A query (or `hidden`) in the URL needs
@@ -63,8 +59,9 @@
 	// `import()` again (Chromium 157 refetches; 153 keeps the failure for the module graph). Retry
 	// reloads the page at the current URL, as Insights does. The tab's `window.name` carries a
 	// one-shot marker across the reload, never into the URL; it is read and cleared here, and the
-	// first load to settle after it sends focus to the results, if nothing else has focus. The
-	// alert node stays while a retry fails again, so it is announced once.
+	// load it starts at mount sends focus to the results, if nothing else has focus. No later load
+	// (the 30 s timer, a browse-mode key) can use it. The alert node stays while a retry fails
+	// again, so it is announced once. Retry writes the bar's typed text into the URL first.
 	let retried = window.name == 'retry';
 	if (retried) window.name = '';
 	let loadingResults: Promise<unknown> | undefined;
@@ -93,7 +90,8 @@
 			}
 		);
 	}
-	function reload() {
+	async function reload() {
+		await bar?.flush();
 		window.name = 'retry';
 		location.reload();
 	}
@@ -103,16 +101,15 @@
 		const hidden = p.get('hidden');
 		if (p.get('q') || p.get('browse') === '1' || hidden === '1' || hidden === 'true') loadResults();
 	});
-	onMount(() => onFirstInteraction(loadResults, KEYS_AFTER_MS));
+	onMount(() => {
+		if (retried) loadResults();
+		return onFirstInteraction(loadResults, KEYS_AFTER_MS);
+	});
 
 	// "Skip to results" (WCAG 2.4.1): at x-large the facet rail comes before the results, a tab stop
 	// per value. The link is the first focusable in the page content (after the shell's skip link and
 	// navigation) and goes to the list's active row, or to the region itself while there is no list
 	// (the empty state, a skeleton, an error).
-	function skipToResults(event: MouseEvent) {
-		event.preventDefault();
-		focusResults();
-	}
 	function focusResults() {
 		const region = document.getElementById('results');
 		if (!region) return;
@@ -125,11 +122,18 @@
 	// S-detail's drawer: opened with a shallow pushState carrying `detail` in page.state. It loads
 	// on first open, so it never joins this route's first load. (A glob stood here until
 	// `DetailHost.svelte` existed, so neither slice edited the other's files.)
+	// A failed chunk shows an alert at the drawer's edge, without taking focus (the row keeps it).
+	// Retry reloads at the drawer's URL, which opens the full page (a reload drops page.state). Close
+	// goes Back, as closing a drawer opened from Search does (no Escape: 45 kB cap).
 	const drawerOpen = $derived('detail' in page.state);
 	let Host = $state<Component>();
+	let hostFailed = $state<boolean>();
 	$effect(() => {
 		if (drawerOpen && !Host)
-			void import('$lib/features/detail/DetailHost.svelte').then((mod) => (Host = mod.default));
+			import('$lib/features/detail/DetailHost.svelte').then(
+				(mod) => (Host = mod.default),
+				() => (hostFailed = true)
+			);
 	});
 </script>
 
@@ -141,7 +145,7 @@
 			href="#results"
 			class="sr-only rounded-field bg-primary px-4 py-2 text-primary-content focus:not-sr-only focus:fixed focus:start-2 focus:top-2 focus:z-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:outline-solid"
 			data-testid="skip-to-results"
-			onclick={skipToResults}>{m.search_page_skip_results()}</a
+			onclick={(e) => (e.preventDefault(), focusResults())}>{m.search_page_skip_results()}</a
 		>
 		<header><h1 class={PAGE_H1} tabindex="-1">{m.search_page_title()}</h1></header>
 		<QueryBar bind:this={bar} />
@@ -163,7 +167,17 @@
 			</div>
 			<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->
 			<div id="search-drawer">
-				{#if Host}<Host />{/if}
+				{#if Host}<Host />{:else if drawerOpen && hostFailed}
+					<div
+						class="flex flex-wrap items-center gap-4 p-6 fixed inset-x-4 bottom-4 z-50 bg-base-100 shadow large:left-auto"
+						role="alert"
+					>
+						{m.search_page_detail_failed()}<button
+							class="btn btn-primary"
+							onclick={() => location.reload()}>{m.search_page_retry()}</button
+						><button class="btn" onclick={() => history.back()}>{m.search_page_close()}</button>
+					</div>
+				{/if}
 			</div>
 		</div>
 	</div>

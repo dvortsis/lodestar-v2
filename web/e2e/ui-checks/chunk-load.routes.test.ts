@@ -5,7 +5,7 @@
 // and follows its Retry or Reload. Waits are conditions with a 10 s deadline; no fixed sleeps.
 // Ported from the review's flows; named `.routes.test.ts` so the `core` project picks it up.
 import type { Page } from '@playwright/test';
-import { body, hits, indexState, server } from '../search-results.fixtures';
+import { body, hits, indexState, row, rowOf, server } from '../search-results.fixtures';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
 import {
 	SettingsBackend,
@@ -240,6 +240,156 @@ test.describe('a lazy chunk fails to load', () => {
 		await expect(box).toBeFocused();
 		await expect(box).toHaveText('abcdef');
 		expect(await page.evaluate(() => window.name)).toBe('');
+		expect(errors).toEqual([]);
+	});
+
+	test('Search results: Retry pressed within 100 ms of typing reloads at the typed query', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const { errors, failed, gate } = await failSearch(page, go, mock as OpenApiMock);
+		gate.blocked = false;
+		const box = page.getByRole('combobox', { name: 'Search torrents' });
+		await box.click();
+		await page.keyboard.press('ControlOrMeta+a');
+		await page.keyboard.type('harbor');
+		// Inside the bar's 200 ms debounce: the URL still holds the old query.
+		expect(new URL(page.url()).searchParams.get('q')).toBe('lantern');
+		await failed.getByRole('button', { name: 'Retry' }).click();
+		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
+		await expect(page).toHaveURL(/[?&]q=harbor(&|$)/);
+		await expect(box).toHaveText('harbor');
+		expect(errors).toEqual([]);
+	});
+
+	test('Search results: Retry while /parse hangs reloads at the raw typed text within about 1 s', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const { errors, failed, gate } = await failSearch(page, go, mock as OpenApiMock);
+		gate.blocked = false;
+		// Parse requests hang until the reload; the reloaded page's are answered as usual. The
+		// stand-in's canonical form collapses spaces, so the raw text (two spaces) is told apart.
+		let slow = true;
+		await page.route('**/api/v1/parse?**', (route) => (slow ? undefined : route.fallback()));
+		page.once('load', () => (slow = false));
+		const box = page.getByRole('combobox', { name: 'Search torrents' });
+		await box.click();
+		await page.keyboard.press('ControlOrMeta+a');
+		await page.keyboard.type('harbor  slow');
+		const start = Date.now();
+		await failed.getByRole('button', { name: 'Retry' }).click();
+		await expect(page).toHaveURL(/[?&]q=harbor\+\+slow(&|$)/);
+		// The bound is 1 s; the rest is the click and the URL write, with room for a slow runner.
+		expect(Date.now() - start).toBeLessThan(4_000);
+		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
+		expect(errors).toEqual([]);
+	});
+
+	test('Search results: after Retry, a load the 30 s timer starts never moves focus', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const errors: string[] = [];
+		page.on('pageerror', (error) => errors.push(error.message));
+		server(mock, () => body(hits(2)));
+		mock.on('searchIndexState', indexState(5_000_000));
+		await page.clock.install();
+		const gate = await blockChunk(page, 'results-announce');
+		await go('/search');
+		await page.getByRole('combobox', { name: 'Search torrents' }).click();
+		const failed = page.locator('#results [role="alert"]');
+		await expect(failed).toBeVisible();
+		// Retry while the chunk still fails: the reload's own load, started at mount, uses the marker
+		// up and fails; nothing is focused.
+		const before = gate.hit;
+		await failed.getByRole('button', { name: 'Retry' }).click();
+		await expect.poll(() => gate.hit).toBeGreaterThan(before);
+		await expect(failed).toBeVisible();
+		expect(await page.evaluate(() => window.name)).toBe('');
+		// The 30 s fallback then starts another load (the shell's chrome arrives with the same timer).
+		// Whether that load fails again (Chromium 153 keeps the failure) or succeeds, focus stays put.
+		gate.blocked = false;
+		await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+		await page.clock.runFor(31_000);
+		await expect(page.getByTestId('palette-button')).toBeAttached();
+		await expect(
+			failed.or(page.getByRole('grid', { name: 'Matching torrents' })).first()
+		).toBeVisible();
+		await page.clock.runFor(1_000); // the success path's focus hand-off is a timeout
+		expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+		expect(errors).toEqual([]);
+	});
+
+	/** Opens result 1's drawer from Search while the drawer's chunk is blocked. */
+	async function failDrawer(page: Page, go: (path: string) => Promise<unknown>, mock: OpenApiMock) {
+		const errors: string[] = [];
+		page.on('pageerror', (error) => errors.push(error.message));
+		server(mock, () => body(hits(2)));
+		mock.on('searchIndexState', indexState(5_000_000));
+		// DetailHost's chunk is the only one that preloads DetailHostBody's stylesheet.
+		const gate = await blockChunk(page, 'assets/DetailHostBody.');
+		await go('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		await rowOf(page, 1).focus();
+		await page.keyboard.press('Enter');
+		const failed = page.locator('#search-drawer [role="alert"]');
+		await expect(failed).toContainText("Details couldn't load.");
+		expect(gate.hit).toBeGreaterThan(0);
+		// The alert is announced, not focused: the row keeps focus.
+		await expect(rowOf(page, 1)).toBeFocused();
+		return { errors, failed, gate };
+	}
+
+	test('the detail drawer: a failed chunk shows an alert, and Retry opens the torrent', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const { errors, failed, gate } = await failDrawer(page, go, mock as OpenApiMock);
+		const url = new URL(page.url());
+		expect(url.pathname).toMatch(/^\/t\//);
+		gate.blocked = false;
+		// The full page finds its hit by hash, without Search's seed.
+		(mock as OpenApiMock).on('searchGet', body(hits(1)));
+		await failed.getByRole('button', { name: 'Retry' }).click();
+		// A reload drops the drawer's page.state, so the torrent opens as its full page.
+		await expect(page.getByTestId('detail-view')).toHaveAttribute('data-mode', 'page');
+		expect(new URL(page.url()).pathname).toBe(url.pathname);
+		await expect(page.locator('#search-drawer')).toHaveCount(0);
+		expect(errors).toEqual([]);
+	});
+
+	test('the detail drawer: Close leaves the failed drawer as closing it does', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const { errors, failed } = await failDrawer(page, go, mock as OpenApiMock);
+		await failed.getByRole('button', { name: 'Close' }).click();
+		await expect(failed).toHaveCount(0);
+		await expect(page).toHaveURL(/\/search\?q=lantern(&|$)/);
+		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
+		// The drawer's entry is gone: Back now leaves Search's own entry, never reopens the drawer.
+		expect(await page.evaluate(() => 'detail' in (history.state?.['sveltekit:states'] ?? {}))).toBe(
+			false
+		);
+		expect(errors).toEqual([]);
+	});
+
+	test('the detail drawer: Back leaves the failed drawer, and the alert goes with it', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const { errors, failed } = await failDrawer(page, go, mock as OpenApiMock);
+		await page.goBack();
+		await expect(failed).toHaveCount(0);
+		await expect(page).toHaveURL(/\/search\?q=lantern(&|$)/);
+		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
 		expect(errors).toEqual([]);
 	});
 });

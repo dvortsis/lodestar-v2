@@ -18,6 +18,8 @@ export type ParseError = Pick<
 
 export const DEFAULT_SORT = 'relevance';
 export const PARSE_DEBOUNCE_MS = 200;
+/** `flush()`'s bound on the parse: past it the raw text is written, as a parse error writes it. */
+export const FLUSH_PARSE_MS = 1000;
 const SORT = /^(relevance|[+-]?(discovered|size|files))$/;
 
 export type UrlState = {
@@ -80,6 +82,8 @@ export function createSearchState(nav: Nav = kitNav) {
 
 	const slot = latest();
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	/** Typed text the URL doesn't hold yet: armed by `setText`, cleared once its write commits. */
+	let due = false;
 	/** The `q` this state last wrote or adopted; a different one in the URL came from outside. */
 	let written: string | undefined;
 
@@ -113,6 +117,32 @@ export function createSearchState(nav: Nav = kitNav) {
 		}
 	}
 
+	/**
+	 * The debounce's write: parses the draft and replaces the URL entry with the canonical text (the
+	 * raw text on an error, so a reload shows it). With `within`, a parse that hasn't answered in
+	 * that many ms is cancelled and the raw text written, as an error would.
+	 */
+	async function write(within?: number) {
+		clearTimeout(timer);
+		const t = text;
+		const canonical = await (within === undefined
+			? parse(t)
+			: new Promise<string | null | undefined>((done) => {
+					const late = setTimeout(() => {
+						slot.cancel(); // its parse then answers undefined, which `done` ignores
+						parsing = false;
+						done(null);
+					}, within);
+					void parse(t).then((c) => {
+						clearTimeout(late);
+						done(c);
+					});
+				}));
+		if (canonical === undefined || t !== text) return; // superseded, or typed on meanwhile
+		due = false;
+		await commit(canonical ?? t, false);
+	}
+
 	async function commit(q: string, push: boolean, over: Partial<UrlState> = {}) {
 		written = q;
 		const target = writeUrl(nav.url(), { ...url(), ...over, q });
@@ -128,6 +158,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			slot.cancel();
 			parsing = false;
 			written = undefined;
+			due = false;
 		},
 		get text() {
 			return text;
@@ -172,11 +203,19 @@ export function createSearchState(nav: Nav = kitNav) {
 			clearTimeout(timer);
 			// Typing wins over a structured edit or a parse in flight: their answers are for older text.
 			slot.cancel();
-			timer = setTimeout(async () => {
-				const canonical = await parse(t);
-				if (canonical === undefined || t !== text) return; // superseded, or typed on meanwhile
-				await commit(canonical ?? t, false); // an error keeps the raw text, so a reload shows it
-			}, PARSE_DEBOUNCE_MS);
+			due = true;
+			timer = setTimeout(() => void write(), PARSE_DEBOUNCE_MS);
+		},
+
+		/**
+		 * Writes typed text the debounce hasn't written yet, now, the way it would (Search's Retry,
+		 * before it reloads). A parse in flight is restarted under the bound: one slower than
+		 * `within` ms writes the raw text. Resolves at once when nothing is due.
+		 */
+		async flush(within = FLUSH_PARSE_MS) {
+			if (!due) return;
+			slot.cancel();
+			await write(within);
 		},
 
 		/** Enter: parses now, normalises the draft to the canonical text and pushes an entry. */

@@ -9,6 +9,8 @@ export interface LiveApi {
 	/** Sets the query and submits it (the Syntax popover's "Try"). */
 	tryQuery(query: string): void;
 	focusEnd(): void;
+	/** Writes typed text the debounce hasn't yet into the URL (bounded; W5's `flush`). */
+	flush(): Promise<void>;
 	/** The Syntax popover (its own chunk, loaded on first open). */
 	loadSyntax(): Promise<SyntaxComponent>;
 }
