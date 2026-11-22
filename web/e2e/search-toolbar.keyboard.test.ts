@@ -50,3 +50,22 @@ test('the view from the keys: the select changes the rows', async ({ page, go, k
 	await expect(page).toHaveURL(/density=compact/);
 	await expect(row(page, 1)).toHaveAttribute('data-density', 'compact');
 });
+
+test('at 390 px with no rows, Skip to results moves focus to the results region', async ({
+	page,
+	go,
+	mock,
+	kbd
+}) => {
+	server(mock, () => ({
+		status: 503,
+		body: { error: { code: 'unavailable', message: 'down' } }
+	}));
+	await page.setViewportSize({ width: 390, height: 800 });
+	await go('/search?q=lantern');
+	await expect(page.getByTestId('results-error')).toBeVisible();
+	const skip = page.getByTestId('skip-to-results');
+	await kbd.tabTo(skip);
+	await kbd.press('Enter');
+	await expect(page.locator('#results')).toBeFocused();
+});

@@ -14,55 +14,18 @@
 	import { ensureSearchPath } from '../query/path';
 	import { results } from '../results/results.svelte';
 	import { selection } from '../bulk/selection.svelte';
-	import {
-		SORTS,
-		VIEWS,
-		prefOf,
-		sortValue,
-		viewHref,
-		viewOf,
-		viewUnset,
-		type View
-	} from './toolbar';
+	import { SORTS, VIEWS, sortValue, viewHref } from './toolbar';
+	import { viewOf, type View } from './view';
 
 	const id = $props.id();
 	const locale = $derived(currentLocale());
 
 	const sorts = $derived(SORTS.map((s) => ({ value: s.value, label: s.label() })));
 	const sort = $derived(sortValue(search.sort));
-	// The account's Appearance density is the default view. The shell sets <html data-density> only
-	// after the page starts, so the start reads the cache it wrote on the last visit (prefs.ts), and
-	// the attribute is watched for the first visit and for a change.
-	const cached = () => {
-		try {
-			return JSON.parse(localStorage.getItem('lodestar.appearance') ?? 'null')?.density;
-		} catch {
-			return undefined;
-		}
-	};
-	let pref = $state(prefOf(document.documentElement.dataset.density ?? cached()));
-	// A view picked on this page stays, whatever the preference says when it arrives.
-	let chose = false;
-	$effect(() => {
-		const root = document.documentElement;
-		const mo = new MutationObserver(() => (pref = prefOf(root.dataset.density)));
-		mo.observe(root, { attributes: true, attributeFilter: ['data-density'] });
-		return () => mo.disconnect();
-	});
-	// Only on /search: elsewhere (the drawer's shallow /t/{hash} URL) the rows read the URL alone.
-	const live = $derived(page.url.pathname === '/search' ? pref : 'comfortable');
-	const view = $derived(viewOf(page.url, live));
-	// A link that names no view gets the preference's, written to the URL (replacing the entry) so the
-	// rows and the table read the same view.
-	$effect(() => {
-		if (!chose && live !== 'comfortable' && viewUnset(page.url))
-			// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewHref() keeps this page's own path
-			void goto(viewHref(page.url, viewOf(page.url, live), live), {
-				replaceState: true,
-				keepFocus: true,
-				noScroll: true
-			});
-	});
+	// The account's Appearance density is the default view. Like the rows, the toolbar reads it with
+	// the URL, so a preference the shell applies late waits for the next query (view.ts).
+	const pref = () => document.documentElement.dataset.density;
+	const view = $derived(viewOf(page.url, pref()));
 	const views = $derived(VIEWS.map((v) => ({ value: v, label: viewLabels[v]() })));
 	const viewLabels: Record<View, () => string> = {
 		list: m.search_table_view_list,
@@ -70,6 +33,21 @@
 		table: m.search_table_view_table,
 		cards: m.search_cards_option
 	};
+
+	// Below x-large the Filters host sits over this row's start (toolbar.css): the row leaves it the
+	// host's measured width, plus a gap.
+	let bar = $state<HTMLElement>();
+	$effect(() => {
+		const rail = document.getElementById('search-rail');
+		if (!bar || !rail || typeof ResizeObserver !== 'function') return;
+		const el = bar;
+		const ro = new ResizeObserver(() => {
+			const w = rail.offsetWidth;
+			el.style.setProperty('--tb-inset', w ? `${w + 8}px` : '0px');
+		});
+		ro.observe(rail);
+		return () => ro.disconnect();
+	});
 
 	const toggle = () => (selection.mode = !selection.mode);
 	const shut = (e: MouseEvent) =>
@@ -94,11 +72,10 @@
 	}
 
 	function setView(next: View) {
-		chose = true;
 		ensureSearchPath();
 		// A view parameter, not a search: it replaces the entry, so Back still walks searches.
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewHref() keeps this page's own path
-		void goto(viewHref(page.url, next, live), {
+		void goto(viewHref(page.url, next, pref()), {
 			replaceState: true,
 			keepFocus: true,
 			noScroll: true
@@ -124,7 +101,7 @@
 </script>
 
 {#if results.status !== 'empty'}
-	<div class="tb" data-testid="results-toolbar">
+	<div class="tb" data-testid="results-toolbar" bind:this={bar}>
 		<p class="tb-count" data-testid="results-count">{count}</p>
 		<div class="tb-controls">
 			<label class="tb-lbl" for="{id}-sort">

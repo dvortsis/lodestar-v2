@@ -2,7 +2,15 @@
 // the "Load more" fallback and end line under the list, no layout shift on a pasted link, and axe.
 import type { Page } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
-import { body, expect, hits, resultsCalls, row, server } from './search-results.fixtures';
+import {
+	body,
+	expect,
+	hits,
+	indexState,
+	resultsCalls,
+	row,
+	server
+} from './search-results.fixtures';
 import { test } from './support/test';
 
 const count = (page: Page) => page.getByTestId('results-count');
@@ -180,6 +188,7 @@ test('on a phone the controls fit one row above the first result, and More is a 
 	mock
 }) => {
 	server(mock, () => body(hits(3), { total: 1284 }));
+	mock.on('searchIndexState', indexState(84_210, { growing: true, growth_per_hour: 2104.5 }));
 	await page.setViewportSize({ width: 390, height: 800 });
 	await go('/search?q=lantern');
 	await expect(row(page, 1)).toBeVisible();
@@ -197,6 +206,10 @@ test('on a phone the controls fit one row above the first result, and More is a 
 	const sort2 = await page.getByLabel('Sort').boundingBox();
 	expect(wide!.x + wide!.width).toBeLessThanOrEqual(sort2!.x);
 	await expect(page.getByTestId('select-mode')).toBeHidden();
+	// "Still growing" stays, as one line with its icon.
+	const banner = page.locator('.rp-growing');
+	expect((await banner.boundingBox())!.height).toBeLessThan(36);
+	await expect(banner.locator('svg')).toBeVisible();
 	const more = page
 		.getByTestId('results-toolbar')
 		.getByRole('button', { name: 'More', exact: true });
@@ -208,26 +221,72 @@ test('on a phone the controls fit one row above the first result, and More is a 
 	await expectNoA11yViolations(page);
 });
 
-test('the Appearance density sets the view of a bare link: no extra history entry, no second search', async ({
+const compactCache = () =>
+	localStorage.setItem('lodestar.appearance', JSON.stringify({ density: 'compact' }));
+
+test('a Compact preference sets the bare link’s view, and typing keeps every key and runs one search', async ({
 	page,
 	mock
 }) => {
 	server(mock, () => body(hits(3), { total: 3 }));
+	await page.addInitScript(compactCache);
 	// `go` adds the project's density to the URL, which would name a view: load the bare link.
-	await page.goto('/search?q=lantern');
-	await expect(row(page, 1)).toHaveAttribute('data-density', 'comfortable');
-	// The shell applies the saved preference with the first interaction, after the page starts
-	// (Chrome.svelte): set what it sets, `<html data-density>`, once the rows are up.
-	await page.evaluate(() => (document.documentElement.dataset.density = 'compact'));
+	await page.goto('/search');
+	const editor = page.getByRole('combobox', { name: 'Search torrents' });
+	await editor.click();
+	await page.keyboard.type('lantern');
+	await expect(editor).toHaveText('lantern');
 	await expect(row(page, 1)).toHaveAttribute('data-density', 'compact');
-	await expect(page).toHaveURL(/density=compact/);
 	await expect(page.getByTestId('view-select')).toHaveValue('compact');
-	// replaceState: Back leaves the page for the one before it, and the query ran once.
-	expect(await page.evaluate(() => history.length)).toBeLessThanOrEqual(2);
-	expect(resultsCalls(mock)).toHaveLength(1);
-	// A chosen List sticks, though the preference says Compact.
+	await expect(page).not.toHaveURL(/density=/);
+	await expect.poll(() => resultsCalls(mock).length).toBe(1);
+	// One view pick is written, and a List stays a List though the preference is Compact.
 	await page.getByTestId('view-select').selectOption('list');
 	await expect(page).toHaveURL(/density=comfortable/);
 	await expect(row(page, 1)).toHaveAttribute('data-density', 'comfortable');
 	expect(resultsCalls(mock)).toHaveLength(1);
 });
+
+test('typing slowly into a bare link keeps every key under a Compact preference', async ({
+	page,
+	mock
+}) => {
+	server(mock, () => body(hits(3), { total: 3 }));
+	await page.addInitScript(compactCache);
+	await page.goto('/search');
+	const editor = page.getByRole('combobox', { name: 'Search torrents' });
+	await editor.click();
+	await page.keyboard.type('lantern', { delay: 120 });
+	await expect(editor).toHaveText('lantern');
+	await expect(row(page, 1)).toBeVisible();
+});
+
+for (const width of [390, 1440]) {
+	test(`a preference the shell applies after the rows are up moves nothing at ${width} px`, async ({
+		page,
+		mock
+	}) => {
+		server(mock, () => body(hits(3), { total: 3 }));
+		await page.setViewportSize({ width, height: 900 });
+		await page.addInitScript(() => {
+			const w = window as unknown as { __cls: number };
+			w.__cls = 0;
+			new PerformanceObserver((list) => {
+				for (const e of list.getEntries() as unknown as {
+					value: number;
+					hadRecentInput: boolean;
+				}[])
+					if (!e.hadRecentInput) w.__cls += e.value;
+			}).observe({ type: 'layout-shift', buffered: true });
+		});
+		await page.goto('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		await expect(count(page)).toHaveText('3 results');
+		// The shell applies the saved preference with the first interaction, after the page starts.
+		await page.evaluate(() => (document.documentElement.dataset.density = 'compact'));
+		await expect(page.getByTestId('view-select')).toHaveValue('list');
+		await expect(row(page, 1)).toHaveAttribute('data-density', 'comfortable');
+		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
+		expect(cls).toBeLessThan(0.01);
+	});
+}

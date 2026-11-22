@@ -132,38 +132,40 @@ describe('the More popover (below 640 px)', () => {
 });
 
 describe('the account density preference', () => {
-	afterEach(() => delete document.documentElement.dataset.density);
-
-	it('sets the view of a link that names none, in the URL, replacing the entry', async () => {
-		document.documentElement.dataset.density = 'compact';
-		render(ResultsToolbar);
-		await waitFor(
-			() =>
-				expect(goto).toHaveBeenCalledWith('/search?q=lantern&density=compact', {
-					replaceState: true,
-					keepFocus: true,
-					noScroll: true
-				}),
-			WAIT
-		);
+	afterEach(() => {
+		delete document.documentElement.dataset.density;
 	});
 
-	it('leaves a link that names a view alone', async () => {
+	it('is the default view of a link that names none, and writes nothing to the URL', async () => {
+		document.documentElement.dataset.density = 'compact';
+		render(ResultsToolbar);
+		await tick();
+		expect((screen.getByLabelText('View') as HTMLSelectElement).value).toBe('compact');
+		expect(goto).not.toHaveBeenCalled();
+	});
+
+	it('loses to a view the link names', () => {
 		document.documentElement.dataset.density = 'cards';
 		visit('/search?q=lantern&density=comfortable');
 		render(ResultsToolbar);
-		await tick();
 		expect((screen.getByLabelText('View') as HTMLSelectElement).value).toBe('list');
-		expect(goto).not.toHaveBeenCalled();
 	});
 
-	it('reads the cache from the last visit, and not off /search', async () => {
-		localStorage.setItem('lodestar.appearance', JSON.stringify({ density: 'cards' }));
-		visit('/t/' + 'a'.repeat(40) + '?q=lantern');
+	it('does not move the view when the shell applies it late', async () => {
 		render(ResultsToolbar);
+		document.documentElement.dataset.density = 'cards';
 		await tick();
 		expect((screen.getByLabelText('View') as HTMLSelectElement).value).toBe('list');
-		expect(goto).not.toHaveBeenCalled();
-		localStorage.removeItem('lodestar.appearance');
+	});
+
+	it('writes the pick, and keeps a List the user chose under another preference', async () => {
+		document.documentElement.dataset.density = 'compact';
+		render(ResultsToolbar);
+		await fireEvent.change(screen.getByLabelText('View'), { target: { value: 'list' } });
+		expect(goto).toHaveBeenCalledWith('/search?q=lantern&density=comfortable', {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true
+		});
 	});
 });

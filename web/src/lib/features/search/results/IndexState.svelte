@@ -70,7 +70,7 @@
 		{/snippet}
 	</EmptyState>
 {:else if banner?.kind === 'growing' && results.status !== 'empty'}
-	<Banner kind="info" class="rp-banner">
+	<Banner kind="info" class="rp-banner rp-growing">
 		<span data-testid="results-cold-start">{growing(state?.searchable_torrents ?? 0)}</span>
 	</Banner>
 {/if}

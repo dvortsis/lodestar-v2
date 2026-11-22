@@ -47,10 +47,14 @@
 	const FIGURES_WAIT_MS = 1000;
 
 	const locale = $derived(currentLocale());
-	const density = $derived<Density>(
-		page.url.searchParams.get('density') === 'compact' ? 'compact' : 'comfortable'
+	// The view's two URL parameters, else the account's Appearance density (toolbar/view.ts says the
+	// same, for the toolbar). It is read with the URL, so a preference the shell applies late takes
+	// effect with the next query, never rearranging the list on screen.
+	const look = $derived(
+		page.url.searchParams.get('density') ?? document.documentElement.dataset.density
 	);
-	const cards = $derived(page.url.searchParams.get('density') === 'cards');
+	const density = $derived<Density>(look === 'compact' ? 'compact' : 'comfortable');
+	const cards = $derived(look === 'cards');
 
 	const tableView = $derived(page.url.searchParams.get('view') === 'table');
 	// Table mode, the bulk bar and `x` load on demand (S-search-5): the list's first load is unchanged.

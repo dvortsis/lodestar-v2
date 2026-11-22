@@ -11,23 +11,19 @@
 	min-height: var(--control-height-dense);
 }
 /* Below x-large the Filters button (the rail's host) shares this row instead of standing above it:
-   the results region lets its children join the page grid, so the button takes the first column at
-   its own width and the toolbar the second, and everything after them spans the row. No width is
-   reserved by hand, so a long label ("Filters (12)", in any language) never overlaps. One row of
-   controls above the first result on a phone. Here, not in results.css: that chunk has no headroom. */
+   it sits over the results track's top-left, and the row leaves it room. The room is the host's
+   measured width (ResultsToolbar sets --tb-inset), so a long label ("Filters (12)", in any language)
+   never overlaps. One row of controls above the first result on a phone. Here, not in results.css:
+   that chunk has no headroom. */
 @media (width < 64rem) {
-	.search-grid:has(#results > .tb) {
-		grid-template-columns: auto minmax(0, 1fr);
-		column-gap: calc(var(--spacing) * 2);
-		& > #results {
-			display: contents;
-			& > :not(.tb) {
-				grid-column: 1 / -1;
-			}
-		}
-		& > #search-rail {
-			align-self: start;
-		}
+	#search-rail {
+		position: absolute;
+		inset-block-start: 0;
+		inset-inline-start: 0;
+		z-index: 1;
+	}
+	.tb {
+		padding-inline-start: var(--tb-inset, 0);
 	}
 }
 /* L3: on a wide screen the controls follow the rows, not the far edge of the track. */
@@ -50,14 +46,17 @@
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
 }
-/* "Still growing" stays visible, as one compact line on a phone: no icon, caption size, tight padding. */
+/* "Still growing" stays visible, as one compact line on a phone: caption size, tight padding, and a
+   16 px icon (status is icon and text). */
 @media (width < 40rem) {
-	.rp-banner:has([data-testid='results-cold-start']) {
+	.rp-growing {
 		padding: var(--spacing) calc(var(--spacing) * 2);
 		font-size: var(--text-caption);
 		line-height: var(--text-caption--line-height);
 		> svg {
-			display: none;
+			inline-size: var(--icon-size-row);
+			block-size: var(--icon-size-row);
+			margin-block: 0;
 		}
 	}
 }
