@@ -87,6 +87,19 @@ for (const width of [1440, 1024]) {
 	}
 }
 
+test('index with imports: five tiles share one row at 1024 px', async ({ page, mock, go }) => {
+	await page.setViewportSize({ width: 1024, height: 900 });
+	const base = indexFixture();
+	mock.on('getInsightsIndex', indexFixture({ kpi: { ...base.kpi, new_searchable_imported: 900 } }));
+	await go('/insights/index');
+	const tiles = page.getByTestId('insights-stage-kpis').locator('> div');
+	await expect(tiles).toHaveCount(5);
+	const tops = await tiles.evaluateAll((els) =>
+		els.map((e) => Math.round(e.getBoundingClientRect().top))
+	);
+	expect(new Set(tops).size).toBe(1);
+});
+
 test('a phone shows no sideways scroll on any stage page', async ({ page, mock, go }) => {
 	await page.setViewportSize({ width: 390, height: 800 });
 	for (const p of pages) {
@@ -97,6 +110,19 @@ test('a phone shows no sideways scroll on any stage page', async ({ page, mock, 
 			true
 		);
 	}
+});
+
+test('discover: the harvested chart names the same time base as its tile', async ({
+	page,
+	mock,
+	go
+}) => {
+	mock.on('getInsightsDiscover', discoverFixture());
+	await go('/insights/discover');
+	const section = page.locator('section', { has: page.locator('#ins-discover-harvested-h') });
+	await expect(section.locator('.ins-sub')).toContainText('By first harvest');
+	await expect(section).toContainText('by first harvest.');
+	await expect(section).not.toContainText('by event time');
 });
 
 test('discover: Harvested says it counts by first harvest', async ({ page, mock, go }) => {

@@ -58,6 +58,8 @@ export interface ChartSpec {
 	csv?: string;
 	/** Every value is an estimate (shown with "≈"). */
 	approx?: boolean;
+	/** Counted by discovery cohort (first harvest), not event time (§10.9.3). */
+	cohort?: boolean;
 	/** A series of readings at the end of each bucket, not counts per bucket: no rate unit. */
 	snapshot?: boolean;
 	/** The axis unit of a snapshot chart; torrents when absent. */
@@ -249,6 +251,7 @@ export function mapDiscover(r: DiscoverResponse): StageModel {
 			title: m.insights_stage_discover_chart_harvested(),
 			csv: 'discover.trend',
 			approx: true,
+			cohort: true,
 			series: [
 				series(
 					r.trend,

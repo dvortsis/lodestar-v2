@@ -1772,8 +1772,8 @@ export default [
 		'41.05 KB'
 	),
 	// X-insights-story-stages (runner §2.26): the overview's first view, `/insights`: its own JS and CSS,
-	// the panels that mount after first paint included. uPlot, the print layout and the privacy banner
-	// load on their own and have entries of their own. Measured on the merged tree, 65.03 kB (62.75 kB on
+	// the panels that mount after first paint included. uPlot, the print layout (loaded after mount) and
+	// the privacy banner have entries of their own. Measured on the merged tree, 65.03 kB (62.75 kB on
 	// main before X-insights-story, 65.01 kB after it).
 	entry(
 		'Insights overview (own JS + CSS)',

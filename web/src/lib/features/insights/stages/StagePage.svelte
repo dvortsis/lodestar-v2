@@ -263,10 +263,14 @@
 		approx ? approxCount(v ?? null, locale) : formatCount(v, locale);
 	const previousLabel = (label: string) => `${label} · ${m.insights_overview_previous_period()}`;
 	// A snapshot chart is readings at the end of each bucket, so it has no "per hour" unit.
-	const summaryOf = (c: { title: string; snapshot?: boolean }) =>
+	const summaryOf = (c: ChartSpec) =>
 		c.snapshot
 			? m.insights_stage_chart_summary_snapshot({ title: c.title, range: rangeText })
-			: m.insights_overview_chart_summary({ title: c.title, unit, range: rangeText });
+			: (c.cohort ? m.insights_stage_chart_summary_harvest : m.insights_overview_chart_summary)({
+					title: c.title,
+					unit,
+					range: rangeText
+				});
 	// How many buckets have any value: none is "nothing measured", one is a reading, not a line.
 	const measured = (series: { values: (number | null)[] }[]) =>
 		(series[0]?.values ?? []).filter((_, i) => series.some((s) => s.values[i] != null)).length;
@@ -437,7 +441,9 @@
 						<p class="ins-sub">
 							{c.snapshot
 								? m.insights_stage_time_snapshot({ tz })
-								: m.insights_stage_time_event({ tz })}
+								: c.cohort
+									? m.insights_overview_stage_time_harvest()
+									: m.insights_stage_time_event({ tz })}
 						</p>
 						{#if !measured(c.series) && !hasPrevious(c)}
 							<p class="ins-sentence" data-testid="insights-chart-{c.id}-empty">
@@ -672,13 +678,12 @@
 
 <style>
 	/* The tiles share the row: as many as fit at the tile size, each growing to fill it, so three
-	   tiles do not leave two columns empty (§10.9.2's five fixed columns are the overview's). */
+	   tiles do not leave two columns empty (§10.9.2's five fixed columns are the overview's). The
+	   tile may shrink from 12 rem to 9.5 rem so that five (Index, with imports) share the 976 px
+	   row at 1024 px, as the shared rule did; the shared two-column layout stays below 40 rem. */
 	@media (min-width: 40rem) {
 		.ins-kpis-fit {
-			grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-		}
-		.ins-kpis-fit > :global(.ins-card:last-child:nth-child(odd)) {
-			grid-column: auto;
+			grid-template-columns: repeat(auto-fit, minmax(min(12rem, max(9.5rem, 19%)), 1fr));
 		}
 	}
 	/* The current stage, range and Compare state are shown, not only exposed to assistive tech:

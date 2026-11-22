@@ -6,7 +6,8 @@
 // strip shows, and both display the same text (the strip's exact count, the page's formatter).
 // Serve is not here: the strip is null until the search counters are read (metrics.md).
 import { render, screen } from '@testing-library/svelte';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { setLocale } from '$lib/paraglide/runtime.js';
 import StageStrip from '../overview/StageStrip.svelte';
 import { overviewFixture } from '../overview/fixtures';
 import { discoverFixture, fetchFixture, indexFixture, understandFixture } from './fixtures';
@@ -18,8 +19,11 @@ const o = overviewFixture({
 const find = (list: Metric[], key: string) => list.find((x) => x.key === key)!;
 const shown = (stage: string) => screen.getByTestId(`insights-stage-${stage}-exact`).textContent;
 
+afterEach(() => setLocale('en', { reload: false }));
+
 describe('stage KPIs show what the overview strip shows', () => {
-	it('discover, fetch, understand and index', () => {
+	it.each(['en', 'zh'] as const)('discover, fetch, understand and index in %s', (locale) => {
+		setLocale(locale, { reload: false });
 		render(StageStrip, { stages: o.stages, onjump: () => {} });
 		const rows: [string, Metric][] = [
 			[
@@ -56,7 +60,7 @@ describe('stage KPIs show what the overview strip shows', () => {
 				)
 			]
 		];
-		for (const [stage, x] of rows) expect(formatMetric(x, x.value, 'en')).toBe(shown(stage));
+		for (const [stage, x] of rows) expect(formatMetric(x, x.value, locale)).toBe(shown(stage));
 	});
 
 	it('the Discover figure is approximate and the Index one is a snapshot, as the strip says', () => {
