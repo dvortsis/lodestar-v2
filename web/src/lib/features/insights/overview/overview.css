@@ -22,12 +22,6 @@
 	flex-direction: column;
 	gap: calc(var(--spacing) * 6);
 }
-.ins-exceptions {
-	order: -1;
-}
-.ins-movement {
-	order: 1;
-}
 @media (min-width: 64rem) {
 	.ins-story {
 		display: grid;
@@ -35,20 +29,23 @@
 		gap: calc(var(--spacing) * 6);
 	}
 	.ins-exceptions {
-		order: 0;
-		grid-column: span 4;
+		grid-area: 1 / 9 / 2 / 13;
 	}
 	.ins-movement {
-		order: 0;
-		grid-column: span 8;
+		grid-area: 1 / 1 / 2 / 9;
 	}
 	.ins-funnel {
-		grid-column: 1 / -1;
+		grid-area: 2 / 1 / 3 / 13;
 	}
 	/* Nothing to act on: the movement keeps the row and the one-line note sits under it. */
-	.ins-story[data-calm] .ins-movement,
+	.ins-story[data-calm] .ins-movement {
+		grid-area: 1 / 1 / 2 / 13;
+	}
 	.ins-story[data-calm] .ins-exceptions {
-		grid-column: 1 / -1;
+		grid-area: 2 / 1 / 3 / 13;
+	}
+	.ins-story[data-calm] .ins-funnel {
+		grid-area: 3 / 1 / 4 / 13;
 	}
 }
 
@@ -60,4 +57,10 @@
 	gap: calc(var(--spacing) * 3);
 	min-width: 0;
 	padding-block: calc(var(--spacing) * 2);
+}
+
+@media print {
+	.ins-plain {
+		break-inside: avoid;
+	}
 }

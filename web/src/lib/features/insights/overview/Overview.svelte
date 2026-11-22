@@ -169,6 +169,8 @@
 			phase: insights.phase,
 			overview,
 			startup: insights.startup,
+			startupCheck: insights.startupCheck,
+			allTime: query.range === 'all',
 			stalled,
 			rangeText,
 			locale
@@ -207,12 +209,15 @@
 				onintensity={(level) => void insights.setIntensity(level)}
 				undo={insights.undo}
 				onundo={() => void insights.undoIntensity()}
+				onundohold={(held) => insights.holdUndo(held)}
 			/>
 
 			<!-- One plain sentence first (U25); it prints with the report (§10.9.6). -->
-			<p class="ins-health" data-testid="insights-health-sentence" data-kind={health.kind}>
-				{health.text}
-			</p>
+			{#if !fieldError}
+				<p class="ins-health" data-testid="insights-health-sentence" data-kind={health.kind}>
+					{health.text}
+				</p>
+			{/if}
 
 			<div class="sr-only" role="status" aria-live="polite" data-testid="insights-announce">
 				{announcement}
@@ -277,28 +282,10 @@
 					<KpiRow kpi={overview.kpi} annotations={overview.annotations} />
 				</section>
 
-				<!-- §10.9.6: trend 8 + needs attention 4, then the funnel 12. On a narrow screen CSS
-				     order gives the plan's order: exceptions, funnel, trend; the DOM is the wide reading order. -->
+				<!-- §10.9.6. The DOM is the narrow order (exceptions, funnel, trend), so keyboard and
+				     screen-reader order match what a single column shows. Wide screens place trend 8 +
+				     needs attention 4, then the funnel 12, with the grid (overview.css). -->
 				<div class="ins-story" data-calm={overview.exceptions.length === 0 ? '' : undefined}>
-					<section
-						id="insights-movement"
-						class="ins-section ins-movement"
-						aria-labelledby="insights-movement-heading"
-					>
-						<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
-							{m.insights_overview_movement_title()}
-						</h2>
-						<p class="ins-sub">
-							{m.insights_overview_movement_time({
-								tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
-							})}
-						</p>
-						<Lazy
-							load={() => import('./Movement.svelte')}
-							props={{ overview, query, rangeText }}
-							height="ins-sk-movement"
-						/>
-					</section>
 					<section
 						id="insights-exceptions"
 						class="ins-section ins-exceptions"
@@ -331,6 +318,25 @@
 							load={() => import('./Funnel.svelte')}
 							props={{ overview, query, rangeText }}
 							height="ins-sk-funnel"
+						/>
+					</section>
+					<section
+						id="insights-movement"
+						class="ins-section ins-movement"
+						aria-labelledby="insights-movement-heading"
+					>
+						<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
+							{m.insights_overview_movement_title()}
+						</h2>
+						<p class="ins-sub">
+							{m.insights_overview_movement_time({
+								tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
+							})}
+						</p>
+						<Lazy
+							load={() => import('./Movement.svelte')}
+							props={{ overview, query, rangeText }}
+							height="ins-sk-movement"
 						/>
 					</section>
 				</div>

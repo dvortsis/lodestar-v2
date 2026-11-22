@@ -2,6 +2,7 @@
 	// The global context bar (§10.9): range, compare, last updated and the crawler's pause and
 	// intensity. It stays usable when the overview fails to load. Compare is a parameter, not a
 	// filter; every non-default range is a chip that resets it.
+	import { tick } from 'svelte';
 	import IconPause from '~icons/ph/pause-bold';
 	import IconPlay from '~icons/ph/play-bold';
 	import IconError from '~icons/ph/x-circle-bold';
@@ -36,6 +37,8 @@
 		/** The level Undo restores for a few seconds after a change (U26); `onundo` restores it. */
 		undo?: { level: Intensity; note: 'set' | 'undone' };
 		onundo?: () => void;
+		/** Focus entered or left the Undo line: the 10 s wait pauses while it is inside. */
+		onundohold?: (held: boolean) => void;
 	}
 	let {
 		height = $bindable(0),
@@ -53,7 +56,8 @@
 		onresume,
 		onintensity,
 		undo,
-		onundo
+		onundo,
+		onundohold
 	}: Props = $props();
 
 	const locale = $derived(currentLocale());
@@ -86,11 +90,36 @@
 		{ value: 'all', label: m.insights_overview_range_all() },
 		{ value: 'custom', label: m.insights_overview_range_custom() }
 	]);
+	// One change at a time: while a request is in flight the state ignores another click (U26), and
+	// the control shows what the server has again. The options are not disabled: that would drop
+	// the keyboard focus from the radio.
+	const changing = $derived(busy === 'intensity');
 	const levels = $derived([
 		{ value: 'low', label: m.insights_overview_intensity_low() },
 		{ value: 'balanced', label: m.insights_overview_intensity_balanced() },
 		{ value: 'aggressive', label: m.insights_overview_intensity_aggressive() }
 	]);
+	const nameOf = (v: Intensity) => levels.find((l) => l.value === v)?.label ?? '';
+	let bar: HTMLElement | undefined = $state();
+	let undoShown = false;
+	// When the Undo line goes away while focus is on it (the button pressed, or the time up), focus
+	// moves to the intensity control instead of falling to the page.
+	$effect(() => {
+		const has = !!undo;
+		if (undoShown && !has) {
+			const a = document.activeElement;
+			// After the checked radio has followed the server's level.
+			if (!a || a === document.body)
+				void tick().then(() =>
+					bar
+						?.querySelector<HTMLElement>(
+							'[data-testid="insights-intensity"] [role="radio"][aria-checked="true"]'
+						)
+						?.focus()
+				);
+		}
+		undoShown = has;
+	});
 	const intensityEffect = $derived(
 		crawler
 			? {
@@ -140,7 +169,7 @@
 	};
 </script>
 
-<div bind:clientHeight={height} class="ins-bar" data-testid="insights-bar">
+<div bind:this={bar} bind:clientHeight={height} class="ins-bar" data-testid="insights-bar">
 	<div class="ins-row">
 		<SegmentedControl
 			options={ranges}
@@ -218,13 +247,18 @@
 					})}
 				</span>
 			{:else}
-				<SegmentedControl
-					options={levels}
-					bind:value={level}
-					label={m.insights_overview_intensity_label()}
-					dense
-					onchange={(v) => onintensity(v as Intensity)}
-				/>
+				<span data-testid="insights-intensity" class="contents"
+					><SegmentedControl
+						options={levels}
+						bind:value={level}
+						label={m.insights_overview_intensity_label()}
+						dense
+						onchange={(v) => {
+							if (changing) level = crawler.intensity;
+							else onintensity(v as Intensity);
+						}}
+					/></span
+				>
 			{/if}
 			<span class="ins-muted ins-sentence" data-testid="insights-intensity-effect"
 				>{intensityEffect}</span
@@ -233,15 +267,21 @@
 			<span class="ins-muted">{m.insights_overview_crawler_unknown()}</span>
 		{/if}
 		<!-- The region is always there so a screen reader announces the text when it appears. -->
-		<span class="ins-undo" role="status" data-testid="insights-intensity-undo">
+		<span
+			class="ins-undo"
+			role="status"
+			data-testid="insights-intensity-undo"
+			onfocusin={() => onundohold?.(true)}
+			onfocusout={() => onundohold?.(false)}
+		>
 			{#if undo && crawler}
 				{undo.note === 'set'
-					? m.insights_overview_intensity_undo_text({ level: levelName })
-					: m.insights_overview_intensity_undone({ level: levelName })}
+					? m.insights_overview_intensity_undo_text({ level: nameOf(undo.level) })
+					: m.insights_overview_intensity_undone({ level: nameOf(undo.level) })}
 				<Button
 					dense
 					onclick={() => onundo?.()}
-					disabled={busy === 'intensity'}
+					disabled={changing}
 					data-testid="insights-intensity-undo-button">{m.insights_overview_undo()}</Button
 				>
 			{/if}

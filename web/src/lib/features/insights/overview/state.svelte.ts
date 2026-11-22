@@ -102,43 +102,77 @@ export function createInsights() {
 	}
 
 	// Undo for the intensity click (UI review U26): the change applies at once; for UNDO_MS after the
-	// last change, Undo puts back the level before it. Each change pushes the level it replaced, so
-	// two changes in a row undo one step at a time. Nothing here changes what a level does.
+	// last change, Undo puts back the level before it. Each change pushes `{from, to}`, so two
+	// changes in a row undo one step at a time. Intensity actions run one at a time (the control and
+	// Undo are disabled meanwhile), so a step is never undone out of order. The 10 s wait pauses
+	// while focus is on the Undo line. Nothing here changes what a level does.
 	const UNDO_MS = 10_000;
-	let undoStack = $state<Intensity[]>([]);
-	let undoNote = $state<'set' | 'undone'>('set');
+	interface Step {
+		from: Intensity;
+		to: Intensity;
+	}
+	let undoStack = $state<Step[]>([]);
+	// What the line names: the level now in force and whether the last step was a change or an undo.
+	let undoShown = $state<{ level: Intensity; note: 'set' | 'undone' }>({
+		level: 'balanced',
+		note: 'set'
+	});
 	let undoTimer: ReturnType<typeof setTimeout> | undefined;
+	let undoHeld = false;
+	let disposed = false;
 	function armUndo() {
 		clearTimeout(undoTimer);
+		if (disposed || undoHeld) return;
 		undoTimer = setTimeout(() => (undoStack = []), UNDO_MS);
 	}
 	function dropUndo() {
 		clearTimeout(undoTimer);
 		undoStack = [];
 	}
+	let intensityBusy = false;
 	async function setIntensity(intensity: Intensity) {
-		const from = crawler?.intensity;
-		const ok = await act('intensity', () => api.patch('/crawler', { body: { intensity } }));
-		if (!ok || from === undefined || from === intensity) return;
-		undoStack = [...undoStack, from];
-		undoNote = 'set';
-		armUndo();
+		if (intensityBusy) return;
+		intensityBusy = true;
+		try {
+			const from = crawler?.intensity;
+			const ok = await act('intensity', () => api.patch('/crawler', { body: { intensity } }));
+			if (!ok || disposed || from === undefined || from === intensity) return;
+			undoStack = [...undoStack, { from, to: intensity }];
+			undoShown = { level: intensity, note: 'set' };
+			armUndo();
+		} finally {
+			intensityBusy = false;
+		}
 	}
 	async function undoIntensity() {
-		const previous = undoStack.at(-1);
-		if (previous === undefined) return;
-		const ok = await act('intensity', () =>
-			api.patch('/crawler', { body: { intensity: previous } })
-		);
-		if (!ok) return;
-		undoStack = undoStack.slice(0, -1);
-		undoNote = 'undone';
-		if (undoStack.length) armUndo();
-		else dropUndo();
+		if (intensityBusy) return;
+		const step = undoStack.at(-1);
+		if (step === undefined) return;
+		intensityBusy = true;
+		try {
+			const ok = await act('intensity', () =>
+				api.patch('/crawler', { body: { intensity: step.from } })
+			);
+			// The line may have expired while the request ran: then nothing is announced.
+			if (!ok || disposed || undoStack.at(-1) !== step) return;
+			undoStack = undoStack.slice(0, -1);
+			undoShown = { level: step.from, note: 'undone' };
+			if (undoStack.length) armUndo();
+			else dropUndo();
+		} finally {
+			intensityBusy = false;
+		}
+	}
+	/** Focus is on the Undo line: keep it; the 10 s starts again when focus leaves. */
+	function holdUndo(held: boolean) {
+		undoHeld = held;
+		if (held) clearTimeout(undoTimer);
+		else if (undoStack.length) armUndo();
 	}
 
 	/** Subscribes to the live feed; returns the unsubscribe. */
 	function start(): () => void {
+		disposed = false;
 		// Called from an effect: reading state here must not make the effect depend on it.
 		return untrack(subscribe);
 	}
@@ -163,6 +197,7 @@ export function createInsights() {
 		return () => {
 			offCrawler();
 			offInsights();
+			disposed = true;
 			dropUndo();
 			overviewSlot.cancel();
 			allSlot.cancel();
@@ -217,8 +252,14 @@ export function createInsights() {
 		undoIntensity,
 		/** The level Undo would restore, and whether the last step was a change or an undo. */
 		get undo(): { level: Intensity; note: 'set' | 'undone' } | undefined {
-			const level = undoStack.at(-1);
-			return level === undefined ? undefined : { level, note: undoNote };
+			return undoStack.length ? undoShown : undefined;
+		},
+		holdUndo,
+		/** `'pending'` while the all-time check is unanswered; `'failed'` when it errored. */
+		get startupCheck(): 'pending' | 'failed' | undefined {
+			if (!overview) return undefined;
+			if (startupState(query.range, overview, all) !== 'check') return undefined;
+			return allFailed ? 'failed' : 'pending';
 		}
 	};
 }

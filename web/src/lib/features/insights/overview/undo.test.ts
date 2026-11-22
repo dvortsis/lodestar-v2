@@ -39,7 +39,7 @@ describe('Undo for the intensity click (U26)', () => {
 	it('restores the previous level exactly, then offers nothing', async () => {
 		const { s, off } = await ready();
 		await s.setIntensity('aggressive');
-		expect(s.undo).toEqual({ level: 'balanced', note: 'set' });
+		expect(s.undo).toEqual({ level: 'aggressive', note: 'set' });
 		await s.undoIntensity();
 		expect(level).toBe('balanced');
 		expect(s.undo).toBeUndefined();
@@ -51,10 +51,10 @@ describe('Undo for the intensity click (U26)', () => {
 		await s.setIntensity('aggressive');
 		await vi.advanceTimersByTimeAsync(4000);
 		await s.setIntensity('low');
-		expect(s.undo?.level).toBe('aggressive');
+		expect(s.undo?.level).toBe('low');
 		await s.undoIntensity();
 		expect(level).toBe('aggressive');
-		expect(s.undo).toEqual({ level: 'balanced', note: 'undone' });
+		expect(s.undo).toEqual({ level: 'aggressive', note: 'undone' });
 		await s.undoIntensity();
 		expect(level).toBe('balanced');
 		expect(s.undo).toBeUndefined();
@@ -77,5 +77,60 @@ describe('Undo for the intensity click (U26)', () => {
 		await s.setIntensity('low');
 		expect(s.undo).toBeUndefined();
 		off();
+	});
+
+	it('names the level that was set and the level put back', async () => {
+		const { s, off } = await ready();
+		await s.setIntensity('aggressive');
+		expect(s.undo).toEqual({ level: 'aggressive', note: 'set' });
+		await s.setIntensity('low');
+		await s.undoIntensity();
+		expect(s.undo).toEqual({ level: 'aggressive', note: 'undone' });
+		off();
+	});
+
+	it('runs one intensity action at a time: a click during an Undo is ignored', async () => {
+		const { s, off } = await ready();
+		await s.setIntensity('aggressive');
+		const undoing = s.undoIntensity();
+		await s.setIntensity('low');
+		await undoing;
+		expect(patch).toHaveBeenCalledTimes(2);
+		expect(level).toBe('balanced');
+		expect(s.undo).toBeUndefined();
+		off();
+	});
+
+	it('a failed Undo keeps the step', async () => {
+		const { s, off } = await ready();
+		await s.setIntensity('aggressive');
+		patch.mockRejectedValueOnce(new Error('no'));
+		await s.undoIntensity();
+		expect(s.undo).toEqual({ level: 'aggressive', note: 'set' });
+		off();
+	});
+
+	it('expiry while Undo runs announces nothing, and focus on the line holds the 10 s', async () => {
+		const { s, off } = await ready();
+		await s.setIntensity('low');
+		s.holdUndo(true);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(s.undo).toBeDefined();
+		s.holdUndo(false);
+		await vi.advanceTimersByTimeAsync(10_100);
+		expect(s.undo).toBeUndefined();
+		off();
+	});
+
+	it('nothing is armed after the page is gone', async () => {
+		const { s, off } = await ready();
+		let release = () => {};
+		patch.mockImplementationOnce(() => new Promise((r) => (release = () => r({}))));
+		const pending = s.setIntensity('low');
+		off();
+		release();
+		await pending;
+		expect(s.undo).toBeUndefined();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });

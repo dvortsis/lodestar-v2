@@ -33,9 +33,9 @@ test.describe('the story', () => {
 		const h2 = await page.locator('main h2').allTextContents();
 		expect(h2).toEqual([
 			'Status',
-			'Movement',
 			'Needs attention',
 			'Where torrents are lost',
+			'Movement',
 			'What is arriving',
 			'Serve',
 			'Detail'
@@ -422,12 +422,17 @@ test.describe('crawler controls', () => {
 		await page.getByRole('radio', { name: 'Aggressive' }).click();
 		const undo = page.getByTestId('insights-intensity-undo-button');
 		await expect(undo).toBeVisible();
-		await expect(page.getByTestId('insights-intensity-undo')).toHaveAttribute('role', 'status');
+		const line = page.getByTestId('insights-intensity-undo');
+		await expect(line).toHaveAttribute('role', 'status');
+		// It names the level that was set, not whatever the last refetch returned.
+		await expect(line).toContainText('Crawler intensity set to Aggressive.');
 		await undo.focus();
 		await page.keyboard.press('Enter');
 		await expect.poll(() => mock.calls('patchCrawler').length).toBe(2);
 		expect(mock.calls('patchCrawler')[1]!.postDataJSON()).toEqual({ intensity: 'balanced' });
 		await expect(undo).toBeHidden();
+		// Focus goes to the intensity control, not the page.
+		await expect(page.getByRole('radio', { name: 'Balanced' })).toBeFocused();
 		// A second change shows Undo again and it expires by itself.
 		await page.getByRole('radio', { name: 'Low' }).click();
 		await expect(undo).toBeVisible();

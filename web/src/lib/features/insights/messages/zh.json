@@ -267,7 +267,6 @@
 	"insights_overview_cohorts_summary": "{range} 内的每个发现批次：已收集数，以及其中成为可搜索的数量。",
 	"insights_overview_cohorts_none": "此范围内还没有批次。",
 	"insights_overview_cohorts_all": "显示全部 {count} 个批次",
-	"insights_overview_cohort_searchable": "{count} 个可搜索",
 	"insights_overview_cohort_complete": "已完成",
 	"insights_overview_segments_title": "正在新增的内容",
 	"insights_overview_segments_time": "分组和类型使用事件时间。来源使用发现批次。",
@@ -341,7 +340,6 @@
 	"insights_health_degraded": "Lodestar 正在运行，但出现了问题。",
 	"insights_health_working": "Lodestar 运行正常。在{range}内，新增 {count} 个可搜索的种子。",
 	"insights_health_working_one": "Lodestar 运行正常。在{range}内，新增 1 个可搜索的种子。",
-	"insights_health_working_unknown": "Lodestar 运行正常。{range}内新增可搜索种子的数量暂不可用。",
 	"insights_health_attention_none": "没有需要你处理的事项。",
 	"insights_health_attention_one": "有 1 件事需要你处理。",
 	"insights_health_attention_many": "有 {count} 件事需要你处理。",
@@ -351,5 +349,8 @@
 	"insights_overview_intensity_undone": "爬取强度已改回{level}。",
 	"insights_overview_stage_time_range": "所选时间范围内",
 	"insights_overview_stage_time_harvest": "按首次收集时间",
-	"insights_overview_stage_time_now": "当前"
+	"insights_overview_stage_time_now": "当前",
+	"insights_health_unknown": "Lodestar 暂时无法判断是否运行正常：{range}内没有新增可搜索的种子，也无法确认它是否刚刚启动。",
+	"insights_health_working_all": "Lodestar 运行正常。迄今已有 {count} 个种子可供搜索。",
+	"insights_health_working_all_one": "Lodestar 运行正常。迄今已有 1 个种子可供搜索。"
 }

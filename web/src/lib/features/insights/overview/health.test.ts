@@ -31,13 +31,30 @@ describe('the health sentence says only what the data says', () => {
 		);
 	});
 
-	it('working: one torrent, and an unknown count, never print 0', () => {
+	it('working: one torrent, and "all" reads "so far"', () => {
 		expect(healthSentence(base({ overview: o({ new_searchable: 1 }) })).text).toContain(
 			'1 new torrent searchable'
 		);
-		const none = healthSentence(base({ overview: o({ new_searchable: null }) })).text;
-		expect(none).toContain('is not available');
-		expect(none).not.toMatch(/\b0\b/);
+		const all = healthSentence(base({ overview: o({ new_searchable: 5 }), allTime: true })).text;
+		expect(all).toContain('So far, it has made 5 torrents searchable.');
+		expect(all).not.toContain('Over all time');
+	});
+
+	it('does not say "working" while the startup check is open, or failed with nothing added', () => {
+		const pending = healthSentence(
+			base({ startupCheck: 'pending', overview: o({ new_searchable: 0 }) })
+		);
+		expect(pending.kind).toBe('loading');
+		expect(pending.text).not.toMatch(/working/);
+		const failed = healthSentence(
+			base({ startupCheck: 'failed', overview: o({ new_searchable: 0 }) })
+		);
+		expect(failed.kind).toBe('unknown');
+		expect(failed.text).not.toMatch(/Lodestar is working/);
+		// With torrents added, the data does say it is working.
+		expect(
+			healthSentence(base({ startupCheck: 'failed', overview: o({ new_searchable: 3 }) })).kind
+		).toBe('working');
 	});
 
 	it('counts what needs attention from the exceptions list', () => {

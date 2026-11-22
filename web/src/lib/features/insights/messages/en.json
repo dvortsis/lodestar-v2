@@ -136,7 +136,6 @@
 	"insights_overview_cohorts_summary": "Each discovery cohort over {range}: harvested, and how many became searchable.",
 	"insights_overview_cohorts_none": "No cohorts in this range yet.",
 	"insights_overview_cohorts_all": "Show all {count} cohorts",
-	"insights_overview_cohort_searchable": "{count} searchable",
 	"insights_overview_cohort_complete": "Complete",
 	"insights_overview_segments_title": "What is arriving",
 	"insights_overview_segments_time": "Groups and types use event time. Sources use discovery cohort.",
@@ -341,7 +340,6 @@
 	"insights_health_degraded": "Lodestar is running, but something is not right.",
 	"insights_health_working": "Lodestar is working. Over {range}, it made {count} new torrents searchable.",
 	"insights_health_working_one": "Lodestar is working. Over {range}, it made 1 new torrent searchable.",
-	"insights_health_working_unknown": "Lodestar is working. How many new torrents became searchable over {range} is not available.",
 	"insights_health_attention_none": "Nothing needs your attention.",
 	"insights_health_attention_one": "1 thing needs your attention.",
 	"insights_health_attention_many": "{count} things need your attention.",
@@ -351,5 +349,8 @@
 	"insights_overview_intensity_undone": "Crawler intensity set back to {level}.",
 	"insights_overview_stage_time_range": "In this range",
 	"insights_overview_stage_time_harvest": "By first harvest",
-	"insights_overview_stage_time_now": "Right now"
+	"insights_overview_stage_time_now": "Right now",
+	"insights_health_unknown": "Lodestar cannot tell yet whether it is working: nothing became searchable over {range}, and it could not check whether it has just started.",
+	"insights_health_working_all": "Lodestar is working. So far, it has made {count} torrents searchable.",
+	"insights_health_working_all_one": "Lodestar is working. So far, it has made 1 torrent searchable."
 }
