@@ -8,9 +8,14 @@ Runner brief, 2026-11-21Z, from X-labels (#1023): "Insights by-source rows carry
 - **`name` is the plugin's display name**, from the same cached `ops.sources()` registry provenance names its sources from (`torrents::plugin_names`). A plugin this build doesn't run keeps its manifest id, as `ProvenanceSource.name` does. A store id with no source row stays `source_{id}`, for both `key` and `name`.
 - **`key` is unchanged,** the plugin's manifest id, so ordering, links and the `source:` field still read it.
 - **Names are filled after the response cache.** Insights responses are cached by window and hour. `name_sources` fills `name` on each request, so a registry read that failed, which falls back to the ids, is never kept in the cache.
+- **Tested end to end** (`crates/api/tests/insights.rs`, runner's review). The test pipeline lists sources with display names, and can be made to fail its listing.
+  - `by_source_rows_carry_the_plugins_names` checks the names on the overview's rows, current and previous, on Discover's rows and in the CSV. It checks the fallbacks too: `gone` shows its id, and `source_5` stays as it is.
+  - `a_failed_listing_is_not_cached_with_the_response` gets ids while the listing fails. Then, in the same window and hour (a cache hit), it gets names once the listing has recovered. It waits for the registry's retry with a 20 s deadline, not a fixed sleep.
+  - Both fail if the previous period's rows aren't named, and both fail if Discover's aren't.
 
 ## `by_ip_family` keeps its shape (runner, §2.26)
 - `SegmentYield` was also `by_ip_family`'s row type. It stays as it was for that list, and the by-source list gets `SourceYield`, so a by-source row always has a name and `by_ip_family`'s JSON and CSV are byte-identical. A test pins both shapes (`by_ip_family_rows_carry_no_name`).
+- **The response bytes are identical; the schema's description text isn't.** `SegmentYield.key`'s doc comment now reads "What it's counted by", since it's no longer a source's, so `openapi.json` describes the field differently.
 
 ## Names are compile-time text (runner, §2.26)
 - **No clean-up helper.** A plugin's display name is its manifest's `name`, a `&'static str` compiled into the binary (`lodestar_sources::Manifest`), not input from outside. Svelte renders it as text, never as HTML. `ProvenanceSource.name` applies no clean-up either, and `crates/api/src/torrents.rs` is unchanged.
