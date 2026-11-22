@@ -10,6 +10,7 @@ import json
 import os
 import stat
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -44,7 +45,9 @@ printf 'docker %s\n' "$*" >> "$STUB/log"
 bad() { printf '%s\n' "$*" >> "$STUB/badargs"; exit 125; }
 is_running() { grep -qx "$1" "$STUB/running" 2>/dev/null; }
 case "$1" in
-  ps) [ "$*" = "ps --format {{.Names}}" ] || bad "$*"
+  info) [ "$*" = "info --format {{.ServerVersion}}" ] || bad "$*"; echo 27.0 ;;  # vm-status
+  ps) [ "$*" = "ps --filter name=^lodestar-collector --format {{.ID}}" ] && exit 0  # vm-status: none
+      [ "$*" = "ps --format {{.Names}}" ] || bad "$*"
       [ -n "$PS_FAIL" ] && exit 1; cat "$STUB/running" 2>/dev/null; exit 0 ;;
   inspect)
     case "$*" in
@@ -141,6 +144,7 @@ esac
 STUB_SYSTEMCTL = r"""#!/usr/bin/env bash
 printf 'systemctl %s\n' "$*" >> "$STUB/log"
 case "$*" in
+  "is-failed --quiet lodestar-block-guard") exit 1 ;;  # vm-status: the boot guard held
   "is-active --quiet lodestar-outage-watcher") [ -e "$STUB/watcher_active" ] ;;
   "daemon-reload") [ -s "$UNIT_DIR/lodestar-block-guard.service" ] || { echo "reload without the boot guard" >> "$STUB/badargs"; exit 1; }
                    echo x >> "$STUB/reloads"
@@ -439,6 +443,81 @@ class StartBlockControl(unittest.TestCase):
         # act's 50-minute job holds the longest session, with the SSH retries.
         longest = max(s["timeout"] for s in steps.BUILT.values()) + remote.FLOCK_WAIT + 60
         self.assertLess(longest + steps.SSH_ATTEMPTS_SECONDS, 45 * 60)
+
+
+class VmStatusMode(Base):
+    """X-vm-status-mode: vm-status names the block's mode in a line the control side keeps,
+    read by the same load_block_env that arm-switch and copy-off use."""
+
+    # The stubs for vm-status's own docker and systemctl calls are fixed answers
+    # (no collectors, boot guard held): these tests read only the mode line.
+    def mode_of(self, raw=None, **env):
+        """The mode line for a fresh block (a new directory per call), whose block.env is `raw` if given."""
+        shutil.rmtree(self.block, ignore_errors=True)
+        self.make_block(**env)
+        if raw is not None:
+            (self.block / "block.env").write_bytes(raw)
+        rc, lines, out = self.run_script("vm-status.sh")
+        self.assertEqual(rc, 0, out)
+        return [ln for ln in lines if ln.startswith("count block_mode_")]
+
+    def env_bytes(self, extra=b""):
+        return (self.block / "block.env").read_bytes() + extra
+
+    UNKNOWN = ["count block_mode_unknown 1"]
+
+    def test_abba_block_has_no_mode_line(self):
+        lines = self.mode_of()
+        self.assertNotIn(b"MODE=", self.env_bytes())
+        self.assertEqual(lines, ["count block_mode_abba 1"])
+
+    def test_on_only_block(self):
+        self.assertEqual(self.mode_of(MODE="on", PURPOSE="screen"), ["count block_mode_on 1"])
+
+    def test_mode_abba_in_the_file_is_unknown(self):
+        """The reader rejects it (start-block never writes it): abba is the absence of MODE."""
+        self.assertEqual(self.mode_of(MODE="abba"), self.UNKNOWN)
+
+    def test_bad_values_are_unknown(self):
+        for bad in ("", "ON", "off", "on ", "on\r", "abba; echo x", "$(id)", "203.0.113.77"):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.mode_of(MODE=bad, PURPOSE="screen"), self.UNKNOWN)
+
+    def test_lines_the_reader_rejects_are_unknown(self):
+        """None of these is MODE=on to load_block_env; status must agree, not guess."""
+        for extra in (b" MODE=on\n", b"MODE =on\n", b"#MODE=on\n", b"mode=on\n", b"MODE=on\r\n"):
+            with self.subTest(extra=extra):
+                self.mode_of(PURPOSE="screen")
+                self.assertEqual(self.mode_of(self.env_bytes(extra)), self.UNKNOWN)
+
+    def test_a_nul_inside_the_key_reads_as_the_reader_reads_it(self):
+        """bash's read drops the NUL, so load_block_env sees MODE=on and the block runs on-only:
+        status says on too, not abba."""
+        self.mode_of(PURPOSE="screen")
+        self.assertEqual(self.mode_of(self.env_bytes(b"MO\0DE=on\n")), ["count block_mode_on 1"])
+
+    def test_a_record_rejected_for_another_reason_is_unknown(self):
+        self.assertEqual(self.mode_of(ROLE="boss"), self.UNKNOWN)
+        self.assertEqual(self.mode_of(MODE="on", PURPOSE="screen", ROLE="boss"), self.UNKNOWN)
+
+    def test_marker_without_block_env_is_unknown(self):
+        self.make_block()
+        (self.block / "block.env").unlink()
+        rc, lines, out = self.run_script("vm-status.sh")
+        self.assertEqual((rc, [ln for ln in lines if "block_mode_" in ln]), (0, self.UNKNOWN), out)
+
+    def test_two_mode_lines_read_as_the_reader_does(self):
+        """load_block_env keeps the last of two valid MODE=on lines: on, as for arm-switch."""
+        self.mode_of(MODE="on", PURPOSE="screen")
+        self.assertEqual(self.mode_of(self.env_bytes(b"MODE=on\n")), ["count block_mode_on 1"])
+
+    def test_no_block_prints_no_mode(self):
+        rc, lines, out = self.run_script("vm-status.sh")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([ln for ln in lines if "block_mode" in ln], [])
+
+    def test_summary_keeps_the_mode(self):
+        self.assertIn("block_mode_on 1", steps.summary(0, self.mode_of(MODE="on", PURPOSE="screen")))
 
 
 class StartBlock(Base):

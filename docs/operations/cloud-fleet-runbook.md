@@ -206,7 +206,7 @@ By default a block is **ABBA**: segment 1 is the control, 2 and 3 the treatment,
   - `"mode": "on"` with `winners`: a stacked stage's control is the winners (`mode_needs_control`);
   - `"purpose"` without `"mode": "on"` (`purpose_needs_on_mode`);
   - any other mode or purpose value (`args_valid` alone).
-- **What the VM gets:** `block.env` gains `MODE=on` and `PURPOSE=screen`. start-block's answer counts one more `ok` than an abba block's (its `mode_on` line); the sure check is the `MODE=on` line in `/var/lib/lodestar-block/block.env`. Every segment starts Lodestar with the treatment's switches on. Everything else is the same as an ABBA block: the leak test, the host and boot guards, arm-switch after each segment, copy-off. No stop condition changes.
+- **What the VM gets:** `block.env` gains `MODE=on` and `PURPOSE=screen`. start-block's answer counts one more `ok` than an abba block's (its `mode_on` line); the sure check is `vm-status`: its answer carries `block_mode_on 1` (`block_mode_abba 1` for an ABBA block). `block_mode_unknown 1` is covered in §3.5. Every segment starts Lodestar with the treatment's switches on. Everything else is the same as an ABBA block: the leak test, the host and boot guards, arm-switch after each segment, copy-off. No stop condition changes.
 - **In the evidence:** copy-off marks the block `"mode": "on"` and every segment's `arm` as `treatment`. `analyze_cr.py effect` refuses such a block with `no_control_arm` (and `order_not_abba_or_baab`), so it never counts toward an A/B outcome. Each segment's own `segment` report reads as usual.
 - **A fresh-database screen's restart drill** (on the test VM, `infra/dev-vm/linux-lane.md` §2 step 5, with the commands at the end of §6): let Lodestar run **at least 12 hours** on its fresh database before the restart. An earlier restart doesn't test what the screen is for. That run uses the screen's own switches, the treatment on, not the shipped defaults of `linux-lane.md` §2 step 4.
   - A fleet on-only block can't give that: arm-switch restarts Lodestar after every segment (every 2 or 3 hours), and the block ends after segment 4 (8 or 12 hours). Use the fleet block for the treatment-on segments; do the 12-hour restart on the test VM.
@@ -232,8 +232,9 @@ By default a block is **ABBA**: segment 1 is the control, 2 and 3 the treatment,
 - **Works:** counters only, for example `done; <n> ok; block_segment <n>, collectors_running 1, disk_free_gib <n>, mem_available_mib <n>, uptime_hours <n>`.
   - A `failed:` list names what isn't so; `lodestar_running` between segments is normal.
   - No `block_segment` means no block is recorded.
-  - **During a block** it also reports `block_intact` and `host_guard_drops <n>`:
-    - `host_guard_drops` above 0 means the host guard (the rule that keeps the host from answering the VPN server outside the tunnel) went missing, after a reboot or a firewall flush, and was put back. The block isn't clean.
+  - **During a block** it also reports `block_intact`, `host_guard_drops <n>` and `block_mode_<mode> 1`:
+    - `block_mode_abba` or `block_mode_on` is the block's mode (`on` is an on-only block, §3.3.2). It comes from the same reader `arm-switch` and `copy-off` use.
+    - `block_mode_unknown` means the block's record (`block.env`) is missing or damaged. `arm-switch` and `copy-off` will refuse it. Don't start more work on that VM, and follow §3.3's steps for a block that can't be ended: run `copy-off`, and if it answers `failed: evidence_present, copy_off` or `failed: block_env`, escalate to the owner for cleanup.
     - `failed: block_intact` means the guard couldn't be put back. gluetun was stopped on purpose and the block is damaged. Run `copy-off`.
   - **`failed: boot_guard_held`** means the VM rebooted mid-block and the guard couldn't be held at boot. Docker is kept down on purpose, so `docker_up` fails too and no container runs, gluetun and Lodestar included. The VM itself is still on the internet (that's how this step reaches it). Anything that starts Docker again runs the same check first. That VM's block and its evidence are lost, because copy-off needs Docker: tear the fleet down.
 
