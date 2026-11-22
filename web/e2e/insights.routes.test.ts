@@ -449,6 +449,9 @@ test.describe('crawler controls', () => {
 		await page.getByRole('radio', { name: 'Aggressive' }).click();
 		await expect(page.getByTestId('insights-intensity-undo-button')).toBeVisible();
 		await page.getByRole('radio', { name: 'Low' }).click();
+		// Wait for the second change to land: the line names Low only then. Undo ignores a press
+		// while a change is in flight, by design, so pressing before this reads as "no request".
+		await expect(page.getByTestId('insights-intensity-undo')).toContainText('is now Low');
 		const undo = page.getByTestId('insights-intensity-undo-button');
 		await undo.focus();
 		await page.keyboard.press('Enter');

@@ -58,6 +58,8 @@ export interface ChartSpec {
 	csv?: string;
 	/** Every value is an estimate (shown with "≈"). */
 	approx?: boolean;
+	/** Counted by discovery cohort (first harvest), not event time (§10.9.3). */
+	cohort?: boolean;
 	/** A series of readings at the end of each bucket, not counts per bucket: no rate unit. */
 	snapshot?: boolean;
 	/** The axis unit of a snapshot chart; torrents when absent. */
@@ -199,14 +201,18 @@ export function mapDiscover(r: DiscoverResponse): StageModel {
 	// Harvest uniqueness comes from the rotating seen filter, so "unique" is always approximate
 	// (§10.9.3).
 	out.kpis = [
-		metric(
-			'harvested',
-			m.insights_stage_discover_harvested(),
-			k.harvested,
-			'count',
-			prevOf(p, (x) => x.harvested),
-			true
-		),
+		{
+			...metric(
+				'harvested',
+				m.insights_stage_discover_harvested(),
+				k.harvested,
+				'count',
+				prevOf(p, (x) => x.harvested),
+				true
+			),
+			// The one tile counted by discovery cohort; the rest are event time (§10.9.3).
+			help: m.insights_overview_stage_time_harvest()
+		},
 		metric(
 			'reported',
 			m.insights_stage_discover_reported(),
@@ -245,6 +251,7 @@ export function mapDiscover(r: DiscoverResponse): StageModel {
 			title: m.insights_stage_discover_chart_harvested(),
 			csv: 'discover.trend',
 			approx: true,
+			cohort: true,
 			series: [
 				series(
 					r.trend,
