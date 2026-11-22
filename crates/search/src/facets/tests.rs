@@ -1514,7 +1514,7 @@ fn a_long_list_reads_fewer_names_per_group() {
 
 #[test]
 fn spellings_are_found_as_words() {
-    let cases: [(&str, &str, Option<&str>); 19] = [
+    let cases: [(&str, &str, Option<&str>); 21] = [
         ("Movie.2020.1080p-RARBG", "rarbg", Some("RARBG")),
         // The last word of its own wins over an earlier one.
         ("Rarbg.Pack.Movie-RARBG", "rarbg", Some("RARBG")),
@@ -1551,6 +1551,9 @@ fn spellings_are_found_as_words() {
         ("Show-\u{212B}NGSTROM", "ångstrom", None),
         // A fit spelling elsewhere in the name still wins.
         ("KING-\u{212A}ING", "king", Some("KING")),
+        // Two whole-word spellings: the last one is taken.
+        ("-S.s", "s", Some("s")),
+        ("-s.S", "s", Some("S")),
     ];
     for (name, value, want) in cases {
         assert_eq!(spelling_in(name, value), want, "{name:?} {value:?}");
@@ -1636,6 +1639,11 @@ mod label_props {
         ) {
             let word = recased(&value, &mask);
             prop_assume!(super::super::fit_label(&word, &value));
+            // Only the word may spell the value: `spelling_in` takes the
+            // last match, so another spelling in the surrounding text
+            // (`-S.s` for `s`) would rightly win over it.
+            prop_assume!(!before.to_ascii_lowercase().contains(&value));
+            prop_assume!(!after.to_ascii_lowercase().contains(&value));
             // Mid-name or at the end.
             let name = if after.is_empty() {
                 format!("{before}-{word}")
