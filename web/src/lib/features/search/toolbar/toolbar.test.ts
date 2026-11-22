@@ -38,12 +38,14 @@ describe('viewHref', () => {
 	});
 	it('round-trips every view', () => {
 		for (const v of VIEWS)
-			expect(viewOf(new URL(viewHref(new URL('http://x/search?q=a'), v), 'http://x'))).toBe(v);
+			expect(viewOf(new URL(viewHref(new URL('http://x/search?q=a'), v), 'http://x').search)).toBe(
+				v
+			);
 	});
 });
 
 describe('viewOf: every old density and view combination lands on one option', () => {
-	const of = (q: string) => viewOf(new URL('http://x/search?' + q));
+	const of = (q: string) => viewOf('?' + q);
 	it.each([
 		['', 'list'],
 		['density=comfortable', 'list'],
@@ -60,7 +62,7 @@ describe('viewOf: every old density and view combination lands on one option', (
 });
 
 describe('the default view: the URL first, then the account preference, then the List', () => {
-	const of = (q: string, pref?: string) => viewOf(new URL('http://x/search?' + q), pref);
+	const of = (q: string, pref?: string) => viewOf('?' + q, pref);
 	it('uses the preference only when the URL names no view', () => {
 		expect(of('q=a')).toBe('list');
 		expect(of('q=a', 'comfortable')).toBe('list');

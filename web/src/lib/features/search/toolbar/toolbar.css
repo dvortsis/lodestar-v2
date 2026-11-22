@@ -16,14 +16,18 @@
    never overlaps. One row of controls above the first result on a phone. Here, not in results.css:
    that chunk has no headroom. */
 @media (width < 64rem) {
-	#search-rail {
-		position: absolute;
-		inset-block-start: 0;
-		inset-inline-start: 0;
-		z-index: 1;
-	}
-	.tb {
-		padding-inline-start: var(--tb-inset, 0);
+	/* Only while the toolbar is the region's first child: above it an alert (Details couldn't load)
+	   would be covered, and with no toolbar (the empty state) there is no row to share. */
+	.search-grid:has(#results > .tb:first-child) {
+		& #search-rail {
+			position: absolute;
+			inset-block-start: 0;
+			inset-inline-start: 0;
+			z-index: 1;
+		}
+		& .tb {
+			padding-inline-start: var(--tb-inset, 0);
+		}
 	}
 }
 /* L3: on a wide screen the controls follow the rows, not the far edge of the track. */

@@ -9,6 +9,7 @@ import {
 	indexState,
 	resultsCalls,
 	row,
+	rowOf,
 	server
 } from './search-results.fixtures';
 import { test } from './support/test';
@@ -133,7 +134,7 @@ test('Load more asks for the next page once, then the end line takes focus', asy
 	expect(resultsCalls(mock).filter((c) => c.cursor === 'p2')).toHaveLength(1);
 });
 
-for (const width of [1366, 390]) {
+for (const width of [1366, 768, 390, 360, 320]) {
 	test(`a pasted link does not shift as the toolbar and its count arrive at ${width} px`, async ({
 		page,
 		go,
@@ -156,7 +157,9 @@ for (const width of [1366, 390]) {
 		await expect(count(page)).toHaveText('3 results');
 		await expect(row(page, 1)).toBeVisible();
 		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
-		expect(cls).toBeLessThan(0.01);
+		// Below x-large the Filters host is placed over the row: no shift at all. A desktop page may
+		// carry a sub-pixel one (about 1e-4) that has nothing to do with it.
+		expect(cls).toBeLessThan(width < 1024 ? 1e-9 : 1e-3);
 	});
 }
 
@@ -258,7 +261,10 @@ test('typing slowly into a bare link keeps every key under a Compact preference'
 	await editor.click();
 	await page.keyboard.type('lantern', { delay: 120 });
 	await expect(editor).toHaveText('lantern');
-	await expect(row(page, 1)).toBeVisible();
+	await expect(row(page, 1)).toHaveAttribute('data-density', 'compact');
+	await expect(page).not.toHaveURL(/density=/);
+	// Each key may have asked once; the settled query ran, and the last answer is the one shown.
+	await expect.poll(() => resultsCalls(mock).at(-1)?.ast !== undefined).toBe(true);
 });
 
 for (const width of [390, 1440]) {
@@ -282,11 +288,69 @@ for (const width of [390, 1440]) {
 		await page.goto('/search?q=lantern');
 		await expect(row(page, 1)).toBeVisible();
 		await expect(count(page)).toHaveText('3 results');
+		const shift = () => page.evaluate(() => (window as unknown as { __cls: number }).__cls);
+		const before = await shift();
 		// The shell applies the saved preference with the first interaction, after the page starts.
 		await page.evaluate(() => (document.documentElement.dataset.density = 'compact'));
 		await expect(page.getByTestId('view-select')).toHaveValue('list');
 		await expect(row(page, 1)).toHaveAttribute('data-density', 'comfortable');
-		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
-		expect(cls).toBeLessThan(0.01);
+		// Two frames, so a shift the change would cause has been reported.
+		await page.evaluate(
+			() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
+		);
+		expect(await shift()).toBe(before);
 	});
 }
+
+test('a preference the shell applies late does not switch the rows when the drawer closes', async ({
+	page,
+	mock
+}) => {
+	server(mock, () => body(hits(3), { total: 3 }));
+	await page.goto('/search?q=lantern');
+	await expect(row(page, 2)).toBeVisible();
+	await page.evaluate(() => (document.documentElement.dataset.density = 'compact'));
+	await row(page, 2).click();
+	await expect(page).toHaveURL(/\/t\//);
+	await expect(page.getByTestId('drawer')).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(page).toHaveURL(/\/search\?q=lantern/);
+	await expect(rowOf(page, 2)).toBeFocused();
+	await expect(row(page, 2)).toHaveAttribute('data-density', 'comfortable');
+	await expect(page.getByTestId('view-select')).toHaveValue('list');
+});
+
+test.describe('the Filters button at 390 px never covers other content', () => {
+	test.use({ viewport: { width: 390, height: 800 } });
+	const overlaps = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+		a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+	test('the empty state’s title', async ({ page, mock }) => {
+		server(mock, () => body([], { total: 0 }));
+		await page.goto('/search?q=%20%20');
+		const title = page.getByTestId('results-empty-title');
+		await expect(title).toBeVisible();
+		const filters = page.getByTestId('facet-open');
+		if (await filters.count()) {
+			expect(overlaps((await filters.boundingBox())!, (await title.boundingBox())!)).toBe(false);
+		}
+	});
+
+	test('the “Details couldn’t load” alert above the toolbar', async ({ page, mock }) => {
+		server(mock, () => body(hits(3), { total: 3 }));
+		await page.goto('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		// What the page puts first in the results region when the drawer's chunk fails to load.
+		await page.evaluate(() => {
+			const alert = document.createElement('div');
+			alert.setAttribute('role', 'alert');
+			alert.textContent = 'Details couldn’t load.';
+			alert.style.cssText = 'padding:24px;border:1px solid';
+			document.getElementById('results')!.prepend(alert);
+		});
+		const alert = page.getByRole('alert').filter({ hasText: /Details couldn.t load/ });
+		await expect(alert).toBeVisible();
+		const filters = page.getByTestId('facet-open');
+		expect(overlaps((await filters.boundingBox())!, (await alert.boundingBox())!)).toBe(false);
+	});
+});

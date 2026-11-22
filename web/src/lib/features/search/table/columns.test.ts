@@ -6,6 +6,7 @@ import {
 	moveColumn,
 	nextSort,
 	normalize,
+	rawName,
 	readPrefs,
 	toggleColumn,
 	visible,
@@ -89,5 +90,15 @@ describe('header sort', () => {
 		expect(ariaSort('size', 'size')).toBe('descending');
 		expect(ariaSort('-files', 'size')).toBe('none');
 		expect(ariaSort('relevance', 'size')).toBe('none');
+	});
+});
+
+describe('the raw name', () => {
+	it('shows only when it differs from the title', () => {
+		expect(rawName({ title: 'The Lantern Keeper', name: 'The.Lantern.Keeper.1080p' })).toBe(
+			'The.Lantern.Keeper.1080p'
+		);
+		expect(rawName({ title: 'same', name: 'same' })).toBeNull();
+		expect(rawName({ title: null, name: 'no title' })).toBeNull();
 	});
 });

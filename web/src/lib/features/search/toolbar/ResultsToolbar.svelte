@@ -25,7 +25,9 @@
 	// The account's Appearance density is the default view. Like the rows, the toolbar reads it with
 	// the URL, so a preference the shell applies late waits for the next query (view.ts).
 	const pref = () => document.documentElement.dataset.density;
-	const view = $derived(viewOf(page.url, pref()));
+	// From the query string, so a new URL object with the same query (the drawer closing) re-reads nothing.
+	const qs = $derived(page.url.search);
+	const view = $derived(viewOf(qs, pref()));
 	const views = $derived(VIEWS.map((v) => ({ value: v, label: viewLabels[v]() })));
 	const viewLabels: Record<View, () => string> = {
 		list: m.search_table_view_list,
@@ -41,10 +43,12 @@
 		const rail = document.getElementById('search-rail');
 		if (!bar || !rail || typeof ResizeObserver !== 'function') return;
 		const el = bar;
-		const ro = new ResizeObserver(() => {
+		const set = () => {
 			const w = rail.offsetWidth;
 			el.style.setProperty('--tb-inset', w ? `${w + 8}px` : '0px');
-		});
+		};
+		set(); // before the first paint: the observer's first call comes a frame later
+		const ro = new ResizeObserver(set);
 		ro.observe(rail);
 		return () => ro.disconnect();
 	});

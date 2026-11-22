@@ -126,3 +126,7 @@ export function ariaSort(current: string, field: string): 'ascending' | 'descend
 	if (current === `+${field}`) return 'ascending';
 	return current === `-${field}` || current === field ? 'descending' : 'none';
 }
+
+/** The raw name the Raw name column shows: only when it differs from the title, as the List does. */
+export const rawName = (hit: { title: string | null; name: string }): string | null =>
+	hit.title !== null && hit.title !== hit.name ? hit.name : null;
