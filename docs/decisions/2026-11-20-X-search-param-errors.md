@@ -10,6 +10,7 @@ Follow-ups from #992's review (O1–O3): clearer, bounded errors for `/api/v1/se
   So a 10 kB value gives an error of well under 1 kB (64 characters before escaping), and an error can't carry a raw newline, escape sequence or bidi override into a log or the UI.
   - `sort_param` is shared, so the bounded echo also reaches `/facets`, `/export` and saved searches.
   - Query syntax errors (`query_syntax`) come from the search crate's parser, which this slice doesn't own. They already quote values with the same `Debug` escaping, and `q` is refused past `MAX_QUERY_BYTES` (2,048), so they're bounded and printable too. They're left as they are.
+
 - **A repeated parameter is named (O2).** `GET /search` with a parameter sent twice (`?sort=a&sort=b`) used to get the generic `bad_parameter` ("A query parameter has the wrong type or value.") with no field. It now gets `repeated_parameter`, `field: <name>`, "sort was sent more than once: send it once."
   - This covers every parameter `/search` takes, each single-valued: `q`, `ast`, `sort`, `limit`, `offset`, `hidden`, `tz`, `cursor`, `collapse`, `exact` and `explain`. A unit test checks that the list matches `SearchRequest`'s fields.
   - Unknown parameters are still ignored, repeated or not.

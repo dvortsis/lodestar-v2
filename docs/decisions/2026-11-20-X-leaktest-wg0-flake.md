@@ -11,31 +11,30 @@ The runner's brief (2026-11-20): the cloud lane's VPN leak test failed once with
   - **The numbers reject a leading zero** (`^(0|[1-9][0-9]{0,3})$`, and `IFACE_WAIT`'s likewise). `(( ))` reads `09` as octal and errors, which would have turned the budget off.
   - **`HELD_PHASE_WAIT` drops from 300 s to 180 s.** The step's sum, with every wait at its own limit and about 2 s per container start:
 
-    | Part | Limit |
-    |---|---|
-    | **Before phase B: about 325 s** | |
-    | gluetun's post-rules loop: 30 rounds of a 1 s sleep and three `docker` calls | about 60 s |
-    | `wait_healthy`: 60 rounds of `docker inspect` and a 2 s sleep | about 120 s |
-    | The host and phase-A capture starts | 20 s |
-    | The tunnel-up probes: `echo_ip` 10 s, TCP 5 s, DNS 5 s, ping about 6 s, IPv6 10 s | about 36 s |
-    | Phase A's blocked probes | about 29 s |
-    | Stopping and parsing the phase-A capture | about 20 s |
-    | About 20 container starts | 40 s |
-    | **Phase B** | |
-    | With flaps: the deadline, plus one retry slower than any before it | about 210 s |
-    | With no flaps: six first attempts | about 90 s |
-    | **After phase B: about 475 s** | |
-    | Stopping and parsing the phase-B capture | about 20 s |
-    | The recovery: post-rules loop 60 s, `wait_healthy` 120 s, `echo_ip` 15 s | about 195 s |
-    | `docker stop` | 10 s |
-    | The inbound capture start | 10 s |
-    | The stop window | 75 s |
-    | `docker start` | about 5 s |
-    | `wait_healthy` after the start | about 120 s |
-    | Stopping and parsing the host capture | about 20 s |
-    | About 10 container starts | 20 s |
-    | **Total, every wait at its limit, with flaps** | **about 1,010 s** |
-
+    | Part                                                                              | Limit             |
+    | --------------------------------------------------------------------------------- | ----------------- |
+    | **Before phase B: about 325 s**                                                   |                   |
+    | gluetun's post-rules loop: 30 rounds of a 1 s sleep and three `docker` calls      | about 60 s        |
+    | `wait_healthy`: 60 rounds of `docker inspect` and a 2 s sleep                     | about 120 s       |
+    | The host and phase-A capture starts                                               | 20 s              |
+    | The tunnel-up probes: `echo_ip` 10 s, TCP 5 s, DNS 5 s, ping about 6 s, IPv6 10 s | about 36 s        |
+    | Phase A's blocked probes                                                          | about 29 s        |
+    | Stopping and parsing the phase-A capture                                          | about 20 s        |
+    | About 20 container starts                                                         | 40 s              |
+    | **Phase B**                                                                       |                   |
+    | With flaps: the deadline, plus one retry slower than any before it                | about 210 s       |
+    | With no flaps: six first attempts                                                 | about 90 s        |
+    | **After phase B: about 475 s**                                                    |                   |
+    | Stopping and parsing the phase-B capture                                          | about 20 s        |
+    | The recovery: post-rules loop 60 s, `wait_healthy` 120 s, `echo_ip` 15 s          | about 195 s       |
+    | `docker stop`                                                                     | 10 s              |
+    | The inbound capture start                                                         | 10 s              |
+    | The stop window                                                                   | 75 s              |
+    | `docker start`                                                                    | about 5 s         |
+    | `wait_healthy` after the start                                                    | about 120 s       |
+    | Stopping and parsing the host capture                                             | about 20 s        |
+    | About 10 container starts                                                         | 20 s              |
+    | **Total, every wait at its limit, with flaps**                                    | **about 1,010 s** |
     - **No setting fits that worst case inside 900 s.** It needs all three `wait_healthy` calls to run out, which already fails the run, and the step's 900 s kill fails closed.
     - **A healthy run fits with margin.** Each `wait_healthy` takes 10–30 s and the post-rules loop a few seconds, so a run takes about 450–550 s before and after phase B. With phase B's 210 s for flaps, that is at most about 760 s, inside 900.
     - **With 300 s, the healthy case would come to about 880 s,** too close to 900.

@@ -1,6 +1,7 @@
 # X-sources-api-spec decisions (#561)
 
 Spec:
+
 - `runner/slices.yaml`, entry `X-sources-api-spec`.
 - `docs/decisions/2026-11-06-runner-sources-split.md` (#550).
 - `docs/decisions/2026-11-06-SRC-15b.md`.
@@ -10,6 +11,7 @@ Spec:
 This PR adds read-only API surface and one read-only store query. It opens no consent class and loosens nothing. The gate stays closed in v0.5.2 (#550).
 
 ## The credential spec lives in `Policy`, not `Manifest`
+
 - **`Policy.credentials: &'static [CredentialSpec]`** holds each credential's `name`, `label`, `kind` (`Secret` or `Username`) and `required`. `Policy::STRICT` gives `&[]`.
 - **Why `Policy`:**
   - It is the manifest's v2 half (§18.1), and `config_schema` already lives there.
@@ -19,6 +21,7 @@ This PR adds read-only API surface and one read-only store query. It opens no co
 - **The types are re-exported from `lodestar_sources::consent`**, since the crate's `manifest` module is private and `lib.rs` is outside this slice's owns.
 
 ## What each plugin declares
+
 - **Prowlarr, ThePornDB and StashDB:** `api_key`, labelled "API key", kind `secret`, required. These are the only names their code reads (`credentials.get(ID, API_KEY)`).
 - **No plugin's `CONFIG_SCHEMA` lists `api_key` any more** (runner, 00:29Z for Prowlarr, 01:00Z for the other two: one rule everywhere).
   - Prowlarr's `Config::from_json` already refused it as a setting, so a form built from the schema would have asked for a field the server rejects.
@@ -29,6 +32,7 @@ This PR adds read-only API surface and one read-only store query. It opens no co
 - **Four plugin files gained only `..Policy::STRICT`:** `full_scrape.rs`, `academic.rs`, `nyaa.rs` and `archive_org.rs`. Their `POLICY` listed every field, so the new field didn't compile without it. Prowlarr, which also listed every field, now sets `credentials` itself (its declaration), so it needs no `..Policy::STRICT`. Runner approval: see "Files outside the slice's owns".
 
 ## Checked against `consent::need` and what the plugins read
+
 - **`consent::check_spec(manifest, spec)`** checks four things:
   - each name passes `check_name`;
   - no name is an egress name (`egress.socks5.*`, the egress setting's);
@@ -46,6 +50,7 @@ This PR adds read-only API surface and one read-only store query. It opens no co
   - Account stays closed in this build, so today's rule changes nothing a user can reach.
 
 ## `GET /sources`: `credential_spec` and `config_schema`
+
 - **Both are new required fields of `Source`.** `credential_spec` lists the declared fields in order. `config_schema` is the plugin's JSON Schema, parsed.
 - **The listed schema has no secrets in it.** Before this PR, the three API-key plugins listed `api_key` in their schema as `"writeOnly": true`, as `Policy.config_schema`'s doc asked. None does now (above).
   - `GET /sources` strips secrets at any depth (runner's review, 2026-11-07T02:33Z), up to 16 levels; deeper counts as a secret (fail closed):
@@ -57,6 +62,7 @@ This PR adds read-only API surface and one read-only store query. It opens no co
 - **No value is ever listed.** The spec describes fields. `credentials` still lists only the names stored. `crates/api/tests/sources_spec.rs` stores a value and checks four places never quote it: the write's own response, both `GET` routes and the purge preview. It also checks that a malformed write's refusal doesn't quote it.
 
 ## The purge preview: `GET /sources/{id}/purge/preview`
+
 - **Session-only, no password, no body (runner, 2026-11-07T00:29Z).** It is a `GET`, behind the session guard like every Sources route, so an API key or feed token gets `401`. It returns counts only to a signed-in admin.
   - The password is asked once, by the commit (`POST /sources/{id}/purge`), as before. Asking for it at preview time would make SRC-15c's dialog either ask twice or keep the password in the page's memory between the two calls.
   - A `GET` fits the router's CSRF model: it writes nothing, and `GET /sources` is read with the same session cookie. `POST` on the preview answers `405`.
@@ -74,6 +80,7 @@ This PR adds read-only API surface and one read-only store query. It opens no co
 - **Size isn't reported yet.** §10.10.7 asks for "the exact count and size". SQLite can't attribute bytes on disk to rows cheaply, and the sum of the torrents' content sizes would read as disk space freed, which it isn't. The dialog shows counts; the button names the torrent count ("Delete 1,204,331 torrents found only by Nyaa", §10.10.7's own example). If a size is wanted, it's a later slice.
 
 ## `patchSource`'s description
+
 - It now says what this build does:
   - only a `none` source can be turned on;
   - every other class gets `400 invalid_setting` on `enabled` before its consent, acknowledgement or credentials are looked at;
@@ -83,9 +90,11 @@ This PR adds read-only API surface and one read-only store query. It opens no co
 - It no longer says an Account source gets `409 credentials_required`, which can't be reached in this build (#553), or describes the consent flow as live (`docs/decisions/2026-11-07-runner-followups.md`). The module doc says the same.
 
 ## OpenAPI
+
 `web/src/lib/api/openapi.json` was regenerated with `cargo run -p lodestar --bin openapi`, and `schema.d.ts` with `npm run api:types`. Neither was edited by hand.
 
 ## For SRC-15c
+
 - **The Account dialog** asks for `credential_spec`'s fields in order: a masked input for `secret`, a plain one for `username`. The label is the spec's English label until its messages are added. It sends `PATCH /sources/{id}/credentials` with `{name: value}` and never shows a stored value. `credentials` says which are stored, so a stored one shows as "Saved", with Replace and Remove.
 - **Generated settings forms** come from `config_schema` and are sent as `config` (only when `editable` lists `config`). The schema never holds a credential field.
 - **The purge dialog** calls `GET /sources/{id}/purge/preview` once when it opens (each call scans the store), shows the counts, and asks for the password only when you commit (`POST /sources/{id}/purge`). When `settled` is false, say the source is still on, so the purge may remove a little more.
@@ -93,18 +102,22 @@ This PR adds read-only API surface and one read-only store query. It opens no co
 - **`SourcePatch.password` is still missing from the schema** (SRC-15b's follow-up). It's outside this slice.
 
 ## For X-consent-gate-lift
+
 1. **Tighten `need` for Account to the spec** (runner, 2026-11-07T00:29Z, deferred here at 01:00Z): with any required credential declared, exactly those must be stored, not just any non-egress name. Keep today's rule for a plugin that declares none, which fails closed. `need`/`need_in` gain the plugin's `Policy::credentials`, and every caller passes it:
    - `crates/pipeline/src/control.rs`: line 635 (`switch_off_unapproved`), 1140 (the view's `need`), 1291 (enable) and 1434 (the credential write's lapse check);
    - `crates/pipeline/src/adult_enrich.rs:342`: the enricher `consent_met` gate;
    - `crates/pipeline/src/lib.rs:1259`: the enabled-by-default check.
 
    Line numbers are as of this PR's base. `consent::check_spec`'s `NotEnough` branch then has something to catch.
+
 2. **Refuse undeclared names** on `PATCH /sources/{id}/credentials` (`control::update_credentials`), egress names apart, so a typo can't satisfy `need` or sit unused in the store.
 3. **The download clients are Account with nothing of their own to store:** their credentials are Integrations'. Under today's `need` they can never be enabled. Decide their Account condition (for example, a configured client) before opening Account.
 4. **Prowlarr's schema allows `agents` up to 8, but its `max_agents` is 1** (SRC-14a). This isn't from this slice; noted because SRC-15c's generated form will show the field.
 
 ## Files outside the slice's owns
+
 Runner approval, in the runner's replies to this session (2026-11-07T00:29Z, 00:30Z and 01:00Z):
+
 - `crates/sources-plugins/src/{prowlarr,stashdb,tpdb}.rs`: the `api_key` declaration, and `CONFIG_SCHEMA` without `api_key`.
 - `crates/sources-plugins/tests/{prowlarr,stashdb,tpdb}.rs`: the one assert each about `api_key` in the schema.
 - `crates/lodestar/src/ops/tests.rs`: the end-to-end preview test.

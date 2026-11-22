@@ -3,12 +3,14 @@
 Runner brief, 2026-11-22Z, with the runner's calls on step 0. It adds a `serve --fixture` variant so the Updates screen's "on" states run against the real server, offline. Core work: it sits beside update signing, so the security bounds below are the runner's and each one has a test.
 
 ## Scope (runner, step 0)
+
 - **Updates only.** The brief also asked for Backups and a failed rebuild.
   - **Backups are out** until that feature exists: the server has no Backups screen or route to serve.
   - **The failed rebuild is out too.**
 - **The brief's premise was corrected at step 0.** It read #1043's "rebuild" and "paused" as screen states a fixture could switch on. They are status-pill states. What the fixture can switch on is the Updates screen's: a release available, a recent check, automatic installs paused.
 
 ## The variant
+
 - **`lodestar serve --fixture [DIR] --fixture-variant updates-on`.** The value is a closed list (clap `ValueEnum`), so an unknown name is a usage error.
 - **`--fixture-variant` requires `--fixture`.** Plain `serve`, and `serve --child`, can't name one. A test covers this from the CLI parse down.
   - **clap `requires` alone wasn't enough.** clap waives a requirement when the missing argument conflicts with a present one, and `--fixture` conflicts with `--child`. So `serve --child --fixture-variant updates-on` parsed, which this slice's first test run caught. The argument now also `conflicts_with = "child"`, and the test checks both orders.
@@ -18,6 +20,7 @@ Runner brief, 2026-11-22Z, with the runner's calls on step 0. It adds a `serve -
 - **The mode is Notify** unless `--config` (`updates.mode`) or `LODESTAR_UPDATES` sets one. The default fixture leaves it Off, as before.
 
 ## Recorded in `fixture.json` (runner)
+
 - **A variant fixture's manifest has `"variant": "updates-on"`.** It's added after the build, through a temporary file and a rename as the builder writes it.
 - **The default fixture writes no key.** Its `fixture.json` is the builder's, byte for byte. A test builds one and checks that recording no variant leaves its bytes unchanged. `bench` (the builder) is untouched by this slice, so that file is main's.
   - **What that test proves, and what it doesn't** (#1051 review): it calls `record(None)` directly, so on its own it's close to a tautology. What holds the guarantee is that `run` writes the manifest only through `record`, and `bench` is unchanged. The integration test adds that a default fixture's `/updates` is still the unavailable stub.
@@ -29,6 +32,7 @@ Runner brief, 2026-11-22Z, with the runner's calls on step 0. It adds a `serve -
   - A refusal is exit 3 with nothing written, as for any other foreign folder. The DIR safety rules are unchanged: an empty or new folder is built, a matching fixture is reused, anything else is refused, and a temporary folder is used by default.
 
 ## What `/updates` answers (`fixture/updates.rs`)
+
 - **On:** `unavailable` is null and the last check is `ok` at the fixture's anchor.
 - **One release:** the next minor version after the running one, dated two days before the anchor. It has fixed notes saying it's a sample, and no notes link.
   - **Its level is `feature`,** a release level word (`fix`, `feature`, `major`) as the engine sends it, so the screen shows its level badge. It is not the policy's `features` (#1051 review).
@@ -39,6 +43,7 @@ Runner brief, 2026-11-22Z, with the runner's calls on step 0. It adds a `serve -
 - **`/system`'s Updates row** is on unless the mode is Off, checked at the anchor.
 
 ## Security bounds (runner; each is tested)
+
 1. **Nothing reaches out.** The provider holds no `Fetch`, no `Source` and no client. `update::start` returns it before any client is built, so none is built under the fixture.
 2. **No key and no verifier change.** The trust core (`crates/update`) isn't touched, and no key is added behind the `fixture` feature. That feature is in the default set, so a key behind it would ship (runner: that route is withdrawn).
 3. **Install is never offered.** `capability` is `{can_install: false, reason: "fixture"}` and rollback is unavailable for `fixture`.
@@ -46,10 +51,12 @@ Runner brief, 2026-11-22Z, with the runner's calls on step 0. It adds a `serve -
 5. **Only a variant fixture selects it.** `update::start` uses the sample only while both flags are set: serving a fixture, and that fixture's variant is `updates-on`. Only `fixture::serve` sets them, and plain `serve` never reaches it.
 
 ## The screen's wording
+
 - **No web change.** The Updates screen has no message for the reason `fixture`, so it shows its generic "This installation can't update itself." That's true here, and the screen's fixture banner doesn't show, because `unavailable` is null.
 - A fixture-specific line can come with a web slice if the screens want one.
 
 ## Tests
+
 - `fixture/updates.rs`:
   - the status shape;
   - the reason `fixture` on capability and rollback;

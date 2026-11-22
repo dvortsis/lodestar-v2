@@ -3,6 +3,7 @@
 Owner, 2026-10-30, with the runner's refinements marked as such. The owner's ruling is on #189 at 13:05Z, answering the runner-commissioned acceptance review on the same issue. The fit is the owner's, posted at 13:20Z. Build-plan §0.3 and §0.4.
 
 ## The owner's ruling
+
 - **CR-0 is accepted.** It passes every gate of the acceptance review. Memory passed under the criterion below.
 - **The memory criterion is loosened by the owner.** "Fitted slope ≈ 0 after hour 1" becomes **"no sustained growth", judged on baseline hours 12–24.**
   - This is an explicit owner loosening of the original wording, recorded as such.
@@ -14,18 +15,20 @@ Owner, 2026-10-30, with the runner's refinements marked as such. The owner's rul
 - **The v0.5.1 delta mapping proceeds** once the fit settles the gate. The fit below settles it.
 
 ## The fit
+
 These figures come from the 1,428 full-resolution baseline rows of the frozen soak `744b84d6` (r21) on the soak host. Only the aggregates are published. The raw samples stay private.
 
-| Window | n | OLS slope | 95% CI |
-|---|---|---|---|
-| Baseline hours 12–24 | 713 | −0.26 MiB/h | [−0.85, +0.32] MiB/h |
-| Baseline hours 1–24 | 1,367 | +3.56 MiB/h | [+3.31, +3.81] MiB/h |
+| Window               | n     | OLS slope   | 95% CI               |
+| -------------------- | ----- | ----------- | -------------------- |
+| Baseline hours 12–24 | 713   | −0.26 MiB/h | [−0.85, +0.32] MiB/h |
+| Baseline hours 1–24  | 1,367 | +3.56 MiB/h | [+3.31, +3.81] MiB/h |
 
 - **Peak private bytes:** 658,649,088 B (628.14 MiB), reached during the baseline.
 - **Verdict:** the upper bound of +0.32 MiB/h is within the 2 MiB/h bar. **The memory pass is final, not provisional.**
 - The 12–24 window shows no sustained growth. The 1–24 window includes the earlier growth that the ruling excludes.
 
 ## Runner refinements (§2.19, flagged to the owner)
+
 - **Linux gated series: anonymous private memory, the collector's `private_bytes` field.**
   - Under Docker this is cgroup v2 `memory.stat` `anon`, or `anon` from the Docker stats API when the cgroup tree isn't mounted. On a native run it's `RssAnon` from `/proc/<pid>/status`. Resident or working-set memory (`working_set_bytes`: VmRSS natively, `memory.current` minus `inactive_file` under Docker) is recorded beside it for context, but it isn't gated.
   - **Reason:** the bar was calibrated on Windows private bytes, which is committed anonymous memory.

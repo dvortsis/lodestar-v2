@@ -3,11 +3,13 @@
 `bench/tests/relevance_sets.rs`, `refused_while_a_server_holds_it`, failed once in #1029's CI (`test (ubuntu-latest)`, head 2f0f3237). It passed on a re-run.
 
 ## Which check failed
+
 - **It was line 346 at that head:** the success check right after `drop(held)`, the server's `index/.lock`. It wasn't the check after `writer.finish()`, as the brief and #1029's comment said.
 - **Both success checks are exposed** to the same mechanism.
 - **Reproduced on `main` (73bb8b68):** the test binary run 300 times with `--test-threads 16` failed 14 times. With its output printed, the tool said "in use: a running Lodestar holds …/index/.lock" right after the test dropped that lock. The same test alone (`--exact`) failed 0 of 300 times.
 
 ## The mechanism (Linux; macOS by the same reasoning)
+
 - **Both locks are `flock` locks:**
   - the tool's check (`File::try_lock_shared`, `bench/src/bin/relevance/data_dir.rs` `hold_locks`);
   - the lock tantivy takes (`MmapDirectory::acquire_lock`, fs4 `try_lock_exclusive`).
@@ -24,12 +26,14 @@
   - It hasn't been seen in CI. If it is, the fix is a condition wait of at least 10 s on the real state (re-run only while the output says "in use"), as the brief allows, not a sleep.
 
 ## Why `spawn` returning isn't enough
+
 - **The first fix held a mutex around `Command::spawn` only, and dropped the locks under it.** The reasoning: std's `spawn` waits for the exec, through `posix_spawn`'s vfork semantics or its close-on-exec error pipe.
 - **It still failed, 4 of 300 runs.**
 - **The reason:** Linux lets the parent go (vfork completion, or the error pipe's EOF) before it closes the child's other close-on-exec descriptors. In `begin_new_exec`, `exec_mmap` releases the vfork parent, and `do_close_on_exec` runs later.
 - **So "spawn returned" doesn't mean "the child holds no copies".** Only "the child exited" does.
 
 ## The fix (test only; the tool is unchanged)
+
 - **A `RwLock`, `CHILDREN`, in the test file:**
   - every run of the tool holds it for reading, from spawn to exit (`Command::output`);
   - a test holds it for writing while it drops a lock it then expects free: `held`, and `writer.finish(); drop(index)`.
@@ -39,11 +43,12 @@
 - **Every assertion on the tool's exit status now prints its stdout and stderr.** That includes the success checks (`succeeded`), the refusals, the failed gates and the exit-code-2 checks.
 
 ## Results
-| Run | Before (main 73bb8b68) | After |
-|---|---|---|
-| `cargo test -p lodestar-bench --test relevance_sets`, 20 times in a loop | 0 of 20 failed | 0 of 20 failed |
-| The test binary, `--test-threads 16`, 300 times | 14 of 300 failed | 0 of 300 failed (and 0 of 600 in a second run) |
-| The mutex around `spawn` only (first fix), 16 threads | — | 4 of 300 failed |
-| Without the guard on `drop(held)` (mutation check), 16 threads | — | 7 of 300 failed |
+
+| Run                                                                      | Before (main 73bb8b68) | After                                          |
+| ------------------------------------------------------------------------ | ---------------------- | ---------------------------------------------- |
+| `cargo test -p lodestar-bench --test relevance_sets`, 20 times in a loop | 0 of 20 failed         | 0 of 20 failed                                 |
+| The test binary, `--test-threads 16`, 300 times                          | 14 of 300 failed       | 0 of 300 failed (and 0 of 600 in a second run) |
+| The mutex around `spawn` only (first fix), 16 threads                    | —                      | 4 of 300 failed                                |
+| Without the guard on `drop(held)` (mutation check), 16 threads           | —                      | 7 of 300 failed                                |
 
 The default `cargo test` loop rarely shows the race on this machine, so the 16-thread loop is the one that tells.

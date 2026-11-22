@@ -154,7 +154,17 @@ test.describe('Discover at 390 px', () => {
 		const strip = page.locator('.dsc-tabs-box');
 		await expect(strip).toBeVisible();
 		expect(await strip.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-		await expect(page.getByText('The list of types scrolls sideways.')).toBeAttached();
+		// A focused tab is never faded and is scrolled fully into view.
+		await page.getByTestId('discover-tab-all').focus();
+		for (let i = 0; i < 6; i++) await page.keyboard.press('Tab');
+		await expect(page.locator('.dsc-tab:focus-visible')).toBeVisible();
+		expect(await strip.evaluate((el) => getComputedStyle(el).maskImage)).toBe('none');
+		const inside = await page.evaluate(() => {
+			const tab = document.querySelector('.dsc-tab:focus-visible')!.getBoundingClientRect();
+			const box = document.querySelector('.dsc-tabs-box')!.getBoundingClientRect();
+			return tab.right <= box.right + 0.5 && tab.left >= box.left - 0.5;
+		});
+		expect(inside).toBe(true);
 		const tab = await page.getByTestId('discover-tab-movie').boundingBox();
 		expect(tab!.height).toBeGreaterThanOrEqual(44);
 	});

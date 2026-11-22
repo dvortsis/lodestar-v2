@@ -3,10 +3,12 @@
 Slice X-restart-required-creds, assigned by the runner on 2026-11-11 to close self-review I1 of X-prowlarr-settings (#658, `2026-11-11-X-prowlarr-settings.md`): a plugin that keeps the credential it was built with (Prowlarr's `KeyAtStart`) went on showing `restart_required: false` after its key changed. The code is `crates/pipeline/src/control.rs`, one trait method in `crates/sources/src/plugin.rs`, Prowlarr's opt-in, and one `Monitor` method in `crates/pipeline/src/lib.rs` (a shared edit, below).
 
 ## Opt-in
+
 - **`SourcePlugin::pins_credentials`, false by default.** A plugin returns true when it reads its credentials once, when it's built, and uses those until the next start. Only those report a credential saved since. Plugins that read theirs fresh at each run need nothing and never show it.
 - **Prowlarr returns true only when built by `Prowlarr::at_start`,** the build that pins its key. `Prowlarr::new` (the fixture contract tests) reads the key each run and returns false.
 
 ## Comparison: the sealed values, recorded at the start
+
 - **`Control::start` records each pinning source's credentials as stored:** each name its `Policy::credentials` declares, with its sealed value or none. `Control::sources` reads them again, and any difference sets `config_pending`, which the API already shows as `restart_required` (`crates/lodestar/src/ops.rs`). No field, DTO or OpenAPI change, and no store change or migration.
 - **Why the sealed value, not a counter or a fingerprint:**
   - The store has no per-source credential revision. Adding one without a migration would mean a new `settings` key written in `Store::update_source_secrets`, which is the store crate's and outside this slice.
@@ -21,6 +23,7 @@ Slice X-restart-required-creds, assigned by the runner on 2026-11-11 to close se
 - **Clearing:** the next start records what's stored then, so a restart on the new key clears it.
 
 ## For the runner
+
 - **`2026-11-09-CMP-5g.md`'s "after a hand-over the Prowlarr source shows `restart_required`"** isn't edited here. It becomes true once X-prowlarr-register registers the plugin through `at_start`. Until then the plugin isn't registered. The hand-over itself is tested here over a stand-in pinning plugin: the same settings saved again and a new key.
 - **Shared edit, test:** `crates/sources-plugins/tests/prowlarr.rs` gets `only_the_start_build_pins_its_key` (`at_start` pins; `new` and `unconfigured` don't). The runner approved it (2026-11-11).
 - **Shared edit:** `crates/pipeline/src/lib.rs` gets `Monitor::pins_credentials(id)`, beside `running_config`, so the control can ask a source's plugin. It isn't in the brief's owns; **the runner approved it** (2026-11-11). The runner suggested a `SourceStatus` field; the method in the same file is smaller. A field on `SourceStatus` instead would also have touched `crates/lodestar/src/metrics.rs`, whose test builds one; a `Policy` flag would have touched 66 policy literals.

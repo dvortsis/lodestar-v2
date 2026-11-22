@@ -3,6 +3,7 @@
 Follows `2026-11-02-status-connector.md`. The owner asked for the dashboard to be as automatic as possible, and for repo rules that keep it current with every change. Nothing in the crawler, store, search or UI changes.
 
 ## Decisions
+
 - **`runner/dashboard.yaml` holds everything GitHub can't show.** It replaces the hand-written copy of the plan that lived inside the connector (`src/meta.json` and the placement rules in `plan.ts`): phases, workstreams, placement rules, outside conditions, the owner queue, gates, roadmap steps, notes, the crawler rate and the soak timeline. The connector reads it from `main` on every refresh, so a plan change is a normal PR with no redeploy.
 - **Progress still comes only from GitHub:** a branch `slice/<id>`, an open PR titled `<id>: …`, and its merge. The runner's `state.json` is a fallback.
 - **Conditions that GitHub can answer answer themselves.** `auto: tag:v0.5.1` and `auto: branch:release/v0.5.1` are read from GitHub, so tagging the release releases the work that waited on it with no edit. Owner decisions stay manual (`met: true`), because they are recorded in prose.
@@ -14,9 +15,11 @@ Follows `2026-11-02-status-connector.md`. The owner asked for the dashboard to b
 - **Slices that appear without a placement rule** land in "Planned follow-ups" and are reported, instead of being hidden or failing the dashboard.
 
 ## Also from the review
+
 - A regex placement pattern that doesn't compile matches nothing and is reported, not thrown on every refresh. A pinned id or a described condition that `slices.yaml` doesn't have or use is reported too.
 - If GitHub can't answer the tag and branch lookups, an `auto:` condition keeps its value from the file instead of flipping to unmet.
 
 ## Not decided here
+
 - Whether `dashboard.yaml` should be generated from `docs/build-plan.md` (it is still written by hand).
 - The dashboard page itself is a Claude artifact, not a repository file. Its tooltips, filters and layout live there.

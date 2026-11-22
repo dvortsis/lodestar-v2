@@ -1,6 +1,7 @@
 # X-api-openapi-repeated decisions (#1021)
 
 Slice session, 2026-11-21. These are X-api-repeated-params' follow-ups (#1010, `docs/decisions/2026-11-21-X-api-repeated-params.md`, "Follow-ups"):
+
 - the OpenAPI 400 descriptions now name `repeated_parameter` where a route can answer it;
 - `GET /export` names an `ast` or `hashes` in its query as `/search` does.
 
@@ -12,18 +13,18 @@ No new error code, dependency or `unsafe`.
 
 Each list holds the codes that the route's own code paths can return as a 400, read from those paths, not from memory (runner). A code only POST can reach (`q_and_ast`, `invalid_ast`, `bad_json`, `bad_body`, `too_many_hashes`, `bad_hash`) is listed only on POST. Each list closes with one line saying the parameter at fault is in `field` where there is one, and that `query_syntax` also gives `start` and `end`.
 
-| Route | Before | Now |
-|---|---|---|
-| `GET /search` | no 400 listed | `repeated_parameter`, `bad_parameter`, `ast_needs_post`, `query_syntax`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep`, `bad_cursor` |
-| `POST /search` | no 400 listed | `bad_json`, `bad_body`, `query_syntax`, `q_and_ast`, `invalid_ast`, and the rest of GET's but `repeated_parameter`, `bad_parameter` and `ast_needs_post` |
-| `GET /facets` | no 400 listed | `repeated_parameter`, `bad_parameter`, `ast_needs_post`, `query_syntax`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz`, `bad_cursor` (`lease`) |
-| `POST /facets` | no 400 listed | `bad_json`, `bad_body`, `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz`, `bad_cursor` |
-| `GET /export` | "as `/search`'s", which listed nothing, and `ast`/`hashes` as `bad_parameter` | `repeated_parameter`, `bad_parameter`, `ast_needs_post`, `hashes_need_post`, `query_syntax`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` |
-| `POST /export` | "as GET's, or `too_many_hashes`, `bad_hash`" | `bad_json`, `bad_body`, `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused`, `too_many_hashes`, `bad_hash` |
-| `GET /logs` | `bad_parameter`, `unknown_component`, `bad_cursor` | `repeated_parameter` added |
-| `GET /logs/stream` | `bad_parameter`, `unknown_component` | `repeated_parameter` added |
-| `GET /logs/files/{name}`, `GET /logs/archive.zip` | `bad_parameter` | `repeated_parameter` added; `bad_parameter` is `format` or `redact` |
-| `GET /events` | `unknown_topic` only | `unknown_topic`, `repeated_parameter`, both with `field: "topics"` |
+| Route                                             | Before                                                                        | Now                                                                                                                                                                                                                   |
+| ------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /search`                                     | no 400 listed                                                                 | `repeated_parameter`, `bad_parameter`, `ast_needs_post`, `query_syntax`, `unknown_sort`, `bad_tz`, `unknown_collapse`, `explain_collapse`, `explain_first_page`, `cursor_and_offset`, `window_too_deep`, `bad_cursor` |
+| `POST /search`                                    | no 400 listed                                                                 | `bad_json`, `bad_body`, `query_syntax`, `q_and_ast`, `invalid_ast`, and the rest of GET's but `repeated_parameter`, `bad_parameter` and `ast_needs_post`                                                              |
+| `GET /facets`                                     | no 400 listed                                                                 | `repeated_parameter`, `bad_parameter`, `ast_needs_post`, `query_syntax`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz`, `bad_cursor` (`lease`)                                                               |
+| `POST /facets`                                    | no 400 listed                                                                 | `bad_json`, `bad_body`, `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_facet`, `bad_limit`, `unknown_sort`, `bad_tz`, `bad_cursor`                                                                              |
+| `GET /export`                                     | "as `/search`'s", which listed nothing, and `ast`/`hashes` as `bad_parameter` | `repeated_parameter`, `bad_parameter`, `ast_needs_post`, `hashes_need_post`, `query_syntax`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused`                           |
+| `POST /export`                                    | "as GET's, or `too_many_hashes`, `bad_hash`"                                  | `bad_json`, `bad_body`, `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused`, `too_many_hashes`, `bad_hash`                     |
+| `GET /logs`                                       | `bad_parameter`, `unknown_component`, `bad_cursor`                            | `repeated_parameter` added                                                                                                                                                                                            |
+| `GET /logs/stream`                                | `bad_parameter`, `unknown_component`                                          | `repeated_parameter` added                                                                                                                                                                                            |
+| `GET /logs/files/{name}`, `GET /logs/archive.zip` | `bad_parameter`                                                               | `repeated_parameter` added; `bad_parameter` is `format` or `redact`                                                                                                                                                   |
+| `GET /events`                                     | `unknown_topic` only                                                          | `unknown_topic`, `repeated_parameter`, both with `field: "topics"`                                                                                                                                                    |
 
 - **POST's 400s for a bad body:** a body that isn't JSON is `bad_json`, and one that couldn't be read is `bad_body`. A body of the wrong shape is a `422 bad_body` (`extract::Json`), so it isn't among the 400s.
 - **Files outside the brief's owns (runner):**
@@ -55,6 +56,7 @@ Each list holds the codes that the route's own code paths can return as a 400, r
 ## The intensity summary (brief item 3)
 
 After CR-1c (#1014) merged, the summary of `PATCH /crawler` in `crates/api/src/ops.rs` says what a live intensity change does with `dht.preset_slots` on, following `docs/decisions/2026-11-21-CR-1c.md`:
+
 - new lookups start only within the new preset's count at once, and lookups already running finish, so the running count settles there (`Actor::running_slots` limits starts; the runner's review);
 - the query rate and outstanding cap follow at once;
 - the slot count, sized from the intensity the node starts with, follows only after a restart.

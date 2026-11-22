@@ -5,6 +5,7 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 **Outcome: a negative result, set down as a negative result.** Neither the merge policy nor the commit cadence passed the rule fixed in advance. The runner closed the slice after Phase 1 (2026-11-04, 18:01Z and 19:00Z): no Phase 2, no edit to `index.rs`. The commit cadence (M2) will be judged in its own slice, on disk and CPU grounds.
 
 ## Phase 1: the harness
+
 - **`bench/examples/mem-merge.rs`.** The production writers have no hook for a merge policy, and `index.rs` was off-limits until SB-6 (#415) merged. So the harness builds both writers itself, the way `SearchIndex::writer`, `Side` and `Indexer::commit` do:
   - one indexing thread and `serve`'s 256 MiB heap, split the same way;
   - the real schemas, the name and trigram tokenizers, and the file index's settings;
@@ -12,12 +13,14 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
   - #406's mmap-cache prune (`get_cache_info()`) after every commit.
 
   The documents come from the store, built with `TorrentDoc::new` and `files::file_docs`. The generator stores no enrichment, so the production path's `doc_enrichment` would be the default too.
+
 - **Modes:** `ingest` (memory), `latency` (search during ingest, through the real `SearchIndex` search path) and `fresh` (discovery-to-searchable at a pace, with `live.rs`'s commit rule and its 500 ms poll).
 - **Not exercised:** the extras in `live.rs`'s `follow` loop, which are the title set (`titles.committed()`), `IndexStats`, the commit hook and the population state; the `Retrying` directory wrapper; and the search-side query caches. The conclusions below cover the tantivy writers and store inserts that the harness drives.
 - **Schema version:** every measurement ran on base 3d45e86, schema v5, before SB-6 (#415, #418) added the `name_trigram` field (v6). The harness was brought up to v6 when `main` was merged in, and the latency table was re-run on v6; the memory rounds weren't. A trigram field adds terms per document, so v6 segments are larger, which could shift the levels measured here.
 - **Shared-file edits (`bench/Cargo.toml`, `Cargo.lock`):** a `tantivy` dev-dependency, at the same version and features as the search crate, and a `mimalloc-v2` feature for arm D. `Cargo.lock` gains only that dependency line for `lodestar-bench`.
 
 ## Rules, fixed before any result (15:41:01Z, sent to the runner before the first run finished)
+
 - **Workload:** 20,000 synthetic torrents per run (about 22 files each, so about 440k file documents), real schemas, merges on, accelerated (each commit as soon as the last one finishes).
 - **Arms, 3 runs each:**
   - A, B and D: 1 document per commit;
@@ -36,15 +39,16 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 - **Pass rule (B over A; the same for C over A and C over B):** every B run's upper bound is below every A run's point estimate, and mean B is below mean A. Runs that conflict make the result inconclusive. D is diagnostic only.
 
 ## Phase 1 results
+
 **Anonymous memory (musl, as shipped), MiB per 1,000 torrents.** Per run: slope [95% CI]. Arm: the mean of the 3 runs with a t-interval (df = 2).
 
-| Arm | Runs | Arm mean | ≈ MiB/h at 665/h | Anon at 20k (MiB) |
-|---|---|---|---|---|
-| A default | 1.99 [1.54, 2.44] / 3.56 [3.17, 3.94] / 2.50 [2.05, 2.96] | 2.68 [0.70, 4.67] | 1.79 | 124 / 159 / 130 |
-| B tuned | 1.39 [1.00, 1.78] / 2.41 [2.04, 2.78] / 3.33 [3.06, 3.59] | 2.38 [−0.03, 4.78] | 1.58 | 107 / 137 / 154 |
-| C tuned, 6/commit | 2.15 [1.65, 2.65] / 1.29 [0.72, 1.87] / 1.04 [0.49, 1.59] | 1.49 [0.05, 2.93] | 0.99 | 143 / 131 / 145 |
-| D1 A on mimalloc v2 | 1.46 [1.16, 1.75] / 1.32 [1.05, 1.60] / 2.05 [1.83, 2.27] | 1.61 [0.65, 2.57] | 1.07 | 114 / 100 / 115 |
-| D2 A, THP off | 2.13 [1.70, 2.55] / 3.02 [2.60, 3.45] / 2.50 [2.15, 2.84] | 2.55 [1.43, 3.67] | 1.70 | 118 / 130 / 109 |
+| Arm                 | Runs                                                      | Arm mean           | ≈ MiB/h at 665/h | Anon at 20k (MiB) |
+| ------------------- | --------------------------------------------------------- | ------------------ | ---------------- | ----------------- |
+| A default           | 1.99 [1.54, 2.44] / 3.56 [3.17, 3.94] / 2.50 [2.05, 2.96] | 2.68 [0.70, 4.67]  | 1.79             | 124 / 159 / 130   |
+| B tuned             | 1.39 [1.00, 1.78] / 2.41 [2.04, 2.78] / 3.33 [3.06, 3.59] | 2.38 [−0.03, 4.78] | 1.58             | 107 / 137 / 154   |
+| C tuned, 6/commit   | 2.15 [1.65, 2.65] / 1.29 [0.72, 1.87] / 1.04 [0.49, 1.59] | 1.49 [0.05, 2.93]  | 0.99             | 143 / 131 / 145   |
+| D1 A on mimalloc v2 | 1.46 [1.16, 1.75] / 1.32 [1.05, 1.60] / 2.05 [1.83, 2.27] | 1.61 [0.65, 2.57]  | 1.07             | 114 / 100 / 115   |
+| D2 A, THP off       | 2.13 [1.70, 2.55] / 3.02 [2.60, 3.45] / 2.50 [2.15, 2.84] | 2.55 [1.43, 3.67]  | 1.70             | 118 / 130 / 109   |
 
 - **Under the frozen rule, B over A, C over A and C over B all fail.** The highest upper bounds (B 3.59, C 2.65) are above A's lowest point estimate (1.99).
 - **Spread within an arm is larger than the gaps between arms.** The workload is deterministic, yet A's runs range from 1.99 to 3.56.
@@ -57,10 +61,10 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 **dhat (gnu), 1 run per arm, 20k torrents:**
 
 | Arm | Live heap growth (KiB per 1k torrents) | Live heap at 20k | Heap high-water, whole run | Median per-row high-water above the floor |
-|---|---|---|---|---|
-| A | 4.7 [4.1, 5.3] | 5.0 MiB | 44.7 MiB | 35.5 MiB |
-| B | 12.5 [11.2, 13.8] | 5.3 MiB | 42.3 MiB | 32.7 MiB |
-| C | 9.5 [8.1, 11.0] | 5.2 MiB | 43.6 MiB | 32.6 MiB |
+| --- | -------------------------------------- | ---------------- | -------------------------- | ----------------------------------------- |
+| A   | 4.7 [4.1, 5.3]                         | 5.0 MiB          | 44.7 MiB                   | 35.5 MiB                                  |
+| B   | 12.5 [11.2, 13.8]                      | 5.3 MiB          | 42.3 MiB                   | 32.7 MiB                                  |
+| C   | 9.5 [8.1, 11.0]                        | 5.2 MiB          | 43.6 MiB                   | 32.6 MiB                                  |
 
 - **Above the floor** means a row's sampled high-water minus that row's least live heap: what the heap rose by at its peak.
 - **The live heap is flat in every arm,** at about 5 to 13 bytes per torrent.
@@ -70,23 +74,26 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 
 **Search and commit latency during ingest:** 5,000 torrents, one arm at a time, gnu with mimalloc, schema v6. Each round of the four queries runs on a newly opened `SearchIndex` handle, because `SearchIndex::refresh` reloads only the torrent reader, and file clauses have to see the file index's current segments. (The first latency run missed this: its file clauses searched a stale snapshot, so it was discarded.) The corpus is small, so these figures show only whether anything regresses.
 
-| Arm | Commit p50 / p95 | Search p50 / p95 | Segments at the end |
-|---|---|---|---|
-| A | 38.8 / 75.6 ms | 0.41 / 2.66 ms | 10 / 10 |
-| B | 40.7 / 73.7 ms | 0.44 / 1.88 ms | 10 / 31 |
-| C | 46.0 / 86.2 ms (6 documents a commit) | 0.45 / 2.74 ms | 9 / 30 |
+| Arm | Commit p50 / p95                      | Search p50 / p95 | Segments at the end |
+| --- | ------------------------------------- | ---------------- | ------------------- |
+| A   | 38.8 / 75.6 ms                        | 0.41 / 2.66 ms   | 10 / 10             |
+| B   | 40.7 / 73.7 ms                        | 0.44 / 1.88 ms   | 10 / 31             |
+| C   | 46.0 / 86.2 ms (6 documents a commit) | 0.45 / 2.74 ms   | 9 / 30              |
 
 - **No arm regresses search** beyond the noise, though B and C keep three times A's file segments.
 
 **Discovery-to-searchable at 665 torrents/h:** 25 min per run, musl, schema v5 (the round-1 binary).
+
 - C (B with 30 s commits): p50 15.1 s, p95 28.6 s, max 30.2 s (273 torrents).
 - Today (A with 2 s commits): p50 0.3 s, p95 0.5 s, max 2.0 s (278 torrents).
 - Both are far inside the 10 min guardrail.
 
 ## Round 2: a large corpus (150k)
+
 **Why it ran.** Later, r4 showed steps of about 70–90 MiB that grew with the corpus (runner, 17:43Z). The 20k runs never build large segments, so a second round measured against a large index. The runner then reported that r4's corpus is small (12,365 documents at hour 16.8), and asked for this round to stop. The musl round had already finished, so it's reported, but it covers a regime the soak doesn't reach.
 
 **Rules, fixed at 18:05:17Z before any result:**
+
 - Each run seeds 150,000 torrents in 5,000-document commits, under its arm's own policy (the `--seed` flag).
 - Then it drips 20,000 torrents: 1 document per commit for A and B, 6 for C.
 - The fit runs from torrent 152,000 to the end.
@@ -95,11 +102,11 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
 
 **Results, musl anonymous memory, MiB per 1,000 torrents:**
 
-| Arm | Runs | Arm mean | Anon over the drip (MiB) | Largest step between rows (MiB) | Segments at the end |
-|---|---|---|---|---|---|
-| A default | 2.20 [1.83, 2.56] / 2.24 [1.83, 2.65] / 1.53 [1.12, 1.93] | 1.99 [0.99, 2.98] | 95→154 / 95→158 / 86→159 | 24 / 21 / 27 | 10 / 24 |
-| B tuned | 5.05 [4.41, 5.69] / 1.01 [0.68, 1.34] / 2.03 [1.70, 2.36] | 2.70 [−2.52, 7.91] | 97→207 / 91→142 / 101→155 | 45 / 22 / 26 | 24 / 68 |
-| C tuned, 6/commit | 2.75 [2.06, 3.44] / 2.05 [1.29, 2.81] / 3.64 [2.72, 4.55] | 2.81 [0.84, 4.78] | 123→180 / 99→187 / 89→210 | 34 / 42 / 34 | 25 / 58 |
+| Arm               | Runs                                                      | Arm mean           | Anon over the drip (MiB)  | Largest step between rows (MiB) | Segments at the end |
+| ----------------- | --------------------------------------------------------- | ------------------ | ------------------------- | ------------------------------- | ------------------- |
+| A default         | 2.20 [1.83, 2.56] / 2.24 [1.83, 2.65] / 1.53 [1.12, 1.93] | 1.99 [0.99, 2.98]  | 95→154 / 95→158 / 86→159  | 24 / 21 / 27                    | 10 / 24             |
+| B tuned           | 5.05 [4.41, 5.69] / 1.01 [0.68, 1.34] / 2.03 [1.70, 2.36] | 2.70 [−2.52, 7.91] | 97→207 / 91→142 / 101→155 | 45 / 22 / 26                    | 24 / 68             |
+| C tuned, 6/commit | 2.75 [2.06, 3.44] / 2.05 [1.29, 2.81] / 3.64 [2.72, 4.55] | 2.81 [0.84, 4.78]  | 123→180 / 99→187 / 89→210 | 34 / 42 / 34                    | 25 / 58             |
 
 - **Under the frozen rule, nothing passes.** B and C's means are above A's.
 - **Every arm shows steps of 20–45 MiB.** The tuned policy leaves two to three times the segments and doesn't make the steps smaller.
@@ -111,11 +118,13 @@ Runner brief X-merge-policy, 2026-11-04 (Track R, the r4 contingency; auto-appro
   - So the 20–45 MiB anonymous steps are most likely the allocator keeping pages from that high-water after it falls. The policy doesn't change them.
 
 ## Limits
+
 - **The pace is accelerated.** Commits run back to back, so retention driven by time isn't exercised: khugepaged collapsing pages, mimalloc's timed purge, and SQLite cache growth over hours. A run lasts minutes, where the soak runs for hours.
 - **The workload is synthetic:** generator torrents, with no enrichment.
 - **The per-hour figures are conversions** from MiB per 1,000 torrents, not measurements at the production pace.
 
 ## What it means
+
 - **At r4's corpus size (round 1), the ingest path retains about 2.7 KiB per torrent.** r4 had 12,365 documents at hour 16.8, so the 20k runs cover it.
   - At r4's measured rate (about 683 stored torrents an hour, about one commit per torrent, runner 19:00Z), A's mean is about 1.8 MiB/h.
   - That point estimate is below the 2.0 MiB/h gate, but the interval doesn't rule out failing it: A's upper bound of 4.67 MiB/1k is about 3.2 MiB/h.

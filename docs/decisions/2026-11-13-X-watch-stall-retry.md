@@ -3,10 +3,12 @@
 Brief: runner, 2026-11-13 (`briefs/X-watch-stall-retry.md`), Track Q (code review 2026-11-12). The 60 s span and the 10 min pending limit are the runner's §2.26 calls on this PR (2026-11-13), which the runner flags to the owner under §2.19. Refines UP-1's "read once it's complete" rule (`docs/decisions/2026-11-12-UP-1.md`, Polling and Afterwards); everything else there stands. Spec: architecture §3, §18.7.
 
 ## Why
+
 - **A stalled copy looked complete.** The watch reads a file once its size and modification time match on two polls 10 s apart. A copy over SMB or NFS that stalls for 10 s or more passes that test half-written, reads as malformed, and went to `failed/` for good. The user then had to find it and copy it in again.
 - **Stalls of 30–60 s are common on home NAS setups** (a disk spinning up, Wi-Fi roaming), so one more read wasn't enough. Losing a copy to `failed/` costs the user more than a broken file waiting a minute longer before it fails (runner).
 
 ## The rule (`crates/lodestar/src/watch.rs`)
+
 - **Only a Malformed verdict is held.** Valid, duplicate (also Accepted), held, refused, judging failed, too large, link, linked and unreadable are put away exactly as before. Those verdicts don't come from a file being incomplete.
 - **A file read as malformed stays where it is,** remembered with the size and modification time it was read at and the time of that read. It's counted in the poll's `waiting`, and in a new `rechecking` count (named so it isn't confused with the filter's `held` verdict), not in `failed`.
 - **`MALFORMED_SPAN` = 60 s of wall-clock time.** A file goes to `failed/` only when it reads as malformed with the same size and modification time it had at a malformed read at least 60 s earlier. The span is measured with a monotonic clock (`Instant`), not in polls, so it holds whatever the poll interval is.
@@ -16,6 +18,7 @@ Brief: runner, 2026-11-13 (`briefs/X-watch-stall-retry.md`), Track Q (code revie
   - In a folder with more than `MAX_SUBMIT` files ready, the read after the span waits for its turn in the rotation.
 
 ## The bounds (§2.26 numbers, the runner's call)
+
 - **`PENDING_FOR` = 10 min of wall-clock time per file,** measured on `Instant` from its first malformed read, however many times it changes. After that the file goes to `failed/` as `<stem>.malformed.torrent`, without another read, on the next poll that sees it, whether it's still changing or not.
   - **It replaces a count of holds** (an earlier round of this PR had 3). A count punished a copy that's slow but still making progress, such as a slow Wi-Fi SMB link or a large multi-file `.torrent` that reads malformed each time it's briefly still: it failed after three such reads though it never stalled for long (runner). No per-file count is kept now; memory is bounded by `MAX_HELD` alone.
   - **How the two limits interact:** the span decides for a file that stops changing. It fails 60 s after its last malformed read, unless the read after the span is valid. The 10 min limit decides for one that doesn't stop, however its changes fall. A change starts a new span but never a new pending time. So a file that stops changing late is failed at whichever comes first: its span ending, or 10 min from its first malformed read.
@@ -33,9 +36,11 @@ Brief: runner, 2026-11-13 (`briefs/X-watch-stall-retry.md`), Track Q (code revie
   - A change of setting that keeps the same folder keeps the set, spans and pending times included.
 
 ## Restart
+
 - **The set lives in memory only.** After a restart a held file is judged from scratch. It waits for two still polls and is read; if it's malformed, it's held for a fresh span. So a restart can add up to one more span and one more read to an unchanged file, and a fresh 10 min to one that keeps changing, since its pending time starts again. It never sends a file to `failed/` sooner than without one.
 
 ## Tests
+
 - **Real-binary tests** in `crates/lodestar/tests/watch.rs`:
   - **`a_stalled_copy_that_finishes_is_taken_not_failed`:**
     - Half a `.torrent` is written, then a valid file that sorts after it.

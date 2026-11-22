@@ -3,6 +3,7 @@
 Lane I, from IMP-4b's open list (`2026-10-31-IMP-4b.md`). No schema change, no API change.
 
 ## One filter loader
+
 - **The filter is built the same way at the server's start and in `lodestar import`** (#257 fresh review, important):
   - `crates/lodestar/src/filter_load.rs`, `sync_sources`: the config's subscriptions synced, the config's blocklist files synced into the floor, the subscribed lists applied. These steps need the binary's config types, so they live in the binary, not in `pipeline`.
   - `lodestar_pipeline::StoreFilter::read` and `lodestar_pipeline::load_filter` (now public): the store's CS-1 entries, CS-8 signatures and switches, then packs, your rules and classification rules. `Pipeline::start` calls it with what it read at start; the CLI calls it right after `sync_sources`.
@@ -14,6 +15,7 @@ Lane I, from IMP-4b's open list (`2026-10-31-IMP-4b.md`). No schema change, no A
   - The brief's "floor term" is taken as the CS-8 signature: the floor (CS-1a, CS-1b, CS-8a) is hashes and signatures, and a shipped term list entry would put a real term in a test.
 
 ## Jobs leave `indexing`
+
 - **The insights recorder completes them** (`crates/lodestar/src/insights.rs`, `finish_imports`). It already follows the serving index's commits and raises `index_watermark_hour`, so no new task or loop is added. It calls `Store::complete_indexed_import_jobs`:
   - at its start, after recording what the index committed before the hook was attached: jobs found in `indexing` (an offline import);
   - after each commit that raises the watermark;
@@ -31,12 +33,15 @@ Lane I, from IMP-4b's open list (`2026-10-31-IMP-4b.md`). No schema change, no A
 - **`status` while the server runs** reads through its own read-only connection, so it shows the new phase without a restart.
 
 ## CLI wording
+
 - `lodestar import status` says of an `indexing` job: "Waiting for the search index: the job completes once the running server, with search on, has indexed these torrents." It used to say the server indexes them after it starts.
 
 ## Tests
+
 - Store: `indexed_jobs_complete_when_the_watermark_passes_them` (not before the watermark, `complete_with_issues` with a waiting candidate, an empty job at once, a paused job waits, nothing twice).
 - Recorder: `the_recorder_completes_indexed_imports` (an empty job found at start, a job completing at the commit that reaches its last id and not at the one before, a reader opened earlier seeing each change, a job still waiting at shutdown staying in `indexing`). Condition waits with a 10 s deadline.
 - Parity: above.
 
 ## Left
+
 - Importing through the running server's writer and `origin="import"` in the gate: B-import-server-2.

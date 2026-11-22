@@ -3,6 +3,7 @@
 A way forward after a rolled-back join or a leftover coordinator folder in the Windows installer's "Join an existing Lodestar as a worker" mode (follow-up to WK-18w, #802; brief `briefs/X-wk18w-rollback.md`). Affects architecture §11 (Windows packaging) and §19.6 (joining).
 
 ## A rolled-back join: a rollback action, not only the recovery message
+
 - **The choice.** A join can succeed and the install still be undone (StartServices fails, a later step fails, or the user cancels). The credentials then stay in `C:\ProgramData\Lodestar`, and every retry is refused as already joined. #802's recovery message tells the user to delete the folder by hand. A rollback action makes that unnecessary in the common case, so this slice adds one. The message stays, for when the rollback couldn't run.
 - **What it removes: only what this setup made.**
   - `join-worker.ps1` writes `cluster\joined-by-setup` as soon as lodestar has finished, whenever this setup created the credentials (also if lodestar then failed, say saving the address), and never when the folder had joined before.
@@ -19,6 +20,7 @@ A way forward after a rolled-back join or a leftover coordinator folder in the W
 - **Left to the user: the coordinator's record.** The rollback can't remove the worker from the main Lodestar, which the token was spent on. The failure messages say to remove it in Settings, Workers before joining again.
 
 ## Messages
+
 - **Lodestar's own refusal is tested too.** A stub prints lodestar's wording, with no `lodestar.db` for the early check to find, and the test asserts the installer's message, never the `--data` advice.
 - **A worker's folder left by a plain uninstall, or by a setup undone without its rollback,** gets one message that fits both: the data folder already belongs to a worker; remove the worker on the main Lodestar, delete the folder as an administrator, and run setup again.
 - **A coordinator's folder left by a plain uninstall.** Someone installs Lodestar normally, uninstalls it (the data folder is kept by default), then installs again as a worker. lodestar refuses "a coordinator's data folder … --data", which an installer user can't act on. `join-worker.ps1` now finds `lodestar.db` before any token file or process. It also maps lodestar's own refusal, if one gets through. Either way it says to back up `C:\ProgramData\Lodestar` if its library is wanted, delete it as an administrator, and run setup again. It is still a failure.
@@ -26,17 +28,21 @@ A way forward after a rolled-back join or a leftover coordinator folder in the W
 - **Never `REMOVE_DATA=1` when nothing is installed.** The WK-18w decisions file and its notes for WK-19 now say to delete or back up the folder in that case. Uninstalling with `REMOVE_DATA=1` stays the advice only while Lodestar is installed.
 
 ## The optional items from rv-802
+
 - **The work folder's parent is pinned.** The script refuses work folders outside `%SystemRoot%\Temp`, the folder the custom action uses. A test passes its own folder (`-TestTempRoot`), and the MSI never does.
 - **Wider test deadlines:** the custom action's 30 s deadline against the script's 90 s.
 - **The pasted-token cases** use a second token-shaped value for the address. They check it appears nowhere, not even as `[join token]`, so a scrub where the address should be left out would be caught. One case runs the script directly, so its own check is tested without the custom action in front of it.
 - **An `lsj1` host is refused,** by the action and the script, also after `https://`.
 
 ## Files outside the brief's owns (the runner's call)
+
 - `packaging/windows/join-finish.ps1` is new. The rollback, commit and prepare steps can't live in `join-worker.ps1`, which needs the token on stdin and the join's arguments. It's installed with the join scripts (`join.wxs`) and never sees the token.
 - `packaging/windows/README.md`: its layout line names the new script.
 
 ## Tests
+
 `test-join-worker.ps1` covers:
+
 - the leftover coordinator folder (refused before lodestar runs, with no `--data` or `REMOVE_DATA` advice);
 - the marker: written for this setup's join and before a failed hand-off, never for a folder that had already joined, also when lodestar succeeds there;
 - a stale marker: removed by the join and by the prepare step, the earlier credentials untouched, and a rollback then removes nothing;

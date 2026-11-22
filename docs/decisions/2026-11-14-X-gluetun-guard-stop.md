@@ -3,11 +3,13 @@
 The test VM's re-test of the VPN leg on main 82797c01 (X-test-vm coordinator, 2026-11-14) found ICMP to the VPN endpoint leaving the host's egress interface from its public address. The host guard from #841 was held and never matched. This slice closes that window and fixes four problems the same run hit in the VM scripts (`infra/fleet/steps/vm`).
 
 ## The stop-window leak
+
 - **Two kinds of packet left:**
   - "host unreachable" sent from 10 to 58 s after `docker stop gluetun`: conntrack kept forwarding the endpoint's leftover WireGuard UDP towards the stopped container's bridge address, and the host answered;
   - one "port unreachable" from the new gluetun container 0.1 s after `docker start`, before its firewall was up.
 
   Both take FORWARD or OUTPUT, never INPUT, so the INPUT guard couldn't match them.
+
 - **What this supersedes:** `2026-11-13-X-gluetun-host-guard.md` says the endpoint's leftover packets match no NAT state and go to the host's INPUT. That's true once Docker has flushed the container's conntrack entries. Until then, leftover packets still match the old entry, are de-NATed towards the gone container's bridge address and take FORWARD, where the host answers "host unreachable". This file adds that case; the INPUT rule stays for the other.
 - **The host guard is now two rules,** both tagged `lodestar-leak-host`, held and released together everywhere the guard was: start-block, the leak test's own copy, `guard_resume` (the outage watcher, the outage-watcher step and the boot guard) and copy-off. The rules are:
   - the INPUT DROP for the endpoint's UDP, unchanged;
@@ -36,6 +38,7 @@ The test VM's re-test of the VPN leg on main 82797c01 (X-test-vm coordinator, 20
   - start-block's own limit goes from 2,400 to 2,455 s, the most the 45-minute session allows (the cap is unchanged; the runner's decision). To fit the new namespace restart under it, that restart is held to `timeout 75 docker restart -t 30`. The worst case then sums to about 2,405 s, which leaves about 50 s for the rest: a margin thinner than before, which the coordinator's loaded re-test should confirm.
 
 ## Data folder modes
+
 - **The problem:** Lodestar starts as root with only CHOWN, SETGID and SETUID (compose `cap_drop: ALL`), so root can't override file modes. On every start it opens `/data` to check the owner. A 0700 folder owned by 65532 refuses that on every start after the first: `PUID/PGID: opening /data: Permission denied`.
 - **The fix:** start-block, and arm-switch for a block started before this change, now:
   - create (or fix) the data and witness folders as 65532-owned, mode 0755;
@@ -50,6 +53,7 @@ The test VM's re-test of the VPN leg on main 82797c01 (X-test-vm coordinator, 20
 - **Product follow-up:** checking the folder's owner before opening it (it is readable without opening, through `symlink_metadata` or an `O_PATH` descriptor) would let a 0700 folder work in the product too. That's a product change, out of scope here.
 
 ## A locally built image
+
 - **The new key:** start-block takes `LOCAL_IMAGE_ID` (the 64 hex characters of `docker image inspect -f {{.Id}}`) in place of `IMAGE_DIGEST`, for test runs.
 - **How it's pinned:** Lodestar then runs `sha256:<id>`, content-pinned like the digest. The image is never pulled; the start stops (`lodestar_image`) unless an image with exactly that ID is present.
 - **Compose never pulls Lodestar's image** (`up --pull never`), in either mode: start-block has already pulled the registry image or checked the local one, so compose's own pull policy plays no part.
@@ -60,10 +64,12 @@ The test VM's re-test of the VPN leg on main 82797c01 (X-test-vm coordinator, 20
   - That `docker compose up` takes `image: sha256:<id>` as a local ID without trying to pull it is for the coordinator's first local-image run to confirm.
 
 ## The interface check under load
+
 - **The failure:** `vpn_interface_stayed_down` failed twice during a 4-core image build, with nothing captured. Its probe container couldn't start inside the probe's 40 s, and a probe that never ran counts as a failure.
 - **The fix:** the check now retries a probe that never ran, until a deadline of `IFACE_WAIT` seconds (120 by default, never less than 10). A probe that ran gives the verdict. Past the deadline it still fails, and `probe_ran` fails too. The retries poll once a second; nothing waits a fixed time.
 
 ## Lodestar after gluetun comes back
+
 - **The problem:** a gluetun that restarts (same container, new network namespace) leaves a running Lodestar in the old namespace. Its API stays unreachable until Lodestar restarts.
 - **The fix, and its limits:**
   - The scripts compare the two containers' namespace inodes (through their main processes) after Lodestar starts.
@@ -73,6 +79,7 @@ The test VM's re-test of the VPN leg on main 82797c01 (X-test-vm coordinator, 20
 - **Follow-up (product):** Lodestar in a shared namespace has no way to rejoin a restarted gluetun on its own. Whether the product, the Unraid template or the compose file should restart it is a separate decision.
 
 ## Tests
+
 - **The leak test (`tests/test_steps.py`):**
   - a stop window that passes with the rule and fails without it;
   - a host capture that died or can't be read;

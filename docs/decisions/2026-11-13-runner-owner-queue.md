@@ -5,6 +5,7 @@ On 2026-11-13 the owner gave the runner owner-queue items 4, 10, 14, 16, 17, 18,
 These are the runner's answers. Each is a §2.19 call, flagged to the owner, who can veto it. None reverses or loosens an owner decision, weakens a security or content-safety decision, or changes a number the owner set. Held findings are named by id, severity and surface only (§2.47, `docs/security/v1/README.md` §5).
 
 ## The owner queue
+
 - **Item 4, Checkpoint 1:** if the projection falls short of the crawler gate, the runner first runs the Track C fixes and measures again.
   - If it is still short, the runner reports to the owner with the evidence, and the owner re-decides the number. The runner never loosens the gate (§2.27); this delegation doesn't change that.
   - `ext:owner-checkpoint-1` now holds: the rule for the checkpoint is decided ahead of it.
@@ -39,6 +40,7 @@ These are the runner's answers. Each is a §2.19 call, flagged to the owner, who
 - **Item 12, the status connector deploy:** done (the connector is deployed), so the item leaves the queue.
 
 ## Other runner calls (§2.19)
+
 - **The gluetun host file lives outside Lodestar's data folder.** Nothing from Lodestar's data folder is ever mounted into a companion. X-gluetun-templates-hostfile writes `post-rules.txt` to a separate companion-files folder and mounts that one. Why: the data folder holds the store, keys and credentials, and a companion has no reason to see any of it.
 - **X-ci-advisories' triage of the three open advisories:**
   - **ctutils:** bumped through the lockfile.
@@ -46,6 +48,7 @@ These are the runner's answers. Each is a §2.19 call, flagged to the owner, who
   - **libsqlite3-sys (RUSTSEC-2026-0459):** a dated 30-day ignore in `deny.toml`, reviewed by 2026-12-13. The mitigation meanwhile is the importer's refusal of a database with `-wal` or `-journal` files. The new slice X-rusqlite-041 (rusqlite 0.41, libsqlite3-sys 0.39) fixes it and removes the ignore.
 
 ## Slices added to `runner/slices.yaml`
+
 - **X-sources-nits** (helper): #816's optional review findings (runner-state brief).
 - **X-gs2-nits** (Opus): rv-804's O1 to O5 for GS-2 (#804).
 - **X-gluetun-hostfile-ui** (helper): the companions screen's field for `gluetun_paths`, after X-gluetun-templates-hostfile.
@@ -54,4 +57,5 @@ These are the runner's answers. Each is a §2.19 call, flagged to the owner, who
 - **Notes:** X-gluetun-templates-hostfile gets the separate folder and the files the change needs; rv-815 O6 (the gluetun pin test's change filter) was first given to X-ci-advisories, which did not take it, and is now its own slice, X-gluetun-pin-ci-filter (#822); X-consent-gate-lift-account gets the `setupNeed` revisit.
 
 ## Flags for the owner (§2.19)
+
 - Every item above. Item 17's proposal 4 is the one not accepted, because it conflicts with three of your decisions.

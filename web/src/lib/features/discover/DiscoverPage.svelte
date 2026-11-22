@@ -178,7 +178,6 @@
 			<h1 class={PAGE_H1} tabindex="-1">{m.discover_title()}</h1>
 
 			<nav aria-label={m.discover_tabs_label()} class="dsc-tabs-box">
-				<p class="sr-only">{m.discover_tabs_more()}</p>
 				<ul class="dsc-tabs">
 					{#each tabs as t (t ?? 'all')}
 						<li>
@@ -186,6 +185,8 @@
 								href={resolve(tabHref(t, search) as Route)}
 								aria-current={tab === t ? 'page' : undefined}
 								class="dsc-tab {FOCUS_RING}"
+								onfocus={(e) =>
+									e.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}
 								data-testid="discover-tab-{t ?? 'all'}">{tabLabel(t)}</a
 							>
 						</li>
@@ -427,6 +428,10 @@
 		animation-timeline: scroll(self inline);
 		animation-range: calc(100% - var(--spacing) * 10) 100%;
 		mask-image: linear-gradient(to right, black calc(100% - var(--dsc-fade)), transparent);
+	}
+	/* The tab you are on is never faded: its label and focus ring keep their contrast. */
+	.dsc-tabs-box:has(:focus-visible) {
+		mask-image: none;
 		border-bottom: var(--border) solid var(--color-base-300);
 	}
 	.dsc-tabs {

@@ -3,6 +3,7 @@
 The runner's records PR after r12 (#1068). It records the runner's calls on 2026-11-22Z for #1069 to #1072, the four Track U slices running now, and the slices they leave. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
 ## Calls in merged slices
+
 - **X-size-limit-one-build (#1069):**
   - A plain `npx size-limit` now stops with an error naming `npm run size:ci`, unless `build/_app/version.json` says `0000000`, the measurement build's version.
   - **The config doesn't rebuild.** A size check must not replace `build/`, which other steps may be using.
@@ -30,6 +31,7 @@ The runner's records PR after r12 (#1068). It records the runner's calls on 2026
   - **Two nits wait for the next edit of `ci_changes.py`:** re-wrap the docstring at line 35, and say "the lockfiles" at lines 139–140.
 
 ## Calls in running slices
+
 - **One owner per file.** The owner's rule is that running slices' owns never overlap. Owner question n 30 asks for a narrow exception (additive lines in shared crawler files) and is still open; it wouldn't cover this file anyway. So `web/.size-limit.mjs` has one owner among the running slices: X-search-toolbar.
   - X-insights-story's new overview entry moves to X-insights-story-stages. The overview has no size entry on main today, so PR 1 lands unbudgeted, with its measured size in the PR, and that size is PR 2's baseline.
   - X-settings-find sends a measured size for its on-demand chunk, if no entry covers it, and the runner adds that entry after X-search-toolbar lands.
@@ -70,6 +72,7 @@ The runner's records PR after r12 (#1068). It records the runner's calls on 2026
     - two e2e specs and its decisions file.
 
 ## Cloud testing
+
 - **The escalation lane** (escalation on, cooldown split off) stalled about 36 minutes after suppression ended.
   - The cooling table reached its 200,000 cap, and the frontier stayed pinned.
   - Escalation re-asks after 300 s, but the record keeps its slot for 6 h. So escalation alone doesn't prevent the stall that `2026-11-20-X-sampler-cooldown-split.md` describes.
@@ -82,5 +85,6 @@ The runner's records PR after r12 (#1068). It records the runner's calls on 2026
 - **No new sampler-counter slice is needed.** `dht_sample_failures_total` and `dht_sample_cooling_reason` were added by X-sample-cooling-metric, after the lanes' build.
 
 ## New slices
+
 - **X-insights-story-stages:** X-insights-story's 03-q, the stage pages reconciled with the overview. The same session builds it after PR 1 merges. It also adds the Insights overview size entry, may edit the `[stage]` route, and never runs beside another slice that owns `web/.size-limit.mjs`.
 - **X-hit-resolution (core):** search results carry the release's resolution (null when none), and the table view gets I15's Resolution column. `SearchHit` has no such field today. It runs after X-units-typed and X-search-toolbar, which own the files it touches.

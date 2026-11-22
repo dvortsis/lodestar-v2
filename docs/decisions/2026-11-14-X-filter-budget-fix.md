@@ -3,6 +3,7 @@
 FILTER-13 and FILTER-14: the filter budget charges. The detail stays held under `docs/security/v1/README.md` §5.
 
 ## Calls
+
 - **Each word or character is charged as new once per torrent, whatever the cache's size** (owner, 2026-11-14). The tokenizer's caches stay the same size.
   - When a word or character finds its cache slot held by another the same read has used, the two trade places. The one displaced is kept for the rest of that read in an overflow store, and the store is emptied when the next read starts.
   - A displaced word goes first to a second table, direct-mapped by a hash of all its bytes, and plans move between the two by swapping in place. Only when that place is also held this read does it go to a hash map with std's randomly keyed hash, so no choice of text makes its look-ups slow. Each trade is charged the same fixed amount whichever holds the word, so a read always costs the same whatever earlier reads left behind. Each entry of the second table carries the read it was kept for, so a new read finds it free.
@@ -17,22 +18,24 @@ FILTER-13 and FILTER-14: the filter budget charges. The detail stays held under 
 - **The "ten thousand files in any script" claim is corrected** (`docs/architecture.md` §20.4's "Read whole" bullet, now updated, and the test's doc). Paths built from a few repeated words, each file numbered, now fit 9,344 to 10,880 files depending on the script, against an estimated 11,000 to 13,000 before: each file's new number is now charged in full. The test now holds 9,000. A collection whose file names vary is judged whole up to a number of files that depends on the script, pinned by a test at a floor under each measured number; there, fits rose in every script (below).
 
 ## Numbers
+
 Fits are the most files of about 60 bytes each, with names drawn from a 2,000-word vocabulary per script, that the core judges whole.
 
-| Script | Before | After |
-|---|---|---|
-| Latin | 4,032 | 5,312 |
-| Cyrillic | 4,928 | 5,888 |
-| Arabic | 4,736 | 5,760 |
-| Kana | 5,568 | 6,656 |
-| CJK | 1,680 | 2,944 |
-| Hangul | 1,152 | 2,432 |
+| Script   | Before | After |
+| -------- | ------ | ----- |
+| Latin    | 4,032  | 5,312 |
+| Cyrillic | 4,928  | 5,888 |
+| Arabic   | 4,736  | 5,760 |
+| Kana     | 5,568  | 6,656 |
+| CJK      | 1,680  | 2,944 |
+| Hangul   | 1,152  | 2,432 |
 
 Measured on the build VM: an Intel Xeon at 2.10 GHz with 4 vCPUs, a noisy host.
 
 Worst-case core judge time at the budget, scaled to the reference runner by the calibration workload: 44.2 ms before (one run), 11.7 ms after (the slowest input's best of five runs on a noisy host). Every input measured is under 15 ms. The core's time for a typical torrent is unchanged within the host's noise.
 
 ## Tests
+
 - `budget_worst_case` (`crates/filter/tests/props.rs`, ignored in debug, run by CI's `filter budget (§20.8)` job) adds generated inputs for the charges above. It fails on the code before this change and passes after. It now sizes each input with the core-aware `Core::read_cost`.
 - `generated_inputs_reach_the_budget` (`crates/filter/tests/props.rs`, runs in CI with no clock) covers the same generated inputs in work units, plus a sixth that pins the overflow store's charge. Each must reach the budget, and be held as CS-0a, at no more than a cap set about a quarter above today's fit. Every one fitted past its cap before these charges. It also checks that a torrent the read alone fits is held when judging its signals passes the budget.
 - `a_read_costs_the_same_whatever_came_before` (`crates/filter/src/normalize.rs`) reads random text whose words keep meeting in the caches. Each read must give the same work, cold work and tokens on a tokenizer used by earlier reads, metered or not, as on a new one.

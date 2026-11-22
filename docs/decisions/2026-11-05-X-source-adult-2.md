@@ -8,12 +8,14 @@ Slice X-source-adult-2 (runner brief, 2026-11-05T10:20Z). It closes the first tw
   - clearing that again makes it Adult once more.
 
   Only the classification uses the mask. The stored correction is still exactly what you sent, so the classification never pretends you said Is adult.
+
 - **How the API learns the mask.** `FiltersApi` gains `adult_sources: u64` (the bitset form of `AdultSources`), set in `crates/lodestar/src/services.rs` from a new `Pipeline::adult_sources()` getter. It's empty while no always-adult source is registered, so nothing changes today. The runner approved both hunks outside the brief's list.
 - **Imports read `unverified_items` in the commit's own transaction.** `commit_import_batch` (`crates/store/src/import.rs`) uses the connection's `AdultMark` from #479. For each torrent record, new or merged into a stored row, it reads the finders of any unverified item under the record's swarm hashes. When one is an always-adult source:
   - the row gains that source's bit (only the always-adult bits, never the other finders'). A disabled or purged source's bit is left out, as `Store::write` and `Store::promote` leave it out (SRC-14b), so the stopped-and-purged gap stays the runner's call and imports don't decide it;
   - `mark_adult_found` marks it for the backfill, unless it's stored Adult already or you said Not adult.
 
   So the derived signal is stored with the row in one transaction, and no crash can leave it un-adult with no retry. With an empty mark nothing is read. On the merge path the check runs before a held record's early return, since a claim under any of the record's hashes concerns the stored row. A candidate record (no info dict) that merges into a stored row does the same.
+
 - **The driver judges a claimed record as adult before the commit.** `driver::run` (`crates/sources-importers`) asks `Store::adult_finders` for each record's hashes:
   - A claimed record is judged by `lodestar_filter::reclassify::judge_source_adult`: detection's reading and the adult reading, the stricter verdict standing. That's the pipeline's `source_adult::judge`, moved to `lodestar-filter` with `stricter`, and the pipeline now delegates to it.
   - The record is stored Adult (nearest adult kind, as an Is adult correction makes it), so the commit writes it adult and the mark isn't needed.
@@ -41,6 +43,7 @@ Slice X-source-adult-2 (runner brief, 2026-11-05T10:20Z). It closes the first tw
     - a claim that another connection adds just before the commit leaves the row with the bit and the mark, and the backfill then makes it Adult (the crash between the two steps).
 
     Each half of the fix was switched off in turn to check that these tests fail without it. The brief's "crash between the two steps" is covered twice: the store test's crash inside the commit (nothing is left half-written), and the driver test's claim arriving after the driver's read (the commit's mark makes the backfill finish the job). `lodestar-sources-importers` gains `lodestar-pipeline` as a dev-dependency for the backfill.
+
   - `crates/store/src/import.rs`: a crash inside the transaction leaves nothing; the commit adds only the always-adult bit and marks the row; a disabled source's bit is left out; a merge into a row lacking the bit gains it and is marked, from a torrent record or a candidate; a row stored Adult gains the bit but isn't marked.
   - `crates/lodestar/src/cli/import/tests.rs`: the CLI's mask is Sukebei's bit only, matched by its manifest id, with the Adult code; it's empty while Sukebei isn't registered. End to end, `lodestar import start` stores a hash a Sukebei unverified item claims as Adult with Sukebei's bit, and the dump's other records as they were.
   - `crates/filter/src/reclassify.rs`: unit tests for `source_adult` and `stricter`.

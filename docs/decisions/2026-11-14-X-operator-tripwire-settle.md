@@ -3,6 +3,7 @@
 This supersedes the session check's window and retry bullets in `2026-11-14-X-operator-hardening.md` (OPERATOR-01). These change the tripwire's wake-session check (`infra/operator/tripwire.py`, `_wake_session`), which decides whether an incomplete sweep disables `operator-wake.yml` under the owner's decision of 2026-11-14 (`2026-11-14-X-operator-hardening.md`). They come from the reviewer session's third delta on #859, at component level. The rule itself is unchanged: an incomplete sweep disables when a wake session ran inside its lookback, or that can't be read.
 
 ## Settling counts
+
 - **Counts that don't add up are read again after a wait.** The check makes up to three attempts, with `SETTLE_SECONDS` (4) between them, through the injected wait function and inside its 45-second deadline. Before, the attempts followed each other at once, so a comment's run still moving from in flight to skipped could use them all up.
 - **A last mismatch made only by others' runs is no session.** It counts as no session when both hold:
   - every run listed in flight had a `gate` job that finished without success, so none can hold a session;
@@ -11,6 +12,7 @@ This supersedes the session check's window and retry bullets in `2026-11-14-X-op
 - **Stricter than the brief:** the brief asked only for the first condition. The second keeps a run in an unknown in-flight status from passing as "no session".
 
 ## The request budget and the window
+
 - **Runs in flight** (`in_progress`, `waiting`, `queued`, `pending`, `requested`) are still read from the last 30 days, the longest a job can wait for approval.
   - Their number is all runs minus `completed` ones, from two counts.
   - The status lists stop once they've found that many. With nothing in flight, which is usual, no list is read.
@@ -30,6 +32,7 @@ This supersedes the session check's window and retry bullets in `2026-11-14-X-op
 - **A run that just settled:** an in-flight list whose copy of a run already shows it completed and skipped passes over that run, and the counts decide. Before, it made a mismatch that could never count as settling.
 
 ## No session outside the window (the runner's call)
+
 - **A wake whose run is too old refuses to start a session.** `wake.py` reads its own run's creation time with the job's token (`actions: read`, which it already holds). It refuses when the run is older than `WAKE_RUN_MAX_AGE_MINUTES`: `COMPLETED_EXTRA_MINUTES` less `WAKE_JOB_MINUTES` less `WAKE_AGE_MARGIN_MINUTES`, that is 72 hours less 45 minutes less 15.
   - **Why the margin:** the 15 minutes cover the setup before the check, a cancellation's overrun and clock skew between the runner and GitHub.
   - **Where it runs:** before the lock, so a refused run holds nothing, and so before the token, the vault write and the session.
@@ -42,14 +45,17 @@ This supersedes the session check's window and retry bullets in `2026-11-14-X-op
 - **No workflow, permission or prompt change.** The agent's prompt and config are unchanged, so `operator-apply.yml` needs no re-dispatch. `wake.py` runs from `main`.
 
 ## Other accepted residuals, failing closed
+
 - **A burst of others' runs in flight.** Each run in flight costs a jobs read, so a timed burst of comments in flight at the moment of the check can pass the request cap, which counts as a session. It was the same before this change.
 - **If GitHub caps totals at 1,000.** Then a window whose counts sit at the cap is split, which costs more requests and can reach the cap. The cost figures above assume no cap; the first run verifies it.
 
 ## A run in flight with no jobs listed yet
+
 - **Kept failing closed; recorded as an accepted residual.** A run in flight whose jobs, or whose `gate` job, aren't listed within the re-reads (five, two seconds apart) counts as a session, whoever started it.
 - **Why not handle it:** GitHub lists a comment's skipped gate as soon as the run exists, as real runs on this repository show, so this needs a backlogged Actions queue. Telling a stranger's run from the runner's without its gate would need the comment's author. The sweep jobs don't receive the runner's ID, and passing it in would be a workflow change.
 
 ## Unchanged
+
 - The gate-success rule and the exact workflow-ref match for the end-of-wake sweep.
 - The escalation posted before the check, and a failed post with nothing disabled failing the job.
 - The time budget's 60-second margin (the budget test now also counts the settle waits and a last wait before the deadline).

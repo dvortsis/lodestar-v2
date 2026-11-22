@@ -16,12 +16,12 @@ From rv-756 N-3, a follow-up named in `2026-11-12-X-dht-lookup-converge.md`. Whe
 
 The sim's node has a public address, so in every scenario it takes a new BEP 42 id once, mid-bootstrap. It now runs the rejoin and a join planned around the new id, instead of a join planned from the old id's neighbourhood. The four goldens in `crates/crawler-sim/tests/sim/golden/` were re-blessed with `CRAWLER_SIM_BLESS=1`.
 
-| Scenario | Min-1 admitted | Steady completed /min | Steady fetched /min | queries_out |
-|---|---|---|---|---|
-| healthy | 116 → 128 | 271.6 → 266.1 (−2.0%) | 77.6 → 77.9 | 41166 → 40950 |
-| high-latency | 106 → 102 | 103.4 → 106.4 (+2.9%) | 28.0 → 32.6 | 27257 → 26182 |
-| admission-pressure | 285 → 259 | 284.1 → 280.9 (−1.1%) | 27.9 → 27.0 | 56509 → 55958 |
-| restart-honoured | 46 → 45 | 116.6 → 114.8 (−1.5%) | 27.9 → 28.1 | 144975 → 143107 |
+| Scenario           | Min-1 admitted | Steady completed /min | Steady fetched /min | queries_out     |
+| ------------------ | -------------- | --------------------- | ------------------- | --------------- |
+| healthy            | 116 → 128      | 271.6 → 266.1 (−2.0%) | 77.6 → 77.9         | 41166 → 40950   |
+| high-latency       | 106 → 102      | 103.4 → 106.4 (+2.9%) | 28.0 → 32.6         | 27257 → 26182   |
+| admission-pressure | 285 → 259      | 284.1 → 280.9 (−1.1%) | 27.9 → 27.0         | 56509 → 55958   |
+| restart-honoured   | 46 → 45        | 116.6 → 114.8 (−1.5%) | 27.9 → 28.1         | 144975 → 143107 |
 
 - **Why they move.** The join refresh's lookups now target the new id's levels, and the rejoin self-lookup fills the new id's own neighbourhood. That changes which nodes the table holds, and so which nodes later lookups and samples ask. In this deterministic sim, a different query order shifts every later count a little.
   - Minute 1 moves either way, depending on whether the earlier neighbourhood fill helps or delays the first owned lookups.

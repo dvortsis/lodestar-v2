@@ -3,7 +3,9 @@
 Follow-up to X-wk-own-lease-lost (#727), from its review (`reviews/rv-727-ebd93dd4.md` on runner-state). Brief: runner, 2026-11-12.
 
 ## What the out set keeps, and for how long
+
 The out set is the tokens of a worker's results on their way out, in `WorkerLeases` (`crates/pipeline/src/worker.rs`).
+
 - **While a result is out:** its entry is kept until the horizon, a lease TTL plus `seal_wait`, 1,200 s at defaults.
 - **Once it's committed** (`committed`): the entry is finished and kept for `FINISHED_GRACE` (180 s) only.
   - **The grace covers the coordinator's writer lag** (the runner's review of #737, rv-737).
@@ -35,6 +37,7 @@ The out set is the tokens of a worker's results on their way out, in `WorkerLeas
 - **A worker restart forgets every out entry:** they're in memory only. A result replayed from the spool after a restart is handled as before #727.
 
 ## The memory cost (worker RSS budget: 256 MB, owner §1.6.5)
+
 - **An entry costs about 190 B:**
   - **The hash map's slot:** a 20-byte key and a 40-byte value, padded to 64 B, plus a control byte, at its load factor. About 85 B at 50,000 entries: 65,536 buckets × 65 B, about 4.3 MB.
   - **The expiry index:** about 100 B. Keys arrive in rising order, so B-tree leaves split about half full, and there are internal nodes on top.
@@ -51,13 +54,15 @@ The out set is the tokens of a worker's results on their way out, in `WorkerLeas
   - Note the window that remains (above): a writer lagging more than 180 s can still end a holder's own lease as lost, until X-wk-fetched-lease lands.
 
 ## The horizon's TTL
+
 - **It's the protocol's default** (`ServerConfig::default().lease_ttl_secs`), not the TTL the coordinator states in `Welcome`.
   - Only the session sees `Welcome` (`WorkerSession::welcome`). The runtime gets a `SessionHandle` in `Work::connected`, and builds its leases when it starts, before any session.
   - The TTL actually enforced is the coordinator's lease authority's (`ClusterServer::with_hooks` takes it from there), built from the pipeline's `LEASE_TTL_SECS`. A test pins it to the protocol's default, so a drift fails CI instead of silently shortening the horizon.
 - **Reading the stated TTL** would need `Welcome`'s TTL passed to the runtime (a change to the `Work` trait or the cluster client). It isn't worth it while the number can't differ. If it ever does, a too-short horizon only brings back the old behaviour past it. A comment at `out_horizon` says so.
 
 ## Tests that race
-- **`the_move_out_happens_under_one_lock`:** a test-only probe (`GapHook`, compiled only in `cfg(test)`) runs inside `send_out` at the instant the token has left *held*. From another thread it checks that the lock is still held there.
+
+- **`the_move_out_happens_under_one_lock`:** a test-only probe (`GapHook`, compiled only in `cfg(test)`) runs inside `send_out` at the instant the token has left _held_. From another thread it checks that the lock is still held there.
   - A change that lets the lock go at that point fails it, every run.
   - A split placed elsewhere (before the probe), or a removed probe, isn't caught by this test. A removed probe fails it ("the probe never ran"), and the race test below covers the rest.
 - **`a_grant_racing_the_move_out_or_the_commit_is_never_held_twice`:**
@@ -68,6 +73,7 @@ The out set is the tokens of a worker's results on their way out, in `WorkerLeas
   Rounds go on until both orders (`Held` and `Out`) have come up, with at least 2,000 rounds; the head start doubles every 200 rounds while one order is missing, up to a 30 s deadline. It asserts the key is never held again.
   - #727's `Barrier` version came out `Out` in 1,000 of 1,000 rounds.
   - With `send_out` split into two lock acquisitions, this test now fails too, alongside the probe test.
+
 - **New unit tests:**
   - the commit grace (from the commit, and an entry sent out again keeping its new expiry);
   - a lost entry kept until the horizon;
@@ -76,6 +82,7 @@ The out set is the tokens of a worker's results on their way out, in `WorkerLeas
 - **The two TTLs pinned:** `the_protocols_lease_ttl_is_the_one_enforced` asserts that the protocol's default lease TTL, which the runtime's horizon reads, equals the pipeline's `LEASE_TTL_SECS`. The coordinator's lease authority enforces the latter: `ClusterServer::with_hooks` takes the TTL from the authority, not from `ServerConfig`.
 
 ## A flake fixed on the way (the runner, shared edit)
+
 - **The flake:** `remote_leases_survive_a_restart_and_parked_ones_go_to_the_built_in_worker` (`crates/pipeline/tests/remote_intake.rs`) failed 1 run in 3 in a reviewer's local runs.
   - `hand_parked` makes the built-in worker the holder before it counts the key in `stats.parked`.
   - The test waited for the holder only, then read `parked`, so it could read it in between.

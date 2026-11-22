@@ -3,6 +3,7 @@
 `test (windows-latest)` failed on #717 (the Windows test job, 2026-11-12T04:57Z) in `a_portable_restart_serves_again_on_the_same_port`. The copy started by Restart now printed `WATCH_TIMED_OUT` and the refusal, so it never served. This slice hardens the copy's wait on the process it replaces (`crates/lodestar/src/system/restart.rs`) and makes a repeat failure explain itself. Nothing here loosens an owner or security decision. The changes to user-visible wording and to the wait's upper bound are the runner's call (`docs/owner-decisions.md` §2.26); they're listed under "For the runner".
 
 ## What the log shows, and what it can't
+
 - **The old process didn't linger.** The test's `child.try_wait()` saw it exit (code 80), and the failing `nth_port` wait of 90 s ended at 04:57:40.92. So the test saw the exit at about 04:56:10.6–10.9Z, under a second after `app.relaunch` (04:56:10.213Z).
   - That rules out the brief's third candidate: no log flush, stderr pipe or inherited handle kept it alive past the hand-over.
 - **The copy's watch didn't report that exit.** Rust refuses only when:
@@ -13,10 +14,12 @@
   1. **A stall before the wait:** the PowerShell started but took 30 s or more to load `Get-Process` and `Select-Object` on a loaded runner. Four service tests were running `sc.exe` and PowerShell at the same moment.
   2. **An early `Wait-Process`:** it came back (an error, which `SilentlyContinue` hides, or a missed exit event) while the old process was still in its graceful shutdown. The script then said `timeout` at once, and the copy refused the moment the hand-over came.
   3. **A slow PowerShell exit:** the script said `exited`, but its own process didn't end for 30 s. The copy needed both.
+
 - **The console lines carried no times,** so the log can't tell these apart. The sibling test passed in the same binary at the same moment, which points to a per-process race or stall rather than a broken script.
 - **Contention between the tests in `windows_service.rs`** is the background to case 1, not a cause on its own. Making the tests serial would only hide it.
 
 ## The fix: one change for each case
+
 - **Case 1: the 30 s runs from a new `ready` word.**
   - **The script now prints three words:**
     - `started` first, as a bare string, so not even `Write-Output`'s module loads before it;
@@ -45,6 +48,7 @@
 - **`WATCH_SCRIPT_LIMIT` grows to 750 s:** `GO_LIMIT` + `EXIT_LIMIT` + three times `PREDECESSOR_WAIT`, so the script still outlasts the copy's longest wait. It's still far under `Wait-Process`'s 32,767 s.
 
 ## Diagnostics, so a repeat failure names its case
+
 - **The copy writes a second line after `WATCH_TIMED_OUT`,** before the refusal:
 
   `The check's timeline, from the hand-over: started -0.9 s, ready +0.4 s, no answer at +30.4 s.`
@@ -59,20 +63,24 @@
     - case 3 can't time out any more.
   - Fixed words and numbers only: it can never carry the hand-over token.
   - It also helps a user's support request.
+
 - **The test's failure dump now has times:**
   - every console line is stamped with the UTC time the test read it;
   - a "seen by the test" block lists when the test started the old process, asked for Restart now, saw the old process exit, and failed.
 
   With `app.relaunch` in `lodestar.jsonl`, that puts the copy's refusal against the old process's exit. The setup token was already on the console; the hand-over token never reaches the console or the dump.
+
 - **`a_relaunched_copy_waits_for_the_process_it_replaces`** now also expects the timeline line, ending in `no answer at +`.
 
 ## Kept from X-flake-portable-restart and -2
+
 - **Constrained Language Mode:** cmdlets, operators and a script block only, with no .NET method calls, no `::` and no member access. The Windows test still runs the real script under CLM, and now expects `started`, then `ready`, then `exited`.
 - **The token never reaches the watch:** `watch_command` still removes it.
 - **The bounded line reader:** 64-byte lines and 16 lines.
 - **Exited only after the process object signals,** as above.
 
 ## For the runner (§2.26)
+
 - **A new user-visible line** after "Lodestar's wait for the copy it replaces to exit timed out.": the timeline line quoted above. The first line, the skip line and the refusal are unchanged.
 - **The copy's longest wait grows from 60 s to 90 s** from the hand-over. That's 30 s from `ready`, which may arrive up to 60 s after the hand-over. The refusal still says "30 s", which is the time it waited once the check was ready.
 - **A watch that said `exited` but hasn't ended within 2 s counts as exited** (case 3 above).
@@ -80,6 +88,7 @@
 - **Left as it was:** if the old process vanishes between `Get-Process` and reading its `StartTime`, the script errors and the copy skips the check, as under -2. Treating an unreadable start time as "still there" would turn a reused id held by another user's process into a refusal.
 
 ## Evidence
+
 - **Linux:** unit tests on a fake clock cover each new behaviour:
   - the wait from `ready`: none, at 0 s, at 10 s, at 50 s, too late at 70 s, and before the hand-over;
   - a believed `exited`, and `exited` followed by a failure;

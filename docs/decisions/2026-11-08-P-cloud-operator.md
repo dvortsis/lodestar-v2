@@ -3,12 +3,14 @@
 The plan is `docs/plan/2026-11-08-cloud-operator.md`: an AI operator on Anthropic's hosted agent runs the cloud test fleet, and the runner manages it through comments on one draft PR. Docs only.
 
 **Where it comes from.** It follows the owner's answers Q1–Q6 (relayed by the dashboard session, 2026-11-08) and the owner's follow-up in this session at about 18:05Z:
+
 - the owner took the first draft's recommendations;
 - the owner confirmed create/destroy;
 - the owner chose and built the MFA-protected PIA broker;
 - at about 18:20Z, the owner said they can't enter MFA for each session ("I can't be entering the MFA for each session") and that the runner manages the control plane ("I don't need to approve all the control agent's code. Let the runner manage the control agent").
 
 **Owner-approved loosenings.** Seven loosenings of `#625`'s access model are named in the plan's "Loosenings of `#625`, named" table, each with the owner answer that approved it:
+
 1. unattended create and destroy of Linodes;
 2. Terraform run without the typed phrase, through the control plane's own entry point; the `.ps1` scripts stay phrase-only;
 3. unattended root step scripts over SSH;
@@ -73,6 +75,7 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
   - it denies approval pauses, and posts the escalation itself on a budget stop, an error or a timeout.
 
   These are runner parameters under §2.26.
+
 - **OIDC trust is pinned to `aud` and to a full `sub` (`StringEquals`) naming the environment and the exact workflow at `refs/heads/main`:** `fleet.yml` for the fleet and PIA roles; `operator-wake.yml`, `operator-apply.yml` or `operator-injection.yml` for the bridge role. None of these workflows has `workflow_call`.
 - **A third OIDC role, `LodestarOperatorBridge`,** trusted on `operator-wake.yml`, `operator-apply.yml` and `operator-injection.yml`, gives them the lock prefix and the lock-file object, plus `s3:GetObject` on `fleet.json`, and nothing else in the state bucket.
 - **`deliver-pia` reads only `fleet.json`** (addresses, fingerprints, firewall IDs, pin, expiry), never the whole Terraform state, which holds host private keys. It reaches the Linodes with the Linode firewall token (whole-firewall scope, kept in Secrets Manager behind `LodestarPiaDelivery`) that opens its own labelled `/32` under the fleet lock.
@@ -90,5 +93,6 @@ All seven are for the control plane only. The sixth and seventh are inferred fro
 - **Residual risk, stated:** the runner shares the owner's login with every Claude session. Any session posting as the owner could wake the operator. The rate limit, the budgets, the $200 cap and the control plane's limits bound it.
 
 ## Flagged for the owner
+
 - **Both open questions are answered** (no per-session MFA; the runner manages the control plane). The runner asks for a fresh Opus `/security-review` on any change to the control-plane paths.
 - **New runner parameters (§2.26):** the session budgets, the wake rate limit and the $40 monthly fleet-compute cap.

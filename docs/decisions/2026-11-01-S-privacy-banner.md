@@ -30,16 +30,16 @@ Completes the #277 item that X-web-polish-1101c (#331) couldn't build: the Overv
 
 ## Sizes (gzip, before → after)
 
-| Entry | Before | After |
-| --- | --- | --- |
-| Every existing `size-limit` entry | | unchanged (byte-identical report) |
-| Overview chunk (`Overview.svelte`, no `size-limit` entry) | 14,123 B | 14,203 B (+80 B) |
-| Privacy banner (on demand), new | | 3.37 KB (limit 3.71 KB, measured + 10%) |
+| Entry                                                     | Before   | After                                   |
+| --------------------------------------------------------- | -------- | --------------------------------------- |
+| Every existing `size-limit` entry                         |          | unchanged (byte-identical report)       |
+| Overview chunk (`Overview.svelte`, no `size-limit` entry) | 14,123 B | 14,203 B (+80 B)                        |
+| Privacy banner (on demand), new                           |          | 3.37 KB (limit 3.71 KB, measured + 10%) |
 
 - **The Overview's +0.08 KB is over the brief's +0.05 KB.** That's the if-block, the `Lazy` mount with its props, and two hashed preload paths (the door and the preload helper). It's the floor found for a conditional lazy mount in this chunk:
   - importing the banner directly: +0.11 KB;
   - with `{#await}`: +0.25 KB;
   - with a `settings` subscription: +0.03 KB more.
-  The runner decides (§2.26).
+    The runner decides (§2.26).
 - **The banner entry (the door, the banner and their own modules) includes Settings → Logging's `rules.ts` chunk (0.95 KB).** `state.ts` lives in that chunk. Reaching `state.ts` alone split it out, which pushed "Settings logging parts" over its limit.
 - **Chunk-graph guard:** `.size-limit.mjs` asserts from the chunk graph (`modulesIn`) that the Overview's chunks carry no `features/shell/privacy/` module.

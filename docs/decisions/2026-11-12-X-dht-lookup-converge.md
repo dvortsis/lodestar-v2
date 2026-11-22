@@ -80,11 +80,11 @@ The reproducer: 50 loopback nodes, 18 swarms announced to their true-closest 8 n
   - After: 15/15 rounds clean, in each of 7 runs (105 rounds), the last on the final code.
 - **crawler-sim goldens re-blessed (runner-approved shared edit).** The join refresh changes the query sequence. Steady stored per minute:
 
-| Scenario | Single seed (golden), before → after | 8-seed mean (`noise_floor`), before → after | 8-seed spread, before / after |
-|---|---|---|---|
-| healthy | 81.3 → 77.6 | 76.0 → 76.3 (+0.4%) | 10.9% / 6.0% |
-| high-latency | 30.3 → 28.0 | 33.1 → 31.3 (−5.4%) | 15.1% / 24.7% |
-| admission-pressure | 30.7 → 27.9 | 29.6 → 30.6 (+3.4%) | 15.4% / 26.6% |
-| restart-honoured (leg 2) | 27.7 → 27.9 | — | — |
+| Scenario                 | Single seed (golden), before → after | 8-seed mean (`noise_floor`), before → after | 8-seed spread, before / after |
+| ------------------------ | ------------------------------------ | ------------------------------------------- | ----------------------------- |
+| healthy                  | 81.3 → 77.6                          | 76.0 → 76.3 (+0.4%)                         | 10.9% / 6.0%                  |
+| high-latency             | 30.3 → 28.0                          | 33.1 → 31.3 (−5.4%)                         | 15.1% / 24.7%                 |
+| admission-pressure       | 30.7 → 27.9                          | 29.6 → 30.6 (+3.4%)                         | 15.4% / 26.6%                 |
+| restart-honoured (leg 2) | 27.7 → 27.9                          | —                                           | —                             |
 
-  Every move is inside the seed spread, and the 8-seed means go both ways. Neither yield nor cost is visibly affected beyond the noise.
+Every move is inside the seed spread, and the 8-seed means go both ways. Neither yield nor cost is visibly affected beyond the noise.
