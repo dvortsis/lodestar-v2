@@ -9,8 +9,9 @@
 // 100 px or more), so it cannot hold a baseline.
 // The clock is frozen at the fixture's own "now" (its manifest `anchor`), so relative times are
 // the same on every run. The masked parts change with the fixture build: the crawler status pill
-// (live figures) and the torrent page's absolute times (discovered, last seen, last scrape),
-// which the fixture builds from the hour it was made in.
+// (live figures), the torrent page's absolute times (discovered, last seen, last scrape) and
+// Search's "Discovered" histogram (bars and axis dates), which the fixture builds from the hour
+// it was made in.
 // The `fixture` project runs after `fixture-writes`, so these screens are captured with the rules
 // and crawler settings those specs leave behind. A change to filters-flows or settings-form can
 // change these baselines. Baselines are
@@ -88,7 +89,9 @@ async function snapshot(page: Page, name: string) {
 			page.getByTestId('status-pill'),
 			page.getByTestId('detail-discovered'),
 			page.getByTestId('detail-last-seen'),
-			page.getByTestId('detail-scrape-at')
+			page.getByTestId('detail-scrape-at'),
+			// Search's "Discovered" histogram: its bars and its two axis dates come from the fixture's build.
+			page.getByTestId('facet-discovered-histogram')
 		]
 	});
 }
