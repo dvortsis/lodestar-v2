@@ -10681,16 +10681,17 @@
         "agent": "session_01MMjhnCct3LAQ8rk8KhVM23",
         "model": "sonnet",
         "since": "2026-11-22T12:54:00Z",
-        "doing": "step 0 (brief briefs/X-msi-upgrade-env-value.md)"
+        "doing": "step 0 go (b) docs only; building"
       },
       {
         "slot": 4,
-        "slice": "X-search-retry-flush",
+        "slice": null,
         "role": "slice",
-        "agent": "session_01MMjhn9moy1oBVXSpM5GdsK",
+        "agent": null,
         "model": "opus",
-        "since": "2026-11-22T09:45:00Z",
-        "doing": "#1065 rv1065b fixes 284e2dde (runner checked the change); CI running, then merge"
+        "since": "2026-11-22T13:00:00Z",
+        "doing": "#1065 merged 586a2981; waits for r12 placements",
+        "status": "idle"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
