@@ -46,6 +46,24 @@ const MAX_NEAR: u32 = 50;
 /// Most words in one NEAR chain.
 pub const MAX_NEAR_WORDS: usize = 16;
 
+/// How `size:` and `largest:` read `KB`, `MB`, `GB` and `TB` (§10.12, UI
+/// review U12). The caller picks it by where the text comes from; there
+/// is no global.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub enum Units {
+    /// Stored query text (filter rules, `unless` queries, allow entries,
+    /// overrides, packs): `KB`/`MB`/`GB`/`TB` count in 1,024s, as every
+    /// release has read them. The default, so no stored caller changes.
+    #[default]
+    Stored,
+    /// Text the user types now (the query bar, typed facet values,
+    /// natural phrasing, `/search?q=`): `KB`/`MB`/`GB`/`TB` count in
+    /// 1,000s and `KiB`/`MiB`/`GiB`/`TiB` in 1,024s, on `size:` and
+    /// `largest:` only. Single letters (`1.5G`), bytes and `piece:` read
+    /// as stored.
+    Typed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextField {
@@ -83,6 +101,13 @@ pub enum NumField {
 }
 
 impl NumField {
+    /// Whether [`Units::Typed`] reads this field's `KB`/`MB`/`GB`/`TB` in
+    /// 1,000s: `size:` and `largest:`. `piece:` stays 1,024-based, since
+    /// piece lengths are powers of two (`piece:16MB` is 16 MiB).
+    pub fn reads_typed_units(self) -> bool {
+        matches!(self, NumField::Size | NumField::Largest)
+    }
+
     /// Whether the field is one value per torrent in a fast column, so a
     /// range on it can be checked in the collector. Years, seasons and
     /// episodes are multi-valued and live in the inverted index.
@@ -646,10 +671,18 @@ struct Parser<'a> {
     leaves: usize,
     depth: usize,
     text: &'a str,
+    units: Units,
 }
 
-/// Parses a query. An empty query is [`Node::All`].
+/// Parses stored query text ([`Units::Stored`]). An empty query is
+/// [`Node::All`].
 pub fn parse(text: &str) -> Result<Node, ParseError> {
+    parse_with(text, Units::Stored)
+}
+
+/// Parses a query with the given reading of size units. An empty query
+/// is [`Node::All`].
+pub fn parse_with(text: &str, units: Units) -> Result<Node, ParseError> {
     if text.len() > MAX_QUERY_BYTES {
         return err(
             format!("query longer than {MAX_QUERY_BYTES} bytes"),
@@ -667,6 +700,7 @@ pub fn parse(text: &str) -> Result<Node, ParseError> {
         leaves: 0,
         depth: 0,
         text,
+        units,
     };
     let node = p.or()?;
     if let Some(t) = p.toks.get(p.pos) {
@@ -858,7 +892,7 @@ impl Parser<'_> {
                     }
                     return err(format!("{name}: needs a value"), start, end);
                 }
-                field_value(kind, &name, &value, vstart, end)
+                field_value(kind, &name, &value, vstart, end, self.units)
             }
         }
     }
@@ -928,12 +962,15 @@ fn field_value(
     value: &str,
     start: usize,
     end: usize,
+    units: Units,
 ) -> Result<Node, ParseError> {
     match kind {
         FieldKind::Text(f) => word(f, value, start, end),
         FieldKind::Num(f) => {
-            let unit = if f.is_count() {
+            let unit: fn(&str) -> Option<u64> = if f.is_count() {
                 parse_count
+            } else if units == Units::Typed && f.reads_typed_units() {
+                parse_bytes_typed
             } else {
                 parse_bytes
             };
@@ -1265,8 +1302,8 @@ fn parse_count(s: &str) -> Option<u64> {
     s.parse().ok()
 }
 
-/// `4GB`, `700MB`, `1.5GiB`, `512`. KB/MB/GB/TB are binary (1024-based),
-/// matching how the UI shows sizes (§10.12).
+/// `4GB`, `700MB`, `1.5GiB`, `512`, as stored text reads them
+/// ([`Units::Stored`]): KB/MB/GB/TB are binary (1024-based).
 fn parse_bytes(s: &str) -> Option<u64> {
     let lower = s.to_ascii_lowercase();
     let split = lower
@@ -1281,6 +1318,30 @@ fn parse_bytes(s: &str) -> Option<u64> {
         "t" | "tb" | "tib" => 1 << 40,
         _ => return None,
     };
+    scaled(num, mult)
+}
+
+/// A size as the user types it now ([`Units::Typed`]): `KB`/`MB`/`GB`/
+/// `TB` count in 1,000s; every other form reads as [`parse_bytes`] does.
+fn parse_bytes_typed(s: &str) -> Option<u64> {
+    let lower = s.to_ascii_lowercase();
+    let split = lower
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(lower.len());
+    let (num, unit) = lower.split_at(split);
+    let mult: u64 = match unit {
+        "kb" => 1_000,
+        "mb" => 1_000_000,
+        "gb" => 1_000_000_000,
+        "tb" => 1_000_000_000_000,
+        _ => return parse_bytes(s),
+    };
+    scaled(num, mult)
+}
+
+/// `num` (digits with at most one `.`; up to 9 fraction digits count)
+/// times `mult`, or `None` past `u64`.
+pub(crate) fn scaled(num: &str, mult: u64) -> Option<u64> {
     if num.is_empty() || num.matches('.').count() > 1 || num.len() > 20 {
         return None;
     }
@@ -1290,7 +1351,16 @@ fn parse_bytes(s: &str) -> Option<u64> {
     if !frac.is_empty() {
         let digits = frac.len().min(9) as u32;
         let f: u64 = frac[..digits as usize].parse().ok()?;
-        value = value.checked_add(f.checked_mul(mult)? / 10u64.pow(digits))?;
+        let scale = 10u64.pow(digits);
+        // A decimal unit divides exactly, without the overflow of
+        // `f * mult` (`1.123456789TB`). A binary one never does, so stored
+        // text reads as it always has.
+        let part = if mult.is_multiple_of(scale) {
+            f.checked_mul(mult / scale)?
+        } else {
+            f.checked_mul(mult)? / scale
+        };
+        value = value.checked_add(part)?;
     }
     Some(value)
 }
@@ -1615,14 +1685,39 @@ impl Node {
         }
     }
 
-    /// Canonical query text; [`parse`] of it gives back the same AST.
+    /// Canonical query text; [`parse`] of it gives back the same AST
+    /// under either reading ([`Units`]). Sizes are bytes or IEC units
+    /// only, so this is the text anything stored holds: every release
+    /// reads it the same way.
     pub fn to_query(&self) -> String {
         let mut s = String::new();
-        self.render(&mut s, false);
+        self.render(&mut s, false, Units::Stored);
         s
     }
 
-    fn render(&self, out: &mut String, nested: bool) {
+    /// The query as the user would type it now: [`to_query`](Self::to_query),
+    /// except that a `size:` or `largest:` bound that's a round decimal
+    /// size echoes in `KB`/`MB`/`GB`/`TB` (`size:>10GB`, §10.12).
+    /// [`parse_with`] and [`Units::Typed`] give back the same AST.
+    ///
+    /// Never persist this: only the query bar, the URL, `/parse`'s and
+    /// natural phrasing's `canonical` and display read it. Stored text
+    /// read with [`Units::Stored`] would mean 7% more per GB.
+    ///
+    /// It can be a byte longer than [`to_query`](Self::to_query) per bound
+    /// (`0..<1KiB` for `0..1023`); past [`MAX_QUERY_BYTES`] it falls back to that
+    /// text, which reads back the same, so an echo that fits as stored
+    /// text never fails to parse again.
+    pub fn to_query_typed(&self) -> String {
+        let mut s = String::new();
+        self.render(&mut s, false, Units::Typed);
+        if s.len() > MAX_QUERY_BYTES {
+            return self.to_query();
+        }
+        s
+    }
+
+    fn render(&self, out: &mut String, nested: bool, units: Units) {
         let text_field = |f: TextField| match f {
             TextField::Any => "",
             TextField::Name => "name:",
@@ -1639,7 +1734,7 @@ impl Node {
                     if i > 0 {
                         out.push(' ');
                     }
-                    n.render(out, matches!(n, Node::Or { .. } | Node::And { .. }));
+                    n.render(out, matches!(n, Node::Or { .. } | Node::And { .. }), units);
                 }
                 if nested {
                     out.push(')');
@@ -1653,7 +1748,7 @@ impl Node {
                     if i > 0 {
                         out.push_str(" | ");
                     }
-                    n.render(out, matches!(n, Node::Or { .. }));
+                    n.render(out, matches!(n, Node::Or { .. }), units);
                 }
                 if nested {
                     out.push(')');
@@ -1664,6 +1759,7 @@ impl Node {
                 of.render(
                     out,
                     matches!(**of, Node::And { .. } | Node::Or { .. } | Node::Near { .. }),
+                    units,
                 );
             }
             Node::Word { field, word } => {
@@ -1716,16 +1812,26 @@ impl Node {
                     NumField::Dht => "dht",
                 };
                 let count = field.is_count();
-                let v = |n: u64| if count { n.to_string() } else { bytes_text(n) };
+                let typed = units == Units::Typed && field.reads_typed_units();
+                let v = |n: u64| match (count, typed) {
+                    (true, _) => n.to_string(),
+                    (false, false) => bytes_text(n),
+                    (false, true) => typed_bytes_text(n),
+                };
+                let round = |m: u64| in_unit(m) || (typed && in_decimal_unit(m));
                 // A one-sided byte bound one short of (or past) a whole unit
                 // reads as the exclusive form: `<16GiB`, `>4GiB`. A two-sided
-                // range doesn't print `a..<b` yet: filter rules store this
-                // text, and a binary one release back can't parse it (FX-6-I9).
-                let below = |n: u64| n.checked_add(1).filter(|&m| !count && in_unit(m));
-                let above = |n: u64| n.checked_sub(1).filter(|&m| !count && in_unit(m));
+                // range doesn't print `a..<b` in stored text: filter rules
+                // store it, and a binary one release back can't parse it
+                // (FX-6-I9). Typed text is never stored, so it may.
+                let below = |n: u64| n.checked_add(1).filter(|&m| !count && round(m));
+                let above = |n: u64| n.checked_sub(1).filter(|&m| !count && round(m));
                 let _ = match (lo, hi) {
                     (Some(l), Some(h)) if l == h => write!(out, "{name}:{}", v(*l)),
-                    (Some(l), Some(h)) => write!(out, "{name}:{}..{}", v(*l), v(*h)),
+                    (Some(l), Some(h)) => match below(*h).filter(|_| typed) {
+                        Some(b) => write!(out, "{name}:{}..<{}", v(*l), v(b)),
+                        None => write!(out, "{name}:{}..{}", v(*l), v(*h)),
+                    },
                     (Some(l), None) => match above(*l) {
                         Some(a) => write!(out, "{name}:>{}", v(a)),
                         None => write!(out, "{name}:>={}", v(*l)),
@@ -1807,11 +1913,11 @@ impl Node {
                     ..
                 } => {
                     out.push_str("file:");
-                    of.render(out, false);
+                    of.render(out, false, units);
                 }
                 _ => {
                     out.push_str("file:(");
-                    of.render(out, false);
+                    of.render(out, false, units);
                     out.push(')');
                 }
             },
@@ -1864,6 +1970,61 @@ fn bytes_text(n: u64) -> String {
         }
     }
     n.to_string()
+}
+
+/// Whether `m` is a whole, nonzero number of KB (1,000 bytes).
+fn in_decimal_unit(m: u64) -> bool {
+    m >= 1_000 && m.is_multiple_of(1_000)
+}
+
+/// Significant digits of `n` written in base 10, trailing zeros dropped.
+fn significant(mut n: u64) -> u32 {
+    if n == 0 {
+        return 1;
+    }
+    while n.is_multiple_of(10) {
+        n /= 10;
+    }
+    n.ilog10() + 1
+}
+
+/// Bytes as the user would type them ([`Units::Typed`]): in the largest
+/// decimal unit (`10GB`, `1.5GB`, `700MB`) when that takes fewer
+/// significant digits than [`bytes_text`]'s IEC form, else that form. So
+/// `10737418240` prints `10GiB` and `10000000000` prints `10GB`; a size
+/// that's both (`4096000`) prints IEC. `parse_bytes_typed` reads every
+/// form back.
+fn typed_bytes_text(n: u64) -> String {
+    let iec = bytes_text(n);
+    if !in_decimal_unit(n) {
+        return iec;
+    }
+    // `bytes_text` wrote a count and an IEC unit, or plain bytes.
+    let count: u64 = iec
+        .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+        .parse()
+        .unwrap_or(n);
+    if count != n && significant(count) <= significant(n) {
+        return iec;
+    }
+    let (unit, mult) = [
+        ("TB", 1_000_000_000_000u64),
+        ("GB", 1_000_000_000),
+        ("MB", 1_000_000),
+        ("KB", 1_000),
+    ]
+    .into_iter()
+    .find(|&(_, m)| n >= m)
+    .expect("n is at least 1,000");
+    let (int, frac) = (n / mult, n % mult);
+    if frac == 0 {
+        return format!("{int}{unit}");
+    }
+    // `n` is whole KB, so the fraction has at most 9 digits, all of
+    // which `parse_bytes_typed` reads.
+    let width = mult.ilog10() as usize;
+    let digits = format!("{frac:0width$}");
+    format!("{int}.{}{unit}", digits.trim_end_matches('0'))
 }
 
 fn ago_text(s: i64) -> String {
@@ -2599,6 +2760,216 @@ mod tests {
             assert_eq!(parse(&text).unwrap(), ast, "{q} → {text}");
             let json = serde_json::to_string(&ast).unwrap();
             assert_eq!(serde_json::from_str::<Node>(&json).unwrap(), ast);
+        }
+    }
+
+    /// `parse_bytes` as it was before X-units-typed, frozen: what every
+    /// earlier release reads stored text with.
+    fn old_parse_bytes(s: &str) -> Option<u64> {
+        let lower = s.to_ascii_lowercase();
+        let split = lower
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(lower.len());
+        let (num, unit) = lower.split_at(split);
+        let mult: u64 = match unit {
+            "" | "b" => 1,
+            "k" | "kb" | "kib" => 1 << 10,
+            "m" | "mb" | "mib" => 1 << 20,
+            "g" | "gb" | "gib" => 1 << 30,
+            "t" | "tb" | "tib" => 1 << 40,
+            _ => return None,
+        };
+        if num.is_empty() || num.matches('.').count() > 1 || num.len() > 20 {
+            return None;
+        }
+        let (int, frac) = num.split_once('.').unwrap_or((num, ""));
+        let int: u64 = if int.is_empty() { 0 } else { int.parse().ok()? };
+        let mut value = int.checked_mul(mult)?;
+        if !frac.is_empty() {
+            let digits = frac.len().min(9) as u32;
+            let f: u64 = frac[..digits as usize].parse().ok()?;
+            value = value.checked_add(f.checked_mul(mult)? / 10u64.pow(digits))?;
+        }
+        Some(value)
+    }
+
+    fn range_of(q: &str, units: Units) -> (Option<u64>, Option<u64>) {
+        match parse_with(q, units).unwrap() {
+            Node::Range { lo, hi, .. } => (lo, hi),
+            n => panic!("{q}: {n:?}"),
+        }
+    }
+
+    #[test]
+    fn typed_units_count_in_thousands_on_size_and_largest() {
+        let (k, g, t) = (1_000u64, 1_000_000_000u64, 1_000_000_000_000u64);
+        let gib = 1u64 << 30;
+        let typed = |q| range_of(q, Units::Typed);
+        assert_eq!(typed("size:10GB"), (Some(10 * g), Some(10 * g)));
+        assert_eq!(typed("size:10gb"), (Some(10 * g), Some(10 * g)));
+        assert_eq!(typed("size:10GiB"), (Some(10 * gib), Some(10 * gib)));
+        assert_eq!(typed("size:>=1.5GB"), (Some(1_500_000_000), None));
+        assert_eq!(typed("size:<1GB"), (None, Some(g - 1)));
+        assert_eq!(typed("size:700MB..2TB"), (Some(700_000_000), Some(2 * t)));
+        assert_eq!(typed("largest:>4KB"), (Some(4 * k + 1), None));
+        assert_eq!(
+            typed("size:1.123456789TB"),
+            (Some(1_123_456_789_000), Some(1_123_456_789_000))
+        );
+        // Single letters, bytes and `piece:` read as stored.
+        assert_eq!(typed("size:1G"), (Some(gib), Some(gib)));
+        assert_eq!(typed("size:512"), (Some(512), Some(512)));
+        assert_eq!(typed("piece:16MB"), (Some(16 << 20), Some(16 << 20)));
+        // Counts don't take units under either reading.
+        assert!(parse_with("files:1KB", Units::Typed).is_err());
+    }
+
+    #[test]
+    fn stored_reading_is_the_default_and_unchanged() {
+        let gib = 1u64 << 30;
+        assert_eq!(Units::default(), Units::Stored);
+        assert_eq!(
+            parse("size:10GB").unwrap(),
+            parse_with("size:10GB", Units::Stored).unwrap()
+        );
+        assert_eq!(
+            range_of("size:10GB", Units::Stored),
+            (Some(10 * gib), Some(10 * gib))
+        );
+        assert_eq!(
+            range_of("largest:2TB", Units::Stored),
+            (Some(2 << 40), Some(2 << 40))
+        );
+        for v in [
+            "0",
+            "1",
+            "512",
+            "1b",
+            "1k",
+            "1KB",
+            "1kib",
+            "1.5G",
+            "4gb",
+            "700MB",
+            "1.5GiB",
+            "16TB",
+            "0.5t",
+            ".5m",
+            "1.123456789TB",
+            "18446744073709551615",
+            "16384TiB",
+            "16777216TB",
+            "1.2.3GB",
+            "GB",
+            "1PB",
+            "1e9",
+            "99999999999999999999GB",
+        ] {
+            assert_eq!(parse_bytes(v), old_parse_bytes(v), "{v}");
+        }
+    }
+
+    /// U12's guard: a filter rule stored as `size:<1GB` keeps matching an
+    /// item between 1 GB and 1 GiB, as it did before typed units.
+    #[test]
+    fn stored_rule_size_under_1gb_still_matches_under_1gib() {
+        let (lo, hi) = range_of("size:<1GB", Units::Stored);
+        assert_eq!((lo, hi), (None, Some((1 << 30) - 1)));
+        let item = 1_000_000_500u64; // over 1 GB, under 1 GiB
+        assert!(hi.is_some_and(|h| item <= h));
+    }
+
+    /// A query a user types now and that gets stored (an alert, a rule
+    /// from an AST) is stored as `to_query()`: bytes or IEC units only,
+    /// read the same by both readings and by every earlier release.
+    #[test]
+    fn stored_text_means_the_same_to_every_parser() {
+        for q in [
+            "size:>10GB",
+            "size:<1GB",
+            "size:1.5GB..2TB",
+            "largest:>=700MB",
+            "file:(size:>50MB) largest:1GB..<4GB",
+            "size:10GiB piece:16MB size:1KB",
+        ] {
+            let ast = parse_with(q, Units::Typed).unwrap();
+            let stored = ast.to_query();
+            assert!(
+                !stored.contains("KB")
+                    && !stored.contains("MB")
+                    && !stored.contains("GB")
+                    && !stored.contains("TB"),
+                "{q} → {stored}"
+            );
+            assert_eq!(parse_with(&stored, Units::Stored).unwrap(), ast, "{stored}");
+            assert_eq!(parse_with(&stored, Units::Typed).unwrap(), ast, "{stored}");
+        }
+    }
+
+    #[test]
+    fn typed_text_echoes_decimal_sizes() {
+        let echo = |q: &str| parse_with(q, Units::Typed).unwrap().to_query_typed();
+        assert_eq!(echo("size:>10GB"), "size:>10GB");
+        assert_eq!(echo("size:>=10GB"), "size:>=10GB");
+        assert_eq!(echo("size:<1GB"), "size:<1GB");
+        assert_eq!(echo("size:1GB..<2GB"), "size:1GB..<2GB");
+        assert_eq!(echo("size:1.5GB"), "size:1.5GB");
+        assert_eq!(echo("size:1500MB"), "size:1.5GB");
+        assert_eq!(echo("size:700MB..2TB"), "size:700MB..2TB");
+        assert_eq!(echo("largest:>=0.5KB"), "largest:>=500");
+        assert_eq!(echo("size:>10GiB"), "size:>10GiB");
+        assert_eq!(echo("size:4000KiB"), "size:4000KiB");
+        assert_eq!(echo("size:4096KB"), "size:4000KiB");
+        assert_eq!(echo("piece:16MB"), "piece:16MiB");
+        assert_eq!(
+            echo("file:(size:>50MB) -largest:1TB"),
+            "file:(size:>50MB) -largest:1TB"
+        );
+        // The stored printer never writes a decimal unit.
+        let ast = parse_with("size:>10GB", Units::Typed).unwrap();
+        assert_eq!(ast.to_query(), "size:>9765625KiB");
+    }
+
+    /// The echo never outgrows the limit when the stored text fits: past
+    /// it, it's the stored text, which reads back the same as typed.
+    #[test]
+    fn typed_text_past_the_limit_falls_back_to_stored() {
+        // The typed-only `a..<b` form can run a byte longer.
+        let one = Node::Range {
+            field: NumField::Size,
+            lo: Some(0),
+            hi: Some(1023),
+        };
+        assert_eq!(one.to_query(), "size:0..1023");
+        assert_eq!(one.to_query_typed(), "size:0..<1KiB");
+        let many = Node::And { of: vec![one; 157] };
+        let stored = many.to_query();
+        assert!(stored.len() <= MAX_QUERY_BYTES, "{}", stored.len());
+        assert_eq!(many.to_query_typed(), stored);
+    }
+
+    #[test]
+    fn typed_bytes_text_reads_back() {
+        for n in [
+            0u64,
+            1,
+            999,
+            1_000,
+            1_024,
+            1_500,
+            4_096_000,
+            999_999_999,
+            1_000_000_000,
+            1_000_000_001,
+            1_500_000_000,
+            10_737_418_240,
+            1_123_456_789_000,
+            2_000_000_000_000,
+            18_446_744_073_709_551_000,
+            u64::MAX,
+        ] {
+            let text = typed_bytes_text(n);
+            assert_eq!(parse_bytes_typed(&text), Some(n), "{n} → {text}");
         }
     }
 }

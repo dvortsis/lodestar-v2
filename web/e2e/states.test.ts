@@ -4,7 +4,11 @@
 // through the API mock's answers; the shell tests cover the illustration's markup.
 import type { Page } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
-import { crawlerFixture, overviewFixture } from '../src/lib/features/insights/overview/fixtures';
+import {
+	crawlerFixture,
+	NOW,
+	overviewFixture
+} from '../src/lib/features/insights/overview/fixtures';
 import {
 	response as discover,
 	newest,
@@ -61,7 +65,11 @@ test('illustrated state: insights, crawler paused', async ({ page, go, mock, den
 	const base = overviewFixture();
 	mock.on(
 		'getInsightsOverview',
-		overviewFixture({ kpi: { ...base.kpi, health: { state: 'paused', reason: 'paused' } } })
+		overviewFixture({
+			kpi: { ...base.kpi, health: { state: 'paused', reason: 'paused' } },
+			// What the server sends once a paused crawler has not flushed for two minutes.
+			stale: { reason: 'paused', since: NOW - 3600 }
+		})
 	);
 	mock.on('getCrawler', crawlerFixture({ paused: true, state: 'paused' }));
 	await go('/insights');

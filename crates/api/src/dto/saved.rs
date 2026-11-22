@@ -42,7 +42,10 @@ pub struct SavedSearchView {
     pub name: String,
     /// Skipped by the notifier; its channels are kept.
     pub paused: bool,
-    /// The query text.
+    /// The query as the user would type it, printed from the stored AST
+    /// every time (sizes in a decimal unit where one fits, `size:>10GB`).
+    /// `/search?q=` reads it back as the same AST. What's stored is
+    /// canonical text in bytes or IEC units.
     pub q: String,
     /// Serve the hits as an RSS feed.
     pub rss: bool,
@@ -59,7 +62,8 @@ pub struct SavedSearchCreate {
     /// 1–200 characters.
     pub name: String,
     /// The query text. Send `q` or `ast`, not both; with neither it
-    /// matches everything.
+    /// matches everything. Sizes read as typed: `GB` is 10^9 bytes, `GiB`
+    /// 2^30. It's stored as the AST's canonical text, not as sent.
     #[serde(default)]
     pub q: Option<String>,
     /// A query AST, as `/parse` returns it.
@@ -84,7 +88,7 @@ pub struct SavedSearchCreate {
 #[serde(default)]
 pub struct SavedSearchPatch {
     pub name: Option<String>,
-    /// Send `q` or `ast`, not both.
+    /// Send `q` or `ast`, not both. Read as `SavedSearchCreate.q` is.
     pub q: Option<String>,
     #[schema(value_type = Option<AstNode>)]
     pub ast: Option<Node>,

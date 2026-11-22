@@ -14,7 +14,8 @@ use utoipa::ToSchema;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 #[serde(default)]
 pub struct ExportRequest {
-    /// The query text, as `/search` takes it.
+    /// The query text, as `/search` takes it (sizes read as typed:
+    /// `GB` is 10^9 bytes).
     pub q: Option<String>,
     /// A query AST, as `/parse` returns it (POST only).
     #[schema(value_type = Option<AstNode>)]
