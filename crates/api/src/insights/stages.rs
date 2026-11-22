@@ -387,6 +387,8 @@ fn discover(
             let key = name(dim);
             let e = by_source.entry(key.clone()).or_insert(DiscoverSource {
                 dropped: 0,
+                // The id until `name_sources` names it, after the cache.
+                name: key.clone(),
                 key,
                 rediscovered: 0,
                 reported: 0,
@@ -1053,6 +1055,10 @@ pub(crate) async fn stage_response(
     .await
     .map_err(internal)??;
     apply(&mut page, snap);
+    if let StagePage::Discover(r) = &mut page {
+        let names = crate::torrents::plugin_names(s).await;
+        super::name_sources(&mut r.by_source, &names);
+    }
     Ok(page)
 }
 

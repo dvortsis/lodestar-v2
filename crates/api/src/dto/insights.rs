@@ -343,7 +343,7 @@ pub struct Segments {
     pub by_group: Vec<SegmentCount>,
     /// Yield by the source that found each hash first, over final
     /// cohorts. Discovery cohort.
-    pub by_source: Vec<SegmentYield>,
+    pub by_source: Vec<SourceYield>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -352,10 +352,27 @@ pub struct SegmentCount {
     pub searchable: u64,
 }
 
+/// One source's yield (`segments.by_source`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SourceYield {
+    pub harvested: u64,
+    /// The source plugin's manifest id, as `source:` takes it.
+    pub key: String,
+    /// The plugin's display name; its manifest id when this build doesn't
+    /// run that plugin, as provenance's `name`.
+    pub name: String,
+    pub searchable: u64,
+    /// Searchable ÷ harvested, 0–1; null when it harvested nothing.
+    #[serde(rename = "yield")]
+    #[schema(required = true)]
+    pub yield_: Option<f64>,
+}
+
+/// A yield by some other key (`by_ip_family`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SegmentYield {
     pub harvested: u64,
-    /// The source plugin's name.
+    /// What it's counted by.
     pub key: String,
     pub searchable: u64,
     /// Searchable ÷ harvested, 0–1; null when it harvested nothing.
@@ -726,8 +743,11 @@ pub struct DiscoverPoint {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct DiscoverSource {
     pub dropped: u64,
-    /// The source's plugin name.
+    /// The source plugin's manifest id, as `source:` takes it.
     pub key: String,
+    /// The plugin's display name; its manifest id when this build doesn't
+    /// run that plugin, as provenance's `name`.
+    pub name: String,
     pub rediscovered: u64,
     pub reported: u64,
 }

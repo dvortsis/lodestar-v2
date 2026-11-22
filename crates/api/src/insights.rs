@@ -40,8 +40,8 @@ pub use crate::dto::insights::{
     Annotation, Bucket, Conversion, DataFilesystem, DataFsKind, EventsQuery, EventsResponse, Fix,
     FunnelCohort, FunnelStages, FunnelTotal, Health, HealthState, ImportNote, InsightsException,
     InsightsRange, Kpi, OverviewQuery, OverviewResponse, PausedSpan, PortFamily, PortPressure,
-    PreviousKpi, PreviousPeriod, PreviousStages, SegmentCount, SegmentMover, SegmentYield,
-    Segments, Serve, Severity, Stages, Stale, TrendPoint,
+    PreviousKpi, PreviousPeriod, PreviousStages, SegmentCount, SegmentMover, Segments, Serve,
+    Severity, SourceYield, Stages, Stale, TrendPoint,
 };
 use crate::error::{ApiError, ApiResult, internal};
 
@@ -1375,17 +1375,22 @@ fn segments(rows: &PeriodRows, c: &Cohorts, names: &BTreeMap<u8, String>, adult:
             .map(|r| (r.dim, r.value.max(0) as u64)),
         adult,
     );
-    let mut by_source: Vec<SegmentYield> = c
+    let mut by_source: Vec<SourceYield> = c
         .by_source
         .iter()
-        .map(|(id, &(harvested, searchable))| SegmentYield {
-            harvested,
-            key: names
+        .map(|(id, &(harvested, searchable))| {
+            let key = names
                 .get(id)
                 .cloned()
-                .unwrap_or_else(|| format!("source_{id}")),
-            searchable,
-            yield_: ratio(searchable, harvested),
+                .unwrap_or_else(|| format!("source_{id}"));
+            SourceYield {
+                harvested,
+                // The id until `name_sources` names it, after the cache.
+                name: key.clone(),
+                key,
+                searchable,
+                yield_: ratio(searchable, harvested),
+            }
         })
         .collect();
     by_source.sort_by(|a, b| {
@@ -1941,6 +1946,11 @@ pub(crate) async fn overview_response(
     .await
     .map_err(internal)??;
     apply_snapshot(&mut response, snap);
+    let names = crate::torrents::plugin_names(s).await;
+    name_sources(&mut response.segments.by_source, &names);
+    if let Some(p) = response.previous.as_mut() {
+        name_sources(&mut p.segments.by_source, &names);
+    }
     if let Some(e) = s
         .filters
         .as_ref()
@@ -1953,6 +1963,43 @@ pub(crate) async fn overview_response(
     }
     response.exceptions.extend(host);
     Ok(response)
+}
+
+/// Names each by-source row by its plugin's display name, from this
+/// build's registry ([`crate::torrents::plugin_names`]), as provenance
+/// does: a plugin this build doesn't run keeps its id. After the cache, so
+/// a cached response never keeps a registry read that failed.
+pub(crate) fn name_sources<R: SourceRow>(rows: &mut [R], names: &crate::torrents::PluginNames) {
+    for r in rows {
+        let name = names.get(r.key()).map(|n| n.name.clone());
+        if let Some(name) = name {
+            r.set_name(name);
+        }
+    }
+}
+
+/// A by-source row [`name_sources`] names.
+pub(crate) trait SourceRow {
+    fn key(&self) -> &str;
+    fn set_name(&mut self, name: String);
+}
+
+impl SourceRow for SourceYield {
+    fn key(&self) -> &str {
+        &self.key
+    }
+    fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+}
+
+impl SourceRow for crate::dto::insights::DiscoverSource {
+    fn key(&self) -> &str {
+        &self.key
+    }
+    fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
 }
 
 /// Rows that had failed closed read again, and their stand-ins' holds
@@ -2775,5 +2822,94 @@ mod tests {
         assert_eq!(e.rows.len(), MAX_ROWS_NAMED, "U-3 is named once");
         let json = serde_json::to_value(&e).unwrap();
         assert_eq!(json["rows"].as_array().unwrap().len(), MAX_ROWS_NAMED);
+    }
+
+    fn registry(entries: &[(&str, &str)]) -> crate::torrents::PluginNames {
+        entries
+            .iter()
+            .map(|(id, name)| {
+                (
+                    (*id).to_owned(),
+                    crate::torrents::PluginName {
+                        name: (*name).to_owned(),
+                        public: true,
+                        endpoints: Vec::new(),
+                        always_adult: false,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn source_yield(key: &str) -> SourceYield {
+        SourceYield {
+            harvested: 2,
+            key: key.to_owned(),
+            name: key.to_owned(),
+            searchable: 1,
+            yield_: Some(0.5),
+        }
+    }
+
+    #[test]
+    fn by_source_rows_take_the_registrys_names() {
+        let names = registry(&[("nyaa", "Nyaa"), ("dht", "Mainline DHT")]);
+        let mut rows = vec![
+            source_yield("nyaa"),
+            source_yield("dht"),
+            // A plugin this build doesn't run, and a store id with no row.
+            source_yield("gone"),
+            source_yield("source_7"),
+        ];
+        name_sources(&mut rows, &names);
+        let got: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|r| (r.key.as_str(), r.name.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("nyaa", "Nyaa"),
+                ("dht", "Mainline DHT"),
+                ("gone", "gone"),
+                ("source_7", "source_7")
+            ]
+        );
+        // No registry (no pipeline, or its listing failed): every row by id.
+        let mut rows = vec![source_yield("nyaa")];
+        name_sources(&mut rows, &Default::default());
+        assert_eq!(rows[0].name, "nyaa");
+        // The Discover rows too; the key never changes.
+        let mut discover = vec![crate::dto::insights::DiscoverSource {
+            dropped: 0,
+            key: "nyaa".into(),
+            name: "nyaa".into(),
+            rediscovered: 1,
+            reported: 2,
+        }];
+        name_sources(&mut discover, &names);
+        assert_eq!(
+            (discover[0].key.as_str(), discover[0].name.as_str()),
+            ("nyaa", "Nyaa")
+        );
+    }
+
+    /// `by_ip_family` keeps its shape: no `name` (the runner, §2.26).
+    #[test]
+    fn by_ip_family_rows_carry_no_name() {
+        let row = crate::dto::insights::SegmentYield {
+            harvested: 2,
+            key: "ipv4".into(),
+            searchable: 1,
+            yield_: Some(0.5),
+        };
+        assert_eq!(
+            serde_json::to_string(&row).unwrap(),
+            r#"{"harvested":2,"key":"ipv4","searchable":1,"yield":0.5}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&source_yield("nyaa")).unwrap(),
+            r#"{"harvested":2,"key":"nyaa","name":"nyaa","searchable":1,"yield":0.5}"#
+        );
     }
 }

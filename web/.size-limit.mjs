@@ -1632,7 +1632,9 @@ export default [
 	// and Find matching the code as well as the label (review).
 	// X-facet-group-case (runner §2.26): 18,825 → 18,848 B, the release group's server label
 	// (`label` through valueLabel and groupLabel in label-release, and TermGroup's labelOf).
-	entry('Facet rail (lazy)', facetsLazy, '18.85 KB'),
+	// X-group-chip-label (runner §2.26): 18,843 → 18,856 B, facets.svelte.ts keeping each response's
+	// group labels for the query chips.
+	entry('Facet rail (lazy)', facetsLazy, '18.86 KB'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
@@ -1722,7 +1724,8 @@ export default [
 		// X-labels (runner §2.26): 39,440 → 40,848 B: the glossary type names (927 B) and the plugin-name table
 		// (287 B), which goes when the API sends plugin names (queued by the runner).
 		// X-page-frame (runner §2.26): 40.85 → 40.98 KB, measured 40,975 B, for the shared h1 class string.
-		'40.98 KB'
+		// X-insights-source-names: 40,975 → 40,655 B, the plugin-name table gone (the API sends names).
+		'40.66 KB'
 	),
 	entry(
 		'Insights stage charts (uPlot, on demand)',

@@ -4,6 +4,9 @@
 //! runs the same checks over a mutated corpus.
 #![no_main]
 
+#[path = "common/private_key.rs"]
+mod private_key;
+
 use libfuzzer_sys::fuzz_target;
 use lodestar_metainfo::hidden_char;
 use lodestar_sources::enrich::Lookup;
@@ -24,6 +27,11 @@ fn clean(s: &str, max: usize) -> bool {
 /// and a number out of `f64` range; `None` then.
 fn second_reader(body: &[u8]) -> Option<serde_json::Value> {
     let root = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
+    // `serde_json`'s private marker keys make `Value` misread the document
+    // (`common/private_key.rs`): no comparison through it then.
+    if private_key::has_private_key(root) {
+        return None;
+    }
     match serde_json::from_slice(root) {
         Ok(v) => Some(v),
         Err(e) => {
@@ -55,6 +63,9 @@ fn second_reader(body: &[u8]) -> Option<serde_json::Value> {
 fn top_id(body: &[u8]) -> Option<String> {
     use serde_json::value::RawValue;
     let root = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
+    if private_key::has_private_key(root) {
+        return None;
+    }
     let top: First = serde_json::from_slice(root).ok()?;
     let data = top.get("data")?.get();
     let item = match data.as_bytes().first()? {

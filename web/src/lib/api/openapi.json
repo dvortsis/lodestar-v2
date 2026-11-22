@@ -14797,6 +14797,7 @@
         "required": [
           "dropped",
           "key",
+          "name",
           "rediscovered",
           "reported"
         ],
@@ -14808,7 +14809,11 @@
           },
           "key": {
             "type": "string",
-            "description": "The source's plugin name."
+            "description": "The source plugin's manifest id, as `source:` takes it."
+          },
+          "name": {
+            "type": "string",
+            "description": "The plugin's display name; its manifest id when this build doesn't\nrun that plugin, as provenance's `name`."
           },
           "rediscovered": {
             "type": "integer",
@@ -22908,6 +22913,7 @@
       },
       "SegmentYield": {
         "type": "object",
+        "description": "A yield by some other key (`by_ip_family`).",
         "required": [
           "harvested",
           "key",
@@ -22922,7 +22928,7 @@
           },
           "key": {
             "type": "string",
-            "description": "The source plugin's name."
+            "description": "What it's counted by."
           },
           "searchable": {
             "type": "integer",
@@ -22965,7 +22971,7 @@
           "by_source": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/SegmentYield"
+              "$ref": "#/components/schemas/SourceYield"
             },
             "description": "Yield by the source that found each hash first, over final\ncohorts. Discovery cohort."
           }
@@ -24600,6 +24606,45 @@
         "example": {
           "enabled": true,
           "priority": "high"
+        }
+      },
+      "SourceYield": {
+        "type": "object",
+        "description": "One source's yield (`segments.by_source`).",
+        "required": [
+          "harvested",
+          "key",
+          "name",
+          "searchable",
+          "yield"
+        ],
+        "properties": {
+          "harvested": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "key": {
+            "type": "string",
+            "description": "The source plugin's manifest id, as `source:` takes it."
+          },
+          "name": {
+            "type": "string",
+            "description": "The plugin's display name; its manifest id when this build doesn't\nrun that plugin, as provenance's `name`."
+          },
+          "searchable": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "yield": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Searchable ÷ harvested, 0–1; null when it harvested nothing."
+          }
         }
       },
       "Stages": {

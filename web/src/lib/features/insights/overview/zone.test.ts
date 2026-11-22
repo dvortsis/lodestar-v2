@@ -82,11 +82,21 @@ describe('Movement’s annotations', () => {
 });
 
 describe('segments by name', () => {
-	it('names a source by its plugin name and types by the glossary', () => {
-		render(Segments, { segments: overviewFixture().segments, query: q, rangeText: 'x' });
+	it("names a source by the server's name for it (X-insights-source-names)", () => {
+		const segments = overviewFixture().segments;
+		segments.by_source.push({
+			harvested: 5,
+			key: 'gone',
+			name: 'gone',
+			searchable: 1,
+			yield: 0.2
+		});
+		render(Segments, { segments, query: q, rangeText: 'x' });
+		// The DHT as the glossary writes it, whatever the server called it.
 		expect(screen.getByTestId('insights-source-dht').textContent).toContain('DHT');
-		expect(screen.getByTestId('insights-source-dht').textContent).not.toMatch(/\bdht\b/);
-		// An id with no name shows as sent.
-		expect(screen.getByTestId('insights-source-tracker').textContent).toContain('tracker');
+		expect(screen.getByTestId('insights-source-dht').textContent).not.toMatch(/\bdht\b|Mainline/);
+		expect(screen.getByTestId('insights-source-nyaa').textContent).toContain('Nyaa');
+		// A plugin this build doesn't run: the server sends its id, shown as sent.
+		expect(screen.getByTestId('insights-source-gone').textContent).toContain('gone');
 	});
 });
