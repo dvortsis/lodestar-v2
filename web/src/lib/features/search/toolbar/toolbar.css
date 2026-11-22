@@ -10,24 +10,27 @@
 	gap: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
 	min-height: var(--control-height-dense);
 }
-/* Below x-large the Filters button (the rail's host) shares this row instead of standing above it:
-   it sits over the results track's top-left, and the row leaves it room. The room is the host's
-   measured width (ResultsToolbar sets --tb-inset), so a long label ("Filters (12)", in any language)
-   never overlaps. One row of controls above the first result on a phone. Here, not in results.css:
-   that chunk has no headroom. */
+/* Below x-large the Filters button (the rail's host) is out of flow in every state, so nothing moves
+   when the toolbar arrives: it sits over the results track's top-left, and ResultsToolbar, alive in
+   every state, sets two lengths on #results from its measured box (--tb-inset: its width and a gap,
+   --tb-rail-h: its height and the grid's gap, which an empty host still leaves). The region's first child, the
+   toolbar or an alert above it (Details couldn't load), starts after the button; with no toolbar
+   (the empty and cold-start states) the panel starts below it, as it did when the host was in flow.
+   One row of controls above the first result on a phone. Here, not in results.css: that chunk has no
+   headroom. */
 @media (width < 64rem) {
-	/* Only while the toolbar is the region's first child: above it an alert (Details couldn't load)
-	   would be covered, and with no toolbar (the empty state) there is no row to share. */
-	.search-grid:has(#results > .tb:first-child) {
-		& #search-rail {
-			position: absolute;
-			inset-block-start: 0;
-			inset-inline-start: 0;
-			z-index: 1;
-		}
-		& .tb {
-			padding-inline-start: var(--tb-inset, 0);
-		}
+	#search-rail {
+		position: absolute;
+		inset-block-start: 0;
+		inset-inline-start: 0;
+		z-index: 1;
+	}
+	#results > :first-child {
+		margin-inline-start: var(--tb-inset, 0);
+	}
+	#results > .rp:first-child {
+		margin-inline-start: 0;
+		margin-block-start: var(--tb-rail-h, 0);
 	}
 }
 /* L3: on a wide screen the controls follow the rows, not the far edge of the track. */

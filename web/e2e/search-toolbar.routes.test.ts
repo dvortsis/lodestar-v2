@@ -142,6 +142,9 @@ for (const width of [1366, 768, 390, 360, 320]) {
 	}) => {
 		await page.setViewportSize({ width, height: 900 });
 		server(mock, () => body(hits(3), { total: 3 }));
+		// A grown index: no "still growing" banner, which a slow state read can add above the rows
+		// (an existing shift that has nothing to do with the toolbar).
+		mock.on('searchIndexState', indexState(5_000_000));
 		await page.addInitScript(() => {
 			const w = window as unknown as { __cls: number };
 			w.__cls = 0;
@@ -157,9 +160,9 @@ for (const width of [1366, 768, 390, 360, 320]) {
 		await expect(count(page)).toHaveText('3 results');
 		await expect(row(page, 1)).toBeVisible();
 		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
-		// Nothing the toolbar does may move: a real jump is 0.004 and up (the Filters host at 360 px). CI's
-		// fonts leave a sub-pixel 1e-5 to 1e-4 here and there, far under the page's 0.02 budget.
-		expect(cls).toBeLessThan(0.001);
+		// Below x-large the Filters host is out of flow in every state: no shift at all. A desktop page
+		// may carry a sub-pixel one (about 1e-4) that has nothing to do with it.
+		expect(cls).toBeLessThan(width < 1024 ? 1e-9 : 1e-3);
 	});
 }
 
@@ -173,6 +176,9 @@ for (const width of [768, 390, 320]) {
 	}) => {
 		await page.setViewportSize({ width, height: 900 });
 		server(mock, () => body(hits(3), { total: 3 }));
+		// A grown index: no "still growing" banner, which a slow state read can add above the rows
+		// (an existing shift that has nothing to do with the toolbar).
+		mock.on('searchIndexState', indexState(5_000_000));
 		await page.addInitScript(() => {
 			const w = window as unknown as { __cls: number };
 			w.__cls = 0;
@@ -184,20 +190,27 @@ for (const width of [768, 390, 320]) {
 					if (!e.hadRecentInput) w.__cls += e.value;
 			}).observe({ type: 'layout-shift', buffered: true });
 		});
+		// A slow CPU, as on CI: the first frames come apart.
+		const cdp = await page.context().newCDPSession(page);
+		await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
 		await page.route('**/_app/immutable/**/*.js', async (route) => {
-			const res = await route.fetch();
-			if ((await res.text()).includes('results-toolbar')) {
-				await new Promise((done) => setTimeout(done, 600));
+			try {
+				const res = await route.fetch();
+				const body = await res.body();
+				if (body.includes('results-toolbar')) await new Promise((done) => setTimeout(done, 600));
+				await route.fulfill({ response: res, body });
+			} catch {
+				// A fetch that failed under load goes to the network as it is; a closed page ignores this.
+				await route.continue().catch(() => {});
 			}
-			return route.fulfill({ response: res });
 		});
 		await go('/search?q=lantern');
-		await expect(count(page)).toHaveText('3 results');
-		await expect(row(page, 1)).toBeVisible();
+		await expect(count(page)).toHaveText('3 results', { timeout: 30_000 });
+		await expect(row(page, 1)).toBeVisible({ timeout: 30_000 });
 		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
-		// Nothing the toolbar does may move: a real jump is 0.004 and up (the Filters host at 360 px). CI's
-		// fonts leave a sub-pixel 1e-5 to 1e-4 here and there, far under the page's 0.02 budget.
-		expect(cls).toBeLessThan(0.001);
+		// Below x-large the Filters host is out of flow in every state: no shift at all. A desktop page
+		// may carry a sub-pixel one (about 1e-4) that has nothing to do with it.
+		expect(cls).toBeLessThan(width < 1024 ? 1e-9 : 1e-3);
 	});
 }
 
@@ -311,6 +324,7 @@ for (const width of [390, 1440]) {
 		mock
 	}) => {
 		server(mock, () => body(hits(3), { total: 3 }));
+		mock.on('searchIndexState', indexState(5_000_000)); // no banner, which a slow read can add
 		await page.setViewportSize({ width, height: 900 });
 		await page.addInitScript(() => {
 			const w = window as unknown as { __cls: number };

@@ -36,16 +36,17 @@
 		cards: m.search_cards_option
 	};
 
-	// Below x-large the Filters host sits over this row's start (toolbar.css): the row leaves it the
-	// host's measured width, plus a gap.
-	let bar = $state<HTMLElement>();
+	// Below x-large the Filters host is out of flow (toolbar.css): this component, alive in every
+	// state, tells #results how much room it takes.
 	$effect(() => {
 		const rail = document.getElementById('search-rail');
-		if (!bar || !rail || typeof ResizeObserver !== 'function') return;
-		const el = bar;
+		const region = document.getElementById('results');
+		if (!rail || !region || typeof ResizeObserver !== 'function') return;
 		const set = () => {
 			const w = rail.offsetWidth;
-			el.style.setProperty('--tb-inset', w ? `${w + 8}px` : '0px');
+			const gap = parseFloat(getComputedStyle(rail.parentElement!).rowGap) || 0;
+			region.style.setProperty('--tb-inset', w ? `${w + 8}px` : '0px');
+			region.style.setProperty('--tb-rail-h', `${rail.offsetHeight + gap}px`);
 		};
 		set(); // before the first paint: the observer's first call comes a frame later
 		const ro = new ResizeObserver(set);
@@ -105,7 +106,7 @@
 </script>
 
 {#if results.status !== 'empty'}
-	<div class="tb" data-testid="results-toolbar" bind:this={bar}>
+	<div class="tb" data-testid="results-toolbar">
 		<p class="tb-count" data-testid="results-count">{count}</p>
 		<div class="tb-controls">
 			<label class="tb-lbl" for="{id}-sort">
