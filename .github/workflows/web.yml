@@ -63,14 +63,10 @@ jobs:
       - run: git diff --exit-code src/lib/api/schema.d.ts
       - run: npm run check
       - run: npx vitest run
-      - run: npm run build
-      # Size is measured on a rebuild with a fixed version name (the commit SHA otherwise changes
-      # the app id and chunk hashes) and chunk names from each chunk's modules, not its bytes
-      # (LODESTAR_STABLE_NAMES, web/vite.config.ts), so an unrelated change doesn't move other
-      # routes' sizes (X-web-build-determinism). The build above keeps the shipped config.
-      - run: npx vite build
-        env: { LODESTAR_BUILD_VERSION: '0000000', LODESTAR_STABLE_NAMES: '1' }
-      - run: npx size-limit
+      # The shipped build, then size measured on a rebuild whose chunk and stylesheet names come
+      # from their sources, not their bytes, so an unrelated change doesn't move other routes'
+      # sizes (X-web-build-determinism, X-size-ci-script). Run it locally the same way.
+      - run: npm run size:ci
 
   # The one check to require in the ruleset. Always reports; passes when `web` passed or was
   # skipped because no web input changed; fails when it failed, was cancelled, or was skipped
