@@ -157,9 +157,47 @@ for (const width of [1366, 768, 390, 360, 320]) {
 		await expect(count(page)).toHaveText('3 results');
 		await expect(row(page, 1)).toBeVisible();
 		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
-		// Below x-large the Filters host is placed over the row: no shift at all. A desktop page may
-		// carry a sub-pixel one (about 1e-4) that has nothing to do with it.
-		expect(cls).toBeLessThan(width < 1024 ? 1e-9 : 1e-3);
+		// Nothing the toolbar does may move: a real jump is 0.004 and up (the Filters host at 360 px). CI's
+		// fonts leave a sub-pixel 1e-5 to 1e-4 here and there, far under the page's 0.02 budget.
+		expect(cls).toBeLessThan(0.001);
+	});
+}
+
+// CI answers the toolbar's chunk later than the results panel's: the Filters host must not move
+// when it arrives (a slow chunk, which a fast local run hides).
+for (const width of [768, 390, 320]) {
+	test(`a pasted link does not shift when a slow toolbar chunk arrives at ${width} px`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		await page.setViewportSize({ width, height: 900 });
+		server(mock, () => body(hits(3), { total: 3 }));
+		await page.addInitScript(() => {
+			const w = window as unknown as { __cls: number };
+			w.__cls = 0;
+			new PerformanceObserver((list) => {
+				for (const e of list.getEntries() as unknown as {
+					value: number;
+					hadRecentInput: boolean;
+				}[])
+					if (!e.hadRecentInput) w.__cls += e.value;
+			}).observe({ type: 'layout-shift', buffered: true });
+		});
+		await page.route('**/_app/immutable/**/*.js', async (route) => {
+			const res = await route.fetch();
+			if ((await res.text()).includes('results-toolbar')) {
+				await new Promise((done) => setTimeout(done, 600));
+			}
+			return route.fulfill({ response: res });
+		});
+		await go('/search?q=lantern');
+		await expect(count(page)).toHaveText('3 results');
+		await expect(row(page, 1)).toBeVisible();
+		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
+		// Nothing the toolbar does may move: a real jump is 0.004 and up (the Filters host at 360 px). CI's
+		// fonts leave a sub-pixel 1e-5 to 1e-4 here and there, far under the page's 0.02 budget.
+		expect(cls).toBeLessThan(0.001);
 	});
 }
 
