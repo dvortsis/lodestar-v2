@@ -1,4 +1,4 @@
-# X-backoff-escalate-passthrough decisions (#PR)
+# X-backoff-escalate-passthrough decisions (#1044)
 
 Runner brief, 2026-11-22Z, to fix main. CR-SAMPLE-BACKOFF-ESCALATE (#1029) made `crates/lodestar/src/config.rs` read `LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE`. The fleet's switch test (`infra/fleet/tests/test_steps.py`, `test_every_crawler_switch_passes_through_by_bare_name`) then failed on main, inside `ci-ok`, because the soak collector didn't know the variable.
 
