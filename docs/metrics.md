@@ -932,7 +932,7 @@ The fetch pool holds info dicts to a byte budget, `max_held_bytes` (64 MiB by de
 
 ## First windows (X-fetch-first-window, 2026-11-14)
 
-A fetch of a dict larger than one request window (64 KiB) asks for that first window all at once and must have it within 4 s ([the decision](decisions/2026-11-14-X-fetch-first-window.md)). Past that the fetch ends as a timed-out failure of that peer; the key keeps its other peers.
+A fetch of a dict larger than one window (64 KiB, 4 pieces) must have that first window within 4 s of asking for it ([the decision](decisions/2026-11-14-X-fetch-first-window.md)). Past that the fetch ends as a timed-out failure of that peer; the key keeps its other peers.
 
 | Series | Type | Meaning |
 | --- | --- | --- |

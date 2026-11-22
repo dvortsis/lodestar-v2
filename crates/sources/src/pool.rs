@@ -248,8 +248,12 @@ pub const RESERVE_WAITS_FREE: u8 = 3;
 /// [`weigh`]'s units.
 ///
 /// A fetch of a dict over 64 KiB reserves in two steps: its first request
-/// window at the handshake (a *partial* claim), the rest once its peer has
-/// sent that whole window (*growth*). A claim that's granted never waits
+/// at the handshake (a *partial* claim), the rest once its peer has sent
+/// the whole first window (*growth*). Peer-wire's first request is the
+/// 64 KiB window and one more piece, 80 KiB of dict, for a dict over five
+/// pieces, and the window alone for one of exactly five
+/// (CR-UTP-FIRST-WINDOW); the rules below work in each claim's own bytes
+/// and assume neither size. A claim that's granted never waits
 /// again, except a partial one for its growth. Two rules keep that from
 /// deadlocking:
 /// - **Growth goes first.** While a growth waits, nothing is granted that
@@ -455,8 +459,10 @@ impl BudgetState {
 }
 
 /// A whole claim of at most this is a small one, with the floor's room: a
-/// dict of one request window (64 KiB) with its client name and PEX
-/// peers, as peer-wire bounds it, and the key.
+/// dict of one first window (64 KiB) with its client name and PEX peers,
+/// as peer-wire bounds it, and the key. Peer-wire reserves no dict over one
+/// window whole (CR-UTP-FIRST-WINDOW), so every whole claim it makes for a
+/// dict of four pieces or fewer fits.
 pub const SMALL_CLAIM: u64 = 80 << 10;
 
 /// The floor is this share of the budget (a quarter), and grown claims
@@ -5938,7 +5944,8 @@ mod budget {
         let stats = handle.stats();
         let gauge = |g: &AtomicU64| g.load(Ordering::Relaxed);
         // The staller announced 300 KB but sent nothing: only its first
-        // window (64 KiB, with the bound) shows.
+        // request (80 KiB, the window and one more piece, with the bound)
+        // shows.
         until("the stalled fetch's reservation", async || {
             handle.queued().await; // a round of the pool publishes its stats
             gauge(&stats.reserved_bytes) >= 64 << 10

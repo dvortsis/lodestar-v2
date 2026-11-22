@@ -76,15 +76,34 @@ struct FakeState {
     /// Bytes reserved by fetches downloading now, and the most at once.
     reserved: AtomicU64,
     max_reserved: AtomicU64,
-    /// With `reserving`: peers that announce this many bytes, reserve as
-    /// peer-wire does (the first 64 KiB, the rest after it arrives), then
-    /// send nothing until peer-wire's 8 s deadline ends them.
+    /// With `reserving`: peers that announce this many bytes, reserve their
+    /// first request as peer-wire does ([`first_reservation`]), then send
+    /// nothing until peer-wire's 8 s deadline ends them.
     silent: Mutex<HashMap<SocketAddr, usize>>,
 }
 
-/// Peer-wire's first request window (`FIRST_WINDOW`), and its deadline.
+/// Peer-wire's first window (`FIRST_WINDOW`, 4 pieces), and its deadline.
 const WINDOW: usize = 64 << 10;
 const DEADLINE: Duration = Duration::from_secs(8);
+/// Room for a full PEX list in a result, as peer-wire's `result_bound`
+/// has it: 200 peers.
+const PEX_BOUND: usize = 200 * std::mem::size_of::<SocketAddr>();
+
+/// What peer-wire reserves first for a dict of `size` bytes, with no
+/// client name, and in all (CR-UTP-FIRST-WINDOW): the window and one more
+/// piece for a dict over five pieces, the window alone for one of five,
+/// and all of a smaller dict, each with the result's bound.
+/// [`peer_wire_reserves_these_first`] pins it to the real fetch, as
+/// `pool_budget_model.rs` pins its own constants: change them together.
+fn first_reservation(size: usize) -> (usize, usize) {
+    let piece = WINDOW / 4;
+    let first = if size > 5 * piece {
+        5 * piece
+    } else {
+        size.min(WINDOW)
+    };
+    (first + PEX_BOUND, size + PEX_BOUND)
+}
 
 struct Fake(Arc<FakeState>);
 
@@ -150,7 +169,8 @@ async fn serve(
         if let Some(size) = silent {
             // Waiting for room counts against the deadline too.
             let _ = tokio::time::timeout(DEADLINE - handshake, async {
-                r.reserve(size.min(WINDOW), size).await;
+                let (now, total) = first_reservation(size);
+                r.reserve(now, total).await;
                 s.reserved.fetch_add(r.bytes(), Ordering::SeqCst);
                 std::future::pending::<()>().await
             })
@@ -2872,9 +2892,11 @@ async fn a_purged_result_leaves_the_recent_order() {
 }
 
 /// Silent peers that announce a dict and send nothing pin only their first
-/// 64 KiB window each, whether they announce 1 MiB (the old first window, a
-/// partial claim) or 64 KiB (a whole one). Against a 4 MiB worker budget,
-/// 20 of each don't stop small dicts flowing (runner, 2026-11-07).
+/// request each, as peer-wire reserves it: 80 KiB of dict and the bound
+/// (about 87 KiB with the key) when they announce 1 MiB (a partial claim),
+/// and 64 KiB and the bound when they announce 64 KiB (a whole one).
+/// Against a 4 MiB worker budget, 20 of each don't stop small dicts
+/// flowing (runner, 2026-11-07; CR-UTP-FIRST-WINDOW).
 #[tokio::test(start_paused = true)]
 async fn silent_claimers_pin_one_small_window_and_small_dicts_still_flow() {
     const SILENT: u32 = 20;
@@ -2906,16 +2928,15 @@ async fn silent_claimers_pin_one_small_window_and_small_dicts_still_flow() {
         h.send(found(0, 10_000 + n, vec![p]));
     }
     let stats = h.handle.stats();
+    // Each pins its first request, with the bound, and the key.
+    let one = |size| (first_reservation(size).0 + std::mem::size_of::<FetchedKey>()) as u64;
+    let all = SILENT as u64 * (one(MIB) + one(WINDOW));
     until("the silent peers to reserve", || {
-        h.fake.reserved.load(Ordering::SeqCst) >= 2 * SILENT as u64 * WINDOW as u64
+        h.fake.reserved.load(Ordering::SeqCst) >= all
     })
     .await;
     let pinned = h.fake.reserved.load(Ordering::SeqCst);
-    // Each pins its window plus the bound's PEX room and the struct.
-    assert!(
-        pinned <= 2 * SILENT as u64 * (WINDOW as u64 + (8 << 10)),
-        "{pinned}"
-    );
+    assert_eq!(pinned, all);
     for n in 0..SMALL {
         h.send(found(0, n, vec![peer(n as u8 + 1, 6881)]));
     }
@@ -3158,4 +3179,77 @@ async fn a_stream_that_ends_empty_on_the_last_attempt_counts_its_lookup_once() {
     assert_eq!(stats.lookups.load(Ordering::Relaxed), 0);
     stop.send(true).unwrap();
     task.await.unwrap();
+}
+
+/// The first `(now, total)` peer-wire's real fetch reserves for a dict of
+/// `size` bytes, from a scripted peer over an in-memory pipe that
+/// announces `size` and the client name "Lodestar".
+/// `pool_budget_model.rs` has the same peer: change them together.
+async fn first_reserved(size: usize) -> (usize, usize) {
+    use lodestar_peer_wire::message::{self, HANDSHAKE_LEN};
+    use lodestar_peer_wire::{FetchOptions, Reserve, fetch_on_stream};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let key = InfoHash([7; 20]);
+    let (ours, mut theirs) = tokio::io::duplex(1 << 16);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let tx = Mutex::new(Some(tx));
+    let opts = FetchOptions {
+        reserve: Some(Reserve(Arc::new(move |now, total| {
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send((now, total));
+            }
+            // Never granted: the fetch stops here, before any request.
+            Box::pin(std::future::pending())
+        }))),
+        ..FetchOptions::default()
+    };
+    let fetch = tokio::spawn(async move { fetch_on_stream(ours, &key, &opts, false).await });
+    // One deadline for the whole exchange, so a fetch that stops
+    // talking fails the test instead of hanging it.
+    let got = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut hello = [0u8; HANDSHAKE_LEN];
+        theirs.read_exact(&mut hello).await.unwrap();
+        theirs
+            .write_all(&message::handshake(&key.0, b"-PW0001-firstrequest", true))
+            .await
+            .unwrap();
+        let ext = message::our_extended_handshake(Some(size));
+        let mut frame = ((ext.len() + 2) as u32).to_be_bytes().to_vec();
+        frame.extend([20, 0]);
+        frame.extend(ext);
+        theirs.write_all(&frame).await.unwrap();
+        rx.await.unwrap()
+    })
+    .await
+    .expect("peer-wire reserves at the extended handshake, within 10 s");
+    fetch.abort();
+    got
+}
+
+/// `first_reservation` is peer-wire's: what the real fetch reserves first
+/// for dicts of 1 KiB, of 4, 5 and 6 pieces, of 5 pieces and a byte, and of
+/// 64 pieces (1 MiB), less the
+/// scripted peer's 8-byte client name.
+#[tokio::test]
+async fn peer_wire_reserves_these_first() {
+    let name = "Lodestar".len();
+    for size in [
+        1 << 10,
+        WINDOW,
+        5 * WINDOW / 4,
+        5 * WINDOW / 4 + 1,
+        6 * WINDOW / 4,
+        MIB,
+    ] {
+        let (now, total) = first_reserved(size).await;
+        assert_eq!(
+            (now, total),
+            (
+                first_reservation(size).0 + name,
+                first_reservation(size).1 + name
+            ),
+            "a dict of {size}"
+        );
+    }
 }
