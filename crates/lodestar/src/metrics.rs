@@ -636,6 +636,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Sampler cooldown obligations; also the indexed expiry count.",
             d.sample_cooling,
         );
+        render_sample_cooling(&mut o, d);
         o.one(
             "dht_sample_inflight",
             "gauge",
@@ -1544,6 +1545,32 @@ fn render_hints(o: &mut Out, d: &StatsSnapshot) {
         "gauge",
         "IPs the hint guard restricts.",
         d.hint_guard_entries,
+    );
+}
+
+/// X-sample-cooling-metric: the sampler's cooldowns by why they began, and
+/// its failed samples (docs/metrics.md). The reasons are a fixed set from
+/// the code; they sum to `dht_sample_cooling`.
+fn render_sample_cooling(o: &mut Out, d: &StatsSnapshot) {
+    use lodestar_dht::node::CoolingReason;
+    let name = "dht_sample_cooling_reason";
+    o.family(
+        name,
+        "gauge",
+        "Sampler cooldowns by why they began; they sum to dht_sample_cooling as of each maintenance tick.",
+    );
+    for (i, reason) in CoolingReason::ALL.iter().enumerate() {
+        o.value(
+            name,
+            &format!("reason=\"{}\"", reason.as_str()),
+            d.sample_cooling_reason[i],
+        );
+    }
+    o.one(
+        "dht_sample_failures_total",
+        "counter",
+        "BEP 51 samples that failed: timeouts, error replies (204 included) and inconsistent replies.",
+        d.sample_failures,
     );
 }
 
@@ -2491,6 +2518,63 @@ mod tests {
         }
         // Not duplicated: the have-filter and hot columns render elsewhere.
         assert!(!out.contains("have_bytes") && !out.contains("hot_columns"));
+    }
+
+    /// X-sample-cooling-metric: every reason renders with its own value,
+    /// the failures counter renders, and both families have their rows in
+    /// docs/metrics.md.
+    #[test]
+    fn sample_cooling_reasons_render_each_reason_and_are_documented() {
+        let d = StatsSnapshot {
+            sample_cooling_reason: [1, 2, 3, 4, 5, 6, 7],
+            sample_failures: 42,
+            ..StatsSnapshot::default()
+        };
+        let mut o = Out(String::new());
+        render_sample_cooling(&mut o, &d);
+        for line in [
+            "# TYPE lodestar_dht_sample_cooling_reason gauge",
+            "lodestar_dht_sample_cooling_reason{reason=\"interval\"} 1",
+            "lodestar_dht_sample_cooling_reason{reason=\"unsupported\"} 2",
+            "lodestar_dht_sample_cooling_reason{reason=\"timeout\"} 3",
+            "lodestar_dht_sample_cooling_reason{reason=\"error\"} 4",
+            "lodestar_dht_sample_cooling_reason{reason=\"first_failure\"} 5",
+            "lodestar_dht_sample_cooling_reason{reason=\"restored\"} 6",
+            "lodestar_dht_sample_cooling_reason{reason=\"sealed\"} 7",
+            "# TYPE lodestar_dht_sample_failures_total counter",
+            "lodestar_dht_sample_failures_total 42",
+        ] {
+            assert!(
+                o.0.lines().any(|l| l == line),
+                "missing {line:?} in\n{}",
+                o.0
+            );
+        }
+        // Exactly the seven reasons, so a new one can't go unrendered.
+        assert_eq!(
+            o.0.lines()
+                .filter(|l| l.starts_with("lodestar_dht_sample_cooling_reason{"))
+                .count(),
+            lodestar_dht::node::CoolingReason::ALL.len()
+        );
+        let doc = include_str!("../../../docs/metrics.md");
+        for family in ["dht_sample_cooling_reason", "dht_sample_failures_total"] {
+            assert!(
+                doc.lines().any(|l| l.starts_with(&format!("| `{family}"))),
+                "docs/metrics.md has no row for {family}"
+            );
+        }
+        let row = doc
+            .lines()
+            .find(|l| l.starts_with("| `dht_sample_cooling_reason"))
+            .expect("the reason row");
+        for reason in lodestar_dht::node::CoolingReason::ALL {
+            assert!(
+                row.contains(&format!("`{}`", reason.as_str())),
+                "docs/metrics.md doesn't name the reason {}",
+                reason.as_str()
+            );
+        }
     }
 
     /// X-sampler-cooldown-split: the counter and gauge render their values
