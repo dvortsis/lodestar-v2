@@ -351,9 +351,9 @@ stage 2 (CR-AB-LC); stage 1 runs and is judged exactly as above.
 
 The collector also records `hint_first` and `sampler_cooldown_split` (stage 3) and
 `sample_backoff_escalate` (`LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE`, off unless set; no
-treatment turns it on yet), and names
-any other `LODESTAR_DHT_*` variable it doesn't know; from stage 2 that makes the segment
-invalid, so a misspelt switch isn't read as off.
+treatment turns it on yet), and names any other `LODESTAR_DHT_*` variable it doesn't
+know; from stage 2 that makes the segment invalid, so a misspelt switch isn't read as
+off.
 
 Every segment also reports CR-LEDGER's `W`, `q` and `y` (`ledger`), and `effect`
 reports them per arm (`ledger_by_arm`). An older binary's are reported absent.
