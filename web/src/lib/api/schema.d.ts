@@ -8699,9 +8699,10 @@ export interface components {
             /** Format: int64 */
             piece_len: number;
             /**
-             * @description The release resolution the name gives, as `res:` takes it
-             *     (`480p` to `4320p`, `1080i`; `4k` reads as `2160p`); null = none
-             *     in the name, or not classified.
+             * @description The release resolution the name gives, in the canonical form `res:`
+             *     matches: `480p`, `576p`, `720p`, `1080i`, `1080p`, `1440p`, `2160p`
+             *     or `4320p` (aliases such as `4k`, `8k` or a bare `1080` are stored
+             *     in this form). Null = none in the name, or not classified.
              * @example 1080p
              */
             resolution: string | null;
