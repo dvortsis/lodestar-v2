@@ -18,6 +18,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import {
 	cpSync,
+	existsSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -82,16 +83,30 @@ const SKIP = new Set([
 	'messages'
 ]);
 
+const MARKER = '.lodestar-pseudo-scratch';
+
 /**
  * The scratch folder, laid out like the repository (`web/` inside it, `brand/` beside it) because
- * the asset step reads ../brand and writes ../packaging. Refuses anywhere inside the repository.
+ * the asset step reads ../brand and writes ../packaging. One per port, so two runs do not share
+ * one. Refuses a folder inside the repository AND one that holds it (`/tmp`, `$HOME`, `..`): the
+ * build deletes the folder first.
  */
-export function scratchDir(env = process.env) {
-	const dir = resolve(env.PSEUDO_DIR || join(tmpdir(), 'lodestar-pseudo'));
-	const rel = relative(REPO, dir);
-	if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)))
+export function scratchDir(env = process.env, port = 4174) {
+	const dir = resolve(env.PSEUDO_DIR || join(tmpdir(), `lodestar-pseudo-${port}`));
+	const inside = relative(REPO, dir); // dir relative to the repository
+	if (inside === '' || (!inside.startsWith('..') && !isAbsolute(inside)))
 		throw new Error(`pseudo-locale: ${dir} is inside the repository; the pseudo build must not be`);
+	const holds = relative(dir, REPO); // the repository relative to dir
+	if (!holds.startsWith('..') && !isAbsolute(holds))
+		throw new Error(`pseudo-locale: ${dir} contains the repository; refusing to build there`);
 	return dir;
+}
+
+/** True when `dir` is absent, empty, or was made by this script (it carries the marker file). */
+export function safeToReplace(dir) {
+	if (!existsSync(dir)) return true;
+	if (existsSync(join(dir, MARKER))) return true;
+	return readdirSync(dir).length === 0;
 }
 
 function run(cmd, args, cwd, env = process.env) {
@@ -113,11 +128,28 @@ function catalogueFiles(dir) {
 	});
 }
 
+/**
+ * The scratch copy's own `node_modules`: every package linked from the real one, except the
+ * caches, which stay the scratch copy's own. (The asset step keeps a stamp in node_modules/.cache
+ * that names the files it wrote; sharing it would make a later real `npm run assets` skip.)
+ */
+function linkNodeModules(dir) {
+	const own = new Set(['.cache', '.vite', '.vite-temp']);
+	const target = join(dir, 'node_modules');
+	mkdirSync(target);
+	for (const name of readdirSync(join(WEB, 'node_modules')))
+		if (!own.has(name))
+			symlinkSync(join(WEB, 'node_modules', name), join(target, name), 'junction');
+}
+
 export function build(root = scratchDir()) {
+	if (!safeToReplace(root))
+		throw new Error(`pseudo-locale: ${root} is not empty and was not made by this script`);
 	rmSync(root, { recursive: true, force: true });
+	mkdirSync(root, { recursive: true });
+	writeFileSync(join(root, MARKER), 'Scratch build of the pseudo-locale check; safe to delete.\n');
 	const dir = join(root, 'web');
 	// The brand pack is only read (verified against its checksums), so the real one is linked.
-	mkdirSync(root, { recursive: true });
 	symlinkSync(join(REPO, 'brand'), join(root, 'brand'), 'junction');
 	cpSync(WEB, dir, {
 		recursive: true,
@@ -126,7 +158,7 @@ export function build(root = scratchDir()) {
 			return rel === '' || !SKIP.has(rel.split(/[\\/]/)[0]);
 		}
 	});
-	symlinkSync(join(WEB, 'node_modules'), join(dir, 'node_modules'), 'junction');
+	linkNodeModules(dir);
 	// The per-feature source catalogues, made pseudo in the copy. vite.config.ts merges them into
 	// messages/en.json at the start of every build, so the sources are what has to change.
 	let files = 0;
@@ -150,7 +182,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 	}
 	const at = rest.indexOf('--port');
 	const port = String(at >= 0 ? rest[at + 1] : 4174);
-	const root = scratchDir();
+	const root = scratchDir(process.env, Number(port));
 	build(root);
 	const server = spawn('npx', ['vite', 'preview', '--port', port, '--strictPort'], {
 		cwd: join(root, 'web'),

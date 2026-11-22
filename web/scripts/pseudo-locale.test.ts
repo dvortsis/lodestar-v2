@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error a plain .mjs script with no type declarations
 import {
@@ -6,6 +9,7 @@ import {
 	OPEN,
 	pseudoCatalogue,
 	pseudoText,
+	safeToReplace,
 	scratchDir
 } from './pseudo-locale.mjs';
 
@@ -63,9 +67,38 @@ describe('pseudoCatalogue', () => {
 });
 
 describe('scratchDir', () => {
-	it('is outside the repository by default and refuses a place inside it', () => {
-		expect(scratchDir({})).not.toContain('lodestar-v2/web');
+	const repo = resolve(import.meta.dirname, '..', '..');
+
+	it('is outside the repository by default, one folder per port', () => {
+		expect(relative(repo, scratchDir({})).startsWith('..')).toBe(true);
+		expect(scratchDir({}, 4174)).not.toBe(scratchDir({}, 4175));
+	});
+
+	it('refuses a place inside the repository', () => {
 		expect(() => scratchDir({ PSEUDO_DIR: './build' })).toThrow(/inside the repository/);
 		expect(() => scratchDir({ PSEUDO_DIR: '../docs/pseudo' })).toThrow(/inside the repository/);
+	});
+
+	it('refuses a folder that holds the repository, which the build would delete', () => {
+		expect(() => scratchDir({ PSEUDO_DIR: resolve(repo, '..') })).toThrow(
+			/contains the repository/
+		);
+		expect(() => scratchDir({ PSEUDO_DIR: '/' })).toThrow(/contains the repository/);
+	});
+});
+
+describe('safeToReplace', () => {
+	it('allows a missing folder, an empty one and one this script made; not another', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'pseudo-test-'));
+		try {
+			expect(safeToReplace(join(dir, 'missing'))).toBe(true);
+			expect(safeToReplace(dir)).toBe(true); // empty
+			writeFileSync(join(dir, 'notes.txt'), "someone else's file");
+			expect(safeToReplace(dir)).toBe(false);
+			writeFileSync(join(dir, '.lodestar-pseudo-scratch'), '');
+			expect(safeToReplace(dir)).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

@@ -47,12 +47,8 @@ const fixture =
 const docs = !!process.env.E2E_DOCS || process.argv.join(' ').split(/[ =]/).includes('docs');
 // The pseudo-locale project serves its own build (a scratch copy of web/ built from pseudo
 // messages) on its own port, and only when asked for, so a normal run never builds it.
-const pseudo =
-	!!process.env.E2E_PSEUDO ||
-	process.argv
-		.join(' ')
-		.split(/[ =]/)
-		.some((a) => a === 'pseudo');
+// Only `--project=pseudo` / `--project pseudo` selects it (not any argument that says "pseudo").
+const pseudo = !!process.env.E2E_PSEUDO || /--project[= ]pseudo(\s|$)/.test(process.argv.join(' '));
 // Workers load this file with their own argv, which lacks `--project=pseudo`; the environment is
 // inherited, so say it there.
 if (pseudo) process.env.E2E_PSEUDO = '1';
