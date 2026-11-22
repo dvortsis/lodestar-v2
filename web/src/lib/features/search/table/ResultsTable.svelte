@@ -55,6 +55,7 @@
 		name: m.search_table_col_name,
 		raw: m.search_table_col_raw,
 		type: m.search_table_col_type,
+		res: m.search_table_col_res,
 		size: m.search_table_col_size,
 		files: m.search_table_col_files,
 		seeders: m.seeders,
@@ -240,6 +241,8 @@
 											>{/if}
 									{:else if id === 'type'}
 										{(hit.content_type && TYPE[hit.content_type]?.()) || '—'}
+									{:else if id === 'res'}
+										{hit.resolution ?? '—'}
 									{:else if id === 'size'}
 										{formatBytes(hit.size, locale)}
 									{:else if id === 'files'}

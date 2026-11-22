@@ -139,6 +139,7 @@ test('j and k move through an alert’s rows', async ({ page, go, kbd, mock }) =
 		metadata_at: T0,
 		name: `Row ${n}`,
 		piece_len: 16384,
+		resolution: null,
 		resolved_via: null,
 		score: 0,
 		seeders: null,
