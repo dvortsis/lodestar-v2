@@ -10677,10 +10677,10 @@
         "slot": 3,
         "slice": "X-openapi-400s-tidy",
         "role": "slice",
-        "agent": "pending",
+        "agent": "session_01MMjhn9GaKErH14DpxeLZZo",
         "model": "sonnet",
-        "since": "2026-11-22T10:50:00Z",
-        "doing": "#1060 merged e3b3c7ba; launching (brief briefs/X-openapi-400s-tidy.md)"
+        "since": "2026-11-22T10:45:00Z",
+        "doing": "#1060 merged e3b3c7ba; building (brief briefs/X-openapi-400s-tidy.md)"
       },
       {
         "slot": 4,
