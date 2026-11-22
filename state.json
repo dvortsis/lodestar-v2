@@ -10653,25 +10653,25 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-21T23:50Z",
+    "updated": "2026-11-22T00:25Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-builder-group-case",
+        "slice": "X-insights-source-names",
         "role": "build",
         "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
         "model": "opus",
-        "since": "2026-11-21T23:50Z",
-        "doing": "#1033 merged (S1-20 fixed); step 0: can a group value reach the Builder"
+        "since": "2026-11-22T00:25Z",
+        "doing": "#1037 merged; built locally, security review then PR"
       },
       {
         "slot": 2,
-        "slice": "X-web-build-determinism",
+        "slice": "X-size-ci-script",
         "role": "build",
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
-        "since": "2026-11-21T21:47Z",
-        "doing": "#1035 merged; determinism push released after #1033"
+        "since": "2026-11-22T00:25Z",
+        "doing": "#1038 merged; step 0"
       },
       {
         "slot": 3,
@@ -10680,16 +10680,16 @@
         "agent": "session_01MMjhnD5iaW7CGjAAtXeVfE",
         "model": "sonnet",
         "since": "2026-11-21T23:00Z",
-        "doing": "split approved (4 parts); building part 1: chunk failure, focus return, settings save gap"
+        "doing": "#1036 review fixes pushed (d978df19), CI; part 2 built locally"
       },
       {
         "slot": 4,
-        "slice": "CR-SAMPLE-BACKOFF-ESCALATE",
+        "slice": "X-relevance-finish-flake",
         "role": "build",
         "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
-        "since": "2026-11-21T16:32Z",
-        "doing": "PR #1029 merged main again (26217c7a); CI running; merge on green"
+        "since": "2026-11-22T00:25Z",
+        "doing": "#1029 merged; step 0: what holds the index at :353"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
