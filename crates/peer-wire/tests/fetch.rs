@@ -592,13 +592,13 @@ async fn a_peer_announcing_max_metadata_reserves_exactly_its_bound() {
     }
 }
 
-/// A peer that announces a large dict reserves only its first request
-/// window (64 KiB) until it has sent that window: a peer that sends nothing
-/// holds at most that. An honest peer's fetch grows to the whole bound
-/// before it requests past the window.
+/// A peer that announces a large dict reserves only its first request (the
+/// window and one more piece, 80 KiB; CR-UTP-FIRST-WINDOW) until it has sent
+/// that window: a peer that sends nothing holds at most that. An honest
+/// peer's fetch grows to the whole bound before it requests past it.
 #[tokio::test]
 async fn a_large_claim_reserves_its_first_window_until_the_window_arrives() {
-    const WINDOW: usize = 4 * 16 * 1024;
+    const WINDOW: usize = 5 * 16 * 1024;
     let pex_bound = 200 * std::mem::size_of::<SocketAddr>();
     let client = "FakePeer 1.0".len();
     let first = WINDOW + client + pex_bound;
