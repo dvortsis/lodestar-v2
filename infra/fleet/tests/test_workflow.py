@@ -147,9 +147,13 @@ class FleetStructure(unittest.TestCase):
                 self.assertLess(keys.index("if"), keys.index("environment"))
 
     def test_all_deployment_jobs_pin_main_and_can_read_approval_settings(self):
+        self.assert_deployment_jobs()
+
+    def assert_deployment_jobs(self, folder=WORKFLOWS):
+        """The policy check over every workflow in `folder`, `.yml` and `.yaml` (WorkflowExtensions runs it on a scratch folder)."""
         from deployment_policy import POLICY
-        self.assertEqual(unlisted_deployment_jobs(workflow_paths()), [])
-        for path in workflow_paths():
+        self.assertEqual(unlisted_deployment_jobs(workflow_paths(folder)), [])
+        for path in workflow_paths(folder):
             for name, job in load(path)["jobs"].items():
                 environment = job.get("environment")
                 if isinstance(environment, dict):
@@ -388,6 +392,9 @@ class WorkflowExtensions(unittest.TestCase):
             paths = workflow_paths(folder)
             self.assertEqual([p.name for p in paths], ["other.yaml", "plain.yml"])
             self.assertEqual(unlisted_deployment_jobs(paths), [("other.yaml", "deploy")])
+            # The real policy test's own loop reads this folder through the same glob.
+            with self.assertRaises(AssertionError):
+                FleetStructure("test_all_deployment_jobs_pin_main_and_can_read_approval_settings").assert_deployment_jobs(folder)
 
     def test_the_repos_workflows_are_all_found(self):
         names = {p.name for p in workflow_paths()}

@@ -1,4 +1,4 @@
-# X-workflow-tests-filter decisions
+# X-workflow-tests-filter decisions (#1062)
 
 Runner brief, 2026-11-22Z, from #1058's review (recorded in `2026-11-22-runner-records-r11.md`). Two workflow-reading tests could be skipped by a workflow change.
 
@@ -7,7 +7,11 @@ Runner brief, 2026-11-22Z, from #1058's review (recorded in `2026-11-22-runner-r
 - **The fix.** One step in `ci.yml`'s `changes` job, after the smoke-pilots unittest line: `python3 .github/scripts/test_workflow_concurrency.py`. That job runs on every pull request, with no condition, and already holds the other instant checks "here, where every PR runs, rather than behind a filter".
 - **The duplicate in `lint` is removed,** so the test runs in exactly one place. `ci.yml` changes still reach it: `changes` runs on every event.
 - **Why a `ci_changes.py` output can't do it.** An output only gates a job, and every job that could host the test sits behind `rust` or another filter. A new job would pay a runner start-up for a 0.1 s test.
-- **Why not Option C** (the infra job loads and runs the test through `infra/fleet/tests/test_workflow.py`). It needs no `ci.yml` edit, but it couples two test trees, and it costs a web.yml-only PR a 6.5 to 7.5 minute infra run to execute a 0.1 s test. (#1058 already sends such a PR there.)
+- **Why not Option C** (the infra job loads and runs the test through `infra/fleet/tests/test_workflow.py`). It needs no `ci.yml` edit, but:
+  - it couples two test trees;
+  - the result would wait behind a 6.5 to 7.5 minute job instead of arriving in seconds;
+  - it would depend on the infra filter, where Option A runs with no filter at all;
+  - a change to `test_workflow_concurrency.py` alone doesn't match `INFRA`, so the test wouldn't run on it.
 - **The runner approved the `ci.yml` edit** (its call under §2.26, flagged to the owner under §2.19). No job gained or lost an `if:`, and no permission, secret or trigger changed.
 - **Extra CI cost:** about 0.1 s in the `changes` job on every PR and push, and no new job. It still runs in exactly one place, as before for a Rust PR.
 

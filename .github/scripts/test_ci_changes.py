@@ -275,7 +275,7 @@ class ConcurrencyCheckRunsOnEveryPullRequest(unittest.TestCase):
         steps = [i for i, line in enumerate(block) if self.SCRIPT in line]
         self.assertEqual(len(steps), 1)
         # A plain one-line step, and the job itself has no `if:` that could skip it.
-        self.assertEqual(block[steps[0]], f"      - run: {self.SCRIPT}")
+        self.assertRegex(block[steps[0]], rf"^      - run: {re.escape(self.SCRIPT)}(\s+#.*)?$")
         following = block[steps[0] + 1] if steps[0] + 1 < len(block) else ""
         self.assertFalse(following.startswith("        "), following)  # no step-level `if:` or `env:` under it
         self.assertFalse([line for line in block if re.match(r"    if:", line)])

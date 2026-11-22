@@ -107,11 +107,12 @@ E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
 # The cloud infrastructure job (X-cloud-infra): Lambda tests, template rebuilds,
 # Terraform fmt/validate and a PowerShell parse check. Never touches a cloud.
 # Every workflow file too (X-infra-filter-workflows): infra/fleet/tests/test_workflow.py
-# reads every .github/workflows/*.yml and .yaml, and other fleet and operator tests read some by
-# name, so a change to any workflow can break them, and a workflow added later
-# is covered with no list to update. And the files directly in docs/operations/,
-# where the fleet runbook that test_block.py reads lives. Its imports/ subfolder
-# is not read by these tests, so it doesn't match.
+# reads every .github/workflows/*.yml and .yaml, and other fleet and operator
+# tests read some by name, so a change to any workflow can break them, and a
+# workflow added later is covered with no list to update. And the files
+# directly in docs/operations/, where the fleet runbook that test_block.py
+# reads lives. Its imports/ subfolder is not read by these tests, so it
+# doesn't match.
 # The rules file and the docs that quote it: the fleet tests that read them run in this job.
 INFRA = re.compile(
     r"^(infra/"
