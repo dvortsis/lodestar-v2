@@ -479,6 +479,7 @@ placement:
   - X-enr-lane-nits
   - X-win-data-dir-followups
   - X-fleet-switch-passthrough
+  - X-backoff-escalate-passthrough
   - X-metrics-prefix-doc
   - X-testvm-teardown-by-id
   - X-api-openapi-400s

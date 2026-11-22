@@ -349,7 +349,9 @@ stage 2 (CR-AB-LC); stage 1 runs and is judged exactly as above.
   values, occupied slots exceed 32 at least once, and the query rate stays within
   the preset.
 
-The collector also records `hint_first` and `sampler_cooldown_split` (stage 3), and names
+The collector also records `hint_first` and `sampler_cooldown_split` (stage 3) and
+`sample_backoff_escalate` (`LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE`, off unless set; no
+treatment turns it on yet), and names
 any other `LODESTAR_DHT_*` variable it doesn't know; from stage 2 that makes the segment
 invalid, so a misspelt switch isn't read as off.
 
