@@ -366,6 +366,26 @@ Open **Settings → Updates** in the **System** group. Under **How to update**, 
 
 A setting locked by a `LODESTAR_UPDATES*` variable shows "Set by …" and can't be changed in the app.
 
+**Recommended:** use the setting in **Settings → Updates**, not a variable. The app keeps the setting in your data folder, so it survives every update.
+
+On Windows, a variable set on the Lodestar service **is lost on every install or update**, including **Install now**. An update removes the service and creates it again, and the variables go with it. You then see the setting unlocked, or Lodestar uses its default. Nothing warns you.
+
+If you still need a variable, set it again after each install or update:
+
+1. Open **Start**, type **Command Prompt**, right-click it and select **Run as administrator**.
+2. In that Command Prompt, paste this command, with your own variable and value between the quotes:
+
+   ```bat
+   reg add HKLM\SYSTEM\CurrentControlSet\Services\Lodestar /v Environment /t REG_MULTI_SZ /d "LODESTAR_UPDATES=notify" /f
+   ```
+
+3. For two or more variables, separate them with `\0`. The command replaces any variables already set.
+4. Open **Services** (`services.msc`), select **Lodestar** and select **Restart**.
+
+**Result:** the setting shows "Set by …" again.
+
+Keep secrets out of service variables: any administrator can read them in the registry.
+
 ### Know when an install can run
 
 Two things don't stop **Install now**.
