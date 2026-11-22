@@ -30,7 +30,12 @@ fn a_panicking_test_leaves_no_server_process() {
         assert!(alive(pid), "the child should be running");
         panic!("a test failing before stop()");
     }));
-    assert!(caught.is_err());
+    let payload = caught.unwrap_err();
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"a test failing before stop()"),
+        "the closure must fail only at the deliberate panic"
+    );
     assert_ne!(pid, 0);
     let start = Instant::now();
     while alive(pid) {
