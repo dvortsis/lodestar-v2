@@ -2,7 +2,8 @@ name: E2E
 
 # PR run: Riverstone light/dark × 7 breakpoints × 2 densities, the rotating 6 themes, reduced
 # motion and keyboard-only projects (axe everywhere; baselines for key screens), then Lighthouse CI.
-# Nightly / manual: the `all-themes` project (axe on every route + key-screen baselines, 48 themes).
+# Nightly / manual: the `all-themes` project (axe on every route + key-screen baselines, 48 themes)
+# and the `pseudo` project (pseudo-locale build: overflow, clipping, hard-coded English).
 #
 # Everything runs in the Playwright image pinned below (match @playwright/test in web/package.json),
 # so text rendering is reproducible and the baselines are generated here, never on a laptop.
@@ -283,6 +284,18 @@ jobs:
         env:
           PLAYWRIGHT_HTML_OPEN: never
           PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-json/results.json
+      # The pseudo-locale check (X-ui-checks-3): every route built from longer, accented messages,
+      # for overflow, clipped text and hard-coded English. Nightly and manual only, like this whole
+      # job. It builds a scratch copy of web/ OUTSIDE the repository (scripts/pseudo-locale.mjs), so
+      # web/build, the Docker image and the release never see it. Its own report and output folders
+      # keep the all-themes diffs above intact; `if: always()` runs it even when all-themes failed.
+      # A failure here fails this job (the tracking issue then points at the run page).
+      - name: Pseudo-locale check
+        if: always()
+        run: npx playwright test --project=pseudo --reporter=list,html --output=test-results-pseudo
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+          PLAYWRIGHT_HTML_REPORT: playwright-report-pseudo
       # Every run, pass or fail: counts and the failing spec titles, to the run page and as a
       # small artifact that `all-themes-issue` reads. This job runs npm code, so it holds no
       # write token; the titles come from the test code and are cleaned before anyone prints them.
@@ -338,7 +351,9 @@ jobs:
           name: playwright-report-all-themes
           path: |
             web/playwright-report
+            web/playwright-report-pseudo
             web/test-results
+            web/test-results-pseudo
           retention-days: 14
 
   # One tracking issue for the nightly all-themes run (spec §10.17). It is its own job so the job
