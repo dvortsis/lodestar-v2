@@ -1161,6 +1161,8 @@ SWITCH_ENV = {
     "preset_slots": "LODESTAR_DHT_PRESET_SLOTS",
     "hint_first": "LODESTAR_DHT_HINT_FIRST",
     "sampler_cooldown_split": "LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT",
+    # CR-SAMPLE-BACKOFF-ESCALATE (#1029): recorded, off unless set; not in a treatment yet.
+    "sample_backoff_escalate": "LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE",
 }
 # LODESTAR_DHT_* variables that aren't switches. Any other is reported by name (never its
 # value), so a switch this list doesn't know isn't silently read as off.
