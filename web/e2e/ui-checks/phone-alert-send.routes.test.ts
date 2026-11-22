@@ -44,17 +44,24 @@ test('phone: open an alert, open it in Search, open a torrent, send it to the cl
 		} as never;
 	});
 
+	// Nothing on the way pushes the page wider than the phone.
+	const fits = async () =>
+		expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+			390
+		);
 	await go('/alerts');
+	await fits();
 	await page.getByTestId('alerts-name-1').tap();
 	await expect(page).toHaveURL(/\/alerts\/1/);
+	await fits();
 	await page.getByTestId('alert-open-search').tap();
 	await expect(page).toHaveURL(/\/search\?q=lantern/);
+	await fits();
 	await row(page, 1).tap();
 	const send = page.getByTestId('detail-send');
 	await expect(send).toHaveText('Send to qBittorrent');
+	await fits();
 	await send.tap();
 	await expect(page.getByText('Sent to qBittorrent')).toBeVisible();
 	expect(sent).toEqual([[hashOf(1)]]);
-	// Nothing on the way pushed the page wider than the phone.
-	expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
 });
