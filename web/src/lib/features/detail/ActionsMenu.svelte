@@ -4,6 +4,8 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import IconDots from '~icons/ph/dots-three-bold';
+	import IconFull from '~icons/ph/arrow-square-out-bold';
+	import IconBlock from '~icons/ph/prohibit-bold';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Menu, { type MenuItem } from '$lib/ui/overlays/Menu.svelte';
@@ -17,10 +19,11 @@
 	let { open = $bindable(), mode, hash, onblock }: Props = $props();
 
 	const items = $derived<MenuItem[]>([
-		...(mode === 'drawer' ? [{ id: 'full', label: m.detail_open_full() }] : []),
+		...(mode === 'drawer' ? [{ id: 'full', label: m.detail_open_full(), icon: IconFull }] : []),
 		{
 			id: 'block',
 			label: m.detail_block(),
+			icon: IconBlock,
 			separatorBefore: mode === 'drawer'
 		}
 	]);

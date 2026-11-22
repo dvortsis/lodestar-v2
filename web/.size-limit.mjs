@@ -1317,6 +1317,9 @@ const actionsMenu = ownChunk(
 // The shared Menu (bits-ui) loads on demand for the results' row menu too, so "Detail sections"
 // leaves its chunks out, by the chunk names the build gives them (the Menu, bits-ui's index-client,
 // scroll-lock and the popper/floating-layer pieces).
+// X-detail-depth (runner r14): the growth 38.82 → 47.44 KB is the Swarm chunk 3.8 KB + 0.6 KB CSS,
+// Technical details 1.5 KB + its CSS and the tracker "checked" time (RelativeTime) 0.9 KB; all load
+// when a section opens.
 const MENU_CHUNKS = new Set([
 	'Menu',
 	'index-client',
@@ -1430,7 +1433,7 @@ export default [
 	// OUT-2 (runner §2.26): back under the §10.1 cap (44.98 KB measured) after the registry's
 	// default-only glob; it had been 45.1 KB at 45.06 KB measured.
 	// X-session-draft-keep (runner §2.26): 45 → 45.5 KB, measured 45.45, for the same safety code.
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45.7 KB'),
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45.71 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1527,6 +1530,9 @@ export default [
 	// 34.04, Notifications 45.51 → 45.66, Insights 45.3 → 45.45, Language 45.1 → 45.24 KB (+30 to
 	// +150 B each): the one h1 class string (28 px display, focus ring, wrap-anywhere) where it was
 	// `text-title font-semibold`.
+	// +2–255 B on Settings section, FiltersScreen, SourcesScreen, InsightsScreen, LanguageScreen and
+	// Settings find: prohibit-bold became a shared chunk when the Detail actions menu's Block reused it
+	// (X-detail-depth); no code moved. Runner, r14.
 	// X-settings-find (runner §2.26): field search's first-view wiring (the lazy import, the `/` key,
 	// the lazy nav icons) and the two I18 fixes cost 88 to 117 B on each of these, measured on main
 	// at 45.55 (Section), 31.51 (Filters), 34.04 (Sources), 45.63 (Notifications), 45.41 (Insights)
@@ -1536,7 +1542,7 @@ export default [
 			`Settings ${name} (first view)`,
 			files,
 			name === 'FiltersScreen'
-				? '31.64 KB'
+				? '31.65 KB'
 				: name === 'JobsScreen'
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
@@ -1544,13 +1550,13 @@ export default [
 						: name === 'CompanionsScreen'
 							? '33 KB'
 							: name === 'SourcesScreen'
-								? '34.15 KB'
+								? '34.16 KB'
 								: name === 'NotificationsScreen'
 									? '45.78 KB'
 									: name === 'InsightsScreen'
-										? '45.56 KB'
+										? '45.57 KB'
 										: name === 'LanguageScreen'
-											? '45.33 KB'
+											? '45.34 KB'
 											: '45 KB'
 		)
 	),
@@ -1619,7 +1625,7 @@ export default [
 		'29.4 KB'
 	),
 	entry('Settings screen icons (on demand)', settingsIconsLazy, '1.66 KB'),
-	entry('Settings find (on demand)', settingsFindLazy, '5.87 KB'),
+	entry('Settings find (on demand)', settingsFindLazy, '6.13 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
 		'Alert dialogs (on demand)',
@@ -1789,7 +1795,7 @@ export default [
 	entry(
 		'Detail actions menu (on demand)',
 		requireMeasuredJs('Detail actions menu (on demand)', actionsMenu),
-		'0.68 KB'
+		'1.40 KB'
 	),
 	entry('Detail identified-as section (on demand)', identifiedSection, '2.84 KB'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
