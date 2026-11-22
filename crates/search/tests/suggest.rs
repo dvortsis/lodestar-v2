@@ -1206,7 +1206,7 @@ proptest! {
         let phrase = words.join(" ");
         let n = match natural(&phrase) {
             Ok(n) => n,
-            // `/x` is regex syntax: not a query yet.
+            // An unclosed or bad `/x` regex is a syntax error.
             Err(e) => return refused_rightly(&phrase, e),
         };
         let mut at = 0;
@@ -1217,8 +1217,12 @@ proptest! {
             let in_chip = n.read.iter().any(|r| r.0 < end && start < r.1);
             let trimmed = w.trim_matches(|c: char| "[]{},.;:!?'".contains(c));
             let kept = n.text.iter().any(|t| t == w || t == trimmed);
+            // Slashes can join words into a `/…/` regex (`/ b flac/`),
+            // kept in the query as written (RX-1).
+            let in_regex = phrase.contains('/')
+                && lodestar_search::parse(&n.canonical).is_ok_and(|q| q.has_regex());
             prop_assert!(
-                kept || in_chip || lodestar_search::natural::is_filler(trimmed),
+                kept || in_chip || in_regex || lodestar_search::natural::is_filler(trimmed),
                 "{:?} lost from {:?}: {}", w, phrase, n.canonical
             );
             // A word read alone into a keyword chip is that value and

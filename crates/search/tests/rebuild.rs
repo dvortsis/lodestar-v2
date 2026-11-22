@@ -832,9 +832,10 @@ fn a_v5_index_serves_while_current_is_built_resumed_and_swapped_in() {
             "payload_sig",
             "group_key",
             "group_minhash",
+            "name_trigram",
         ];
         let want = if produced.contains(&f) {
-            // SRC-3's, GS-0's, GS-2's and GS-2b's: a rebuild writes them
+            // SRC-3's, GS-0's, GS-2's, GS-2b's and RX-1's: a rebuild writes them
             // for every torrent.
             Availability::Ready
         } else {
