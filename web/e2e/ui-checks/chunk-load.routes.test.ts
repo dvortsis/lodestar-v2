@@ -22,11 +22,14 @@ const expect = baseExpect.configure({ timeout: 10_000 });
  * lets everything else through. The marker is a test id or message key only that chunk carries.
  */
 async function blockChunk(page: Page, marker: string) {
-	const gate = { blocked: true, hit: 0 };
+	// `seen` counts the marker chunk's responses, blocked or not; `pending` the chunk requests in flight.
+	const gate = { blocked: true, hit: 0, seen: 0, pending: 0 };
 	await page.route('**/_app/immutable/**/*.js', async (route) => {
+		gate.pending++;
 		try {
 			const response = await route.fetch();
 			const text = await response.text();
+			if (text.includes(marker)) gate.seen++;
 			if (gate.blocked && text.includes(marker)) {
 				gate.hit++;
 				await route.abort('connectionrefused');
@@ -38,6 +41,8 @@ async function blockChunk(page: Page, marker: string) {
 			// flight (the end of the test, or a Reload that replaced the page); there is nothing
 			// left to answer. Anything else is a real failure.
 			if (!page.isClosed() && !/closed|disposed/i.test(String(error))) throw error;
+		} finally {
+			gate.pending--;
 		}
 	});
 	return gate;
@@ -279,11 +284,10 @@ test.describe('a lazy chunk fails to load', () => {
 		await box.click();
 		await page.keyboard.press('ControlOrMeta+a');
 		await page.keyboard.type('harbor  slow');
-		const start = Date.now();
 		await failed.getByRole('button', { name: 'Retry' }).click();
+		// Only the 1 s bound writes the raw text while /parse never answers; without it this times
+		// out. The bound itself is pinned with fake timers in search.test.ts.
 		await expect(page).toHaveURL(/[?&]q=harbor\+\+slow(&|$)/);
-		// The bound is 1 s; the rest is the click and the URL write, with room for a slow runner.
-		expect(Date.now() - start).toBeLessThan(4_000);
 		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
 		expect(errors).toEqual([]);
 	});
@@ -314,11 +318,13 @@ test.describe('a lazy chunk fails to load', () => {
 		// Whether that load fails again (Chromium 153 keeps the failure) or succeeds, focus stays put.
 		gate.blocked = false;
 		await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+		const seen = gate.seen;
 		await page.clock.runFor(31_000);
 		await expect(page.getByTestId('palette-button')).toBeAttached();
-		await expect(
-			failed.or(page.getByRole('grid', { name: 'Matching torrents' })).first()
-		).toBeVisible();
+		// Let the timer's load settle: every chunk fetch answered, and where the browser refetched
+		// the results chunk, its empty state shown (bare /search has no query, so no grid).
+		await expect.poll(() => gate.pending).toBe(0);
+		if (gate.seen > seen) await expect(page.getByTestId('results-empty')).toBeVisible();
 		await page.clock.runFor(1_000); // the success path's focus hand-off is a timeout
 		expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
 		expect(errors).toEqual([]);
@@ -373,6 +379,8 @@ test.describe('a lazy chunk fails to load', () => {
 		await expect(failed).toHaveCount(0);
 		await expect(page).toHaveURL(/\/search\?q=lantern(&|$)/);
 		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
+		// Focus goes back to the row, never to the page body.
+		await expect(rowOf(page, 1)).toBeFocused();
 		// The drawer's entry is gone: Back now leaves Search's own entry, never reopens the drawer.
 		expect(await page.evaluate(() => 'detail' in (history.state?.['sveltekit:states'] ?? {}))).toBe(
 			false

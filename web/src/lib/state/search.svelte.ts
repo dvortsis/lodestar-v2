@@ -84,6 +84,8 @@ export function createSearchState(nav: Nav = kitNav) {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	/** Typed text the URL doesn't hold yet: armed by `setText`, cleared once its write commits. */
 	let due = false;
+	/** The flush under way: a second Retry waits for it instead of cancelling its parse. */
+	let flushing: Promise<void> | undefined;
 	/** The `q` this state last wrote or adopted; a different one in the URL came from outside. */
 	let written: string | undefined;
 
@@ -208,14 +210,17 @@ export function createSearchState(nav: Nav = kitNav) {
 		},
 
 		/**
-		 * Writes typed text the debounce hasn't written yet, now, the way it would (Search's Retry,
-		 * before it reloads). A parse in flight is restarted under the bound: one slower than
-		 * `within` ms writes the raw text. Resolves at once when nothing is due.
+		 * Writes typed text the debounce hasn't written yet, now, the way it would. For Search's
+		 * Retry only, right before it reloads: after a timeout the raw text is in the URL with no
+		 * AST for it. A parse in flight is restarted under the bound: one slower than `within` ms
+		 * writes the raw text. Resolves at once when nothing is due; a second call while one runs
+		 * waits for that one.
 		 */
-		async flush(within = FLUSH_PARSE_MS) {
-			if (!due) return;
+		flush(within = FLUSH_PARSE_MS): Promise<void> {
+			if (flushing) return flushing;
+			if (!due) return Promise.resolve();
 			slot.cancel();
-			await write(within);
+			return (flushing = write(within).finally(() => (flushing = undefined)));
 		},
 
 		/** Enter: parses now, normalises the draft to the canonical text and pushes an entry. */

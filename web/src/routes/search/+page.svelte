@@ -124,7 +124,8 @@
 	// `DetailHost.svelte` existed, so neither slice edited the other's files.)
 	// A failed chunk shows an alert at the drawer's edge, without taking focus (the row keeps it).
 	// Retry reloads at the drawer's URL, which opens the full page (a reload drops page.state). Close
-	// goes Back, as closing a drawer opened from Search does (no Escape: 45 kB cap).
+	// goes Back, as closing a drawer opened from Search does, and focus returns to the results'
+	// active row (no Escape: 45 kB cap).
 	const drawerOpen = $derived('detail' in page.state);
 	let Host = $state<Component>();
 	let hostFailed = $state<boolean>();
@@ -175,7 +176,9 @@
 						{m.search_page_detail_failed()}<button
 							class="btn btn-primary"
 							onclick={() => location.reload()}>{m.search_page_retry()}</button
-						><button class="btn" onclick={() => history.back()}>{m.search_page_close()}</button>
+						><button class="btn" onclick={() => (history.back(), focusResults())}
+							>{m.search_page_close()}</button
+						>
 					</div>
 				{/if}
 			</div>

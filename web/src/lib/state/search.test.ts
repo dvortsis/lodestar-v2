@@ -473,6 +473,19 @@ describe('flush (Search Retry, before its reload)', () => {
 		expect(s.parseError).toBeNull();
 	});
 
+	it('a second flush while one waits joins it: one write, of the typed text', async () => {
+		const f = fakeNav('http://x/search?q=old');
+		const s = createSearchState(f.nav);
+		fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+		s.setText('twice');
+		const first = s.flush();
+		const second = s.flush();
+		await vi.advanceTimersByTimeAsync(FLUSH_PARSE_MS);
+		await Promise.all([first, second]);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(f.calls).toEqual([{ url: '/search?q=twice', push: false }]);
+	});
+
 	it('restarts a debounce parse already in flight under the bound', async () => {
 		const f = fakeNav('http://x/search?q=old');
 		const s = createSearchState(f.nav);
