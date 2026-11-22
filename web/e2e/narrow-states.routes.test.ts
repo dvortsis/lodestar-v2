@@ -154,6 +154,9 @@ test.describe('Discover at 390 px', () => {
 		const strip = page.locator('.dsc-tabs-box');
 		await expect(strip).toBeVisible();
 		expect(await strip.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+		// At rest the strip keeps its bottom border (the focus rule only drops the fade).
+		expect(await strip.evaluate((el) => getComputedStyle(el).borderBottomWidth)).not.toBe('0px');
+
 		// A focused tab is never faded and is scrolled fully into view.
 		await page.getByTestId('discover-tab-all').focus();
 		for (let i = 0; i < 6; i++) await page.keyboard.press('Tab');

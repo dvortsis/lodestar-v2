@@ -428,11 +428,11 @@
 		animation-timeline: scroll(self inline);
 		animation-range: calc(100% - var(--spacing) * 10) 100%;
 		mask-image: linear-gradient(to right, black calc(100% - var(--dsc-fade)), transparent);
+		border-bottom: var(--border) solid var(--color-base-300);
 	}
 	/* The tab you are on is never faded: its label and focus ring keep their contrast. */
 	.dsc-tabs-box:has(:focus-visible) {
 		mask-image: none;
-		border-bottom: var(--border) solid var(--color-base-300);
 	}
 	.dsc-tabs {
 		display: flex;
