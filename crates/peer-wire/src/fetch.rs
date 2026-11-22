@@ -150,10 +150,12 @@ impl std::fmt::Debug for Reserve {
     }
 }
 
-/// Pieces in the first request window: what a [`Reserve`] covers before
-/// the peer has sent anything. 64 KiB holds the 10–60 KB dicts most
-/// torrents have (architecture §3) whole, while a peer that announces a
-/// size and sends nothing pins only this much (runner, 2026-11-07).
+/// Pieces in the first window: what the peer must send within
+/// `first_window_deadline`. 64 KiB holds the 10–60 KB dicts most torrents
+/// have (architecture §3) whole. A [`Reserve`] covers [`first_request`]
+/// before the peer has sent anything, so a peer that announces a large
+/// size and sends nothing pins that much, 80 KiB of dict, until the
+/// window is due (runner, 2026-11-07; CR-UTP-FIRST-WINDOW).
 const FIRST_PIECES: usize = 4;
 /// The dict bytes the first request window covers.
 pub(crate) const FIRST_WINDOW: usize = FIRST_PIECES * METADATA_PIECE;
@@ -890,8 +892,8 @@ struct Assembly {
     remaining: usize,
     next: usize,
     in_flight: usize,
-    /// No piece at or past this is requested (the first window, until a
-    /// large dict's whole bound is reserved).
+    /// No piece at or past this is requested ([`first_request`]'s pieces,
+    /// until a large dict's whole bound is reserved).
     limit: usize,
     /// Dict bytes received.
     got: usize,
