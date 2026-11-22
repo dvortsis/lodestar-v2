@@ -351,6 +351,5 @@
 	"insights_health_unknown": "Lodestar 暂时无法判断是否运行正常：{range}内没有新增可搜索的种子，也无法确认它是否刚刚启动。",
 	"insights_health_working_all": "Lodestar 运行正常。迄今已有 {count} 个种子可供搜索。",
 	"insights_health_working_all_one": "Lodestar 运行正常。迄今已有 1 个种子可供搜索。",
-	"insights_stage_one_reading": "此范围内只有一次读数。{readings}。",
-	"insights_stage_time_kpis_discover": "按每个密钥首次收集的时间计算，时区：{tz}。标有“快照”的项目为最近一次更新时的状态。"
+	"insights_stage_one_reading": "此范围内只有一次读数。{readings}。"
 }

@@ -99,10 +99,11 @@ test('a phone shows no sideways scroll on any stage page', async ({ page, mock, 
 	}
 });
 
-test('discover: the KPIs say they count by first harvest', async ({ page, mock, go }) => {
+test('discover: Harvested says it counts by first harvest', async ({ page, mock, go }) => {
 	mock.on('getInsightsDiscover', discoverFixture());
 	await go('/insights/discover');
-	await expect(page.getByText('Counted by when each key was first harvested')).toBeVisible();
+	await expect(page.getByTestId('insights-stage-harvested-help')).toHaveText('By first harvest');
+	await expect(page.getByTestId('insights-stage-reported-help')).toHaveCount(0);
 });
 
 test('one measured bucket reads as a sentence with its unit, not a plot with one tick', async ({
@@ -123,6 +124,25 @@ test('one measured bucket reads as a sentence with its unit, not a plot with one
 	await expect(thin).toContainText('≈');
 	await expect(thin).toContainText('per hour');
 	await expect(page.getByTestId('insights-chart-discover-harvested')).toHaveCount(0);
+	await expectNoA11yViolations(page);
+});
+
+test('with Compare on, a previous period keeps the chart instead of the one-reading sentence', async ({
+	page,
+	mock,
+	go
+}) => {
+	const base = discoverFixture();
+	mock.on(
+		'getInsightsDiscover',
+		discoverFixture({
+			trend: base.trend.map((p, i) => (i === 11 ? p : { ...p, harvested: null })),
+			previous: { kpi: base.kpi, range: base.range, trend: base.trend }
+		})
+	);
+	await go('/insights/discover?compare=1');
+	await expect(page.getByTestId('insights-chart-discover-harvested-thin')).toHaveCount(0);
+	await expect(page.getByTestId('insights-chart-discover-harvested')).toBeVisible();
 });
 
 test('a missing series reads "Not available yet", never 0', async ({ page, mock, go }) => {

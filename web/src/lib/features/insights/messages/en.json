@@ -351,6 +351,5 @@
 	"insights_health_unknown": "Lodestar cannot tell yet whether it is working: nothing became searchable over {range}, and it could not check whether it has just started.",
 	"insights_health_working_all": "Lodestar is working. So far, it has made {count} torrents searchable.",
 	"insights_health_working_all_one": "Lodestar is working. So far, it has made 1 torrent searchable.",
-	"insights_stage_one_reading": "Only one reading in this range. {readings}.",
-	"insights_stage_time_kpis_discover": "Counted by when each key was first harvested, in {tz}. Items marked Snapshot are as of the last update."
+	"insights_stage_one_reading": "Only one reading in this range. {readings}."
 }

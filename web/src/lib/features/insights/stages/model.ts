@@ -199,14 +199,18 @@ export function mapDiscover(r: DiscoverResponse): StageModel {
 	// Harvest uniqueness comes from the rotating seen filter, so "unique" is always approximate
 	// (§10.9.3).
 	out.kpis = [
-		metric(
-			'harvested',
-			m.insights_stage_discover_harvested(),
-			k.harvested,
-			'count',
-			prevOf(p, (x) => x.harvested),
-			true
-		),
+		{
+			...metric(
+				'harvested',
+				m.insights_stage_discover_harvested(),
+				k.harvested,
+				'count',
+				prevOf(p, (x) => x.harvested),
+				true
+			),
+			// The one tile counted by discovery cohort; the rest are event time (§10.9.3).
+			help: m.insights_overview_stage_time_harvest()
+		},
 		metric(
 			'reported',
 			m.insights_stage_discover_reported(),
