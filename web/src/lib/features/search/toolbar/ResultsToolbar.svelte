@@ -15,17 +15,20 @@
 	import { ensureSearchPath } from '../query/path';
 	import { results } from '../results/results.svelte';
 	import { selection } from '../bulk/selection.svelte';
-	import { SORTS, sortValue, viewParamHref } from './toolbar';
+	import { SORTS, VIEWS, sortValue, viewHref, viewOf, type View } from './toolbar';
 
 	const id = $props.id();
 	const locale = $derived(currentLocale());
 
 	const sorts = $derived(SORTS.map((s) => ({ value: s.value, label: s.label() })));
 	const sort = $derived(sortValue(search.sort));
-	const density = $derived.by(() => {
-		const d = page.url.searchParams.get('density');
-		return d === 'compact' || d === 'cards' ? d : 'comfortable';
-	});
+	const view = $derived(viewOf(page.url));
+	const viewLabels: Record<View, () => string> = {
+		list: m.search_table_view_list,
+		compact: m.search_toolbar_compact,
+		table: m.search_table_view_table,
+		cards: m.search_cards_option
+	};
 
 	// The count of the rows shown: none while the first answer is out, or after it failed.
 	const count = $derived.by(() => {
@@ -45,17 +48,31 @@
 		void search.setSort(next);
 	}
 
-	const view = $derived(page.url.searchParams.get('view') === 'table' ? 'table' : 'list');
-
-	function setParam(key: 'density' | 'view', next: string) {
+	function setView(next: View) {
 		ensureSearchPath();
 		// A view parameter, not a search: it replaces the entry, so Back still walks searches.
-		// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewParamHref() keeps this page's own path
-		void goto(viewParamHref(page.url, key, next), {
-			replaceState: true,
-			keepFocus: true,
-			noScroll: true
-		});
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewHref() keeps this page's own path
+		void goto(viewHref(page.url, next), { replaceState: true, keepFocus: true, noScroll: true });
+	}
+
+	let Menu = $state<typeof import('$lib/ui/overlays/Menu.svelte').default>();
+	let menuOpen = $state(false);
+	let byKeyboard = false;
+	async function openMenu(event: MouseEvent) {
+		if (Menu) return; // Bits' trigger handles it from here
+		byKeyboard = event.detail === 0;
+		try {
+			Menu = (await import('$lib/ui/overlays/Menu.svelte')).default;
+			menuOpen = true;
+		} catch {
+			// The chunk didn't load: nothing opens, and the next press tries again.
+		}
+	}
+
+	function menuPick(id: string) {
+		if (id === 'select') selection.mode = !selection.mode;
+		else if (id === 'save') void save();
+		else setView(id as View);
 	}
 
 	let Dialog = $state<typeof import('$lib/features/alerts/SaveSearchDialog.svelte').default>();
@@ -90,34 +107,50 @@
 					onchange={(e) => setSort(e.currentTarget.value)}
 				/>
 			</label>
-			<SegmentedControl
-				dense
-				label={m.search_toolbar_density()}
-				value={density}
-				options={[
-					{ value: 'comfortable', label: m.search_toolbar_comfortable() },
-					{ value: 'compact', label: m.search_toolbar_compact() },
-					{ value: 'cards', label: m.search_cards_option() }
-				]}
-				onchange={(v) => setParam('density', v)}
-			/>
-			<SegmentedControl
-				dense
-				label={m.search_table_view()}
-				value={view}
-				options={[
-					{ value: 'list', label: m.search_table_view_list() },
-					{ value: 'table', label: m.search_table_view_table() }
-				]}
-				onchange={(v) => setParam('view', v)}
-			/>
-			<Button
-				dense
-				aria-pressed={selection.mode}
-				data-testid="select-mode"
-				onclick={() => (selection.mode = !selection.mode)}>{m.search_bulk_mode()}</Button
-			>
-			<Button dense loading={saving} onclick={() => void save()}>{m.search_toolbar_save()}</Button>
+			<!-- Below 640 px one menu holds the view, Select and Save; from 640 px the three controls show.
+			     CSS picks one (toolbar.css): the hidden set is out of the tab order and the reader's tree. -->
+			<div class="tb-narrow">
+				<!-- The menu's code (Bits UI) loads on the first press, as the row menu's does. -->
+				{#snippet viewButton(props: Record<string, unknown>)}
+					<Button dense data-testid="view-menu" aria-haspopup="menu" onclick={openMenu} {...props}
+						>{m.search_toolbar_view_count({ view: viewLabels[view](), count })}</Button
+					>
+				{/snippet}
+				{#if Menu}
+					<Menu
+						bind:open={menuOpen}
+						autofocusFirst={byKeyboard}
+						label={m.search_table_view()}
+						items={[
+							...VIEWS.map((v) => ({ id: v, label: viewLabels[v]() })),
+							{ id: 'select', label: m.search_bulk_mode(), separatorBefore: true },
+							{ id: 'save', label: m.search_toolbar_save() }
+						]}
+						onSelect={menuPick}
+					>
+						{#snippet trigger({ props })}{@render viewButton(props)}{/snippet}
+					</Menu>
+				{:else}
+					{@render viewButton({})}
+				{/if}
+			</div>
+			<div class="tb-wide">
+				<SegmentedControl
+					dense
+					label={m.search_table_view()}
+					value={view}
+					options={VIEWS.map((v) => ({ value: v, label: viewLabels[v]() }))}
+					onchange={(v) => setView(v as View)}
+				/>
+				<Button
+					dense
+					aria-pressed={selection.mode}
+					data-testid="select-mode"
+					onclick={() => (selection.mode = !selection.mode)}>{m.search_bulk_mode()}</Button
+				>
+				<Button dense loading={saving} onclick={() => void save()}>{m.search_toolbar_save()}</Button
+				>
+			</div>
 		</div>
 	</div>
 {/if}

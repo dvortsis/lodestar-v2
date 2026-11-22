@@ -52,6 +52,7 @@
 
 	const LABEL: Record<ColumnId, () => string> = {
 		name: m.search_table_col_name,
+		raw: m.search_table_col_raw,
 		type: m.search_table_col_type,
 		size: m.search_table_col_size,
 		files: m.search_table_col_files,
@@ -232,7 +233,9 @@
 								</th>
 							{:else}
 								<td class:rt-num={NUMERIC.has(id)} data-testid="table-{id}-{i + 1}">
-									{#if id === 'type'}
+									{#if id === 'raw'}
+										<span class="rt-raw">{showBidi(hit.name)}</span>
+									{:else if id === 'type'}
 										{(hit.content_type && TYPE[hit.content_type]?.()) || '—'}
 									{:else if id === 'size'}
 										{formatBytes(hit.size, locale)}

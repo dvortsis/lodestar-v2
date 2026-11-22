@@ -40,7 +40,17 @@ describe('column prefs', () => {
 		expect(p.order.slice(0, 2)).toEqual(['size', 'name']);
 		expect(new Set(p.order).size).toBe(p.order.length);
 		expect(p.order).toContain('discovered');
-		expect(p.hidden).toEqual(['files']);
+		expect(p.hidden).toEqual(['files', 'raw']);
+	});
+
+	it('show the raw name by default, and keep a saved choice that predates it', () => {
+		expect(visible(defaultPrefs())).toContain('raw');
+		const old = normalize({
+			order: ['name', 'type', 'size', 'files', 'seeders', 'leechers', 'trackers', 'discovered'],
+			hidden: ['leechers']
+		});
+		expect(visible(old)).not.toContain('raw');
+		expect(visible(normalize({ order: ['name', 'raw', 'size'], hidden: [] }))).toContain('raw');
 	});
 
 	it('work when storage throws or is missing', () => {
@@ -59,7 +69,7 @@ describe('column prefs', () => {
 	it('toggle and move', () => {
 		expect(toggleColumn(defaultPrefs(), 'name')).toEqual(defaultPrefs());
 		const moved = moveColumn(defaultPrefs(), 'type', 1);
-		expect(moved.order.slice(1, 3)).toEqual(['size', 'type']);
+		expect(moved.order.slice(2, 4)).toEqual(['size', 'type']);
 		expect(moveColumn(defaultPrefs(), 'name', -1)).toEqual(defaultPrefs());
 	});
 });

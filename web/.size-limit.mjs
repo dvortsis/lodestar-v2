@@ -1112,7 +1112,12 @@ const TOOLBAR = [
 	'src/lib/features/search/toolbar/toolbar.css'
 ];
 const saveLoader = [/features\/search\/toolbar\/save-dialog\.ts$/];
-const toolbarOnDemand = [/features\/alerts\/SaveSearchDialog\.svelte$/, ...saveLoader];
+// The phone's View menu (Bits UI) loads on its first press, as the row menu does.
+const toolbarOnDemand = [
+	/features\/alerts\/SaveSearchDialog\.svelte$/,
+	...saveLoader,
+	/^chunk:Menu$/
+];
 const toolbarLazy = [
 	...new Set(
 		TOOLBAR.flatMap((k) => ownChunk(k, toolbarOnDemand, false, [...engagedSearch, ...resultsLazy]))

@@ -20,11 +20,26 @@ export function sortValue(sort: string): string {
 	return SORTS.some((s) => s.value === v) ? v : DEFAULT_SORT;
 }
 
-/** This page with the view parameter `key` set to `value`; the default drops the parameter. */
-export function viewParamHref(url: URL, key: 'density' | 'view', value: string): string {
+export type View = 'list' | 'compact' | 'table' | 'cards';
+export const VIEWS: readonly View[] = ['list', 'compact', 'table', 'cards'];
+
+/**
+ * The one view the two URL parameters mean. Table wins over any density (the table has none), then
+ * Cards and Compact; anything else is the List (§10.2's Comfortable). Old links keep working.
+ */
+export function viewOf(url: URL): View {
+	const p = url.searchParams;
+	if (p.get('view') === 'table') return 'table';
+	const d = p.get('density');
+	return d === 'cards' || d === 'compact' ? d : 'list';
+}
+
+/** This page with `view` chosen: it clears both parameters, then sets the one that view needs. */
+export function viewHref(url: URL, view: View): string {
 	const u = new URL(url);
-	if (value === 'compact' || value === 'table' || value === 'cards') u.searchParams.set(key, value);
-	else u.searchParams.delete(key);
+	u.searchParams.delete('density');
+	u.searchParams.delete('view');
+	if (view === 'table') u.searchParams.set('view', 'table');
+	else if (view !== 'list') u.searchParams.set('density', view);
 	return u.pathname + u.search + u.hash;
 }
-export const densityHref = (url: URL, density: string) => viewParamHref(url, 'density', density);

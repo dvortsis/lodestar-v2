@@ -10,6 +10,27 @@
 	gap: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
 	min-height: var(--control-height-dense);
 }
+/* Below x-large the Filters button (the rail's host) shares this row instead of standing above it:
+   the host sits over the results track's top-left and the row leaves it room. One row of controls
+   above the first result on a phone. Here, not in results.css: that chunk has no headroom. */
+@media (width < 64rem) {
+	#search-rail {
+		position: absolute;
+		inset-block-start: 0;
+		inset-inline-start: 0;
+		z-index: 1;
+	}
+	.search-grid:has([data-testid='facet-open']) .tb {
+		padding-inline-start: calc(var(--spacing) * 32);
+	}
+}
+/* L3: on a wide screen the controls follow the rows, not the far edge of the track. */
+@media (width >= 120rem) {
+	.tb {
+		justify-content: flex-start;
+		max-width: calc(var(--spacing) * 240);
+	}
+}
 /* Reserved while the count is out, so nothing moves when it arrives. */
 .tb-count {
 	margin: 0;
@@ -28,4 +49,38 @@
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
 	white-space: nowrap;
+}
+/* "Still growing" stays visible, as one compact line on a phone: no icon, caption size, tight padding. */
+@media (width < 40rem) {
+	.rp-banner:has([data-testid='results-cold-start']) {
+		padding: var(--spacing) calc(var(--spacing) * 2);
+		font-size: var(--text-caption);
+		line-height: var(--text-caption--line-height);
+		> svg {
+			display: none;
+		}
+	}
+}
+/* Below 640 px: one View menu (it holds the count, Select and Save); from 640 px the controls. */
+.tb-wide,
+.tb-narrow {
+	display: contents;
+}
+@media (width < 40rem) {
+	.tb-wide,
+	.tb-count {
+		display: none;
+	}
+	.tb-sort > span {
+		position: absolute;
+		overflow: hidden;
+		width: 1px;
+		height: 1px;
+		clip-path: inset(50%);
+	}
+}
+@media (width >= 40rem) {
+	.tb-narrow {
+		display: none;
+	}
 }
