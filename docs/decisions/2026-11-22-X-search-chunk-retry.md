@@ -18,3 +18,12 @@
   - the detail drawer loaded with a plain `import()` instead of the `import.meta.glob` that stood in until `DetailHost.svelte` existed. It is the same lazy chunk, and the Detail drawer sizes don't move.
 
   **Measured with `npm run size:ci`: 44,955 B of 45,000 B, so 45 B of headroom** for the next slice that touches the Search route. Search route CSS (19.79 kB) and Search results (lazy) (40,822 B) don't change.
+- **Lighthouse's first-load weight: comments out of `app.html`, not a higher limit (runner, §2.26).** Lighthouse checks `total-byte-weight` on bare `/search` against 102,400 B (`web/lighthouserc*.json`, §10.1's 100 KB first load).
+  - **This PR alone went over:** 102,468 B on CI at 052815ff (102,443 B locally). `main` measures about 102,228 B locally, worked out from the files that differ.
+  - **The alert can't move out of the route:** it must show exactly when lazy chunks fail, so its cost stays on the first load.
+  - **Following S-locale-boot's precedent, the load shrank instead of the limit rising.** The three explanatory HTML comments in `web/src/app.html` shipped in every first load. Their text moved unchanged to `web/src/app-html.md`, each headed by the element it described.
+    - Both `<!-- prettier-ignore -->` markers and the indentation stay.
+    - Nothing reads those comments: `scripts/themes.ts` and `scripts/messages.ts` rewrite only the prepaint and boot-locale script bodies.
+    - The built `index.html` is byte-identical apart from the comments, its three scripts included.
+  - **Results:** `index.html` gzipped went from 3,646 to 2,966 B. Lighthouse on bare `/search` now measures 101,767 B locally on all three mobile runs, and 101,767 B on desktop, about 630 B under the limit.
+  - **Not done:** collapsing the indentation would save about 145 B more. It was left out, because it needs a build step and the margin is already enough.
