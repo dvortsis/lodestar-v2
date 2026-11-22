@@ -97,4 +97,60 @@ test.describe('Settings → Companions', () => {
 		await expect.poll(() => installs.length).toBe(1);
 		expect(installs[0]).toEqual({ version: '5.0.1', sha256: SHA });
 	});
+
+	// X-checksum-wrap: the checksum wraps 32+32 or not at all, and copies as the 64 characters. Each
+	// character's line comes from a one-character Range's box, so the check reads real line boxes.
+	for (const [width, height] of [
+		[1366, 900],
+		[390, 844]
+	] as const) {
+		test(`the checksum wraps evenly and copies whole at ${width} px`, async ({
+			page,
+			context,
+			go
+		}) => {
+			await page.setViewportSize({ width, height });
+			await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+			await go('/settings/companions');
+			await page.getByRole('button', { name: 'Update' }).click();
+			await dialogSettled(page);
+			const sha = page.locator('[data-offer-sha]');
+			await expect(sha).toBeVisible();
+			const lines = () =>
+				sha.evaluate((dd) => {
+					const tops: number[] = [];
+					for (const node of Array.from(dd.childNodes)) {
+						if (node.nodeType !== Node.TEXT_NODE) continue;
+						const text = node.textContent ?? '';
+						for (let i = 0; i < text.length; i++) {
+							if (/\s/.test(text[i]!)) continue;
+							const range = document.createRange();
+							range.setStart(node, i);
+							range.setEnd(node, i + 1);
+							tops.push(Math.round(range.getBoundingClientRect().top));
+						}
+					}
+					const counts = new Map<number, number>();
+					for (const top of tops) counts.set(top, (counts.get(top) ?? 0) + 1);
+					return [...counts.entries()].sort((a, b) => a[0] - b[0]).map(([, n]) => n);
+				});
+			await expect.poll(async () => JSON.stringify(await lines())).toMatch(/^\[(64|32,32)\]$/);
+			test
+				.info()
+				.annotations.push({ type: 'checksum lines', description: JSON.stringify(await lines()) });
+			// Nothing sticks out of the dialog sideways.
+			expect(await sha.evaluate((dd) => dd.scrollWidth <= dd.clientWidth)).toBe(true);
+			const selected = await sha.evaluate((dd) => {
+				const range = document.createRange();
+				range.selectNodeContents(dd);
+				const selection = window.getSelection()!;
+				selection.removeAllRanges();
+				selection.addRange(range);
+				return selection.toString();
+			});
+			expect(selected).toBe(SHA);
+			await page.keyboard.press('ControlOrMeta+c');
+			await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(SHA);
+		});
+	}
 });

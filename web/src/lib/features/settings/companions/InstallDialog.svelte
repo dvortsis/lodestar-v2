@@ -18,6 +18,9 @@
 	let { offer, busy, error, onconfirm, onclose }: Props = $props();
 	let open = $state(true);
 	const size = $derived(bytesText(offer.size_bytes, currentLocale()));
+	// The checksum's halves: the one break opportunity is between them, so it wraps 32+32.
+	const shaHead = $derived(offer.sha256.slice(0, 32));
+	const shaTail = $derived(offer.sha256.slice(32));
 	const rows = $derived([
 		[m.settings_companions_offer_program(), offer.name],
 		[
@@ -50,10 +53,12 @@
 				<dt class="text-muted-text">{k}</dt>
 				<dd class="break-words" data-offer-field={i} data-testid={`offer-field-${i}`}>{v}</dd>
 			{/each}
-			<!-- The checksum is 64 characters: it takes the dialog's whole width, under its label. -->
+			<!-- The checksum is 64 characters: it takes the dialog's whole width, under its label. Hex has
+			     no break opportunity, so it wraps only at the <wbr> (32+32) when 64 don't fit; a half that
+			     can't fit breaks anywhere rather than overflow. <wbr> adds no character to a copy. -->
 			<dt class="text-muted-text large:col-span-2">{m.settings_companions_offer_sha()}</dt>
-			<dd class="break-all font-mono text-caption large:col-span-2" data-offer-sha>
-				{offer.sha256}
+			<dd class="font-mono text-caption wrap-anywhere large:col-span-2" data-offer-sha>
+				{shaHead}<wbr />{shaTail}
 			</dd>
 		</dl>
 		{#if error}<Banner kind="error">{error}</Banner>{/if}
