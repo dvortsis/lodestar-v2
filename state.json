@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T09:21:00Z",
+    "updated": "2026-11-22T09:35:00Z",
     "items": [
       {
         "slot": 1,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhnAtTMJUdkNfg1nuMEj",
         "model": "sonnet",
         "since": "2026-11-22T09:21:00Z",
-        "doing": "launched; step 0 (brief 9e6b4feb)"
+        "doing": "#1058 review APPROVE; one push for nits (docs/operations top level, decisions facts)"
       },
       {
         "slot": 3,
@@ -10680,16 +10680,16 @@
         "agent": "session_01MMjhn9FudTFDiafHhoEKK1",
         "model": "opus",
         "since": "2026-11-22T09:21:00Z",
-        "doing": "launched; step 0 (brief 9e6b4feb)"
+        "doing": "step 0 go (mode on only with purpose screen); building"
       },
       {
         "slot": 4,
-        "slice": "CR-UTP-FIRST-WINDOW",
-        "role": "build",
-        "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
+        "slice": "runner-records-r11",
+        "role": "runner",
+        "agent": "session_01EYhgh4JX3AmHzKXPjYCoUg",
         "model": "opus",
-        "since": "2026-11-22T04:35Z",
-        "doing": "#1054 go (a), follow-up for pool docs; building"
+        "since": "2026-11-22T09:35:00Z",
+        "doing": "#1054 merged 8c5f4a1b; records PR #1059 in review"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
