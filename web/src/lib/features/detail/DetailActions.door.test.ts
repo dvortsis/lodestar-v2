@@ -7,7 +7,11 @@ import DetailActions from './DetailActions.svelte';
 vi.mock('$lib/features/filters/flows-door', () => ({
 	load: () => Promise.reject(new Error('chunk failed'))
 }));
-vi.mock('./send', () => ({ sendLabel: async () => null, sendHash: vi.fn() }));
+vi.mock('./send', () => ({
+	sendLabel: async () => null,
+	sendHash: vi.fn(),
+	clientUnreadable: () => false
+}));
 
 it('says so with the error toast when the flows door fails to load', async () => {
 	const { toasts } = await import('$lib/ui/feedback/toasts.svelte');

@@ -3,6 +3,7 @@
 	// /t/{hash} as a full page (a direct link, or "Open full page"). From Search it is a drawer
 	// instead (features/detail/DetailHost). The page is the shared frame (ui/layout), up to 80 rem; its header and summary keep --manuscript-width.
 	import { onMount, untrack } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
@@ -24,23 +25,12 @@
 			setDrawerTarget(null);
 		};
 	});
-	// Back goes where the visitor came from; a direct link (no earlier page of ours) goes to Search.
-	function back(event: MouseEvent) {
-		if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
-			return;
-		let ours = false;
-		try {
-			ours =
-				history.length > 1 &&
-				!!document.referrer &&
-				new URL(document.referrer).origin === location.origin;
-		} catch {
-			// an unreadable referrer: the link's own href (Search) is used
-		}
-		if (!ours) return;
-		event.preventDefault();
-		history.back();
-	}
+	// Back to Search keeps the Search's own address: the drawer's /t URL carries the query and filters
+	// (its `?…`), so the link is /search with them. A direct link has none, so it is plain /search.
+	let search = $state('');
+	afterNavigate(({ from }) => {
+		search = from?.url.pathname === '/search' ? from.url.search : '';
+	});
 	onMount(
 		() =>
 			void import('$lib/features/detail/commands').then(
@@ -55,12 +45,13 @@
 <div class={PAGE_FRAME} data-page-frame="">
 	<div class={PAGE_BODY_WIDE}>
 		<div class="contents ls-detail-page">
+			<!-- eslint-disable svelte/no-navigation-without-resolve -- resolve('/search') plus the page's own query string -->
 			<a
 				class="ls-focus link inline-flex items-center gap-1 text-body"
-				href={resolve('/search')}
-				onclick={back}
+				href={resolve('/search') + search}
 				data-testid="detail-back-search">{m.detail_back_search()}</a
 			>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
 			<header
 				class="flex max-w-(--manuscript-width) flex-wrap items-start justify-between gap-x-4 gap-y-2"
 			>

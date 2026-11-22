@@ -50,7 +50,8 @@ describe('Composition', () => {
 		render(Composition, {
 			composition: [share('holograms', 10, 50), share('video', 10, 50)]
 		});
-		expect(screen.getAllByTestId('detail-groups-item')[0]!.textContent).toMatch(/Other · 1|Video/);
+		const items = screen.getAllByTestId('detail-groups-item').map((e) => e.textContent);
+		expect(items.some((t) => t!.includes('Other · 1'))).toBe(true);
 		expect(document.body.textContent).toContain('Other · 1');
 	});
 

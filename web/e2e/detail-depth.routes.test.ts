@@ -119,5 +119,5 @@ test('at 390 the actions sit under the title, in the DOM and on screen', async (
 test('Back to Search links to Search on a direct load', async ({ page, go, mock }) => {
 	mockTorrent(mock, swarm, hit());
 	await go(`/t/${HASH}`);
-	await expect(page.getByTestId('detail-back-search')).toHaveAttribute('href', '/search');
+	await expect(page.getByTestId('detail-back-search')).toHaveAttribute('href', /^\/search(\?|$)/);
 });

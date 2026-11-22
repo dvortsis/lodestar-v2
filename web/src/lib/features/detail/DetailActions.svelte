@@ -46,7 +46,7 @@
 			s.sendLabel(true).then((l) => {
 				go = s.sendHash;
 				label = l;
-				if (!l && !gone) noClient();
+				if (!l && !gone && !s.clientUnreadable()) noClient();
 			}),
 		() => {}
 	);
@@ -125,6 +125,7 @@
 		<Button
 			dense
 			aria-haspopup="menu"
+			aria-expanded="false"
 			aria-label={m.detail_actions_menu()}
 			data-testid="detail-actions-menu"
 			onclick={openMenu}
@@ -136,7 +137,9 @@
 {#if hint}
 	<p class="basis-full text-small text-muted-text" data-testid="detail-client-hint">
 		{m.detail_client_hint()}
-		<a class="link" href={resolve('/settings/integrations' as '/')}>{m.detail_client_setup()}</a>
+		<a class="link" href={resolve('/settings/[section]', { section: 'integrations' })}
+			>{m.detail_client_setup()}</a
+		>
 	</p>
 {/if}
 {#if Block && target && target.hash === detail?.hash}

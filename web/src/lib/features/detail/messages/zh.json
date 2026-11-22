@@ -90,7 +90,7 @@
 	"detail_hash": "信息哈希",
 	"detail_hash_v2": "信息哈希（v2）",
 	"detail_metadata_at": "元数据获取时间",
-	"detail_section_swarm": "种群",
+	"detail_section_swarm": "节点群",
 	"detail_swarm_unit": "纵轴：{unit}",
 	"detail_swarm_peers": "节点数",
 	"detail_swarm_daily": "按日采样",
@@ -103,7 +103,7 @@
 	"detail_swarm_trackers_caption": "最近一轮有响应的 Tracker",
 	"detail_swarm_tracker_unknown": "无法解析的地址",
 	"detail_swarm_dht": "DHT 估算",
-	"detail_swarm_dht_estimate": "约 {seeds} 个做种、{peers} 个节点（估算值）",
+	"detail_swarm_dht_estimate": "{seeds} 个做种、{peers} 个节点（DHT 估算值）",
 	"detail_swarm_completed": "已上报 {count} 次完成下载",
-	"detail_swarm_none": "暂无种群数据。"
+	"detail_swarm_none": "暂无节点群数据。"
 }

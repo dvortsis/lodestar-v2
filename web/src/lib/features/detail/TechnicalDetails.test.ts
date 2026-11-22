@@ -28,7 +28,6 @@ describe('TechnicalDetails', () => {
 			expect(within(flags).getByText(label)).toBeTruthy();
 		expect(text('detail-hash-v2')).toBe('f'.repeat(64));
 		expect(text('detail-junk-score')).toBe('70');
-		expect(text('detail-junk-reasons')).toContain('too small');
 	});
 
 	it('without the hit the junk score is a dash, not 0', () => {

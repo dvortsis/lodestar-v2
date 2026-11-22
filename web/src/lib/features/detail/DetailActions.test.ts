@@ -6,12 +6,13 @@ import DetailActions from './DetailActions.svelte';
 
 const copyMagnet = vi.hoisted(() => vi.fn());
 const sendHash = vi.hoisted(() => vi.fn());
-const client = vi.hoisted(() => ({ name: null as string | null }));
+const client = vi.hoisted(() => ({ name: null as string | null, unreadable: false }));
 const label = vi.hoisted(() => vi.fn());
 vi.mock('./magnet', () => ({ copyMagnet }));
 vi.mock('./send', () => ({
 	sendLabel: async (fresh?: boolean) => (label(fresh), client.name && `Send to ${client.name}`),
-	sendHash
+	sendHash,
+	clientUnreadable: () => client.unreadable
 }));
 
 beforeEach(() => copyMagnet.mockClear());
@@ -96,6 +97,7 @@ describe('Open in torrent client and the actions menu', () => {
 describe('the no-client hint', () => {
 	afterEach(() => {
 		client.name = null;
+		client.unreadable = false;
 		localStorage.clear();
 		vi.restoreAllMocks();
 	});
@@ -130,5 +132,20 @@ describe('the no-client hint', () => {
 		render(DetailActions, { detail: torrentDetail() });
 		expect(await screen.findByTestId('detail-send')).toBeTruthy();
 		expect(screen.queryByTestId('detail-client-hint')).toBeNull();
+	});
+
+	it('is not used up by a settings read that failed (offline, signed out)', async () => {
+		localStorage.clear();
+		client.unreadable = true;
+		label.mockClear();
+		const first = render(DetailActions, { detail: torrentDetail() });
+		await vi.waitFor(() => expect(label).toHaveBeenCalledTimes(1), { timeout: 10_000 });
+		await vi.dynamicImportSettled();
+		expect(screen.queryByTestId('detail-client-hint')).toBeNull();
+		expect(localStorage.getItem('lodestar.detail.client-hint')).toBeNull();
+		first.unmount();
+		client.unreadable = false;
+		render(DetailActions, { detail: torrentDetail() });
+		expect(await screen.findByTestId('detail-client-hint')).toBeTruthy();
 	});
 });

@@ -7,7 +7,6 @@
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import type { SearchHit, TorrentDetail } from './cache';
-	import { junkText } from './summary/junk';
 
 	interface Props {
 		detail: TorrentDetail;
@@ -26,12 +25,11 @@
 			] as const
 		).filter(([flag]) => detail.flags.includes(flag))
 	);
-	const reasons = $derived(hit?.junk_reasons ?? []);
 </script>
 
 <section class="ls-detail-section" aria-labelledby="{id}-h" data-section="technical">
 	<details data-testid="detail-technical">
-		<summary class="ls-focus cursor-default font-semibold" id="{id}-h"
+		<summary class="ls-focus cursor-pointer font-semibold" id="{id}-h"
 			>{m.detail_technical()}</summary
 		>
 		<dl class="ls-detail-facts mt-3">
@@ -60,11 +58,6 @@
 				<span class="tabular-nums" data-testid="detail-junk-score"
 					>{formatScore(hit?.junk_score ?? null, locale)}</span
 				>
-				{#if reasons.length}
-					<ul class="ls-detail-stack" data-testid="detail-junk-reasons">
-						{#each reasons as reason (reason)}<li>{junkText(reason)}</li>{/each}
-					</ul>
-				{/if}
 			</dd>
 		</dl>
 	</details>

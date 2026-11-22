@@ -87,14 +87,15 @@
 							vector-effect="non-scaling-stroke"
 						/>
 					{/if}
-					{#each line.dots as dot (dot.x)}<circle
-							cx={dot.x}
-							cy={dot.y}
-							r="1.5"
-							fill={color}
+					{#each line.dots as dot, i (i)}<path
+							d="M{dot.x} {dot.y}h0"
+							stroke={color}
+							stroke-width="4"
+							stroke-linecap="round"
+							vector-effect="non-scaling-stroke"
 						/>{/each}
 				{/each}
-				{#each chart.points as p (p.at)}
+				{#each chart.points as p, i (i)}
 					<!-- A wide invisible target per sample: the native tooltip carries the full date. -->
 					<rect
 						x={p.x - 2}
@@ -104,7 +105,7 @@
 						fill="transparent"
 						data-testid="detail-swarm-point"
 					>
-						<title>{tip(p)}</title> >
+						<title>{tip(p)}</title>
 					</rect>
 				{/each}
 			</svg>

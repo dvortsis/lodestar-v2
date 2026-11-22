@@ -103,7 +103,7 @@
 	"detail_swarm_trackers_caption": "Trackers that reported in the last round",
 	"detail_swarm_tracker_unknown": "Unreadable address",
 	"detail_swarm_dht": "DHT estimate",
-	"detail_swarm_dht_estimate": "About {seeds} seeders, {peers} peers (an estimate)",
+	"detail_swarm_dht_estimate": "{seeds} seeders, {peers} peers (a DHT estimate)",
 	"detail_swarm_completed": "{count} completed downloads reported",
 	"detail_swarm_none": "No swarm numbers yet."
 }

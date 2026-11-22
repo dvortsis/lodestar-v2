@@ -69,3 +69,18 @@ test('leaving Search opens full-page detail and does not restore the old invoker
 	await expect(page.getByTestId('detail-view')).toHaveAttribute('data-mode', 'page');
 	await expect.poll(() => mock.calls('searchGet').length, { timeout: 10_000 }).toBe(1);
 });
+
+test('Back to Search from the full page returns to the same Search, with its query', async ({
+	page,
+	go,
+	mock
+}) => {
+	server(mock, () => body(hits(3)));
+	await go('/search?q=lantern');
+	await row(page, 1).click();
+	await page.getByTestId('detail-actions-menu').click();
+	await page.getByRole('menuitem', { name: 'Open full page' }).click();
+	await expect(page.getByTestId('detail-view')).toHaveAttribute('data-mode', 'page');
+	await page.getByTestId('detail-back-search').click();
+	await expect(page).toHaveURL(/\/search\?q=lantern/);
+});
