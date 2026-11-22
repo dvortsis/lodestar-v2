@@ -163,4 +163,41 @@ mod tests {
             );
         }
     }
+
+    /// Every built-in plugin's display name is short plain text
+    /// (X-insights-source-names): Insights and provenance show it as sent,
+    /// with no clean-up of their own, so a manifest can't slip in an empty
+    /// name, a control character or an invisible one unseen.
+    #[test]
+    fn every_manifest_name_is_short_plain_text() {
+        let invisible = |c: char| {
+            c.is_control()
+                || matches!(
+                    c,
+                    '\u{ad}'
+                        | '\u{180e}'
+                        | '\u{200b}'..='\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2060}'..='\u{2064}'
+                        | '\u{2066}'..='\u{2069}'
+                        | '\u{feff}'
+                )
+        };
+        assert!(invisible('\u{200b}') && invisible('\u{7}') && !invisible('é'));
+        for m in super::manifests() {
+            let name = m.name;
+            assert!(!name.trim().is_empty(), "{}: empty name", m.id);
+            assert!(
+                name.chars().count() <= 64,
+                "{}: {name:?} is over 64 chars",
+                m.id
+            );
+            assert!(
+                !name.chars().any(invisible),
+                "{}: {name:?} has a hidden char",
+                m.id
+            );
+            assert_eq!(name, name.trim(), "{}: {name:?} has edge spaces", m.id);
+        }
+    }
 }

@@ -227,6 +227,19 @@ describe('mapDiscover', () => {
 		)[0];
 		expect(bars?.items.map((i) => i.label)).toEqual(['BEP 51 sample', 'x:1']);
 	});
+	it("names each source by the server's name, the DHT as the glossary writes it", () => {
+		const t = discoverTables(
+			discoverFixture({
+				by_source: [
+					{ dropped: 3, key: 'dht', name: 'Mainline DHT', rediscovered: 40, reported: 900 },
+					{ dropped: 0, key: 'nyaa', name: 'Nyaa', rediscovered: 2, reported: 30 },
+					// A plugin this build doesn't run: its id, as sent.
+					{ dropped: 0, key: 'gone', name: 'gone', rediscovered: 0, reported: 1 }
+				]
+			})
+		).find((x) => x.id === 'by-source');
+		expect(t?.rows.map((r) => r.key)).toEqual(['DHT', 'Nyaa', 'gone']);
+	});
 	it('says the IP-family split is not available when null', () => {
 		const t = discoverTables(discoverFixture()).find((x) => x.id === 'by-ip-family');
 		expect(t?.empty).toBeTruthy();

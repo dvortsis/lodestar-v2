@@ -1724,7 +1724,8 @@ export default [
 		// X-labels (runner §2.26): 39,440 → 40,848 B: the glossary type names (927 B) and the plugin-name table
 		// (287 B), which goes when the API sends plugin names (queued by the runner).
 		// X-page-frame (runner §2.26): 40.85 → 40.98 KB, measured 40,975 B, for the shared h1 class string.
-		'40.98 KB'
+		// X-insights-source-names: 40,975 → 40,655 B, the plugin-name table gone (the API sends names).
+		'40.66 KB'
 	),
 	entry(
 		'Insights stage charts (uPlot, on demand)',

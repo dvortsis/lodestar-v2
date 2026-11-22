@@ -151,8 +151,8 @@ export function overviewFixture(over: Partial<Overview> = {}): Overview {
 				{ key: 'unclassified', searchable: 77 }
 			],
 			by_source: [
-				{ harvested: 70000, key: 'dht', searchable: 31000, yield: 0.4429 },
-				{ harvested: 21234, key: 'tracker', searchable: 8876, yield: 0.418 }
+				{ harvested: 70000, key: 'dht', name: 'Mainline DHT', searchable: 31000, yield: 0.4429 },
+				{ harvested: 21234, key: 'nyaa', name: 'Nyaa', searchable: 8876, yield: 0.418 }
 			]
 		},
 		serve: {

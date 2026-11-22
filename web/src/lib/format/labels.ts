@@ -11,6 +11,5 @@
 export * from './label-field';
 export * from './label-release';
 export * from './label-source';
-export * from './label-source-names';
 export * from './label-theme';
 export * from './label-type';
