@@ -10678,10 +10678,10 @@
         "slot": 3,
         "slice": "X-msi-upgrade-env-value",
         "role": "slice",
-        "agent": "pending",
+        "agent": "session_01MMjhnCct3LAQ8rk8KhVM23",
         "model": "sonnet",
-        "since": "2026-11-22T13:00:00Z",
-        "doing": "launching; step 0 (brief briefs/X-msi-upgrade-env-value.md)"
+        "since": "2026-11-22T12:54:00Z",
+        "doing": "step 0 (brief briefs/X-msi-upgrade-env-value.md)"
       },
       {
         "slot": 4,
