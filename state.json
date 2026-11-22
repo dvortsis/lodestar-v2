@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T10:50:00Z",
+    "updated": "2026-11-22T11:35:00Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-pool-first-request-docs",
+        "slice": "X-fixture-server-kill-on-drop",
         "role": "slice",
-        "agent": "session_01MMjhnBpFNkqSRJbKoL98DZ",
-        "model": "opus",
-        "since": "2026-11-22T09:52:00Z",
-        "doing": "#1061 rv1061 APPROVE 12ce586a; CI running, then merge"
+        "agent": "pending",
+        "model": "sonnet",
+        "since": "2026-11-22T11:35:00Z",
+        "doing": "#1061 merged 85daac75; launching (brief briefs/X-fixture-server-kill-on-drop.md)"
       },
       {
         "slot": 2,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhnAtTMJUdkNfg1nuMEj",
         "model": "sonnet",
         "since": "2026-11-22T10:27:00Z",
-        "doing": "step 0 go (Option A: ci.yml changes-job step, lint duplicate removed); building"
+        "doing": "#1062 rv1062 APPROVE; fixes local, pushes after #1064 lands (RustSec url)"
       },
       {
         "slot": 3,
@@ -10680,7 +10680,7 @@
         "agent": "session_01MMjhn9GaKErH14DpxeLZZo",
         "model": "sonnet",
         "since": "2026-11-22T10:45:00Z",
-        "doing": "#1060 merged e3b3c7ba; building (brief briefs/X-openapi-400s-tidy.md)"
+        "doing": "#1063 f93da609 review fixes; CI running, then merge"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhn9moy1oBVXSpM5GdsK",
         "model": "opus",
         "since": "2026-11-22T09:45:00Z",
-        "doing": "building (Close needs >=35 B trim in QueryBar, else drop)"
+        "doing": "#1065 rv1065 APPROVE; one push of review fixes + ECONNRESET"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
