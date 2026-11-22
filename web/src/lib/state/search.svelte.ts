@@ -18,6 +18,8 @@ export type ParseError = Pick<
 
 export const DEFAULT_SORT = 'relevance';
 export const PARSE_DEBOUNCE_MS = 200;
+/** `flush()`'s bound on the parse: past it the raw text is written, as a parse error writes it. */
+export const FLUSH_PARSE_MS = 1000;
 const SORT = /^(relevance|[+-]?(discovered|size|files))$/;
 
 export type UrlState = {
@@ -80,6 +82,12 @@ export function createSearchState(nav: Nav = kitNav) {
 
 	const slot = latest();
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	/** Typed text the URL doesn't hold yet: armed by `setText`, cleared once its write commits. */
+	let due = false;
+	/** The flush under way: a second Retry waits for it instead of cancelling its parse. */
+	let flushing: Promise<void> | undefined;
+	/** Bumped by `cancelPending`: a write that started before it never commits after it. */
+	let generation = 0;
 	/** The `q` this state last wrote or adopted; a different one in the URL came from outside. */
 	let written: string | undefined;
 
@@ -113,6 +121,36 @@ export function createSearchState(nav: Nav = kitNav) {
 		}
 	}
 
+	/**
+	 * The debounce's write: parses the draft and replaces the URL entry with the canonical text (the
+	 * raw text on an error, so a reload shows it). With `within`, a parse that hasn't answered in
+	 * that many ms is cancelled and the raw text written, as an error would.
+	 */
+	async function write(within?: number) {
+		clearTimeout(timer);
+		const t = text;
+		const g = generation;
+		const canonical = await (within === undefined
+			? parse(t)
+			: new Promise<string | null | undefined>((done) => {
+					const late = setTimeout(() => {
+						slot.cancel(); // its parse then answers undefined, which `done` ignores
+						parsing = false;
+						done(null);
+					}, within);
+					void parse(t).then((c) => {
+						clearTimeout(late);
+						done(c);
+					});
+				}));
+		// Superseded, typed on meanwhile, or the editor left (a flush's bound outlives the page).
+		if (canonical === undefined || t !== text || g !== generation) return;
+		await commit(canonical ?? t, false);
+		// Only once the URL holds it: a Retry during the commit still waits for a write. Text typed
+		// meanwhile stays due.
+		if (t === text) due = false;
+	}
+
 	async function commit(q: string, push: boolean, over: Partial<UrlState> = {}) {
 		written = q;
 		const target = writeUrl(nav.url(), { ...url(), ...over, q });
@@ -128,6 +166,8 @@ export function createSearchState(nav: Nav = kitNav) {
 			slot.cancel();
 			parsing = false;
 			written = undefined;
+			due = false;
+			generation++;
 		},
 		get text() {
 			return text;
@@ -172,11 +212,22 @@ export function createSearchState(nav: Nav = kitNav) {
 			clearTimeout(timer);
 			// Typing wins over a structured edit or a parse in flight: their answers are for older text.
 			slot.cancel();
-			timer = setTimeout(async () => {
-				const canonical = await parse(t);
-				if (canonical === undefined || t !== text) return; // superseded, or typed on meanwhile
-				await commit(canonical ?? t, false); // an error keeps the raw text, so a reload shows it
-			}, PARSE_DEBOUNCE_MS);
+			due = true;
+			timer = setTimeout(() => void write(), PARSE_DEBOUNCE_MS);
+		},
+
+		/**
+		 * Writes typed text the debounce hasn't written yet, now, the way it would. For Search's
+		 * Retry only, right before it reloads: after a timeout the raw text is in the URL with no
+		 * AST for it. A parse in flight is restarted under the bound: one slower than `within` ms
+		 * writes the raw text. Resolves at once when nothing is due; a second call while one runs
+		 * waits for that one.
+		 */
+		flush(within = FLUSH_PARSE_MS): Promise<void> {
+			if (flushing) return flushing;
+			if (!due) return Promise.resolve();
+			// The write's parse supersedes one in flight (`latest()` aborts the previous run).
+			return (flushing = write(within).finally(() => (flushing = undefined)));
 		},
 
 		/** Enter: parses now, normalises the draft to the canonical text and pushes an entry. */
@@ -263,6 +314,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			if (q === written) return;
 			written = q;
 			clearTimeout(timer);
+			due = false; // the URL's text is the draft now: Retry has nothing to write
 			text = q;
 			void parse(q);
 		}

@@ -255,6 +255,10 @@
 		editor?.focusEnd();
 	}
 
+	export function flush() {
+		return s.flush();
+	}
+
 	export async function loadSyntax(): Promise<SyntaxComponent> {
 		return (await import('./SyntaxPopover.svelte')).default;
 	}

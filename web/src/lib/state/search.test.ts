@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSearchState, readUrl, writeUrl, type Ast, type Nav } from './search.svelte';
+import {
+	FLUSH_PARSE_MS,
+	PARSE_DEBOUNCE_MS,
+	createSearchState,
+	readUrl,
+	writeUrl,
+	type Ast,
+	type Nav
+} from './search.svelte';
 
 const json = (body: unknown, init: ResponseInit = {}) =>
 	new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' }, ...init });
@@ -408,5 +416,133 @@ describe('search state', () => {
 		expect(s.text).toBe('');
 		expect(s.ast).toBeNull();
 		expect(f.calls.at(-1)).toEqual({ url: '/search?view=x', push: true });
+	});
+});
+
+describe('flush (Search Retry, before its reload)', () => {
+	it('resolves at once, with no request or write, when no typed text is due', async () => {
+		const f = fakeNav('http://x/search?q=old');
+		const s = createSearchState(f.nav);
+		await s.flush();
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(f.calls).toEqual([]);
+		// Written text isn't due any more either.
+		s.setText('Lantern');
+		await vi.advanceTimersByTimeAsync(PARSE_DEBOUNCE_MS);
+		expect(f.calls).toEqual([{ url: '/search?q=lantern', push: false }]);
+		fetchMock.mockClear();
+		await s.flush();
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(f.calls).toHaveLength(1);
+	});
+
+	it('writes text typed within the debounce now, as the debounce would, replacing the entry', async () => {
+		const f = fakeNav('http://x/search?q=old');
+		const s = createSearchState(f.nav);
+		s.setText('Harbor');
+		await s.flush(); // no timer advanced: the debounce hasn't fired
+		expect(f.calls).toEqual([{ url: '/search?q=harbor', push: false }]);
+		// The debounce doesn't write it a second time.
+		await vi.advanceTimersByTimeAsync(PARSE_DEBOUNCE_MS * 2);
+		expect(f.calls).toHaveLength(1);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps the raw text on a parse error, as the debounce does', async () => {
+		const f = fakeNav();
+		const s = createSearchState(f.nav);
+		s.setText('a (');
+		await s.flush();
+		expect(f.calls).toEqual([{ url: '/search?q=a+%28', push: false }]);
+	});
+
+	it('writes the raw text when the parse never answers within the bound', async () => {
+		const f = fakeNav('http://x/search?q=old');
+		const s = createSearchState(f.nav);
+		fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+		s.setText('Slow Query');
+		let done = false;
+		const flushed = s.flush().then(() => (done = true));
+		await vi.advanceTimersByTimeAsync(FLUSH_PARSE_MS - 1);
+		expect(done).toBe(false);
+		expect(f.calls).toEqual([]);
+		await vi.advanceTimersByTimeAsync(1);
+		await flushed;
+		expect(f.calls).toEqual([{ url: '/search?q=Slow+Query', push: false }]);
+		expect(s.parsing).toBe(false);
+		expect(s.parseError).toBeNull();
+	});
+
+	it('a second flush while one waits joins it: one write, of the typed text', async () => {
+		const f = fakeNav('http://x/search?q=old');
+		const s = createSearchState(f.nav);
+		fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+		s.setText('twice');
+		const first = s.flush();
+		const second = s.flush();
+		await vi.advanceTimersByTimeAsync(FLUSH_PARSE_MS);
+		await Promise.all([first, second]);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(f.calls).toEqual([{ url: '/search?q=twice', push: false }]);
+	});
+
+	it("a flush during the debounce write's commit still writes: the text is due until the URL holds it", async () => {
+		const f = fakeNav('http://x/search?q=old');
+		let release!: () => void;
+		const go = f.nav.go;
+		f.nav.go = (url, push) =>
+			new Promise<void>((resolve) => {
+				release = () => void go(url, push).then(resolve);
+			});
+		const s = createSearchState(f.nav);
+		s.setText('mid');
+		await vi.advanceTimersByTimeAsync(PARSE_DEBOUNCE_MS); // parsed; the commit's navigation waits
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const flushed = s.flush();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fetchMock).toHaveBeenCalledTimes(2); // not resolved at once: it writes again
+		release(); // the debounce's navigation
+		await vi.advanceTimersByTimeAsync(0);
+		release(); // the flush's own
+		await flushed;
+		expect(f.calls.at(-1)).toEqual({ url: '/search?q=mid', push: false });
+	});
+
+	it('an outside URL change (sync) leaves nothing due', async () => {
+		const f = fakeNav('http://x/search?q=old');
+		const s = createSearchState(f.nav);
+		s.setText('typed');
+		f.visit('http://x/search?q=pasted');
+		s.sync();
+		await vi.advanceTimersByTimeAsync(0);
+		fetchMock.mockClear();
+		await s.flush();
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(f.calls).toEqual([]);
+	});
+
+	it('a flush waiting on its bound writes nothing once the editor leaves (cancelPending)', async () => {
+		const f = fakeNav('http://x/search?q=old');
+		const s = createSearchState(f.nav);
+		fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+		s.setText('left');
+		const flushed = s.flush();
+		s.cancelPending(); // the user went to another page: Live is destroyed
+		await vi.advanceTimersByTimeAsync(FLUSH_PARSE_MS);
+		await flushed;
+		expect(f.calls).toEqual([]);
+	});
+
+	it('restarts a debounce parse already in flight under the bound', async () => {
+		const f = fakeNav('http://x/search?q=old');
+		const s = createSearchState(f.nav);
+		fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+		s.setText('pending');
+		await vi.advanceTimersByTimeAsync(PARSE_DEBOUNCE_MS); // the debounce's parse is now in flight
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const flushed = s.flush();
+		await vi.advanceTimersByTimeAsync(FLUSH_PARSE_MS);
+		await flushed;
+		expect(f.calls).toEqual([{ url: '/search?q=pending', push: false }]);
 	});
 });

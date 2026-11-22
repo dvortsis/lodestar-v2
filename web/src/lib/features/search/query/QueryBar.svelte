@@ -18,11 +18,6 @@
 	}
 	let { searchState }: Props = $props();
 
-	const LABEL = 'search-query-label';
-	const MESSAGE = 'search-query-message';
-	// Safari's `autocorrect` is not in Svelte's attribute types.
-	const NO_AUTOCORRECT = { autocorrect: 'off' } as Record<string, string>;
-
 	let el = $state<HTMLDivElement>();
 	let empty = $state(true);
 	let Live = $state<typeof import('./Live.svelte').default>();
@@ -40,7 +35,11 @@
 		return loading;
 	}
 
-	onMount(() => onFirstInteraction(engage));
+	onMount(() => {
+		// Safari's `autocorrect`, which isn't in Svelte's attribute types (a spread would cost more).
+		el!.setAttribute('autocorrect', 'off');
+		return onFirstInteraction(engage);
+	});
 
 	// A query (or `hidden`) in the URL needs its text, checks and chips now: a pasted link, back.
 	// `hidden` reads as W5's `readUrl` does ("1" or "true"); importing it would put W5 on the
@@ -58,6 +57,11 @@
 		if (!el) return;
 		el.focus();
 		getSelection()?.collapse(el, el.childNodes.length);
+	}
+
+	/** Search's Retry: typed text the URL doesn't hold yet goes in first (none before the editor). */
+	export function flush() {
+		return live?.flush();
 	}
 
 	/** The lazy part, once mounted. */
@@ -93,12 +97,17 @@
 	}
 </script>
 
-<search data-search-bar class="flex flex-col gap-1 xx-large:max-w-6xl" aria-labelledby={LABEL}>
-	<span id={LABEL} class="sr-only">{m.search_query_label()}</span>
+<search
+	data-search-bar
+	class="flex flex-col gap-1 xx-large:max-w-6xl"
+	aria-labelledby="search-query-label"
+>
+	<span id="search-query-label" class="sr-only">{m.search_query_label()}</span>
 	<div class="flex items-center gap-2">
 		<div class="relative min-w-0 flex-1">
 			<!-- The listbox (S-search-4) attaches here: aria-controls, and aria-expanded while open.
 			     ARIA 1.2 needs aria-controls only while the popup is shown, which it never is yet. -->
+			<!-- svelte-ignore a11y_role_has_required_aria_props -->
 			<div
 				bind:this={el}
 				role="combobox"
@@ -107,16 +116,15 @@
 				aria-expanded="false"
 				aria-autocomplete="list"
 				aria-haspopup="listbox"
-				aria-labelledby={LABEL}
-				aria-describedby={MESSAGE}
+				aria-labelledby="search-query-label"
+				aria-describedby="search-query-message"
 				spellcheck="false"
 				autocapitalize="off"
-				{...NO_AUTOCORRECT}
 				enterkeyhint="search"
 				inputmode="search"
 				data-testid="query-editor"
 				class="block w-full overflow-x-auto rounded-field border border-field-border bg-base-100 px-4 text-body-lg {FOCUS_RING}"
-				style="height: var(--query-bar-height); padding-block: calc(var(--spacing) * 3 - var(--border)); white-space: pre; overflow-y: hidden; scrollbar-width: none"
+				style="height:var(--query-bar-height);padding-block:calc(var(--spacing) * 3 - var(--border));white-space:pre;overflow-y:hidden;scrollbar-width:none"
 				oninput={() => (empty = !el?.textContent)}
 				oncompositionstart={() => (composing = true)}
 				oncompositionend={() => (composing = false)}
@@ -132,7 +140,7 @@
 				aria-hidden="true"
 				hidden={!empty}
 				class="pointer-events-none absolute inset-0 truncate px-4 text-body-lg text-muted-text"
-				style="padding-block: calc(var(--spacing) * 3)"
+				style="padding-block:calc(var(--spacing) * 3)"
 				><span class="medium:hidden">{m.search_query_placeholder_short()}</span><span
 					class="hidden medium:inline">{m.search_query_placeholder()}</span
 				></span
@@ -142,10 +150,9 @@
 			<Syntax bind:open={syntaxOpen} ontry={tryQuery} />
 		{:else}
 			<button
-				type="button"
 				class="btn btn-ghost {FOCUS_RING} {TARGET_MIN}"
 				aria-haspopup="dialog"
-				onclick={(e) => void openSyntax(e)}>{m.search_query_syntax()}</button
+				onclick={openSyntax}>{m.search_query_syntax()}</button
 			>
 		{/if}
 	</div>
@@ -154,7 +161,7 @@
 			bind:this={live}
 			{el}
 			{searchState}
-			message={MESSAGE}
+			message="search-query-message"
 			{onescape}
 			onempty={(v: boolean) => (empty = v)}
 			composing={() => composing}
@@ -166,6 +173,6 @@
 		/>
 	{:else}
 		<!-- The message line's place: one text-small line, always, so nothing shifts. -->
-		<p id={MESSAGE} role="status" class="text-small">&nbsp;</p>
+		<p id="search-query-message" role="status" class="text-small">&nbsp;</p>
 	{/if}
 </search>
