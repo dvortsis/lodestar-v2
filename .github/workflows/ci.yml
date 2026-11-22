@@ -68,6 +68,10 @@ jobs:
       # The import pilot's size figures (X-index-bytes-1m); stdlib only and
       # instant, so here, where every PR runs, rather than behind a filter.
       - run: python3 -m unittest discover -s docs/operations/imports/pilots/smoke -p 'test_*.py'
+      # Reads ci.yml, web.yml and e2e.yml, so it runs on every pull request, not
+      # behind the rust filter: a PR that changes only web.yml or e2e.yml still
+      # checks them (X-workflow-tests-filter).
+      - run: python3 .github/scripts/test_workflow_concurrency.py
       # main's history was rewritten on 2026-10-30 (docs/owner-decisions.md
       # §2.25). A head that still contains the old root or the old main tip
       # would merge the removed history back in, so it fails here.
@@ -124,7 +128,6 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$BASE"
           python3 .github/scripts/test_log_lint.py
-          python3 .github/scripts/test_workflow_concurrency.py
           python3 .github/scripts/log_lint.py --base FETCH_HEAD
 
   openapi:

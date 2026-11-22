@@ -50,6 +50,25 @@ def steps(job):
     return job.get("steps") or []
 
 
+def workflow_paths(folder=WORKFLOWS):
+    """Every workflow file in the folder: GitHub runs both extensions (X-workflow-tests-filter)."""
+    return sorted(p for p in folder.iterdir() if p.suffix in (".yml", ".yaml"))
+
+
+def unlisted_deployment_jobs(paths):
+    """(file, job) pairs whose deployment environment's policy doesn't name that file."""
+    from deployment_policy import POLICY
+    out = []
+    for path in paths:
+        for name, job in load(path)["jobs"].items():
+            environment = job.get("environment")
+            if isinstance(environment, dict):
+                environment = environment.get("name")
+            if environment in POLICY["environments"] and path.name not in POLICY["environments"][environment]:
+                out.append((path.name, name))
+    return out
+
+
 def covered():
     return [WORKFLOWS / n for n in COVERED if (WORKFLOWS / n).exists()]
 
@@ -129,7 +148,8 @@ class FleetStructure(unittest.TestCase):
 
     def test_all_deployment_jobs_pin_main_and_can_read_approval_settings(self):
         from deployment_policy import POLICY
-        for path in WORKFLOWS.glob("*.yml"):
+        self.assertEqual(unlisted_deployment_jobs(workflow_paths()), [])
+        for path in workflow_paths():
             for name, job in load(path)["jobs"].items():
                 environment = job.get("environment")
                 if isinstance(environment, dict):
@@ -137,7 +157,6 @@ class FleetStructure(unittest.TestCase):
                 if environment not in POLICY["environments"]:
                     continue
                 with self.subTest(workflow=path.name, job=name):
-                    self.assertIn(path.name, POLICY["environments"][environment])
                     self.assertIn("github.ref == 'refs/heads/main'", job.get("if", ""))
                     self.assertLess(list(job).index("if"), list(job).index("environment"))
                     injection = path.name == "operator-injection.yml"
@@ -352,6 +371,28 @@ OPERATOR_WORKFLOWS = ("operator-wake.yml", "operator-apply.yml", "operator-tripw
 LIVE_INSTALL = ('python3 -m pip install --quiet --no-deps --require-hashes --target "$RUNNER_TEMP/fleet-deps" '
                 '-r infra/fleet/requirements-live.txt')
 INVOKE = re.compile(r"python3 (infra/[\w/.-]+\.py) ([a-z][\w-]*)")
+
+
+class WorkflowExtensions(unittest.TestCase):
+    """GitHub runs `.yaml` workflows too, so the policy check covers both (X-workflow-tests-filter)."""
+
+    def test_a_yaml_workflow_is_checked_and_a_deployment_job_in_it_is_caught(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "other.yaml").write_text(
+                "name: x\non: push\njobs:\n  deploy:\n    environment: cloud-fleet\n    runs-on: ubuntu-latest\n    steps: []\n",
+                encoding="utf-8")
+            (folder / "plain.yml").write_text("name: y\non: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps: []\n", encoding="utf-8")
+            (folder / "notes.md").write_text("x", encoding="utf-8")
+            (folder / "other.yaml.bak").write_text("x", encoding="utf-8")
+            paths = workflow_paths(folder)
+            self.assertEqual([p.name for p in paths], ["other.yaml", "plain.yml"])
+            self.assertEqual(unlisted_deployment_jobs(paths), [("other.yaml", "deploy")])
+
+    def test_the_repos_workflows_are_all_found(self):
+        names = {p.name for p in workflow_paths()}
+        self.assertTrue({"fleet.yml", "ci.yml", "web.yml"} <= names)
+        self.assertEqual(unlisted_deployment_jobs(workflow_paths()), [])
 
 
 class PublicLogLeak(unittest.TestCase):

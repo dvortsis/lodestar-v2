@@ -5,6 +5,7 @@ Run: python3 .github/scripts/test_ci_changes.py
 """
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -249,6 +250,44 @@ class Unraid(unittest.TestCase):
         for f in ["packaging/unraidX/validate.py", "packaging/icons/lodestar-256.png", "packaging/docker/Dockerfile",
                   "docs/user/02-install-lodestar-on-unraid-and-docker.md"]:
             self.assertFalse(ci_changes.UNRAID.match(f), f)
+
+
+class ConcurrencyCheckRunsOnEveryPullRequest(unittest.TestCase):
+    """test_workflow_concurrency.py reads ci.yml, web.yml and e2e.yml. It runs in the `changes` job, which
+    every pull request runs, because the Rust jobs it used to sit behind skip a web.yml-only PR
+    (X-workflow-tests-filter)."""
+
+    SCRIPT = "python3 .github/scripts/test_workflow_concurrency.py"
+
+    def ci_text(self):
+        return (ci_changes.ROOT / ".github/workflows/ci.yml").read_text()
+
+    def job_block(self, text, job):
+        lines = text.splitlines()
+        start = lines.index(f"  {job}:")
+        end = next((i for i in range(start + 1, len(lines)) if re.match(r"  [A-Za-z0-9_-]+:", lines[i])), len(lines))
+        return lines[start:end]
+
+    def test_it_runs_once_in_the_changes_job_with_no_condition(self):
+        text = self.ci_text()
+        self.assertEqual(text.count("test_workflow_concurrency.py"), 1)
+        block = self.job_block(text, "changes")
+        steps = [i for i, line in enumerate(block) if self.SCRIPT in line]
+        self.assertEqual(len(steps), 1)
+        # A plain one-line step, and the job itself has no `if:` that could skip it.
+        self.assertEqual(block[steps[0]], f"      - run: {self.SCRIPT}")
+        following = block[steps[0] + 1] if steps[0] + 1 < len(block) else ""
+        self.assertFalse(following.startswith("        "), following)  # no step-level `if:` or `env:` under it
+        self.assertFalse([line for line in block if re.match(r"    if:", line)])
+
+    def test_the_rust_gated_lint_job_no_longer_carries_it(self):
+        self.assertFalse([line for line in self.job_block(self.ci_text(), "lint") if "test_workflow_concurrency" in line])
+
+    def test_a_web_or_e2e_workflow_only_pr_still_skips_the_rust_jobs(self):
+        run_pr = EndToEnd.run_pr
+        for f in [".github/workflows/web.yml", ".github/workflows/e2e.yml"]:
+            kv = run_pr(self, {f: "x"})
+            self.assertEqual((kv["rust"], kv["infra"]), ("false", "true"), f)
 
 
 class EndToEnd(unittest.TestCase):
