@@ -22,6 +22,18 @@ NAME=lodestar_running; say running lodestar
 # delivery can be running now).
 NAME=run_clean; say test ! -e "$PIA_RUN"
 
+# The block's mode (X-vm-status-mode), read from block.env, never sourced. The
+# control side keeps only the grammar's lines, so the mode is a count line
+# whose name carries it: block_mode_abba, block_mode_on or block_mode_unknown,
+# each 1. A missing MODE is abba (the default; only on-only writes it). Any
+# other value is unknown, whatever the file holds.
+block_mode() {  # prints the bare mode word, for a count line
+  local m
+  if ! grep -q '^MODE=' "$BLOCK/block.env" 2>/dev/null; then printf abba; return; fi
+  m=$(sed -n 's/^MODE=//p' "$BLOCK/block.env" 2>/dev/null | head -n 1)
+  case $m in on | abba) printf '%s' "$m" ;; *) printf unknown ;; esac
+}
+
 # The block marker (OP-3b): a recorded block, and its segment.
 case $(block_state) in
   block)
@@ -29,7 +41,8 @@ case $(block_state) in
     # X-gluetun-guard-reboot: a host guard that couldn't be held mid-block, and
     # how many times one was found gone (the outage watcher puts it back).
     NAME=block_intact; say intact
-    drops=$(guard_drops | digits); echo "count host_guard_drops ${drops:-0}" ;;
+    drops=$(guard_drops | digits); echo "count host_guard_drops ${drops:-0}"
+    echo "count block_mode_$(block_mode) 1" ;;
   none) echo "skip block_recorded" ;;
   *) echo "fail block_recorded" ;;
 esac

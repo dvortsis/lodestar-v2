@@ -44,7 +44,9 @@ printf 'docker %s\n' "$*" >> "$STUB/log"
 bad() { printf '%s\n' "$*" >> "$STUB/badargs"; exit 125; }
 is_running() { grep -qx "$1" "$STUB/running" 2>/dev/null; }
 case "$1" in
-  ps) [ "$*" = "ps --format {{.Names}}" ] || bad "$*"
+  info) [ "$*" = "info --format {{.ServerVersion}}" ] || bad "$*"; echo 27.0 ;;  # vm-status
+  ps) [ "$*" = "ps --filter name=^lodestar-collector --format {{.ID}}" ] && exit 0  # vm-status: none
+      [ "$*" = "ps --format {{.Names}}" ] || bad "$*"
       [ -n "$PS_FAIL" ] && exit 1; cat "$STUB/running" 2>/dev/null; exit 0 ;;
   inspect)
     case "$*" in
@@ -141,6 +143,7 @@ esac
 STUB_SYSTEMCTL = r"""#!/usr/bin/env bash
 printf 'systemctl %s\n' "$*" >> "$STUB/log"
 case "$*" in
+  "is-failed --quiet lodestar-block-guard") exit 1 ;;  # vm-status: the boot guard held
   "is-active --quiet lodestar-outage-watcher") [ -e "$STUB/watcher_active" ] ;;
   "daemon-reload") [ -s "$UNIT_DIR/lodestar-block-guard.service" ] || { echo "reload without the boot guard" >> "$STUB/badargs"; exit 1; }
                    echo x >> "$STUB/reloads"
@@ -439,6 +442,41 @@ class StartBlockControl(unittest.TestCase):
         # act's 50-minute job holds the longest session, with the SSH retries.
         longest = max(s["timeout"] for s in steps.BUILT.values()) + remote.FLOCK_WAIT + 60
         self.assertLess(longest + steps.SSH_ATTEMPTS_SECONDS, 45 * 60)
+
+
+class VmStatusMode(Base):
+    """X-vm-status-mode: vm-status names the block's mode in a line the control side keeps."""
+
+    def mode_lines(self, **env):
+        self.make_block(**env)
+        rc, lines, raw = self.run_script("vm-status.sh")
+        self.assertEqual(rc, 0, raw)
+        return [ln for ln in lines if ln.startswith("count block_mode_")]
+
+    def test_abba_block(self):
+        self.assertEqual(self.mode_lines(), ["count block_mode_abba 1"])
+
+    def test_on_only_block(self):
+        self.assertEqual(self.mode_lines(MODE="on", PURPOSE="screen"), ["count block_mode_on 1"])
+
+    def test_missing_mode_is_abba(self):
+        lines = self.mode_lines()
+        self.assertNotIn("MODE=", (self.block / "block.env").read_text())
+        self.assertEqual(lines, ["count block_mode_abba 1"])
+
+    def test_bad_values_are_unknown(self):
+        for bad in ("", "ON", "off", "on ", "abba; echo x", "$(id)", "203.0.113.77"):
+            with self.subTest(bad=bad):
+                self.setUp()
+                self.assertEqual(self.mode_lines(MODE=bad), ["count block_mode_unknown 1"])
+
+    def test_no_block_prints_no_mode(self):
+        rc, lines, raw = self.run_script("vm-status.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertEqual([ln for ln in lines if "block_mode" in ln], [])
+
+    def test_summary_keeps_the_mode(self):
+        self.assertIn("block_mode_on 1", steps.summary(0, self.mode_lines(MODE="on", PURPOSE="screen")))
 
 
 class StartBlock(Base):
