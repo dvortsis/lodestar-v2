@@ -164,18 +164,9 @@ export const ALLOWED = [
  * removes them. Delete an entry when its fix lands (the check then guards it). They go first in
  * the list: a broader allowance would otherwise eat part of their text.
  */
+// Empty: a new gap is listed here with the slice that fixes it, and removed when that lands.
 /** @type {{ gap: string, pattern: RegExp, when?: (ctx: Ctx) => boolean }[]} */
-export const KNOWN_GAPS = [
-	{
-		gap: 'relative-time callers do not pass the catalogue\'s "just now" (src/lib/format/relative.ts keeps an English fallback)',
-		pattern: /\bjust\s+now\b/g
-	},
-	{
-		gap: 'Insights annotations insert the raw setting value ("aggressive") into a translated sentence (Movement.svelte)',
-		// Only inside a pseudo message, so the word is not hidden everywhere else.
-		pattern: inMessage(/\baggressive\b/g)
-	}
-];
+export const KNOWN_GAPS = [];
 
 /**
  * True when `text` holds English that did not come from the catalogue: a run of two or more plain

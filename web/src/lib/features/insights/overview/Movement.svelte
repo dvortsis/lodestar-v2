@@ -87,12 +87,22 @@
 		stopped: () => m.insights_overview_note_stopped(),
 		paused: () => m.insights_overview_note_paused(),
 		resumed: () => m.insights_overview_note_resumed(),
-		intensity: (t) => m.insights_overview_note_intensity({ level: t })
+		intensity: (t) => {
+			const level = levelText[t]?.();
+			return level
+				? m.insights_overview_note_intensity({ level })
+				: m.insights_overview_note_intensity_changed();
+		}
+	};
+	// The server sends the setting's value; show its label (the Settings words). A level or kind this build
+	// doesn't know is a sentence of its own, never the raw English word.
+	const levelText: Record<string, () => string> = {
+		low: () => m.insights_overview_level_low(),
+		balanced: () => m.insights_overview_level_balanced(),
+		aggressive: () => m.insights_overview_level_aggressive()
 	};
 	const note = (a: Overview['annotations'][number]) =>
-		importText(a, locale) ??
-		kindText[a.kind]?.(a.text) ??
-		m.insights_overview_note_unknown({ kind: a.kind });
+		importText(a, locale) ?? kindText[a.kind]?.(a.text) ?? m.insights_overview_note_unrecognised();
 </script>
 
 <div class="ins-col" data-testid="insights-movement-charts">
