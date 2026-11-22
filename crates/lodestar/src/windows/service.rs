@@ -1029,6 +1029,7 @@ where
         None
         | Some(Command::Serve {
             fixture: None,
+            fixture_variant: None,
             child: false,
         }) => Role::Serve,
         // Only with no flags: a service never joins (a token file would join

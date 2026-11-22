@@ -77,6 +77,19 @@ pub enum Command {
         /// DIR); any other folder is refused
         #[arg(long, value_name = "DIR", num_args = 0..=1)]
         fixture: Option<Option<PathBuf>>,
+        /// With --fixture: the same data with one screen's states on
+        /// (`updates-on`: a release available, nothing installs)
+        // `conflicts_with` too: clap waives `requires` when the missing
+        // argument conflicts with a present one, as `--fixture` does with
+        // `--child`.
+        #[arg(
+            long,
+            value_enum,
+            value_name = "VARIANT",
+            requires = "fixture",
+            conflicts_with = "child"
+        )]
+        fixture_variant: Option<crate::fixture::Variant>,
         /// Run as the supervisor's child (set by the supervisor, §12.2)
         #[arg(long, hide = true, conflicts_with = "fixture")]
         child: bool,
@@ -1348,6 +1361,7 @@ mod tests {
 
     const SERVE: Command = Command::Serve {
         fixture: None,
+        fixture_variant: None,
         child: false,
     };
 
@@ -1394,6 +1408,7 @@ mod tests {
             cmd("serve --fixture").1,
             Some(Command::Serve {
                 fixture: Some(None),
+                fixture_variant: None,
                 child: false
             })
         );
@@ -1401,8 +1416,43 @@ mod tests {
             cmd("serve --fixture /tmp/fx --config c.toml").1,
             Some(Command::Serve {
                 fixture: Some(Some("/tmp/fx".into())),
+                fixture_variant: None,
                 child: false
             })
+        );
+        // X-fixture-updates-on: a variant only with --fixture, and only a
+        // known one; plain `serve` can never name one.
+        assert_eq!(
+            cmd("serve --fixture /tmp/fx --fixture-variant updates-on").1,
+            Some(Command::Serve {
+                fixture: Some(Some("/tmp/fx".into())),
+                fixture_variant: Some(crate::fixture::Variant::UpdatesOn),
+                child: false
+            })
+        );
+        assert_eq!(
+            cmd("serve --fixture --fixture-variant updates-on").1,
+            Some(Command::Serve {
+                fixture: Some(None),
+                fixture_variant: Some(crate::fixture::Variant::UpdatesOn),
+                child: false
+            })
+        );
+        assert_eq!(
+            args("serve --fixture-variant updates-on").unwrap_err(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert_eq!(
+            args("serve --child --fixture-variant updates-on").unwrap_err(),
+            clap::error::ErrorKind::ArgumentConflict
+        );
+        assert_eq!(
+            args("serve --fixture-variant updates-on --child").unwrap_err(),
+            clap::error::ErrorKind::ArgumentConflict
+        );
+        assert_eq!(
+            args("serve --fixture --fixture-variant backups").unwrap_err(),
+            clap::error::ErrorKind::InvalidValue
         );
         assert_eq!(cmd("--config /x.toml"), (Some("/x.toml".into()), None));
         assert_eq!(
@@ -1532,6 +1582,7 @@ mod tests {
             cmd("serve --child").1,
             Some(Command::Serve {
                 fixture: None,
+                fixture_variant: None,
                 child: true
             })
         );

@@ -59,7 +59,16 @@
 	let Results = $state<Panel>();
 	let Toolbar = $state<Bar>();
 	let Facets = $state<Host>();
+	// A failed set shows an alert in #results. It clears the cached promise, so a new query calls
+	// `import()` again (Chromium 157 refetches; 153 keeps the failure for the module graph). Retry
+	// reloads the page at the current URL, as Insights does. The tab's `window.name` carries a
+	// one-shot marker across the reload, never into the URL; it is read and cleared here, and the
+	// first load to settle after it sends focus to the results, if nothing else has focus. The
+	// alert node stays while a retry fails again, so it is announced once.
+	let retried = window.name == 'retry';
+	if (retried) window.name = '';
 	let loadingResults: Promise<unknown> | undefined;
+	let failed = $state<boolean>();
 	function loadResults() {
 		loadingResults ??= Promise.all([
 			import('$lib/features/search/results/ResultsPanel.svelte'),
@@ -68,21 +77,31 @@
 			import('$lib/features/search/results/results.css'),
 			import('$lib/features/search/toolbar/ResultsToolbar.svelte'),
 			import('$lib/features/search/toolbar/toolbar.css')
-		]).then(([panel, host, , , bar]) => {
-			Results = panel.default;
-			Facets = host.default;
-			Toolbar = bar.default;
-		});
+		]).then(
+			([panel, host, , , bar]) => {
+				Results = panel.default;
+				Facets = host.default;
+				Toolbar = bar.default;
+				// Only while nothing has focus: a slow load never pulls it from typing (QueryBar's rule).
+				if (retried) setTimeout(() => document.activeElement == document.body && focusResults());
+				retried = false;
+			},
+			() => {
+				loadingResults = undefined;
+				retried = false;
+				failed = true;
+			}
+		);
+	}
+	function reload() {
+		window.name = 'retry';
+		location.reload();
 	}
 	$effect(() => {
+		// QueryBar's own test, written the same way so the two compress together.
 		const p = page.url.searchParams;
-		if (
-			p.get('q') ||
-			p.get('browse') === '1' ||
-			p.get('hidden') === '1' ||
-			p.get('hidden') === 'true'
-		)
-			loadResults();
+		const hidden = p.get('hidden');
+		if (p.get('q') || p.get('browse') === '1' || hidden === '1' || hidden === 'true') loadResults();
 	});
 	onMount(() => onFirstInteraction(loadResults, KEYS_AFTER_MS));
 
@@ -92,6 +111,9 @@
 	// (the empty state, a skeleton, an error).
 	function skipToResults(event: MouseEvent) {
 		event.preventDefault();
+		focusResults();
+	}
+	function focusResults() {
 		const region = document.getElementById('results');
 		if (!region) return;
 		const row = region.querySelector<HTMLElement>('[role="grid"] [role="row"][tabindex="0"]');
@@ -100,17 +122,14 @@
 		region.focus();
 	}
 
-	// S-detail's drawer: opened with a shallow pushState carrying `detail` in page.state. The glob
-	// is empty until `DetailHost.svelte` exists, so neither slice edits the other's files, and the
-	// drawer never joins this route's first load.
-	const hosts = import.meta.glob<{ default: Component }>(
-		'/src/lib/features/detail/DetailHost.svelte'
-	);
-	const loadHost = Object.values(hosts)[0];
+	// S-detail's drawer: opened with a shallow pushState carrying `detail` in page.state. It loads
+	// on first open, so it never joins this route's first load. (A glob stood here until
+	// `DetailHost.svelte` existed, so neither slice edited the other's files.)
 	const drawerOpen = $derived('detail' in page.state);
 	let Host = $state<Component>();
 	$effect(() => {
-		if (drawerOpen && loadHost && !Host) void loadHost().then((mod) => (Host = mod.default));
+		if (drawerOpen && !Host)
+			void import('$lib/features/detail/DetailHost.svelte').then((mod) => (Host = mod.default));
 	});
 </script>
 
@@ -134,7 +153,13 @@
 			<!-- S-search-3: the results toolbar; S-search-2: the results list. -->
 			<div id="results">
 				{#if Toolbar}<Toolbar />{/if}
-				{#if Results}<Results focusBar={() => bar?.focusEnd()} />{/if}
+				{#if Results}<Results focusBar={() => bar?.focusEnd()} />{:else if failed}
+					<div class="flex flex-col gap-4 p-6" role="alert">
+						{m.search_page_results_failed()}<button class="btn btn-primary" onclick={reload}
+							>{m.search_page_retry()}</button
+						>
+					</div>
+				{/if}
 			</div>
 			<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->
 			<div id="search-drawer">
