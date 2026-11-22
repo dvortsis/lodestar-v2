@@ -37,3 +37,5 @@ Checked on a real install (`lodestar serve`, claimed, the API probed):
 ## Size
 
 New code is in the lazy chunk, which measures 5.69 kB gzip ("Settings find (on demand)"). What stays in the first view (the box wiring, the `/` key, the I18 fixes and the stylesheet) adds 0.1 to 0.3 kB to the Settings entries, which had 0.03 kB of headroom. The raises are recorded in the PR description.
+
+- **Search results (lazy)** goes from 40.85 to 40.86 KB (runner, r14): X-hit-resolution measured it at 40,853 B against the 40,850 B cap, and only a renamed table chunk's hashed filename differs. Nothing in Results changes in this slice.

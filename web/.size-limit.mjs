@@ -1657,7 +1657,8 @@ export default [
 	// #1028 adds 0 B to this chunk; the old limit left `main` 2 B inside its edge.
 	// X-pseudo-text-gaps (runner §2.26): 40.84 → 40.85 KB. 40,822 → 40,841 B: RelativeTime passes the
 	// catalogue's `common_just_now`, about 19 B in each chunk that uses it.
-	entry('Search results (lazy)', resultsFirst, '40.85 KB'),
+	// +0.01 kB: hashed chunk-name compression noise (X-hit-resolution: a renamed table chunk costs Results 3 B; no code moved). Runner, r14.
+	entry('Search results (lazy)', resultsFirst, '40.86 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
