@@ -1767,9 +1767,10 @@ export default [
 		// (287 B), which goes when the API sends plugin names (queued by the runner).
 		// X-page-frame (runner §2.26): 40.85 → 40.98 KB, measured 40,975 B, for the shared h1 class string.
 		// X-insights-source-names: 40,975 → 40,655 B, the plugin-name table gone (the API sends names).
-		// X-insights-story-stages (runner §2.26, flagged to the owner §2.19): 40.66 → 41.05 KB, the one-reading
-		// sentence (~145 B), the auto-fit KPI row (~140 B) and the Harvested time-base line.
-		'41.05 KB'
+		// X-insights-story-stages (runner §2.26, flagged to the owner §2.19): 40.66 → 41.12 KB, the one-reading
+		// sentence (~145 B), the auto-fit KPI row (~140 B), the Harvested time-base line and, after the
+		// review, the row's shrink to 9.5 rem and the harvested chart's own time base (~61 B together).
+		'41.12 KB'
 	),
 	// X-insights-story-stages (runner §2.26): the overview's first view, `/insights`: its own JS and CSS,
 	// the panels that mount after first paint included. uPlot, the print layout (loaded after mount) and
