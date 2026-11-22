@@ -149,5 +149,6 @@ test('search → open → send', async ({ page, go, kbd }) => {
 
 ## Size and Lighthouse
 
+- Measure sizes with `npm run size:ci`, the build CI gates on. `npx size-limit` (and `npm run size`) refuse to run on a plain `npm run build`, whose chunk names and app id differ from it by a few bytes.
 - `npx size-limit` also fails if a brand raster (`/brand/**/*.{avif,webp,png}`, favicons excepted) is referenced from the first-load html, search JS or CSS (`.size-limit.mjs`).
 - `npm run lhci` runs Lighthouse CI against `npm run preview` (build first): `lighthouserc.json` (mobile) then `lighthouserc.desktop.json`. It asserts LCP (mobile < 2.5 s, desktop < 1.0 s), TBT ≤ 100 ms (the lab proxy for INP < 100 ms), CLS ≤ 0.02 and total byte weight ≤ 100 KB. Reports are written to `.lighthouseci/` and uploaded as a CI artifact (no upload server). Locally set `CHROME_PATH=/opt/pw-browsers/chromium-1194/chrome-linux/chrome`.

@@ -1,0 +1,6 @@
+# X-size-limit-one-build decisions
+
+- **Cause.** `npm run size:ci` builds, then rebuilds with `LODESTAR_BUILD_VERSION=0000000` and `LODESTAR_STABLE_NAMES=1` (stable chunk and CSS names, fixed app id) and runs size-limit on that rebuild. A plain `npm run build` followed by `npx size-limit` measured the shipped build, whose content-hash names and commit-based app id gzip a few bytes differently (on #1065: Search +7 B, Facet rail +6 B, Insights stage pages +17 B). A contributor could see red locally with CI green, or the reverse.
+- **Option taken.** `web/.size-limit.mjs` reads `build/_app/version.json` before it reads the manifest. If it is missing or its version isn't `0000000` it throws one error that names `npm run size:ci`. `size:ci`'s own rebuild sets that version, so CI is unchanged. No limit and no CI step changed. Only `.github/workflows/web.yml` runs size-limit, through `size:ci`.
+- **Declined: rebuilding inside the config.** It would replace `build/` with the measurement build (stable names, fixed app id), so a later preview, e2e or packaging run would use a build the contributor didn't ask for. A size check must not change what it measures (runner, §2.26).
+- **Docs.** `web/e2e/README.md` names `size:ci` as the gate. The CLAUDE.md "Before pushing" line change is in the PR description for the runner.
