@@ -133,7 +133,7 @@ const PANELS: [Panel; 20] = [
         "segments.by_source",
         "/segments/by_source",
         Some("/previous/segments/by_source"),
-        &["harvested", "key", "searchable", "yield"],
+        &["harvested", "key", "name", "searchable", "yield"],
     ),
     overview(
         "exceptions",
@@ -178,7 +178,7 @@ const PANELS: [Panel; 20] = [
         Stage::Discover,
         "/by_source",
         None,
-        &["dropped", "key", "rediscovered", "reported"],
+        &["dropped", "key", "name", "rediscovered", "reported"],
     ),
     stage(
         "discover.by_strategy",
@@ -430,7 +430,9 @@ fn render(columns: &[&str], rows: &[(&'static str, BTreeMap<String, Value>)]) ->
             (`lodestar-insights-<panel>-<from>-<to>.csv`).",
         content_type = "text/csv",
         body = String,
-    ))
+    ),
+    (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a missing or unknown `panel`, an unknown `reason`, a value of the wrong type, or `compare` isn't 0 or 1) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn export_csv(
     State(s): State<ApiState>,
@@ -666,7 +668,7 @@ mod tests {
     #[test]
     fn text_is_defused_and_numbers_are_not() {
         let v = json!({"segments": {"by_source": [
-            {"key": "=HYPERLINK(\"http://x\",\"y\")", "harvested": -3},
+            {"key": "=HYPERLINK(\"http://x\",\"y\")", "name": "=cmd|x", "harvested": -3},
             {"key": "@SUM(A1)", "harvested": 1},
             {"key": "\tcmd", "harvested": 2},
             {"key": "\r=x", "harvested": 2},
@@ -680,8 +682,10 @@ mod tests {
         let recs = parse(&text);
         assert_eq!(
             recs[0],
-            ["period", "harvested", "key", "searchable", "yield"]
+            ["period", "harvested", "key", "name", "searchable", "yield"]
         );
+        // A plugin's name is defused like any other text.
+        assert_eq!(recs[1][3], "'=cmd|x");
         let keys: Vec<&str> = recs[1..].iter().map(|r| r[2].as_str()).collect();
         assert_eq!(
             keys,

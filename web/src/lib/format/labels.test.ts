@@ -1,7 +1,7 @@
 // @vitest-environment node
 // One label formatter per field (X-labels): every value the server can send has a label, read
 // against the vocabularies in `crates/` at test time, and anything else shows as sent.
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { setLocale } from '$lib/paraglide/runtime.js';
@@ -13,7 +13,6 @@ import {
 	hdrLabel,
 	languageLabel,
 	releaseSourceLabel,
-	sourceIdLabel,
 	sourceLabel,
 	themeLabel,
 	typeLabel,
@@ -33,83 +32,6 @@ function parserValues(name: string): string[] {
 	const values = [...body.matchAll(/=> "([^"]+)"/g)].map((x) => x[1]!);
 	expect(values.length, `release-parser ${name}`).toBeGreaterThan(3);
 	return values;
-}
-
-/** Every `.rs` file under a directory of `crates/`, recursively. */
-function rustFiles(dir: string): string[] {
-	return readdirSync(crates + dir, { withFileTypes: true }).flatMap((e) =>
-		e.isDirectory()
-			? rustFiles(`${dir}${e.name}/`)
-			: e.name.endsWith('.rs')
-				? [`${dir}${e.name}`]
-				: []
-	);
-}
-
-/** The text between `{` at `open` and its matching `}`. */
-function braced(source: string, open: number): string {
-	let depth = 0;
-	for (let i = open; i < source.length; i++) {
-		if (source[i] === '{') depth++;
-		else if (source[i] === '}' && --depth === 0) return source.slice(open + 1, i);
-	}
-	throw new Error(`unbalanced braces at ${open}`);
-}
-
-/**
- * Every plugin manifest in `crates/sources-plugins` (subdirectories too), outside test modules: its
- * id and its name. Every construction must parse, whatever order its fields are in, and its id and
- * name may be a string, a `const` or a path to one; only a copy (`Manifest { …, ..MANIFEST }`) that
- * sets no id is left out. Anything it can't read fails here rather than passing unchecked.
- */
-function manifests(): [string, string][] {
-	const files = rustFiles('sources-plugins/src/').map((f) => {
-		const all = read(f);
-		const test = all.indexOf('#[cfg(test)]');
-		return [f, test < 0 ? all : all.slice(0, test)] as const;
-	});
-	// Each file's `const NAME: &str = "…"`, for ids and names given as constants; a path
-	// (`nyaa::ID`) is read in the module it names.
-	const consts = new Map(
-		files.map(([f, source]) => [
-			f,
-			new Map(
-				[...source.matchAll(/const (\w+): &(?:'static )?str = "([^"]+)";/g)].map((x) => [
-					x[1]!,
-					x[2]!
-				])
-			)
-		])
-	);
-	const value = (raw: string | undefined, file: string, what: string): string => {
-		const where = `${file}: a manifest's ${what}`;
-		expect(raw, where).toBeDefined();
-		const v = raw!.trim();
-		if (/^"[^"]*"$/.test(v)) return v.slice(1, -1);
-		const path = v.split('::');
-		const name = path.at(-1)!;
-		const module = path.at(-2);
-		const home = module ? files.find(([f]) => f.endsWith(`/${module}.rs`))?.[0] : file;
-		const hit = home ? consts.get(home)?.get(name) : undefined;
-		expect(hit, `${where}: ${v} isn't a string or a const it can find`).toBeDefined();
-		return hit!;
-	};
-	const found: [string, string][] = [];
-	let constructions = 0;
-	for (const [file, source] of files)
-		for (const x of source.matchAll(/[=(]\s*(?:\w+::)*Manifest\s*\{/g)) {
-			constructions++;
-			const body = braced(source, x.index! + x[0].length - 1);
-			const field = (k: string) => new RegExp(`(?:^|[\\s,{])${k}:\\s*([^,\\n]+),`).exec(body)?.[1];
-			if (body.includes('..') && field('id') === undefined) {
-				constructions--; // a copy of a manifest already counted
-				continue;
-			}
-			found.push([value(field('id'), file, 'id'), value(field('name'), file, 'name')]);
-		}
-	expect(found.length, 'every manifest construction was read').toBe(constructions);
-	expect(found.length).toBeGreaterThan(15);
-	return found;
 }
 
 /** The query fields the Builder lists (`crates/search/src/query.rs` FIELDS), aliases left out. */
@@ -179,11 +101,6 @@ describe('languages', () => {
 });
 
 describe('sources', () => {
-	it('names every plugin by its manifest name', () => {
-		const wrong = manifests().filter(([id, name]) => sourceIdLabel(id) !== name);
-		expect(manifests().length).toBeGreaterThan(15);
-		expect(wrong, 'plugin ids whose label differs from their manifest name').toEqual([]);
-	});
 	it('writes the DHT as the glossary does, whatever the server called it', () => {
 		expect(sourceLabel('dht')).toBe('DHT');
 		expect(sourceLabel('dht', 'Mainline DHT')).toBe('DHT');
@@ -196,11 +113,10 @@ describe('sources', () => {
 	it("prefers the server's name, unless it's only the id; else the id", () => {
 		expect(sourceLabel('nyaa', 'Nyaa (mirror)')).toBe('Nyaa (mirror)');
 		expect(sourceLabel('nyaa', 'nyaa')).toBe('nyaa');
-		// With ids alone (Insights), the manifest's name.
-		expect(sourceIdLabel('nyaa')).toBe('Nyaa');
-		expect(sourceIdLabel('dht')).toBe('DHT');
-		expect(sourceIdLabel('bitmagnet')).toBe('bitmagnet import');
-		expect(sourceIdLabel('gone')).toBe('gone');
+		// Insights sends the server's name too (X-insights-source-names); the id when the build
+		// doesn't run the plugin.
+		expect(sourceLabel('nyaa', 'Nyaa')).toBe('Nyaa');
+		expect(sourceLabel('bitmagnet', 'bitmagnet')).toBe('bitmagnet import');
 		expect(sourceLabel('gone', 'gone')).toBe('gone');
 		expect(sourceLabel('gone')).toBe('gone');
 	});
@@ -266,7 +182,6 @@ describe('no inherited names', () => {
 			expect(hdrLabel(code)).toBe(code);
 			expect(releaseSourceLabel(code)).toBe(code);
 			expect(sourceLabel(code)).toBe(code);
-			expect(sourceIdLabel(code)).toBe(code);
 			expect(fieldLabel(code)).toBe(code);
 			expect(typeLabel(code)).toBe(code);
 		}

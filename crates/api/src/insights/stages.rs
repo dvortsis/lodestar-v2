@@ -387,6 +387,8 @@ fn discover(
             let key = name(dim);
             let e = by_source.entry(key.clone()).or_insert(DiscoverSource {
                 dropped: 0,
+                // The id until `name_sources` names it, after the cache.
+                name: key.clone(),
                 key,
                 rediscovered: 0,
                 reported: 0,
@@ -1053,6 +1055,10 @@ pub(crate) async fn stage_response(
     .await
     .map_err(internal)??;
     apply(&mut page, snap);
+    if let StagePage::Discover(r) = &mut page {
+        let names = crate::torrents::plugin_names(s).await;
+        super::name_sources(&mut r.by_source, &names);
+    }
     Ok(page)
 }
 
@@ -1131,7 +1137,10 @@ macro_rules! stage_route {
                                                             path = $path,
                                                             tag = "insights",
                                                             params(StageQuery),
-                                                            responses((status = 200, body = $resp))
+                                                            responses(
+                                                                (status = 200, body = $resp),
+                                                                (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one."),
+                                                            )
                                                         )]
         pub(crate) async fn $fn(
             State(s): State<ApiState>,

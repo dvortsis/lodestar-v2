@@ -4,6 +4,9 @@
 //! json_props.rs` runs the reader-only checks over generated input.
 #![no_main]
 
+#[path = "common/private_key.rs"]
+mod private_key;
+
 use libfuzzer_sys::fuzz_target;
 use lodestar_sources_feeds::json::{Limits, R, Reader, Stop, TextError, Walk, decode};
 use serde_json::{Map, Value};
@@ -99,7 +102,12 @@ fuzz_target!(|data: &[u8]| {
             assert!(matches!(e, Stop::Malformed | Stop::Depth | Stop::Elements));
         }
     }
-    // Whatever serde_json accepts, the reader accepts and reads the same.
+    // Whatever serde_json accepts, the reader accepts and reads the same,
+    // but for `serde_json`'s private marker keys, which make `Value`
+    // misread the document (`common/private_key.rs`).
+    if private_key::has_private_key(text.as_bytes()) {
+        return;
+    }
     if let Ok(want) = serde_json::from_str::<Value>(text) {
         assert_eq!(skip_all(text, WIDE), Ok(false), "{text:?}");
         let got = walk_all(text, WIDE).expect("serde_json accepted it");

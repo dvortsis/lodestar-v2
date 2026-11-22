@@ -4921,8 +4921,13 @@ export interface components {
         DiscoverSource: {
             /** Format: int64 */
             dropped: number;
-            /** @description The source's plugin name. */
+            /** @description The source plugin's manifest id, as `source:` takes it. */
             key: string;
+            /**
+             * @description The plugin's display name; its manifest id when this build doesn't
+             *     run that plugin, as provenance's `name`.
+             */
+            name: string;
             /** Format: int64 */
             rediscovered: number;
             /** Format: int64 */
@@ -9080,10 +9085,11 @@ export interface components {
             /** Format: int64 */
             searchable: number;
         };
+        /** @description A yield by some other key (`by_ip_family`). */
         SegmentYield: {
             /** Format: int64 */
             harvested: number;
-            /** @description The source plugin's name. */
+            /** @description What it's counted by. */
             key: string;
             /** Format: int64 */
             searchable: number;
@@ -9114,7 +9120,7 @@ export interface components {
              * @description Yield by the source that found each hash first, over final
              *     cohorts. Discovery cohort.
              */
-            by_source: components["schemas"]["SegmentYield"][];
+            by_source: components["schemas"]["SourceYield"][];
         };
         /**
          * @description Serve (§10.9.2 level 6). Every field is null until its counter exists:
@@ -10006,6 +10012,25 @@ export interface components {
              *     Applies at the next start.
              */
             schedule?: string[];
+        };
+        /** @description One source's yield (`segments.by_source`). */
+        SourceYield: {
+            /** Format: int64 */
+            harvested: number;
+            /** @description The source plugin's manifest id, as `source:` takes it. */
+            key: string;
+            /**
+             * @description The plugin's display name; its manifest id when this build doesn't
+             *     run that plugin, as provenance's `name`.
+             */
+            name: string;
+            /** Format: int64 */
+            searchable: number;
+            /**
+             * Format: double
+             * @description Searchable ÷ harvested, 0–1; null when it harvested nothing.
+             */
+            yield: number | null;
         };
         /** @description The stage strip (§10.9.1, `docs/metrics.md` §6.1). */
         Stages: {
@@ -11687,6 +11712,15 @@ export interface operations {
                     "application/json": components["schemas"]["CollectionSummary"][];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`hidden` isn't a boolean). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -11751,6 +11785,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CollectionPage"];
+                };
+            };
+            /** @description `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (a value of the wrong type: `after`, `hidden` or `limit`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `collection_not_found`. */
@@ -13419,6 +13462,15 @@ export interface operations {
                     "application/json": components["schemas"]["DigestPreview"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`period` isn't `daily` or `weekly`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -13451,6 +13503,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DiscoverResponse"];
+                };
+            };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (`limit` isn't a whole number), `unknown_type` (`type`) or `bad_cursor` (a cursor this server didn't give out for Newest). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -14008,6 +14069,15 @@ export interface operations {
                     "application/json": components["schemas"]["Queue"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (`limit` isn't a whole number), `bad_limit` (`limit` outside 1–1000) or `bad_cursor` (not a review-queue cursor). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -14106,6 +14176,15 @@ export interface operations {
                     "application/json": components["schemas"]["Tombstones"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (`adult` isn't a boolean, or `limit` isn't a whole number), `bad_limit` (`limit` outside 1–1000) or `bad_cursor` (not a review-queue cursor). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -14140,6 +14219,15 @@ export interface operations {
                     "application/json": components["schemas"]["InsightsDiscoverResponse"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -14163,6 +14251,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventsResponse"];
+                };
+            };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (`from` or `to` is missing or isn't a whole number) or `bad_range` (`from` or `to`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -14209,6 +14306,15 @@ export interface operations {
                     "text/csv": string;
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a missing or unknown `panel`, an unknown `reason`, a value of the wrong type, or `compare` isn't 0 or 1) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -14243,6 +14349,15 @@ export interface operations {
                     "application/json": components["schemas"]["FetchResponse"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -14275,6 +14390,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IndexResponse"];
+                };
+            };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -14318,6 +14442,15 @@ export interface operations {
                     "application/json": components["schemas"]["OverviewResponse"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, or `compare` isn't 0 or 1) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -14352,6 +14485,15 @@ export interface operations {
                     "application/json": components["schemas"]["ServeResponse"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -14384,6 +14526,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnderstandResponse"];
+                };
+            };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
@@ -15328,6 +15479,15 @@ export interface operations {
                     "application/json": components["schemas"]["ParseResponse"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (`natural` isn't a boolean), `query_syntax` or `natural_too_long` (`q` is over 512 bytes or 32 tokens for `natural`). Each names the parameter at fault in `field`; `query_syntax` also gives `start` and `end`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -15572,7 +15732,7 @@ export interface operations {
                     "application/json": components["schemas"]["AlertsPage"];
                 };
             };
-            /** @description `bad_cursor`: a cursor this server didn't give out. */
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (`limit` isn't a whole number) or `bad_cursor` (a cursor this server didn't give out). Each names the parameter at fault in `field` where there is one. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -16058,6 +16218,15 @@ export interface operations {
                     "application/toml": string;
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`preferences` isn't a boolean). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -16083,6 +16252,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImportReport"];
+                };
+            };
+            /** @description `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`dry_run` isn't a boolean), each naming it in `field` where there is one; `bad_json` (the body isn't JSON) or `bad_body` (the body couldn't be read). A body of the wrong shape is a 422 `bad_body`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `stale_revision`: a section changed since the dry run's `revisions`. */
@@ -16551,6 +16729,15 @@ export interface operations {
                     "application/json": components["schemas"]["SuggestResponse"];
                 };
             };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type: `pos`, `limit` or `hidden`), `query_too_long` (`q`) or `bad_pos` (`pos` is past the end of `q`). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
@@ -16814,6 +17001,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FilesPage"];
+                };
+            };
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (`offset` or `limit` isn't a whole number) or `bad_hash` (not a 40-character hex info hash). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description `torrent_not_found`, or `adult_hidden`: an Adult torrent while "Show adult content" is off. */
@@ -17313,7 +17509,7 @@ export interface operations {
                     "application/json": components["schemas"]["UserItemsResponse"];
                 };
             };
-            /** @description `bad_cursor`: a cursor this server didn't give out. */
+            /** @description `repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, or a `label` that isn't allowed) or `bad_cursor` (a cursor this server didn't give out). Each names the parameter at fault in `field` where there is one. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -17343,6 +17539,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LabelCount"][];
+                };
+            };
+            /** @description `repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`hidden` isn't a boolean). Each names the parameter at fault in `field` where there is one. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

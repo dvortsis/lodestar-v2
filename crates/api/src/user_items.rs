@@ -208,7 +208,7 @@ fn parse_cursor(text: &str) -> ApiResult<(i64, i64)> {
     params(UserItemsQuery),
     responses(
         (status = 200, body = UserItemsResponse),
-        (status = 400, body = ErrorEnvelope, description = "`bad_cursor`: a cursor this server didn't give out."),
+        (status = 400, body = ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, or a `label` that isn't allowed) or `bad_cursor` (a cursor this server didn't give out). Each names the parameter at fault in `field` where there is one."),
     )
 )]
 pub(crate) async fn list(
@@ -289,7 +289,10 @@ pub(crate) async fn list(
     path = "/user-items/labels",
     tag = "library",
     params(LabelsQuery),
-    responses((status = 200, body = Vec<LabelCount>))
+    responses(
+        (status = 200, body = Vec<LabelCount>),
+        (status = 400, body = ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`hidden` isn't a boolean). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn labels(
     State(s): State<ApiState>,

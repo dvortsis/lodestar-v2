@@ -66,6 +66,28 @@ struct FakeOps {
     paused: AtomicBool,
     searchable: Mutex<Option<u64>>,
     lag: Mutex<Option<u64>>,
+    /// What `sources()` lists, as (plugin, display name); `None` fails
+    /// the listing (X-insights-source-names).
+    listing: Mutex<Option<Vec<(String, String)>>>,
+}
+
+/// A listed source plugin, as `GET /sources` gives it.
+fn listed(id: u8, plugin: &str, name: &str) -> Source {
+    serde_json::from_value(json!({
+        "agents": { "count": 1, "enforced": false, "max": 1 },
+        "consent": "none", "consent_required": false, "consent_version": "",
+        "credentials": [], "editable": [],
+        "egress": { "live": null, "setting": null, "warnings": [] },
+        "enabled": true, "endpoints": [], "finds_private": false,
+        "health": { "harvested_24h": 0, "last_error": null, "last_run": null,
+            "running": true, "stored_24h": 0 },
+        "id": id, "kinds": ["discovery"], "name": name, "needs": null, "networks": ["bt"],
+        "not_yet_editable": [], "password_required": false, "plugin": plugin,
+        "priority": "normal", "purge_pending": false, "restart_required": false,
+        "risk": "low", "schedule": { "default": [], "enforced": false, "windows": [] },
+        "state": "enabled", "version": "1"
+    }))
+    .unwrap()
 }
 
 impl OpsApi for FakeOps {
@@ -105,7 +127,17 @@ impl OpsApi for FakeOps {
     }
 
     fn sources(&self) -> BoxFuture<'_, Result<Vec<Source>, OpsError>> {
-        Box::pin(async { Ok(Vec::new()) })
+        let listing = self.listing.lock().unwrap().clone();
+        Box::pin(async move {
+            match listing {
+                Some(l) => Ok(l
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (plugin, name))| listed(i as u8, plugin, name))
+                    .collect()),
+                None => Err(OpsError::Internal("listing failed".into())),
+            }
+        })
     }
 
     fn patch_source(
@@ -216,6 +248,7 @@ fn fixture_with(insights: bool) -> Fixture {
         paused: AtomicBool::new(false),
         searchable: Mutex::new(Some(1_000)),
         lag: Mutex::new(Some(0)),
+        listing: Mutex::new(Some(Vec::new())),
     });
     let source = Arc::new(FakeSource {
         now: AtomicI64::new(NOW),
@@ -2057,4 +2090,161 @@ async fn the_overview_carries_the_privacy_summary_to_a_session_only() {
     )
     .await;
     assert_eq!(status, 401);
+}
+
+/// Sources 0 `dht`, 1 `nyaa` and 2 `gone` (a plugin this build doesn't
+/// run), each with a final cohort in the 24-hour window and, for 0 and
+/// 1, in the one before; source 5 has cohorts but no source row. Each
+/// also reported keys, for Discover.
+fn named_story(f: &Fixture) {
+    let c = f.sql();
+    for (id, plugin) in [(0, "dht"), (1, "nyaa"), (2, "gone")] {
+        c.execute(
+            "INSERT INTO sources (id, plugin, version, state, added_at) VALUES (?1, ?2, '1', 0, 0)",
+            params![id, plugin],
+        )
+        .unwrap();
+    }
+    let final_cohort = |hour: i64, source: u8| {
+        [
+            cohort(hour, source, HARVESTED, 0, 2),
+            cohort(hour, source, PEER_FOUND, 0, 2),
+            cohort(hour, source, FETCHED, 0, 1),
+            cohort(hour, source, STORED, 0, 1),
+            cohort(hour, source, CODES.stage, 0, 1),
+            cohort(hour, source, LOST, 8, 1),
+        ]
+    };
+    let (now_h, before) = (NOW_H - 5, NOW_H - 30);
+    let mut cohorts = Vec::new();
+    for source in [0, 1, 2, 5] {
+        cohorts.extend(final_cohort(now_h, source));
+    }
+    for source in [0, 1] {
+        cohorts.extend(final_cohort(before, source));
+    }
+    let counters: Vec<Counter> = [0u32, 1, 2, 5]
+        .into_iter()
+        .map(|dim| counter(now_h, 1, dim, 0, 10))
+        .collect();
+    let mut s = f.store();
+    write(&mut s, &cohorts, &counters, &[]);
+    // Measured hours, so the cohorts are final.
+    s.add_counters(&coverage(NOW_H - 50..=NOW_H, &[COVER_INDEX, COVER_CRAWL]))
+        .unwrap();
+}
+
+fn names_of(rows: &Value) -> BTreeMap<String, String> {
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["key"].as_str().unwrap().to_owned(),
+                r["name"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+fn names(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect()
+}
+
+fn list_plugins(f: &Fixture) {
+    *f.ops.listing.lock().unwrap() = Some(vec![
+        ("dht".into(), "Mainline DHT".into()),
+        ("nyaa".into(), "Nyaa".into()),
+    ]);
+}
+
+/// X-insights-source-names: every by-source row carries its plugin's
+/// display name, from the registry, in the overview (current and
+/// previous), Discover and the CSV; a plugin this build doesn't run shows
+/// its id, a source with no row stays `source_{id}`.
+#[tokio::test]
+async fn by_source_rows_carry_the_plugins_names() {
+    let f = fixture();
+    list_plugins(&f);
+    named_story(&f);
+    let cookie = session(&f).await;
+    let v = json_get(&f, &cookie, "/api/v1/insights/overview?range=24h&compare=1").await;
+    assert_eq!(
+        names_of(&v["segments"]["by_source"]),
+        names(&[
+            ("dht", "Mainline DHT"),
+            ("nyaa", "Nyaa"),
+            ("gone", "gone"),
+            ("source_5", "source_5")
+        ])
+    );
+    assert_eq!(
+        names_of(&v["previous"]["segments"]["by_source"]),
+        names(&[("dht", "Mainline DHT"), ("nyaa", "Nyaa")]),
+        "the previous period's rows are named too"
+    );
+    let d = json_get(&f, &cookie, "/api/v1/insights/discover?range=24h").await;
+    assert_eq!(
+        names_of(&d["by_source"]),
+        names(&[
+            ("dht", "Mainline DHT"),
+            ("nyaa", "Nyaa"),
+            ("gone", "gone"),
+            ("source_5", "source_5")
+        ])
+    );
+    // The CSV carries the name beside the key.
+    let (status, csv) = send(
+        &f,
+        get(
+            "/api/v1/insights/export.csv?panel=discover.by_source&range=24h",
+            Some(&cookie),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(csv.lines().any(|l| l.contains(",nyaa,Nyaa,")), "{csv}");
+}
+
+/// A listing that failed answers with ids, and that answer isn't kept in
+/// the response cache: once the listing recovers, the same window and
+/// hour (a cache hit) is named.
+#[tokio::test]
+async fn a_failed_listing_is_not_cached_with_the_response() {
+    let f = fixture();
+    *f.ops.listing.lock().unwrap() = None;
+    named_story(&f);
+    let cookie = session(&f).await;
+    let uri = "/api/v1/insights/overview?range=24h&compare=1";
+    let v = json_get(&f, &cookie, uri).await;
+    assert_eq!(
+        names_of(&v["segments"]["by_source"])["nyaa"],
+        "nyaa",
+        "ids while the listing fails"
+    );
+    let d = json_get(&f, &cookie, "/api/v1/insights/discover?range=24h").await;
+    assert_eq!(names_of(&d["by_source"])["nyaa"], "nyaa");
+    // Nothing is written meanwhile, so these are cache hits. A failed
+    // listing is retried after a few seconds: wait for it, with a deadline.
+    list_plugins(&f);
+    let deadline = Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let v = json_get(&f, &cookie, uri).await;
+        let d = json_get(&f, &cookie, "/api/v1/insights/discover?range=24h").await;
+        let named = names_of(&v["segments"]["by_source"])["nyaa"] == "Nyaa"
+            && names_of(&v["previous"]["segments"]["by_source"])["nyaa"] == "Nyaa"
+            && names_of(&d["by_source"])["nyaa"] == "Nyaa";
+        if named {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "still unnamed after the listing recovered: {}",
+            v["segments"]["by_source"]
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
 }

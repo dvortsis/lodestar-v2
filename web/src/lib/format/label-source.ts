@@ -1,6 +1,5 @@
-// Discovery sources (X-labels), for "Found by" and the Source facet, where the server sends each
-// source's name with its plugin id. Insights sends ids alone: `label-source-names.ts` adds the
-// plugins' names there, so the detail's first view doesn't carry them.
+// Discovery sources (X-labels), for "Found by", the Source facet and Insights' by-source rows, where
+// the server sends each source's name with its plugin id (X-insights-source-names).
 import { m } from '$lib/paraglide/messages.js';
 import { word } from './label-shared';
 

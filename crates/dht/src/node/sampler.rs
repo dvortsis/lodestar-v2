@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use super::CoolingReason;
 use super::limits::{Network, allocation, network};
 use super::transport::{Map, Set};
 
@@ -77,6 +78,8 @@ enum State {
         until: Instant,
         token: u64,
         struck: bool,
+        /// Why it cools (`dht_sample_cooling_reason`).
+        reason: CoolingReason,
     },
     /// A first failure's short cooldown ended: the node may be sampled, and
     /// the streak is remembered until `forget`, the failure plus the full
@@ -124,6 +127,9 @@ pub(crate) struct Sampler {
     /// when that was last checked ([`Sampler::full_time`]).
     full: Duration,
     full_checked: Option<Instant>,
+    /// Cooling records by [`CoolingReason`], kept by [`Sampler::put`] and
+    /// [`Sampler::take`], the only ways `states` changes.
+    cooling_by: [usize; CoolingReason::ALL.len()],
 }
 
 impl Default for Sampler {
@@ -155,6 +161,7 @@ impl Sampler {
             spill: None,
             full: Duration::ZERO,
             full_checked: None,
+            cooling_by: [0; CoolingReason::ALL.len()],
         }
     }
 
@@ -239,14 +246,14 @@ impl Sampler {
                 if let Some(State::Cooling { until, .. }) = self.states.get(&addr) {
                     self.short.remove(&(*until, token, addr));
                 }
-                self.states.remove(&addr);
+                self.take(&addr);
                 self.recount(&addr, true);
                 continue;
             }
             self.expiry.remove(&(end, token, addr));
             if matches!(self.states.get(&addr), Some(State::Cooling { token: t, .. }) if *t == token)
             {
-                self.states.remove(&addr);
+                self.take(&addr);
                 self.recount(&addr, true);
                 // A restored record that moves is honoured: the filter
                 // keeps it to its end at least (monitoring, P5).
@@ -265,6 +272,7 @@ impl Sampler {
                 until,
                 token,
                 struck: true,
+                ..
             } => {
                 self.short.remove(&(until, token, addr));
                 self.struck.remove(&(forget_of(until), token, addr));
@@ -398,7 +406,7 @@ impl Sampler {
         }
         let was = self.tracked(&addr);
         // The streak carries into the sample, so its failure escalates.
-        let streak = match self.states.remove(&addr) {
+        let streak = match self.take(&addr) {
             Some(state @ State::Cooling { token, .. }) => {
                 self.unindex(addr, state);
                 self.retire(token);
@@ -420,7 +428,7 @@ impl Sampler {
             self.recount(&addr, was);
             return false;
         }
-        self.states.insert(addr, State::InFlight { token, streak });
+        self.put(addr, State::InFlight { token, streak });
         self.recount(&addr, was);
         true
     }
@@ -436,17 +444,35 @@ impl Sampler {
             return false;
         }
         if let Some(forget) = streak {
-            self.states.insert(addr, State::Struck { forget, token });
+            self.put(addr, State::Struck { forget, token });
             self.struck.insert((forget, token, addr));
         } else {
-            self.states.remove(&addr);
+            self.take(&addr);
             self.recount(&addr, true);
         }
         true
     }
 
+    /// [`complete_scaled`](Self::complete_scaled) at scale 1. The actor
+    /// always names the scale; tests use this.
+    #[cfg(test)]
     pub fn complete(&mut self, addr: SocketAddr, token: u64, wait: Duration, now: Instant) -> bool {
         self.complete_scaled(addr, token, wait, 1, now)
+    }
+
+    /// The node answered that it doesn't do BEP 51 (a reply without its
+    /// fields, or a KRPC 204): [`UNSUPPORTED_BACKOFF`], as
+    /// [`complete`](Self::complete) would give it, counted as
+    /// [`CoolingReason::Unsupported`].
+    pub fn complete_unsupported(&mut self, addr: SocketAddr, token: u64, now: Instant) -> bool {
+        self.complete_as(
+            addr,
+            token,
+            UNSUPPORTED_BACKOFF,
+            1,
+            CoolingReason::Unsupported,
+            now,
+        )
     }
 
     /// [`complete`](Self::complete), cooling `scale` times as long (WK-10e,
@@ -459,6 +485,18 @@ impl Sampler {
         token: u64,
         wait: Duration,
         scale: u8,
+        now: Instant,
+    ) -> bool {
+        self.complete_as(addr, token, wait, scale, CoolingReason::Interval, now)
+    }
+
+    fn complete_as(
+        &mut self,
+        addr: SocketAddr,
+        token: u64,
+        wait: Duration,
+        scale: u8,
+        reason: CoolingReason,
         now: Instant,
     ) -> bool {
         // A sample's token is a wire transaction id, always below the
@@ -476,7 +514,7 @@ impl Sampler {
                 .saturating_mul(u32::from(scale));
         // Any completion ends a streak: an answer resets it, and a full
         // backoff needs no memory after it.
-        self.cool(addr, token, until, false);
+        self.cool(addr, token, until, false, reason);
         true
     }
 
@@ -488,7 +526,33 @@ impl Sampler {
     /// failure plus `backoff`, the end of the cooldown it replaces; a
     /// failure within the streak cools for `backoff` and ends it, as an
     /// answer does.
+    ///
+    /// This is a timeout ([`CoolingReason::Timeout`]);
+    /// [`fail_reply`](Self::fail_reply) is the same for a reply.
     pub fn fail(&mut self, addr: SocketAddr, token: u64, backoff: Duration, now: Instant) -> bool {
+        self.fail_as(addr, token, backoff, CoolingReason::Timeout, now)
+    }
+
+    /// [`fail`](Self::fail) for an error reply (not a 204) or an
+    /// inconsistent one ([`CoolingReason::Error`]).
+    pub fn fail_reply(
+        &mut self,
+        addr: SocketAddr,
+        token: u64,
+        backoff: Duration,
+        now: Instant,
+    ) -> bool {
+        self.fail_as(addr, token, backoff, CoolingReason::Error, now)
+    }
+
+    fn fail_as(
+        &mut self,
+        addr: SocketAddr,
+        token: u64,
+        backoff: Duration,
+        cause: CoolingReason,
+        now: Instant,
+    ) -> bool {
         debug_assert!(token & PROOF_TOKEN == 0, "a wire token below PROOF_TOKEN");
         let Some(State::InFlight { token: t, streak }) = self.states.get(&addr).copied() else {
             return false;
@@ -501,20 +565,34 @@ impl Sampler {
         // A streak's end is derived from its short cooldown's, so only the
         // full backoff starts one (every caller passes it).
         if self.escalate && !struck && backoff == MAX_INTERVAL {
-            self.cool(addr, token, now + FIRST_FAILURE_BACKOFF, true);
+            self.cool(
+                addr,
+                token,
+                now + FIRST_FAILURE_BACKOFF,
+                true,
+                CoolingReason::FirstFailure,
+            );
         } else {
-            self.cool(addr, token, now + backoff, false);
+            self.cool(addr, token, now + backoff, false, cause);
         }
         true
     }
 
-    fn cool(&mut self, addr: SocketAddr, token: u64, until: Instant, struck: bool) {
-        self.states.insert(
+    fn cool(
+        &mut self,
+        addr: SocketAddr,
+        token: u64,
+        until: Instant,
+        struck: bool,
+        reason: CoolingReason,
+    ) {
+        self.put(
             addr,
             State::Cooling {
                 until,
                 token,
                 struck,
+                reason,
             },
         );
         if struck {
@@ -522,6 +600,36 @@ impl Sampler {
             self.struck.insert((forget_of(until), token, addr));
         } else {
             self.expiry.insert((until, token, addr));
+        }
+    }
+
+    /// Sets `addr`'s record, keeping [`Sampler::cooling_by`] exact.
+    fn put(&mut self, addr: SocketAddr, state: State) -> Option<State> {
+        if let State::Cooling { reason, .. } = state {
+            self.cooling_by[reason as usize] += 1;
+        }
+        let old = self.states.insert(addr, state);
+        if let Some(old) = old {
+            self.uncount(old);
+        }
+        old
+    }
+
+    /// Removes `addr`'s record, keeping [`Sampler::cooling_by`] exact.
+    fn take(&mut self, addr: &SocketAddr) -> Option<State> {
+        let old = self.states.remove(addr);
+        if let Some(old) = old {
+            self.uncount(old);
+        }
+        old
+    }
+
+    fn uncount(&mut self, old: State) {
+        if let State::Cooling { reason, .. } = old {
+            let n = &mut self.cooling_by[reason as usize];
+            // Only `put` adds Cooling records, so this never runs dry.
+            debug_assert!(*n > 0, "{reason:?} released more than counted");
+            *n = n.saturating_sub(1);
         }
     }
 
@@ -539,7 +647,7 @@ impl Sampler {
             self.expiry.pop_first();
             if matches!(self.states.get(&addr), Some(State::Cooling { token: t, .. }) if *t == token)
             {
-                self.states.remove(&addr);
+                self.take(&addr);
                 self.recount(&addr, true);
                 self.retire(token);
             }
@@ -557,7 +665,7 @@ impl Sampler {
             if matches!(self.states.get(&addr), Some(State::Cooling { token: t, struck: true, .. }) if *t == token)
             {
                 let forget = forget_of(until);
-                self.states.insert(addr, State::Struck { forget, token });
+                self.put(addr, State::Struck { forget, token });
             }
         }
         for _ in 0..RECLAIM_PER_TICK {
@@ -577,12 +685,13 @@ impl Sampler {
                     until,
                     token: t,
                     struck: true,
+                    ..
                 }) if t == token => {
                     self.short.remove(&(until, token, addr));
                 }
                 _ => continue,
             }
-            self.states.remove(&addr);
+            self.take(&addr);
             self.recount(&addr, true);
         }
     }
@@ -629,7 +738,7 @@ impl Sampler {
         }
         let was = self.tracked(&addr);
         let token = self.proof_token(true);
-        self.cool(addr, token, until, false);
+        self.cool(addr, token, until, false, CoolingReason::Restored);
         self.restored_live += 1;
         // Never refused for its shares, as for capacity; it still counts.
         self.recount(&addr, was);
@@ -647,7 +756,7 @@ impl Sampler {
             .collect();
         for addr in flying {
             let token = self.proof_token(false);
-            self.cool(addr, token, until, false);
+            self.cool(addr, token, until, false, CoolingReason::Sealed);
         }
     }
 
@@ -704,6 +813,25 @@ impl Sampler {
     }
     pub fn inflight(&self) -> usize {
         self.known() - self.cooling() - self.struck()
+    }
+    /// Cooling records by [`CoolingReason`], in [`CoolingReason::ALL`]'s
+    /// order: they sum to [`cooling`](Self::cooling). Spilled cooldowns and
+    /// [`struck`](Self::struck) records aren't cooling records.
+    pub fn cooling_by_reason(&self) -> [usize; CoolingReason::ALL.len()] {
+        debug_assert_eq!(self.cooling_by.iter().sum::<usize>(), self.cooling());
+        self.cooling_by
+    }
+    /// The cooling records by reason, counted from scratch, for the tests
+    /// that check [`cooling_by_reason`](Self::cooling_by_reason).
+    #[cfg(test)]
+    pub fn recount_cooling(&self) -> [usize; CoolingReason::ALL.len()] {
+        let mut by = [0; CoolingReason::ALL.len()];
+        for s in self.states.values() {
+            if let State::Cooling { reason, .. } = s {
+                by[*reason as usize] += 1;
+            }
+        }
+        by
     }
     /// Remembered streaks whose short cooldown ended (escalation on only).
     pub fn struck(&self) -> usize {
