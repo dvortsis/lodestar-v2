@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T09:45:00Z",
+    "updated": "2026-11-22T09:52:00Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-pseudo-text-gaps",
+        "slice": "X-pool-first-request-docs",
         "role": "slice",
-        "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
+        "agent": "session_01MMjhnBpFNkqSRJbKoL98DZ",
         "model": "opus",
-        "since": "2026-11-22T07:48:17Z",
-        "doing": "#1056 071a1daf main merged + review fixes; CI"
+        "since": "2026-11-22T09:52:00Z",
+        "doing": "launched; step 0 (brief eea35e5c); #1056 merged 151993bb"
       },
       {
         "slot": 2,
