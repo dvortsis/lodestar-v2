@@ -13,7 +13,6 @@ Follow-up to #1004 (X-win-log-path-display), from its fresh review's optional fi
   - the Mongolian free variation selectors, U+180B–U+180F.
 
   What `acl::invisible` covered before (every Cf, including the visible format marks, and Zl and Zp) stays.
-
 - **The filter crate isn't touched; `acl` carries its own copy** (the runner's call on #1007).
   - **Why:** reusing `lodestar_filter::normalize::invisible` meant making it `pub`. Any change to `crates/filter` runs the §20.8 filter-budget job, and that job is red on `main`: it fails locally on e8e16420 too, with the mixed 10,000-rule cases over 50 µs. A separate filter-perf slice the runner schedules deals with that, and this slice doesn't wait for it.
   - **The filter's own copy:** its private `normalize::invisible` lists U+180E but not U+180B–180D or U+180F. The runner's review of #1007 found that's a doc and test gap, not a matching bug: those marks are dropped earlier, before `ignored()`. The runner has queued it as a filter slice, and it's unchanged here.
@@ -31,20 +30,19 @@ Follow-up to #1004 (X-win-log-path-display), from its fresh review's optional fi
   - Running as root ignores permissions.
 
   Making it testable would mean injecting the metadata call, which is more than this slice's visibility changes allow.
-
 - **Mutations, each checked, and each failing a test on Linux:**
 
-  | Mutation                                                        | Fails                                           |
-  | --------------------------------------------------------------- | ----------------------------------------------- |
-  | `quoted()` without its `invisible` check                        | 4 tests                                         |
-  | `default_ignorable` without the variation selectors U+FE00–FE0F | `quoted_escapes_every_default_ignorable`        |
-  | `default_ignorable` without U+180B–U+180F                       | `quoted_escapes_every_default_ignorable`        |
-  | `secure_dir`'s folder back to `{:?}`                            | `secure_dir_errors_quote_the_folder`            |
-  | `secure_dir`'s inspect error back to raw `{e}`                  | `secure_dir_errors_escape_the_systems_own_text` |
-  | `secure_dir`'s create error back to raw `{e}`                   | `secure_dir_errors_quote_the_folder`            |
-  | the `data_dir` refusal's file back to `{:?}`                    | `every_refusal_shows_its_path_as_written`       |
-  | the witness and blocklist refusals' file back to `{:?}`         | `every_refusal_shows_its_path_as_written`       |
-  | "is a file" back to `{:?}`                                      | `the_file_in_the_way_is_quoted`                 |
-  | a visible Cf mark (U+0600–0605) dropped from the old list       | `quoted_escapes_every_default_ignorable`        |
-  | `plain()` on the wider set                                      | `plain_keeps_what_only_the_temp_log_escapes`    |
-  | `one_line` on the wider set                                     | `the_event_log_line_keeps_its_own_set`          |
+  | Mutation | Fails |
+  |---|---|
+  | `quoted()` without its `invisible` check | 4 tests |
+  | `default_ignorable` without the variation selectors U+FE00–FE0F | `quoted_escapes_every_default_ignorable` |
+  | `default_ignorable` without U+180B–U+180F | `quoted_escapes_every_default_ignorable` |
+  | `secure_dir`'s folder back to `{:?}` | `secure_dir_errors_quote_the_folder` |
+  | `secure_dir`'s inspect error back to raw `{e}` | `secure_dir_errors_escape_the_systems_own_text` |
+  | `secure_dir`'s create error back to raw `{e}` | `secure_dir_errors_quote_the_folder` |
+  | the `data_dir` refusal's file back to `{:?}` | `every_refusal_shows_its_path_as_written` |
+  | the witness and blocklist refusals' file back to `{:?}` | `every_refusal_shows_its_path_as_written` |
+  | "is a file" back to `{:?}` | `the_file_in_the_way_is_quoted` |
+  | a visible Cf mark (U+0600–0605) dropped from the old list | `quoted_escapes_every_default_ignorable` |
+  | `plain()` on the wider set | `plain_keeps_what_only_the_temp_log_escapes` |
+  | `one_line` on the wider set | `the_event_log_line_keeps_its_own_set` |

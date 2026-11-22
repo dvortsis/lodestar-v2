@@ -15,10 +15,10 @@ From the X-test-vm bug hunt: the `regex_plan` and `cluster_filter_snapshot` fuzz
   - The bytes are exactly those `to_vec` then `resize` gave, so what the decoder sees, every assertion and what an input can reach are unchanged.
   - Nothing else in the target changed.
 
-|        | Execs/s | Inputs in 5 min | Coverage (edges) | Features | Peak RSS |
-| ------ | ------- | --------------- | ---------------- | -------- | -------- |
-| Before | 265     | 79,851          | 2,382            | 4,122    | 326 MB   |
-| After  | 1,348   | 405,890         | 3,538            | 7,698    | 228 MB   |
+| | Execs/s | Inputs in 5 min | Coverage (edges) | Features | Peak RSS |
+|---|---|---|---|---|---|
+| Before | 265 | 79,851 | 2,382 | 4,122 | 326 MB |
+| After | 1,348 | 405,890 | 3,538 | 7,698 | 228 MB |
 
 - **Result:** 5.1 times the inputs in the same window, and more coverage. Neither run found a crash.
 
@@ -30,16 +30,15 @@ From the X-test-vm bug hunt: the `regex_plan` and `cluster_filter_snapshot` fuzz
 - **No harness change.** Dropping a parse would remove an oracle, and leaving `regex_syntax` uninstrumented would hide the case-folding paths from the fuzzer.
 - **Finding, reported to the runner and not changed here:** in a plain release build (outside the fuzzer), `parse` averages 0.55 ms over the 921-input corpus. Its slowest inputs take 10–12 ms each, all of them wide classes case-folded across Unicode: `\P{Any}`, `\S`, negated POSIX classes such as `[:^word:]`. `Bounds` already caps the folding weight per pattern and the target's one-second assertion holds, so this is a cost to know, not a fault.
 
-|           | Execs/s | Inputs in 5 min | Coverage (edges) | Features | Peak RSS |
-| --------- | ------- | --------------- | ---------------- | -------- | -------- |
-| Unchanged | 131     | 39,431          | 4,943            | 22,765   | 641 MB   |
+| | Execs/s | Inputs in 5 min | Coverage (edges) | Features | Peak RSS |
+|---|---|---|---|---|---|
+| Unchanged | 131 | 39,431 | 4,943 | 22,765 | 641 MB |
 
 No crash.
 
 ## X-proptest-cases-env, dropped
 
 The bug hunt reported that the parser property suites ignore `PROPTEST_CASES`, because they hard-code `ProptestConfig::with_cases(N)`. That isn't so with proptest 1.11.0 (`Cargo.lock`): the `proptest!` macro passes each suite's config through `contextualize_config`, which applies `PROPTEST_CASES` on top.
-
 - **Measured** on `main`'s bencode `roundtrip` suite: unset 0.07 s, `PROPTEST_CASES=2048` 0.08 s, `20480` 0.72 s, `100000` 3.1 s.
 - **The one exception in those suites** is `filter/tests/props.rs`'s `the_property_reads_trails`. It builds its own fixed-seed runner on purpose, so its coverage counts stay steady.
 - **A value that isn't a number** gets proptest's warning on stderr, and the suite's own count runs.

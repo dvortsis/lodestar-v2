@@ -26,44 +26,44 @@ Slice session, 2026-11-21Z. It answers UI review I11 and P15 (`docs/review/2026-
 
 Measured with `e2e/page-frame.routes.test.ts` (`PAGE_FRAME_TABLE=1`) on `main` and on this branch, against the OpenAPI mock. "Before" content edges are the page root's content box, which is the heading's wrapper; Search's wrapper had no padding of its own (its heading, query bar and grid each had `px-4`), so its 16 / width-16 below is read from the source. "none" is a page with no `h1`; "sr" is the clipped `sr-only` one.
 
-| Destination                      | Width | Before: h1 | content L | content R | After: h1 | content L | content R |
-| -------------------------------- | ----- | ---------- | --------- | --------- | --------- | --------- | --------- |
-| Search                           | 390   | 16         | 16        | 374       | 16        | 16        | 374       |
-| Logs                             | 390   | 16         | 16        | 374       | 16        | 16        | 374       |
-| Settings, Keyboard               | 390   | 32         | 16        | 374       | 16        | 16        | 374       |
-| Discover                         | 390   | 16         | 16        | 374       | 16        | 16        | 374       |
-| Alerts                           | 390   | 16         | 16        | 374       | 16        | 16        | 374       |
-| Alert detail                     | 390   | 16         | 16        | 374       | 16        | 16        | 374       |
-| Insights                         | 390   | sr         | 16        | 374       | 16        | 16        | 374       |
-| Insights stage                   | 390   | 16         | 16        | 374       | 16        | 16        | 374       |
-| Compare                          | 390   | 16         | 16        | 374       | 16        | 16        | 374       |
-| Detail (`/t/…`)                  | 390   | 16         | 16        | 374       | 16        | 16        | 374       |
-| Settings (the other screens)     | 390   | 16         | 16        | 374       | 16        | 16        | 374       |
-| Settings, Companions and Outputs | 390   | none       | 16        | 374       | 16        | 16        | 374       |
-| Logs                             | 1024  | 16         | 16        | 1008      | 24        | 24        | 1000      |
-| Settings, Keyboard               | 1024  | 320        | 16        | 1008      | 312       | 24        | 1000      |
-| Search                           | 1024  | 16         | 16        | 1008      | 24        | 24        | 1000      |
-| Discover                         | 1024  | 24         | 24        | 1000      | 24        | 24        | 1000      |
-| Alerts                           | 1024  | 24         | 24        | 1000      | 24        | 24        | 1000      |
-| Alert detail                     | 1024  | 24         | 24        | 1000      | 24        | 24        | 1000      |
-| Insights                         | 1024  | sr         | 24        | 1000      | 24        | 24        | 1000      |
-| Insights stage                   | 1024  | 24         | 24        | 1000      | 24        | 24        | 1000      |
-| Compare                          | 1024  | 16         | 16        | 1008      | 24        | 24        | 1000      |
-| Detail                           | 1024  | 16         | 16        | 1008      | 24        | 24        | 1000      |
-| Settings (the other screens)     | 1024  | 304        | 16        | 1008      | 312       | 24        | 1000      |
-| Settings, Companions and Outputs | 1024  | none       | 16        | 1008      | 312       | 24        | 1000      |
-| Logs                             | 1440  | 16         | 16        | 1424      | 24        | 24        | 1416      |
-| Settings, Keyboard               | 1440  | 320        | 16        | 1424      | 312       | 24        | 1416      |
-| Search                           | 1440  | 16         | 16        | 1424      | 24        | 24        | 1416      |
-| Discover                         | 1440  | 24         | 24        | 1416      | 24        | 24        | 1416      |
-| Alerts                           | 1440  | 84         | 84        | 1356      | 24        | 24        | 1304      |
-| Alert detail                     | 1440  | 84         | 84        | 1356      | 24        | 24        | 1304      |
-| Insights                         | 1440  | sr         | 24        | 1416      | 24        | 24        | 1416      |
-| Insights stage                   | 1440  | 24         | 24        | 1416      | 24        | 24        | 1416      |
-| Compare                          | 1440  | 16         | 16        | 1424      | 24        | 24        | 1304      |
-| Detail                           | 1440  | 176        | 176       | 1264      | 24        | 24        | 1304      |
-| Settings (the other screens)     | 1440  | 304        | 16        | 1424      | 312       | 24        | 1416      |
-| Settings, Companions and Outputs | 1440  | none       | 16        | 1424      | 312       | 24        | 1416      |
+| Destination | Width | Before: h1 | content L | content R | After: h1 | content L | content R |
+|---|---|---|---|---|---|---|---|
+| Search | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Logs | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Settings, Keyboard | 390 | 32 | 16 | 374 | 16 | 16 | 374 |
+| Discover | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Alerts | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Alert detail | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Insights | 390 | sr | 16 | 374 | 16 | 16 | 374 |
+| Insights stage | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Compare | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Detail (`/t/…`) | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Settings (the other screens) | 390 | 16 | 16 | 374 | 16 | 16 | 374 |
+| Settings, Companions and Outputs | 390 | none | 16 | 374 | 16 | 16 | 374 |
+| Logs | 1024 | 16 | 16 | 1008 | 24 | 24 | 1000 |
+| Settings, Keyboard | 1024 | 320 | 16 | 1008 | 312 | 24 | 1000 |
+| Search | 1024 | 16 | 16 | 1008 | 24 | 24 | 1000 |
+| Discover | 1024 | 24 | 24 | 1000 | 24 | 24 | 1000 |
+| Alerts | 1024 | 24 | 24 | 1000 | 24 | 24 | 1000 |
+| Alert detail | 1024 | 24 | 24 | 1000 | 24 | 24 | 1000 |
+| Insights | 1024 | sr | 24 | 1000 | 24 | 24 | 1000 |
+| Insights stage | 1024 | 24 | 24 | 1000 | 24 | 24 | 1000 |
+| Compare | 1024 | 16 | 16 | 1008 | 24 | 24 | 1000 |
+| Detail | 1024 | 16 | 16 | 1008 | 24 | 24 | 1000 |
+| Settings (the other screens) | 1024 | 304 | 16 | 1008 | 312 | 24 | 1000 |
+| Settings, Companions and Outputs | 1024 | none | 16 | 1008 | 312 | 24 | 1000 |
+| Logs | 1440 | 16 | 16 | 1424 | 24 | 24 | 1416 |
+| Settings, Keyboard | 1440 | 320 | 16 | 1424 | 312 | 24 | 1416 |
+| Search | 1440 | 16 | 16 | 1424 | 24 | 24 | 1416 |
+| Discover | 1440 | 24 | 24 | 1416 | 24 | 24 | 1416 |
+| Alerts | 1440 | 84 | 84 | 1356 | 24 | 24 | 1304 |
+| Alert detail | 1440 | 84 | 84 | 1356 | 24 | 24 | 1304 |
+| Insights | 1440 | sr | 24 | 1416 | 24 | 24 | 1416 |
+| Insights stage | 1440 | 24 | 24 | 1416 | 24 | 24 | 1416 |
+| Compare | 1440 | 16 | 16 | 1424 | 24 | 24 | 1304 |
+| Detail | 1440 | 176 | 176 | 1264 | 24 | 24 | 1304 |
+| Settings (the other screens) | 1440 | 304 | 16 | 1424 | 312 | 24 | 1416 |
+| Settings, Companions and Outputs | 1440 | none | 16 | 1424 | 312 | 24 | 1416 |
 
 After the change every destination's `h1` is at 16 px at 390 px and at 24 px at 1024 and 1440 px, except the Settings screens at 1024 px and up (call 5), which share 312 px. The old spread was 16, 24, 84, 176 and 304 px, with 15 / 23 px for Insights's clipped heading and no heading on Companions and Outputs. No two edges differ by 1 px.
 
@@ -85,17 +85,17 @@ After the change every destination's `h1` is at 16 px at 390 px and at 24 px at 
 
 Search's first-load JS is 44.70 kB (main 44.39 kB), under the 45 kB cap. The Settings first views and Insights stage pages grow by 30 to 150 B: the `h1` is now the 28 px display style with the focus ring and `wrap-anywhere`, where it was `text-title font-semibold`, and one string serves every page. Raises (runner approved, §2.26), each the measured size rounded up to 0.01 kB:
 
-| Entry                        | Limit    | Measured       | New limit | Why                                                                                                                                               |
-| ---------------------------- | -------- | -------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSS                          | 19.73 kB | 19.783 kB      | 19.79 kB  | the frame's `large:px-6`, `large:py-6`, `print:p-0`, `max-w-7xl`                                                                                  |
-| Settings section             | 45.5 kB  | 45.578 kB      | 45.58 kB  | the shared `h1` string                                                                                                                            |
-| Settings FiltersScreen       | 31.42 kB | 31.525 kB      | 31.53 kB  | the shared `h1` string                                                                                                                            |
-| Settings InsightsScreen      | 45.3 kB  | 45.445 kB      | 45.45 kB  | the shared `h1` string                                                                                                                            |
-| Settings LanguageScreen      | 45.1 kB  | 45.231 kB      | 45.24 kB  | the shared `h1` string                                                                                                                            |
-| Settings NotificationsScreen | 45.51 kB | 45.655 kB      | 45.66 kB  | the shared `h1` string                                                                                                                            |
-| Settings SourcesScreen       | 34 kB    | 34.031 kB      | 34.04 kB  | the shared `h1` string                                                                                                                            |
-| Insights stage pages         | 40.85 kB | 40.975 kB      | 40.98 kB  | the shared `h1` string                                                                                                                            |
-| Builder (on demand)          | 8.43 kB  | 8.432 kB       | 8.44 kB   | chunk placement                                                                                                                                   |
-| Search results (lazy)        | 40.83 kB | 40.832 kB (CI) | 40.84 kB  | not this PR: `main` measures 40,832 B in CI's build and this PR adds 0 B to the chunk; the old limit left `main` 2 B inside its edge (§2.18 port) |
+| Entry | Limit | Measured | New limit | Why |
+|---|---|---|---|---|
+| CSS | 19.73 kB | 19.783 kB | 19.79 kB | the frame's `large:px-6`, `large:py-6`, `print:p-0`, `max-w-7xl` |
+| Settings section | 45.5 kB | 45.578 kB | 45.58 kB | the shared `h1` string |
+| Settings FiltersScreen | 31.42 kB | 31.525 kB | 31.53 kB | the shared `h1` string |
+| Settings InsightsScreen | 45.3 kB | 45.445 kB | 45.45 kB | the shared `h1` string |
+| Settings LanguageScreen | 45.1 kB | 45.231 kB | 45.24 kB | the shared `h1` string |
+| Settings NotificationsScreen | 45.51 kB | 45.655 kB | 45.66 kB | the shared `h1` string |
+| Settings SourcesScreen | 34 kB | 34.031 kB | 34.04 kB | the shared `h1` string |
+| Insights stage pages | 40.85 kB | 40.975 kB | 40.98 kB | the shared `h1` string |
+| Builder (on demand) | 8.43 kB | 8.432 kB | 8.44 kB | chunk placement |
+| Search results (lazy) | 40.83 kB | 40.832 kB (CI) | 40.84 kB | not this PR: `main` measures 40,832 B in CI's build and this PR adds 0 B to the chunk; the old limit left `main` 2 B inside its edge (§2.18 port) |
 
 The Settings screens' `h1` moves from `text-title` (20 px) to the display size (28 px): a runner call under §2.26 (call 2 above).

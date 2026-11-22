@@ -17,7 +17,6 @@ The client half of §20.10–§20.11's preview, warning and password protocol, a
 13. **zh:** short labels only (buttons, the password label, the countdown, the action names); the rest falls back to English until translated. The server's `warning` and error `message` are English-only (backend follow-up below).
 
 ## Backend follow-ups (named, not filled in on the client)
-
 - `Assessment` has no per-item breakdown by layer, rule, media category, source or network, and no sealed names for core-caught items (§20.10).
 - No CSX-5 "contradiction with CS-1/CS-8" flag (§20.5.5).
 - `Preview` has no "matches now" count for strengthening rules (Block this uses `/search`'s `total`).

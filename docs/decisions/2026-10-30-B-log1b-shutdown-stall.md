@@ -12,5 +12,4 @@ The runner's decision of 2026-10-30, after `tests/shutdown.rs`'s `a_stalled_down
   - before the signal the bound never runs, even at zero.
 
   They use real timers of 50 ms or less with outcomes that don't depend on timing, and a 10 s deadline only so a broken case can't hang. tokio's paused time would need its `test-util` feature in the binary's manifest, which isn't this slice's.
-
 - **Not done:** option (b), letting an in-flight download keep streaming after `logs.close()` until the bound. It changes the server's behaviour, and the runner decided against it.

@@ -5,7 +5,6 @@ The plan is `docs/plan/2026-11-08-cloud-test-plan.md`: concurrent test lanes on 
 **One item changes an owner answer, and the owner approved it on 2026-11-08Z:** the uTP timing. For the cloud screen: The owner approved adding a standing cloud-screen stage (2026-11-08) and left its design to the runner; its rules are the runner's under §2.26, flagged to the owner under §2.19.
 
 **Nothing weakens a content-safety decision or changes an owner-set number.**
-
 - The one security-relevant change is Prerequisite 2. It widens Main's SSH ingress by one more `/32` (Win's egress), through the infra follow-up slice's own review, and stays SSH-only.
 - Everything else tightens the plan or follows an existing contract (CR-SPEC, `docs/operations.md` §4.3, handoff §6).
 
@@ -46,7 +45,6 @@ The remaining refinements are the runner's to flag (`docs/owner-decisions.md` §
 - **Each Linode gets its own PIA exit.** Two crawlers on one exit would be "another crawler on the public IP" (CR-SPEC 6.5).
 
 ## Flagged for the owner
-
 - The cloud screen's rules, which are the runner's under §2.26 (above).
 - Infra follow-up for the runner to slice after `#625` (the X-cloud-infra session agreed they're feature changes outside it):
   - an admin-address list for Main's firewall;

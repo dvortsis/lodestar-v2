@@ -3,7 +3,6 @@
 Runner brief R-mem-triage, 2026-11-02, Track R. rc.2 is `release/v0.5.1` at 6be95525. The Linux Docker soak r3 measured its `private_bytes` slope (the cgroup's `anon`) at 6.66 MiB/h, 95% CI [4.62, 8.70], over baseline hours 12–16, about 10–14 KiB per stored torrent. This file records what was measured, what was ruled out and what is still open, plus one small leak fix. **It does not explain or fix r3's slope.**
 
 ## How it was measured
-
 - **Two harnesses, in `bench/examples/` as dev-dependencies, so they stay out of the binary and the bench gates' change detection:**
   - **`mem-ingest`** runs the real ingest path: `Pipeline::start_with` (intake, have-filter, leases, fetch pool, prepare, writer, SQLite), the hot columns, and a `Serving` live index with its title FST, wired as `serve` wires them.
     - Synthetic torrents come from the bench generator, with realistic piece lists. A stand-in source and fetcher replace the DHT and the peer wire.
@@ -16,7 +15,6 @@ Runner brief R-mem-triage, 2026-11-02, Track R. rc.2 is `release/v0.5.1` at 6be9
 - **Built as the image ships it** (static musl via `cargo zigbuild`, mimalloc) as well as for gnu. The libc changes the result (below), so the musl figures are the ones that apply to the soak.
 
 ## What was ruled out (measured)
-
 - **No unbounded or oversized per-torrent structure on the ingest path.**
   - dhat's live Rust heap was 41.6 MB at 20k torrents and 52.6 MB at 33.6k. Without the harness's own queue that is about 150 B per stored torrent, which is the title FST, the hot columns, the have-filter and the gate's buffers, as designed.
   - SQLite's own memory (`sqlite3_memory_used`) is flat at about 8 MiB.
@@ -37,45 +35,43 @@ Runner brief R-mem-triage, 2026-11-02, Track R. rc.2 is `release/v0.5.1` at 6be9
 - **The big DHT structures plateau early.** In CR-0's hourly samples (`docs/soak/evidence/2026-10-30-cr0-final/`), `fetch_pending` and `dht_sample_cooling` reach their 200k caps by hour 6.5 and stay there. Private memory still drifts about 4 MiB/h while stored torrents go from 1k to 18k. The slope therefore comes after every large capped structure has filled.
 
 ## Inventory (rc.2)
-
 Everything below is bounded, except where marked.
 
-| Structure                                   | Bound                                                                                                       |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Have-filter                                 | Bloom filter, rebuilt at twice the size when full; about 1.3 MB at 20k                                      |
-| Gate queue                                  | `WAITING`, with drops counted                                                                               |
-| Funnel and rollups maps                     | Drained at every flush                                                                                      |
-| Fetch pool `entries`                        | `max_pending` 200k (architecture §6)                                                                        |
-| Pool `admitted`                             | Compacted at 2× entries + 1024                                                                              |
-| Pool `lookup_backlog`                       | Cleaned lazily. In the 10-24 run it was 204,821 at the end, against 200,000 pending                         |
-| Pool `recent`                               | 50k                                                                                                         |
-| Coordinator `LeaseTable` and `WorkerLeases` | Track pending keys. Two leaks, fixed here (below)                                                           |
-| DHT sampler states and expiry               | `MAX_KNOWN` 200k, about 35–45 MB at the cap                                                                 |
-| Sampler frontier                            | 20k                                                                                                         |
-| `PeerStore`                                 | 10k hashes × 50 peers, 30 min TTL                                                                           |
-| Routing table                               | K = 8 entries and 8 replacements per bucket                                                                 |
-| Lookups                                     | 16, 32 or 16, with deadlines                                                                                |
-| Pending queries                             | `max_outstanding`                                                                                           |
-| Seen and contacted filters                  | Fixed size                                                                                                  |
-| Scrape lanes                                | `LANE_CAP` 50k per lane                                                                                     |
-| Scrape rounds                               | Expire at their deadline                                                                                    |
-| Search result, facet and file caches        | `CacheConfig`                                                                                               |
-| Search per-segment sets                     | Per search                                                                                                  |
-| Search leases                               | Have a TTL                                                                                                  |
-| Title FST                                   | One set, rebuilt at most once a minute                                                                      |
-| zstd store dictionaries                     | Never trained at run time                                                                                   |
-| Log ring                                    | 5000 records or a 4 MB estimate. **Fills slowly at a low log rate**, so over 24 h it looks linear: a few MB |
-| Log fold table                              | 1024 keys                                                                                                   |
-| Log start-up buffer                         | 2000 lines                                                                                                  |
-| SSE ring                                    | 512                                                                                                         |
-| SSE broadcast lag                           | 256                                                                                                         |
-| Per-client SSE queue                        | 16                                                                                                          |
-| Insights page caches                        | 8                                                                                                           |
-| `request_log`                               | 512 routes                                                                                                  |
-| SQLite page caches                          | About 2 MB per connection (the default)                                                                     |
+| Structure | Bound |
+|---|---|
+| Have-filter | Bloom filter, rebuilt at twice the size when full; about 1.3 MB at 20k |
+| Gate queue | `WAITING`, with drops counted |
+| Funnel and rollups maps | Drained at every flush |
+| Fetch pool `entries` | `max_pending` 200k (architecture §6) |
+| Pool `admitted` | Compacted at 2× entries + 1024 |
+| Pool `lookup_backlog` | Cleaned lazily. In the 10-24 run it was 204,821 at the end, against 200,000 pending |
+| Pool `recent` | 50k |
+| Coordinator `LeaseTable` and `WorkerLeases` | Track pending keys. Two leaks, fixed here (below) |
+| DHT sampler states and expiry | `MAX_KNOWN` 200k, about 35–45 MB at the cap |
+| Sampler frontier | 20k |
+| `PeerStore` | 10k hashes × 50 peers, 30 min TTL |
+| Routing table | K = 8 entries and 8 replacements per bucket |
+| Lookups | 16, 32 or 16, with deadlines |
+| Pending queries | `max_outstanding` |
+| Seen and contacted filters | Fixed size |
+| Scrape lanes | `LANE_CAP` 50k per lane |
+| Scrape rounds | Expire at their deadline |
+| Search result, facet and file caches | `CacheConfig` |
+| Search per-segment sets | Per search |
+| Search leases | Have a TTL |
+| Title FST | One set, rebuilt at most once a minute |
+| zstd store dictionaries | Never trained at run time |
+| Log ring | 5000 records or a 4 MB estimate. **Fills slowly at a low log rate**, so over 24 h it looks linear: a few MB |
+| Log fold table | 1024 keys |
+| Log start-up buffer | 2000 lines |
+| SSE ring | 512 |
+| SSE broadcast lag | 256 |
+| Per-client SSE queue | 16 |
+| Insights page caches | 8 |
+| `request_log` | 512 routes |
+| SQLite page caches | About 2 MB per connection (the default) |
 
 ## The lease leaks (fixed)
-
 - **A key rejected in prepare and seen again kept a lease forever.**
   - Intake grants the sighting a new lease. The pool drops it as a recent duplicate, and nothing ended the lease, so `LeaseTable` and `WorkerLeases` grew by about 200 B per such sighting. CR-0 saw about 2 an hour, so this isn't the slope.
   - **The fix:** the pool now calls a new `Funnel::duplicate` hook when it turns away a non-reply sighting as recent (`crates/sources/src/pool.rs`, `Pool::on_discovery`).
@@ -93,7 +89,6 @@ Everything below is bounded, except where marked.
 - **Delta (build plan §0.4):** both changes touch the **crawler lifecycle**: the pool's handling of a recent duplicate, and of a restored key past the cap. They don't touch the sampler or the endpoint policy. A re-soak is assumed anyway.
 
 ## What is open
-
 - **About 80% of r3's slope (roughly 5 MiB/h) is not reproduced** by anything that runs without the live network.
   - The harnesses lack DHT replies and their timing, real peers, real TCP fetch failures (about 16k/h in CR-0) and hours of wall time.
   - The next step is to diff r3's own metrics snapshots (about 250 series a minute, already collected) against `private_bytes` over hours 6–16, and find whichever gauge rises with it.

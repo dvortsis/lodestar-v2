@@ -3,19 +3,16 @@
 #1008's probe found that about 1.25–1.8% of honest fetches over a 15%-loss uTP link miss the 4 s first-window deadline (`FIRST_WINDOW_DEADLINE`, `crates/peer-wire/src/fetch.rs`). This slice re-judges that deadline for lossy uTP links.
 
 **Decision (the runner's, §2.26; flagged to the owner, §2.19): (d). The 4 s deadline stays, and the first request asks for one more piece than the window.**
-
 - No time bound changes, for any peer.
 - (b) goes to the owner as a question (below), and (c) is advised against.
 
 ## What the first window bounds
-
 - **When it applies:** a dict larger than one window (`FIRST_WINDOW`, 4 pieces of 16 KiB, 64 KiB).
 - **What it bounds:** once the first request is out, the peer must deliver the window, pieces 0–3, within `first_window_deadline`. That caps how long a peer that won't deliver can hold a fetch slot and the reservation made before it has sent anything. It covers a silent peer and a slow or hostile one.
 - **After the window:** the peer must keep pace (`Pace`) until the fetch's own deadline.
 - **A miss fails that peer, never the key** (`Error::FirstWindow`, a timeout). The fetch moves on to the key's next peer.
 
 ## Why uTP loss stretches the time to the first window
-
 - **The window is about 55 packets of data from the peer:** 64 KiB and four ut_metadata headers, at uTP's 1,200-byte `MSS`.
 - **Most losses are repaired quickly.** Three duplicate ACKs, or packets selectively acknowledged past the hole (`DUP_ACK_THRESHOLD`), trigger a fast retransmit within about a round trip.
 - **Losses near the tail wait for the timer.** A loss near the end of what the peer is sending has too few packets after it to trigger a fast retransmit. So does a lost ACK, or a lost resend.
@@ -27,9 +24,7 @@
 - **The request pattern decides how often that happens.** The product always fetches with a reserve (`pool.rs` calls `fetch_reserving`), so it asks for only the first request until the window is in. The window's last piece is then the tail of everything the peer has to send.
 
 ## Measured
-
 Honest fetches of a 120 kB dict (8 pieces) over the in-process lossy link from `crates/peer-wire/tests/utp.rs`. Loss is in both directions, never two drops in a row, with 0–30 ms reordering. Release build, 400 fetches per cell, 16 at a time.
-
 - Every peer is honest by construction.
 - Other failures were 0 in every cell.
 - Timing changes which packets are lost, so a seed doesn't replay its losses: compare cells as totals.
@@ -37,36 +32,33 @@ Honest fetches of a 120 kB dict (8 pieces) over the in-process lossy link from `
 **First-window misses at 4 s**
 
 | Loss | Product today (window alone) | (d), the window and one more piece | #1008's pattern (all 8 pieces at once, not the product's) |
-| ---- | ---------------------------- | ---------------------------------- | --------------------------------------------------------- |
-| 5%   | 0 (0%)                       | 0 (0%)                             | 0 (0%)                                                    |
-| 10%  | 8 (2.0%)                     | 2 (0.5%)                           | 0 (0%)                                                    |
-| 15%  | 25 (6.25%)                   | 10 (2.5%)                          | 8 (2.0%)                                                  |
-| 20%  | 75 (18.75%)                  | 37 (9.25%)                         | 32 (8.0%)                                                 |
+|---|---|---|---|
+| 5% | 0 (0%) | 0 (0%) | 0 (0%) |
+| 10% | 8 (2.0%) | 2 (0.5%) | 0 (0%) |
+| 15% | 25 (6.25%) | 10 (2.5%) | 8 (2.0%) |
+| 20% | 75 (18.75%) | 37 (9.25%) | 32 (8.0%) |
 
 - **The (d) column** is the change as built. An earlier run of a variant, which waited for every requested piece before moving on, gave 0, 7 and 45 at 10, 15 and 20%: the same order, within run-to-run noise.
 
 **With a 20 s window (the product's pattern today):** all 1,600 fetches succeeded. Whole-fetch time, p50 / p99 / max:
 
-| Loss | p50   | p99    | max    |
-| ---- | ----- | ------ | ------ |
-| 5%   | 2.1 s | 5.0 s  | 7.3 s  |
-| 10%  | 3.3 s | 10.6 s | 13.4 s |
-| 15%  | 4.7 s | 11.0 s | 13.7 s |
-| 20%  | 7.4 s | 18.7 s | 29.1 s |
+| Loss | p50 | p99 | max |
+|---|---|---|---|
+| 5% | 2.1 s | 5.0 s | 7.3 s |
+| 10% | 3.3 s | 10.6 s | 13.4 s |
+| 15% | 4.7 s | 11.0 s | 13.7 s |
+| 20% | 7.4 s | 18.7 s | 29.1 s |
 
 **To re-run it** (`first_window_miss_rates`, `#[ignore]`d as a measurement, about 32 min):
-
 ```
 cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates -- --ignored --nocapture
 ```
-
 - `FIRST_WINDOW_ONLY_4S=1` skips the 20 s runs.
 - `FIRST_WINDOW_ALL_PIECES=1` uses #1008's pattern.
 - `FIRST_WINDOW_FETCHES` sets the count.
 - The loss model's rate is now a parameter (`Loss::at`). At 15% it draws exactly as before, so `fetches_over_a_lossy_link` and every other test run as they did.
 
 ## (d): the first request is the window and one more piece
-
 - **The change** (`FIRST_REQUEST` and `first_request`, `fetch.rs`). For a dict larger than five pieces, the first request asks for pieces 0–4 and reserves 80 KiB of dict up front, instead of pieces 0–3 and 64 KiB.
 - **What stays as it was:**
   - the window is still pieces 0–3;
@@ -115,7 +107,6 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
     - waiting for every requested piece fails `the_window_is_still_its_four_pieces`, two existing pace tests and the peer model's withheld-piece-4 case (seed 101).
 
 ## The candidates and their cost
-
 - **(a) Keep 4 s and today's request.**
   - 2% of honest uTP fetches miss at 10% loss, 6% at 15% and 19% at 20%; each moves on to the key's next peer.
   - Every bound is unchanged.
@@ -126,7 +117,6 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
 - **(c) A longer deadline overall.** Advised against: it loosens the bound for every peer on every transport, and it's the owner's by the brief.
 
 ## Owner question: a bounded uTP extension, (b), on top of (d)
-
 - **The proposal:** on uTP only, one extension of 4 s, granted only if a piece of the first window arrived in the last 2 s before the 4 s mark.
 - **What it changes:**
   - a slow peer's worst case on uTP goes from 4 s to 8 s;
@@ -136,9 +126,7 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
 - **The runner's recommendation:** not to build it unless live data show uTP paths at 15% loss or worse are common. The runner adds the owner_queue entry in its records PR.
 
 ## Follow-up (the runner places it in r11)
-
 The pool's docs and fixtures still describe a 64 KiB first request. No pool rule depends on it (above), and every test passes. The runner decided (§2.26) to keep them out of this slice:
-
 - `crates/sources/src/pool.rs:250-251`: "a dict over 64 KiB reserves in two steps: its first request window".
 - `crates/sources/src/pool.rs:458`: `SMALL_CLAIM`'s doc ("a dict of one request window (64 KiB)"). The claim limit itself is right: no whole claim passes one window.
 - `crates/sources/src/pool_budget_model.rs:104-110`: the per-network invariant `held <= share + SMALL_CLAIM`, to be written as `share + one first request`.

@@ -3,7 +3,6 @@
 The runner's records PR after r9 (#1040). It records the runner's calls on 2026-11-22Z, #1039 and #1041 to #1050. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
 ## Calls in merged slices
-
 - **X-insights-source-names (#1039):**
   - **The fuzz targets skip only what serde_json can't round-trip.** A JSON key that starts `$serde_json::private::`, unescaped, makes serde_json read the value as its private raw-value form (the fuzz crate enables `raw_value`). Escaped keys don't count.
     - `json` skips only the final `Value` comparison for such input.
@@ -49,7 +48,6 @@ The runner's records PR after r9 (#1040). It records the runner's calls on 2026-
   - Tests only. Their origin is #1033. Its `slices.yaml` entry is added here.
 
 ## Calls in running slices
-
 - **X-fixture-updates-on (#1051):**
   - **It switches on Updates only.** Backups have no server feature yet.
   - **There's no fixture trust key.** `fixture` is a default feature, so a key behind it would ship in every build. The runner's first brief suggested one and withdrew it.
@@ -63,9 +61,7 @@ The runner's records PR after r9 (#1040). It records the runner's calls on 2026-
 - **X-search-chunk-retry** waits for X-ui-checks-4. It owns `web/e2e/ui-checks/chunk-load.routes.test.ts`, which falls under X-ui-checks-4's `web/e2e/ui-checks/**`, so its dependency is added.
 
 ## The cloud test VM (leads only)
-
 These are leads from the X-test-vm lane, not results. They don't change a gate or a default.
-
 - **CR-4's route-backoff screen is warranted:** IPv6 `no_route` stayed above 0.
 - **A follow-up, X-leaktest-vpn-held-down:** the leak test's `vpn_interface_held_down` harness failure came back once after #988, with 0 packets leaked, and a second run passed.
 - **A follow-up, X-block-on-only-mode:**
@@ -74,7 +70,6 @@ These are leads from the X-test-vm lane, not results. They don't change a gate o
 - **No baseline exists for capacity rejections** (millions an hour, under uTP), so they can't be judged yet. The next A/B screens report them for both arms.
 
 ## New slices
-
 - **X-pseudo-text-gaps:** fixes the two pieces of hard-coded English that #1045 found.
   - It adds a `just_now` message (en and zh), which `RelativeTime.svelte` passes to the formatter. Today no catalogue has one, and `relative.ts` falls back to built-in strings.
   - Insights annotations look up the setting and event-kind values in the catalogue instead of inserting them raw.

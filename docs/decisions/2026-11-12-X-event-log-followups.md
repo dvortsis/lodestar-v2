@@ -3,7 +3,6 @@
 Follow-ups after #702 (X-event-log-notice, Legal Notice version 5), from the runner's brief and rv-702's nits. The Legal Notice text itself doesn't change. These are the slice's decisions under §2.33. None loosens an owner decision or a security decision.
 
 ## What goes to the Application log
-
 Section 5 of the Legal Notice allows the Application log to hold what happened, how to fix it, version numbers, the step that stopped, and folder paths. Every local user can read that log. This slice keeps each writer inside that, and tighter where the text came from a file on disk or could name a place in a user profile.
 
 - **The update helper (`update/windows/helper.rs`):** both notes, the blocked install (error 1920) and the install that exited 0 without replacing the program, are built by functions that take only Lodestar's parsed values: a count and semver versions, whose grammar holds `0-9 A-Z a-z . - +` alone.
@@ -30,7 +29,6 @@ Section 5 of the Legal Notice allows the Application log to hold what happened, 
   One function, so the two lists can't drift. Tested for each range the brief names.
 
 ## The update helper's `eventcreate` wait is bounded
-
 - **`run_bounded` runs it through `supervise`,** the same bounded wait msiexec gets, with no input or output. Past `EVENT_LOG_WAIT` (10 s) the child is killed and reaped, and the entry is given up: it's best effort, and a hung `eventcreate` must never hold up a rollback or a restart.
 - **No fixed sleep:** `supervise` polls with a deadline.
 - **`a_hung_event_log_command_is_killed_at_its_bound`** uses a real child that never exits (`sleep 600`, or `Start-Sleep` on Windows). It's killed at a short bound, well inside the test's 10 s deadline. It also checks that a command that ends answers its code.
@@ -40,14 +38,12 @@ Section 5 of the Legal Notice allows the Application log to hold what happened, 
   - The fix is the same bounded run. `run_bounded` is `pub(super)` in `update::windows::helper` today, so moving it beside the service (for example into `windows/mod.rs`) is a small follow-up. I named it to the runner rather than widen this slice.
 
 ## Docs and checks
-
 - **`settings/logging.rs`:** the comments said nothing writes to the Windows Event Log. They now say Lodestar's logging never does, that the service's and the update helper's fixed notes do, and that `event_log_errors` stays hidden and unused.
 - **User guide, chapter 6.1:** the two table rows about the Windows service's failures now point to the Application log, marked "(Newer than v0.5.1)" as section 6.2 is:
   - "three failure events": when the cause is the data folder (section 6.2), three Lodestar notes too;
   - "stops at once and stays stopped": look for the Lodestar error, event ID 3, first.
 
   The wording matches the service's note: it names the data folder and the Repair fix. `lint_docs.py docs/user --strict`: 0 failed, 0 warnings.
-
 - **`docs/legal/operator-guidance.md`:** its status line now describes the development builds on `main`, which lead to the next release cut from `main`, as version 5 of the Legal Notice. That's the runner's wording (owner-decisions §2.57 delegates it), since 0.5.2 itself ships version 4. The rest of the page says nothing about the Event Log, and needs nothing: the notes hold no visitor's data.
 - **`docs/legal/README.md`:** #709 already rewrote the section 5 row to list .NET's `Diagnostics.EventLog` and `WriteEntry` beside `eventcreate` and the rest, ignoring case, as `tests/legal_facts.rs` checks. So this PR takes `main`'s row, and the file has no change of its own.
 - **`packaging/windows/smoke.ps1`:** after the refused start (the administrator's Explorer entry on the data folder), it waits up to 30 s for an Application log event from the source `Lodestar`, ID 3, since the start. The wait polls, with no fixed sleep. It checks that:

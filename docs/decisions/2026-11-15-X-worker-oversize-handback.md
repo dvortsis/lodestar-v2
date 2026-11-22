@@ -5,7 +5,6 @@
 This builds on X-fetch-room-fix (`2026-11-14-X-fetch-room-fix.md`), which held a worker's largest dict to just under 3 MiB and left larger ones to this slice. Architecture §19 (workers and the coordinator). This file says only what the code now does.
 
 ## Calls
-
 - **A key too large for a remote worker goes to the built-in worker instead of being lost.** A worker still reports it as it always has: a `Lost` outcome with the oversize reason, under its lease's token. No wire change and no new protocol version.
   - **The refusal check comes first** (runner). Before any grant, the server asks its sink whether the built-in worker refuses the key (`InboundSink::refuses_local`: held, or blocked by the filter, the same check its own intake runs). A refused key ends there as a blocked loss, remembered as any blocked loss is (`LeaseAuthority::report`). It is never granted to the built-in worker or put in its pool. In the parked build the grant came first and the refusal only afterwards, though still before any fetch.
   - Otherwise the coordinator's server routes that report to `LeaseAuthority::hand_to_local`. Under one lock, if the worker holds the key under that token, the lease is granted to the built-in worker under a new token. The key keeps its cohort, sources and strategy, and it isn't a loss or a new harvest.
@@ -23,11 +22,9 @@ This builds on X-fetch-room-fix (`2026-11-14-X-fetch-room-fix.md`), which held a
 - **What's left:** a lying worker can spend up to its hand-back allowance, 120 built-in fetch slots an hour, on keys it holds. Random keys find no peers, so each costs a pool slot until its fetch gives up, not a large download. Peers in three networks agreeing on a false "too large" (the size rule) can move a key from a worker to the built-in worker, at one fetch each. That's bounded by the size rule, the once-only memory and the allowance.
 
 ## Ride-along
-
 - `leases.rs`: the parked commit had put `HandBack` between `LeaseAuthority`'s doc comment and the struct. The doc is back on `LeaseAuthority`.
 
 ## Tests
-
 - **Lease authority** (`leases.rs`):
   - An oversize key is handed to the built-in worker once, only by its holder under its current token, keeping its cohort and sources, not as a loss, and a second time it's a loss. The keys handed back are bounded.
   - A worker's hand-backs keep to its allowance. Past it they're losses, not handed or parked. Another worker's allowance is its own. It's still spent just before the window ends and comes back once it has.

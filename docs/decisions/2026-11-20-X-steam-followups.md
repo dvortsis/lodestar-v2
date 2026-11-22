@@ -6,7 +6,6 @@ runner to confirm. Builds on `2026-11-16-ENR-steam.md`; nothing there is
 superseded.
 
 ## A suspicious finished list is refused (UX: never lose a working list)
-
 - **What is refused.** A list that finishes downloading is checked against
   the one in use before it replaces it (`steam::suspicious`):
   - an empty list is always refused, the first one included;
@@ -82,7 +81,6 @@ superseded.
     smaller list is being refused.
 
 ## Tests for behaviour #969 left untested
-
 - **The 60 s cancel hold** (`CANCELLED`): a lookup cancelled mid-request is
   held until exactly 60 s after the hold was set; at 59 s a lookup is
   `HELD` and sends nothing, at 60 s the refresh runs. Paused tokio clock;
@@ -102,7 +100,6 @@ superseded.
   stored format.
 
 ## Not here
-
 - The `ext:` condition for switching the plugin on (the owner's adult
   sign-off, a live re-read of Steam's terms, Valve accepting the
   `x-webapi-key` header) is the runner's, in `runner/dashboard.yaml`.

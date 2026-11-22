@@ -3,7 +3,6 @@
 The re-judge that X-filter01-fix (#843) left as a follow-up, the store's hold precedence for kept holds, and the review nits from X-filter01-hardening (#855). Every hold stays fail-closed. The detail of the fix stays held under `docs/security/v1/README.md` §5.
 
 ## Calls
-
 - **The core has a version** (§20.5): `CORE_VERSION` in `lodestar-filter`, now 2. It goes up whenever a change to the core could judge a stored torrent differently, so a later core fix reuses it. 1 covers every core before X-filter01-fix (#843): the released v0.5.1 core, which read text one way, and the later pre-#843 `main`, which read it two ways. A store that records no version was judged by one of them. Runner, by message.
 - **The store records what its torrents were judged by** in `settings` rows, with no schema change and no migration, so update rollback keeps opening the store (runner):
   - `filter.core.judged` holds the version.
@@ -46,7 +45,6 @@ The re-judge that X-filter01-fix (#843) left as a follow-up, the store's hold pr
 - **The meter's second read is a strict bound** (§20.8): a path read twice is charged its own first read plus every word and character it holds as if the caches were cold. So the core's second read can never cost more than the meter counted. Runner, by message.
 
 ## Numbers
-
 - **`budget_worst_case`:** 28 shapes, worst 12–15.7 ms scaled on the build VM this run, against 9–11 ms for the same shapes on `main` in the same session. The difference is the host's noise, not this change: the costliest shape reads the same file count and units on both. The bound (15 ms) and the CI budget limit are unchanged, and CI's `filter budget (§20.8)` job decides.
 - **The re-judge (synthetic):** about 143 s per million stored in memory and 169 s on disk (reopened before the run; the OS cache couldn't be dropped on the build VM), in release, on 20,000 made-up torrents, three in ten of them packs of 20 to 180 files (29 files a torrent on average), 2% of them in the first phase (`rejudge_rate`). An extrapolation, not a real store; ingest shares the writer, so it takes longer on a busy server.
 - **Held in the repo's corpora:** still 0 of 515 (198 pack-corpus torrents, 317 release names), now counted with `too_large`, as intake checks it.

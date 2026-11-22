@@ -1,13 +1,11 @@
 # X-ci-advisories decisions (#820)
 
 Spec:
-
 - `runner/slices.yaml`, entry `X-ci-advisories` (Track Q, INFRA-09).
 - The runner's brief of 2026-11-13.
 - `docs/build-plan.md` (the "Supply chain and release" row).
 
 ## The advisory check
-
 - **CI checks every crate in `Cargo.lock` against the RustSec advisory database.**
   - It's the new `advisories` job ("RustSec advisories") in `.github/workflows/ci.yml`: `cargo deny --locked check advisories`.
   - It's inside the required `ci-ok` gate, so a failure blocks a merge.
@@ -20,29 +18,24 @@ Spec:
   - Licences stay with `.github/scripts/licenses.py`.
 
 ## When it runs (`ci_changes.py`)
-
 - **On a pull request,** only when it touches `Cargo.lock`, `deny.toml`, `ci.yml` or `ci_changes.py` (`ADVISORIES`). A `Cargo.toml` change that moves a version also changes `Cargo.lock`.
 - **On main, the nightly and manual runs, always.** An advisory published against a crate already in the lockfile turns the next nightly red, without any PR touching dependencies.
 - **`fuzz/Cargo.lock` isn't checked.** The fuzz harness is its own workspace, built only in CI's fuzz job and never shipped.
 - **Tests:** `test_ci_changes.py` covers the matching paths and near misses (`Advisories`). Its end-to-end tests check four things: a lockfile-only PR runs the check, a docs-only PR doesn't, a non-PR event always does, and so does a PR with the `full-ci` label.
 
 ## No permission, secret or trigger changes
-
 - The job inherits the workflow's `permissions: contents: read` and uses no secret.
 - Checkout has `persist-credentials: false`.
 - `pull_request_target` isn't used. Those decisions are the owner's.
 
 ## The advisories open in Cargo.lock (main at 667479cb)
-
 cargo-deny reported three.
 
 ### RUSTSEC-2026-0385: `ctutils` 0.4.2: upgraded
-
 - **The advisory:** non-constant-time mask generation and `u128` comparisons. It reaches Lodestar through `digest` → `hmac`, `argon2`, `sha1` and `pbkdf2`.
 - **Fixed:** `cargo update -p ctutils` moves it to 0.4.8, the latest patch, MSRV 1.87. Nothing else in `Cargo.lock` moves.
 
 ### RUSTSEC-2026-0486: `rustix` 1.1.5: upgraded (runner, 2026-11-13T06:13Z)
-
 - **The advisory:** the xattr functions mark unwritten bytes as initialized when given a zero-length buffer. Lodestar never calls them: it uses `fs::OFlags`, `statvfs`, `process` and `thread`.
 - **Fixed:** `crates/companions/Cargo.toml` pinned it exactly, at `=1.1.5`. It's now `=1.1.6`, and `Cargo.lock` moves only `rustix`.
 - **The pin stays exact.** It comes from CMP-1 (`docs/decisions/2026-11-08-CMP-1.md`), which pins this crate's network and OS dependencies to the lockfile versions, as with `reqwest` `=0.13.5`. It names no audited surface of its own.
@@ -50,7 +43,6 @@ cargo-deny reported three.
 - **The runner added** that one `crates/companions/Cargo.toml` line, and its `Cargo.lock` lines, to this slice's owns. The companions crate's tests and clippy pass on 1.1.6.
 
 ### RUSTSEC-2026-0459: `libsqlite3-sys` 0.38.2: ignored until 2026-12-13 (runner, 2026-11-13T06:13Z)
-
 - **The advisory:** the bundled SQLite before 3.54.0 can return uninitialized page-cache memory when a process opens a database file together with a crafted `-wal` whose page size differs. 0.38.2 bundles SQLite 3.53.2.
 - **No compatible fix:** 0.39 (SQLite 3.54) comes only with `rusqlite` 0.41. That's a semver-major bump in `crates/store` and `crates/sources-importers`, a core storage change that doesn't belong in a CI slice. The runner opens **X-rusqlite-041** for it (Opus, with the full test run).
 - **Why the exposure is narrow:**

@@ -6,7 +6,7 @@ Test-only. No product code changes; the product cause found here is queued as X-
 - **Why the 401 hand-off test flaked** (the runner's review of #995). There were two causes, and neither was only a short timeout.
   - **The test caught a moment instead of a state.** It didn't mock `getAuthStatus`, so the mock answered "signed in". The stream's 401 sent the page to `/login`, `/login` saw "signed in" and sent it back to `next`, and the next 401 sent it to `/login` again. The runner's review logged the URL bouncing every 30–50 ms for 3–6 s, and `toHaveURL` passed only when a poll landed on a `/login` phase. That fits the failed run, which read `/alerts?x=1`.
     - The test now mocks a signed-out `getAuthStatus`, as its sibling test does.
-    - It also checks that the page _stays_ on `/login`: after `/login` has asked who is signed in and the network has gone quiet, the URL is still `/login?next=…`.
+    - It also checks that the page *stays* on `/login`: after `/login` has asked who is signed in and the network has gone quiet, the URL is still `/login?next=…`.
     - Without the mock, the new check fails (3 of 3 runs, checked locally).
   - **Only the stream ever hands off, and only after an interaction.**
     - `listSavedSearches`' 401 arrives about 13 ms after load (as the runner's review measured it) and is dropped. The client has no `loginHandler` yet, because `Shell.svelte` is still loading `installAuthHandlers` by dynamic import (`client.ts`, `Shell.svelte` `onMount`).

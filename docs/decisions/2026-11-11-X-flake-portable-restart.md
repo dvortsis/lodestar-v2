@@ -3,7 +3,6 @@
 The flake in `a_portable_restart_serves_again_on_the_same_port` on #655 (Windows CI, at `ca0fbf6d`): the relaunched copy started 10 ms after the hand-over and failed with `serve: sqlite: disk I/O error`. Brief: runner, 2026-11-11. Supersedes the "then for end of file, which comes when this process exits and Windows has released its port, data lock and files" claim in `crates/lodestar/src/windows/mod.rs` (PK-win-restart, X-win-restart-followups).
 
 ## The root cause
-
 - **The end of file isn't the exit.** The old process keeps the pipe's write end until it exits (`HANDED`), so the pipe closes as Windows closes its handles. Microsoft's "Terminating a Process" lists the order: objects are closed, then "the process code is removed from memory", and the process object is signalled last. So the old process's mapped files are still mapped when the successor reads end of file.
 - **The old process exits with the store open.** `serve_as` calls `reexec` inside `block_on`, and `hand_over` ends with `std::process::exit(80)`. Store connections still held by tasks are never closed: the process's exit closes them.
 - **SQLite's first opener truncates `-shm`.** With the old process's handles closed, its lock on the `-shm` DMS byte is gone, so the successor takes it as the first opener and truncates the file (`winLockSharedMemory`). The old process's view of `-shm` is still mapped, so `SetEndOfFile` fails. That's `SQLITE_IOERR_TRUNCATE`, "disk I/O error", which SQLite doesn't retry.
@@ -11,7 +10,6 @@ The flake in `a_portable_restart_serves_again_on_the_same_port` on #655 (Windows
 - **Unix isn't affected.** `exec` replaces the image and its maps at once, and the supervisor waits for its child's exit.
 
 ## The fix: wait for the process, not the pipe
-
 - **The old process's id is already in the hand-over.** `relaunch::token()` is `lodestar-<pid>-<nanos>`, made by the old process. `restart::predecessor_pid` reads it back. `spawn()` and `hand_over` are unchanged.
 - **A watch, started first thing.** `wait_if_successor` starts a Windows PowerShell with no window (`powershell_command`) before it waits for the token, so its start overlaps the old process's shutdown. The script (`restart::predecessor_script`) waits on the process object (`WaitForExit`) and ends with 0 once the process has exited or isn't running.
   - A process with that id that started after the copy took the id later, so it isn't waited on. The old process always starts before its copy.
@@ -25,7 +23,6 @@ The flake in `a_portable_restart_serves_again_on_the_same_port` on #655 (Windows
 - **No second layer here.** A bounded retry of the store's open on `SQLITE_IOERR_TRUNCATE` would be in `services.rs` or `lodestar-store`, outside this brief's files. It's left for the runner to decide.
 
 ## Tests
-
 - **Every OS** (`restart.rs`, a fake clock and a fake probe, no waiting):
   - `a_relaunched_copy_waits_until_the_old_process_has_exited`: running, running, exited goes on at the third probe; nothing to wait on goes on at once.
   - `a_process_still_running_past_the_wait_is_refused`: probed until the deadline, then refused; the wait is at least 10 s; the message.
@@ -36,5 +33,4 @@ The flake in `a_portable_restart_serves_again_on_the_same_port` on #655 (Windows
 - **Not run here:** this session has no Windows. The Windows code was checked with `cargo clippy --target x86_64-pc-windows-gnu`, and the integration tests run on Windows CI.
 
 ## Shared edits
-
 - `crates/lodestar/src/windows/mod.rs`: `wait_if_successor` and a new `watch_predecessor` in `relaunch::os`, one `use` line, and the `relaunch` module's doc. `spawn()`, `hand_over` and `hook` are untouched. PK-win-portable-upd is editing `spawn()` at the same time.

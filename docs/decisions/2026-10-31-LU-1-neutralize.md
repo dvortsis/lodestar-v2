@@ -1,6 +1,6 @@
 # LU-1-neutralize decisions
 
-LU-1 (a lure note beside an archive standing in for media) now honours CSX-5 _Neutralize terms_, as architecture §20.5.5 says. This closes the gap `2026-10-30-F-filters-packs.md` left ("Not changed: LU-1's `lure-file` reason"). No owner decision or number changes.
+LU-1 (a lure note beside an archive standing in for media) now honours CSX-5 *Neutralize terms*, as architecture §20.5.5 says. This closes the gap `2026-10-30-F-filters-packs.md` left ("Not changed: LU-1's `lure-file` reason"). No owner decision or number changes.
 
 - **The classifier says which lures it found.** `lodestar_classify::lure_hits(file)` gives the lure texts (`password`, `click here`, `visit www`, …) a file's name holds, as the `lure-file` reason reads them: ASCII-lowercase substrings, small files only (under 64 KiB), never padding. The junk score uses it, and so does LU-1, so the size and the list live only in `lodestar-classify` (§20.6).
 - **The junk score doesn't change.** The `lure-file` reason and its weight are worked out exactly as before. Neutralize is a filter entry and never reaches the classifier: the filter only borrows the classification. `junk::tests::lure_file_scores_as_before` pins the `lure-file` reasons and score, with the 64 KiB and padding edges.

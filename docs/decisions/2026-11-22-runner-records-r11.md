@@ -3,7 +3,6 @@
 The runner's records PR after r10 (#1052). It records the runner's calls on 2026-11-22Z for #1048, #1051 and #1053 to #1057, and for the slices still running. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
 ## Calls in merged slices
-
 - **X-ui-checks-4 (#1048):** five fixture screenshots and their regeneration flow. The X-ui-checks umbrella is now complete.
   - **The coupling is kept (runner):** a PR marked for regeneration only commits its new baselines once the whole fixture suite is green, and `web/e2e/README.md` says so.
   - **The real test comes later:** the first nightly runs after 1da2253a test whether the fixture baselines hold across days, and whether the pseudo step holds in `all-themes`. The runner watches the nightly tracking issue.
@@ -35,7 +34,6 @@ The runner's records PR after r10 (#1052). It records the runner's calls on 2026
   - **The overlap with X-alert-noun** (`web/src/lib/features/search/messages/**`) ended when #1057 merged. X-search-retry-flush records its own.
 
 ## Calls in running slices
-
 - **X-pseudo-text-gaps (#1056):** approved.
   - `common_just_now` lives in `web/src/lib/i18n/messages`. `relative.ts` drops its English table, and a direct caller that passes nothing gets Intl's own word.
   - Movement uses Insights' own level labels: reusing Settings' labels cost Settings messages 176 B, so it was reversed.
@@ -55,12 +53,10 @@ The runner's records PR after r10 (#1052). It records the runner's calls on 2026
 - **Not new:** the vitest timeout in `screen.test.ts` that the #1053 session saw under load is X-filters-dialog-test-timeout, already fixed in #1035.
 
 ## Process
-
 - **Adjacent `slices.yaml` lines cost CI rounds.** #1051 conflicted twice with neighbouring entries from other slices, each time a full CI round. From now on the runner plans the landing order when it places entries on adjacent lines. A slice whose entry sits next to another open PR's waits in the landing lane until that PR lands, then brings `main` in once.
 - **Usage:** the account's 7-day usage is near its limit. The runner keeps slices small and launches no extra testing sessions unless a merge needs one.
 
 ## New slices
-
 - **X-pool-first-request-docs:** the pool's docs, fixtures and budget model follow peer-wire's first request after #1054: 80 KiB plus the bound for a dict over 5 pieces, and 64 KiB then growth for a 5-piece dict.
   - The model's invariant slack becomes "share + one first request", and the model reserves peer-wire's sizes instead of a hand-written 64 KiB.
   - It also takes #1054's review nits in `fetch.rs` and `utp.rs`.

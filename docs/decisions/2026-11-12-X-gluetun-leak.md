@@ -3,14 +3,12 @@
 Fixes testing blocker #1: gluetun's kill switch let packets of established flows leave by the host's network when the tunnel went down. The testing session found 61 such packets on a fleet VM on 2026-11-12. Sources were read in gluetun's repository at tag `v3.41.3` (commit `3d1e20c5`, the digest the fleet pins) and at `master` (`236b10ba`, 2026-11-12T04:29Z).
 
 ## What gluetun does
-
 - **The cause, confirmed in source.** `enable()` (`internal/firewall/enable.go`) sets DROP policies, then appends `OUTPUT -o lo ACCEPT`, then `acceptEstablishedRelatedTraffic`, which is `-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT` with no interface (`internal/firewall/iptables.go`). The `-o wg0` accept comes later (`SetVPNConnection`, `vpn.go`). When wg0 goes down, the kernel routes a flow opened through the tunnel out of eth0, still carrying the tunnel's source address, and that first accept passes it.
 - **(c) No release fixes it.** `v3.41.3` is the newest tag. `master` still has the unrestricted accept. Commit `2429c0d` (#3158, on `master`, in no tag) adds `flushExistingConnections` (`internal/firewall/flush.go`). That flushes conntrack, or falls back to the `GLUETUN_PUBLIC_ONLY` chain, but only when the firewall is turned on, not when the tunnel drops. A newer version is not the fix.
 - **(a) The supported hook is `/iptables/post-rules.txt`.** `runUserPostRules` runs at the end of `enable()`, once, before the VPN starts. It runs each line that starts with `iptables`, `ip6tables` or their `-nft`/`-legacy` forms, and skips every other line, so comments are inert. A missing file is skipped without a word. A failing line makes `enable()` return an error: its deferred `fallbackToDisabled` resets the policies to ACCEPT, and `main.go` then exits. That happens before any VPN or app traffic, but the rules must never fail, and the leak test checks that they loaded.
 - **gluetun's image sets `VPN_INTERFACE=tun0`** (`Dockerfile` line 79), and WireGuard takes that value (`internal/configuration/settings/wireguard.go`). Rules that name `wg0` need `VPN_INTERFACE=wg0` set explicitly. The fleet compose and the PIA example set it.
 
 ## The fix
-
 - **Three rules per family, all inserted at the top of OUTPUT** (`packaging/companions/gluetun-post-rules.txt`, which explains each line):
   1. `-o wg0 -j CONNMARK --set-xmark 0x800000/0x800000` marks every connection that sends a packet through the tunnel. It changes no verdict.
   2. `! -o wg0 -m connmark --mark 0x800000/0x800000 -j DROP`: a connection that used the tunnel never leaves by another interface.
@@ -35,7 +33,6 @@ Fixes testing blocker #1: gluetun's kill switch let packets of established flows
 - **The PIA example is pinned** to the fleet's digest (it was `:latest`), the version the rules were checked on.
 
 ## The leak test
-
 - **Recreating gluetun is guarded (the VM re-run on 2026-11-13).**
   - **The windows.** The VPN endpoint keeps sending the old session for a while after a recreate. Two paths can then draw a "port unreachable" back to it:
     - **The container.** The old one shutting down, or a new one before gluetun has turned its firewall on, can answer the endpoint's packets that still reach it.
@@ -71,7 +68,6 @@ Fixes testing blocker #1: gluetun's kill switch let packets of established flows
 - **(b) Host rules.** The leak test adds three, all for its own run and all removed by `cleanup`: the DOCKER-USER counter, which only counts, and the two guards, which hold the endpoint's UDP only while gluetun is recreated or the test runs. A standing host DROP rule for the fleet VMs, as defence in depth while they crawl, is still not added, because it would hide a gluetun regression from the leak test. Propose it with the crawl phase if wanted. It is never something an Unraid user is asked to do.
 
 ## X-gluetun-leak-cmp (the runner's follow-up, Opus): brief notes
-
 - **Compose templates:** emit gluetun's `configs:` entry with the file's inline `content:` (as `infra/fleet/steps/vm/compose.yaml` does). This needs no host path; the file is copied in as 0444. Also set `VPN_INTERFACE: wg0`.
 - **Unraid XML:** add a read-only Path, host `<gluetun folder>/post-rules.txt` → `/iptables/post-rules.txt`, plus a `VPN_INTERFACE=wg0` Variable. Lodestar writes the file. A missing host file fails closed: Docker creates a folder there and gluetun exits with `read /iptables/post-rules.txt: is a directory`, which was checked on v3.41.3.
 - **Source of the text:** `packaging/companions/gluetun-post-rules.txt`, embedded at build time so the generator and the fleet can't drift. A test keeps the fleet's copies equal to it.
@@ -84,20 +80,16 @@ Fixes testing blocker #1: gluetun's kill switch let packets of established flows
 - **Not in scope:** an existing gluetun that Lodestar routes through by name. Lodestar can't change its mounts, so it can only point the user at the manual step.
 
 ## Not done here (for the runner)
-
 - **The generated companion templates** (`packaging/companions/{compose,unraid}`) are golden output of `crates/companions` (`tests/templates.rs`, byte for byte), and that test also forbids extra files in those folders. Fixing them needs generator changes in `crates/**`:
   - compose: `configs:` content plus `VPN_INTERFACE=wg0`;
   - Unraid: a read-only Path to a host copy of the file, plus `VPN_INTERFACE=wg0`;
   - correcting the Overview's "Its firewall blocks all traffic while the VPN is down".
 
   The brief requires asking first, and the runner was asked. The user guide marks template support **(planned)** and gives the manual steps.
-
 - **Defence in depth in Lodestar itself**, binding its sockets to the tunnel interface so a rerouted flow fails at the socket: propose it as its own slice.
 
 ## Follow-ups (X-gluetun-leak-cmp)
-
 From the runner's review of #800 at 87be769b, and O3 of its review of e46cb683. No decision changes.
-
 - **The guards in the leak test:**
   - **IPv4 only, by design:** `endpoint_valid` accepts only an IPv4 endpoint, so the endpoint's packets never arrive over IPv6.
   - **Set before they're inserted:** each guard's flag is set before its `iptables -I`. A signal in between still has `cleanup` look for the rule, and `drop_all` checks with `-C` first.
@@ -111,9 +103,7 @@ From the runner's review of #800 at 87be769b, and O3 of its review of e46cb683. 
 - **Not done:** `tcpdump -Q in` (old O7). It would drop the inbound evidence (`captured_inbound_*`) that showed run 3's router solicitation and DAD frames for what they were. The MAC check and the host counter already cover what `-Q in` would add.
 
 ## X-gluetun-templates
-
 The generated gluetun companion templates now carry the post-rules (the runner's brief `briefs/X-gluetun-templates.md`). The defaults below are a runner §2.19 flag to the owner.
-
 - **Compose:** gluetun's service gets a `configs:` entry, and the document a top-level `configs:` whose inline `content:` is the rules file. Compose copies it in read-only (0444), as on the fleet VMs.
   - The text is written as a YAML literal block by a new writer node, which refuses anything YAML wouldn't read back unchanged: `$`, tabs, carriage returns, control characters, a first line that starts with a space, and a last line with no newline or with trailing blank lines.
   - The routed companion already waited for `service_healthy`, which covers O3 for compose.

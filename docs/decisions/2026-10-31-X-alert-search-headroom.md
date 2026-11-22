@@ -13,28 +13,26 @@ The Alert route, the lazy search results, the Alerts route and the results toolb
   - The module graph also counts every message as "reached" through the `messages.js` barrel.
 
   So the isolation here comes from imports, not from chunk groups. Revisit this if Kit allows the setting, or with Rolldown's `tags`.
-
 - **Limits** (`web/.size-limit.mjs`). The brief allows either: lower the limit to measured + 10% of the cut, or keep the old limit when the cut is the headroom.
   - **Alerts route:** lowered to 26.3 KB. Measured + 10% of the cut would leave less than the 0.5 KB headroom target, so the limit keeps that 0.5 KB.
   - **Results toolbar:** back to 4.6 KB. This reverses X-build-stable-name's SHA-noise raise and still leaves 310 B of headroom.
   - **Alert route and Search results:** limits kept, so the cut is their headroom.
 - **Measured** (bytes, gzipped; `npx size-limit --json`; local builds without `GITHUB_SHA`; two runs of the same build, identical; this branch with `main` merged in):
 
-  | Entry                                         | `main` (17ed97e) | This branch  | Limit before → after        | Headroom |
-  | --------------------------------------------- | ---------------- | ------------ | --------------------------- | -------- |
-  | Alert route                                   | 45,976           | 45,404       | 46 KB → 46 KB               | 596 B    |
-  | Search results (lazy)                         | 43,288           | 42,744       | 43.3 KB → 43.3 KB           | 556 B    |
-  | Alerts route                                  | 29,168           | 25,732       | 29.2 KB → 26.3 KB           | 568 B    |
-  | Results toolbar (lazy)                        | 4,597            | 4,290        | 4.65 KB → 4.6 KB            | 310 B    |
-  | Alerts key commands (on demand)               | (new)            | 3,171        | 3.5 KB                      |          |
-  | Save search loader (on demand)                | (new)            | 494          | 0.55 KB                     |          |
-  | Settings overview                             | 11,118           | 10,577       | 45 KB                       |          |
-  | Settings section                              | 43,853           | 43,312       | 45 KB                       |          |
-  | Settings first views (each hand-built screen) |                  | −540 to −543 | 45 KB                       |          |
-  | Search cards (lazy)                           | 8,233            | 8,211        | 8.3 KB                      |          |
-  | Search route JS (initial)                     | 43,062           | 43,066       | 45 KB                       |          |
-  | Route table (app.js)                          | 1,776            | 1,778        | 1.26 KB + 0.04 KB per route |          |
+  | Entry | `main` (17ed97e) | This branch | Limit before → after | Headroom |
+  |---|---|---|---|---|
+  | Alert route | 45,976 | 45,404 | 46 KB → 46 KB | 596 B |
+  | Search results (lazy) | 43,288 | 42,744 | 43.3 KB → 43.3 KB | 556 B |
+  | Alerts route | 29,168 | 25,732 | 29.2 KB → 26.3 KB | 568 B |
+  | Results toolbar (lazy) | 4,597 | 4,290 | 4.65 KB → 4.6 KB | 310 B |
+  | Alerts key commands (on demand) | (new) | 3,171 | 3.5 KB | |
+  | Save search loader (on demand) | (new) | 494 | 0.55 KB | |
+  | Settings overview | 11,118 | 10,577 | 45 KB | |
+  | Settings section | 43,853 | 43,312 | 45 KB | |
+  | Settings first views (each hand-built screen) | | −540 to −543 | 45 KB | |
+  | Search cards (lazy) | 8,233 | 8,211 | 8.3 KB | |
+  | Search route JS (initial) | 43,062 | 43,066 | 45 KB | |
+  | Route table (app.js) | 1,776 | 1,778 | 1.26 KB + 0.04 KB per route | |
 
   The search first load grew by 4 B, 2 B of it in the route table: re-hashed chunk names, since no first-load code changed. Every other entry moved by 9 B or less.
-
 - **No change to what the page shows or to first paint.** The search first load has the same files (4 B larger), so no request was added before first paint. Lighthouse was not run in this session. The visual baselines are untouched: no markup or CSS changed.

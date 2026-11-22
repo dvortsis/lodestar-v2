@@ -3,7 +3,6 @@
 The coordinator counts the busy denials it sends, by cause. This is the metrics half of #637's busy retry. Brief: runner, 2026-11-08T23:15Z. The change of premise below is the runner's call, 2026-11-08T23:14Z.
 
 ## The premise changed: the coordinator counts, not the worker
-
 - **The brief** asked for the worker's own counters (`busy_retried`, `busy_gave_up`, `busy_dropped`) as Prometheus metrics in `metrics.rs`.
 - **They can't get there.** Those counters live in the remote `lodestar worker` process (`worker::runtime::Counts`), and that process serves no HTTP and no `/metrics`.
   - The coordinator's `/metrics` can't read them.
@@ -14,7 +13,6 @@ The coordinator counts the busy denials it sends, by cause. This is the metrics 
   - Carrying the worker's counters in the heartbeat is logged as a possible follow-up, not queued.
 
 ## The metric
-
 - **`cluster_claims_busy_total{cause}`:** a counter, per key. It sits beside the other `cluster_*` series in `crates/lodestar/src/cluster/serve.rs`, where every cluster series renders. That's the brief's "`metrics.rs`" in practice.
 - **Exactly three fixed causes**, matching the three places the server answers busy:
   - `held_back`: grants held back. Either the admission hook allowed fewer new leases (the writer's queue at its high-water mark, §19.5), or too many commits happened during the store check (`claim_batch`'s forgotten window). It's the same count as the existing `cluster_busy_total`, which stays as it is so dashboards don't break.
@@ -25,11 +23,9 @@ The coordinator counts the busy denials it sends, by cause. This is the metrics 
 - **Counters are process-lifetime and summed over every opening of the port**, like the other cluster counters: turning workers off and on never sends them backwards.
 
 ## Also
-
 - `crates/cluster/src/server.rs`: the stale `KeyCheck` doc line now says the worker claims a busy key again with back-off (#637).
 
 ## Tests
-
 - `keys_held_back_are_counted_as_busy` (new, `crates/cluster/tests/transport.rs`, with an admission hook that admits one key): two keys held back, counted as `held_back`.
 - `a_claim_whose_check_fails_is_denied`: one failed check, two keys counted as `check_failed`.
 - `a_claim_denies_an_unknown_key_as_busy`: one key counted as `key_unknown`.

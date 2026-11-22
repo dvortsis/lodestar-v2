@@ -3,7 +3,6 @@
 The follow-ups from #649's review (`reviews/rv-649-8d4ac5f6.md`: findings 1, 2, 4 and 5). Brief: runner, 2026-11-09T04:58Z.
 
 ## A relaunched copy that fails at start stays readable (finding 1)
-
 - **The case:** after the hand-over, the old process exits 80 and `Start Lodestar.cmd` ends without `pause`. If the relaunched copy then fails at start (a held port, an unreadable config, a lock still held past its wait), it prints its error and exits. With nothing left attached to the console, the window closes before anyone reads it.
 - **`restart::hold_if_relaunch_failed`** wraps everything `main` runs. It waits only when all of these hold:
   - the copy was started by Restart now;
@@ -33,7 +32,6 @@ The follow-ups from #649's review (`reviews/rv-649-8d4ac5f6.md`: findings 1, 2, 
   - `a_relaunch_outside_the_launchers_window_exits`: with the token but no window variable (the hidden-console case), it exits with a failure and no prompt.
 
 ## The companions lock (finding 2)
-
 - **The problem:** `Manager::open` (`crates/companions/src/manager.rs`) answering `Busy` after a quick restart on Windows turned companions off for the whole run (`install_failed step=open reason=busy`).
 - **The fix:** on Windows it now tries a busy lock again every 100 ms for up to 10 s, as `lodestar-search`'s index lock does (X-win-restart-followups). Elsewhere it's one attempt. A lock error other than busy is never retried.
 - **A local helper, `retry_busy`,** over `std::fs::TryLockError`. companions doesn't depend on search, and no existing common crate fits without a new dependency edge.
@@ -43,7 +41,6 @@ The follow-ups from #649's review (`reviews/rv-649-8d4ac5f6.md`: findings 1, 2, 
   - The `lodestar companion` command opens it too. On Windows, while serve is running, it now says another Lodestar process is managing companions after up to 10 s instead of at once.
 
 ## Nits (findings 4 and 5)
-
 - **`EXIT_RELAUNCHED`:** `update::control` is Unix-only and the relaunch is Windows-only, so neither can name the other.
   - `EXIT_RELAUNCHED` is now defined on every platform.
   - `the_relaunch_exit_code_is_the_restart_code` (a Unix test) pins it to `EXIT_RESTART`.
@@ -51,9 +48,7 @@ The follow-ups from #649's review (`reviews/rv-649-8d4ac5f6.md`: findings 1, 2, 
 - **`rebuild.rs`'s `lock_root` doc now says that only opening the lock file is never retried.** tantivy 0.27 reports every failed try-lock as busy, so a filesystem that refuses locks is tried for the whole wait on Windows, then reported as in use.
 
 ## Left for a later slice
-
 - **`crates/lodestar/src/update/layout.rs` (~239), the update `bin` folder's `.lock`,** has the same non-blocking `LockFileEx` pattern. PK-win-upd-3 (#644) is open on `update/**`, so it goes in its own slice once #644 merges.
 
 ## Shared edits
-
 - `crates/lodestar/src/main.rs`: `main` becomes `run`, and the new `main` calls `hold_if_relaunch_failed(run())` (runner-approved, 2026-11-09T05:01Z, as a wrap of the serve result; widened to `main` for the early returns, as above).

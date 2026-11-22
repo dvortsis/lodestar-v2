@@ -3,7 +3,6 @@
 Found while root-causing `cluster::serve::tests::off_binds_and_creates_nothing_until_allowed`, which failed about one run in three at `--test-threads=32`. It was not starvation and not a lost wakeup. The cluster's start failed once with `sqlite: table <name> already exists`, and nothing retried it (architecture §12, the store; §20, the cluster port).
 
 ## Migrations run under one write lock
-
 - **The race:** `migrate` read the schema version outside any transaction, then ran each migration in its own deferred transaction. Two connections opening the same store at once both read version N, and both applied N+1. The second failed on a table the first had just created.
   - On a store being upgraded, both also took a snapshot through the same `.tmp` name, and one failed with a disk I/O error.
   - Any two first opens could hit it, and so could any two opens across an upgrade. It wasn't specific to tests.
@@ -22,7 +21,6 @@ Found while root-causing `cluster::serve::tests::off_binds_and_creates_nothing_u
   - All of these failed before the fix.
 
 ## The floor writer doesn't create the database
-
 - **Before,** the cluster's floor writer expired old reports at start, then hourly. Each expiry opened the store, so it created `lodestar.db` even with workers off.
   - The test's "not even the database is touched" held only because the test checked before its first await.
   - Its open is the one that raced the cluster's own first open.
@@ -30,6 +28,5 @@ Found while root-causing `cluster::serve::tests::off_binds_and_creates_nothing_u
   - The test waits for the writer's first expiry (a test-only counter), then checks that the database still doesn't exist. The check fails without the skip.
 
 ## Not in this slice
-
 - **A start that fails isn't retried** while workers stay allowed. Only toggling them, or a reseal, opens the port again. That's X-cluster-start-retry: bounded backoff and the failure shown in status (runner, 2026-11-15).
 - **`Store::load` and `open_reader`** are untouched; X-store-load-busy-map is working in that area.
