@@ -1,4 +1,4 @@
-# X-fuzz-advisories: the fuzz workspace's lockfile is checked against RustSec
+# X-fuzz-advisories decisions (#1072)
 
 Runner's call under `docs/owner-decisions.md` §2.26; recorded 2026-11-22Z.
 
