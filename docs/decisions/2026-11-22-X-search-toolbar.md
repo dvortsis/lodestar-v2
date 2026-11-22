@@ -18,6 +18,6 @@ Slice `X-search-toolbar`, from the UI review of 2026-11-13 (`docs/review/2026-11
   | ----------------------------- | -------- | ---------------------------------------------- | -------- |
   | Search route JS (initial)     | 44.95 kB | 44.95 kB                                       | 45 kB    |
   | Search results (lazy)         | 40.84 kB | 40.84 kB                                       | 40.85 kB |
-  | Results toolbar (lazy)        | 4.28 kB  | 3.89 kB                                        | 4.6 kB   |
+  | Results toolbar (lazy)        | 4.28 kB  | 4.29 kB                                        | 4.6 kB   |
   | Search cards (lazy)           | 8.00 kB  | 8.00 kB (unchanged; 8.11 kB with the raw name) | 8.01 kB  |
   | Search table mode (on demand) | 5.92 kB  | 6.05 kB                                        | 6.5 kB   |
