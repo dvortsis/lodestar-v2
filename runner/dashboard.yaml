@@ -303,6 +303,7 @@ placement:
   - X-zero-rescue
   - X-detail-depth
   - X-units-typed
+  - X-hit-resolution
   - S-search-*
   - S-detail
   - S-compare
@@ -312,6 +313,7 @@ placement:
   - X-insights-funnel-fixture
   - X-insights-scroll-a11y
   - X-insights-story
+  - X-insights-story-stages
   - X-charts
   - X-alert-noun
   - X-alert-noun-text
@@ -1691,6 +1693,8 @@ roadmap:
     - X-safety-toggles
     - X-settings-find
     - X-insights-story
+    - X-insights-story-stages
+    - X-hit-resolution
     - X-charts
     - X-narrow-states
     - X-setup-token-boot
