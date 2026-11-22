@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-22T18:39:04Z",
+  "updated_at": "2026-11-22T20:03:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T18:39:04Z",
+    "updated": "2026-11-22T20:03:11Z",
     "items": [
       {
         "slot": 1,
@@ -10666,12 +10666,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-search-toolbar",
-        "role": "slice",
-        "agent": "session_01MMjhnAa7HfaQXcvUi8EyoQ",
-        "model": "sonnet",
-        "since": "2026-11-22T14:39Z",
-        "doing": "round-2 fixes delta-checked by runner at 5906c800; CI running, then merge"
+        "slice": "X-hit-resolution",
+        "role": "build",
+        "agent": "pending",
+        "model": "opus",
+        "since": "2026-11-22T20:03:11Z",
+        "doing": "launching; step 0 first"
       },
       {
         "slot": 3,
@@ -10680,7 +10680,7 @@
         "agent": "session_01MMjhn8dW836gVL7w6tkAZz",
         "model": "sonnet",
         "since": "2026-11-22T15:33Z",
-        "doing": "local; size file after #1075 merges"
+        "doing": "#1075 merged; .size-limit.mjs handed over; merging main, re-measuring, then ready"
       },
       {
         "slot": 4,
