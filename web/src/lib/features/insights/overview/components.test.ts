@@ -119,6 +119,11 @@ describe('every number is a response field through a formatter', () => {
 		);
 		expect(text('insights-funnel-harvested-value')).toBe(formatCount(t.stages.harvested));
 		expect(screen.queryByTestId('insights-funnel-harvested-sub')).toBeNull();
+		// Cohort rows read in words, from the cohort's own fields (P10).
+		const c = o.funnel[1]!;
+		expect(text(`insights-cohort-${c.cohort}-value`)).toBe(
+			`${formatCount(c.stages.harvested)} harvested, ${formatCount(c.stages.searchable)} searchable`
+		);
 		expect(text('insights-funnel-complete')).toContain(
 			`${formatCount(t.final_cohorts)} of ${formatCount(t.cohorts)} cohorts complete`
 		);

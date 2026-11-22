@@ -31,6 +31,15 @@
 		index: () => m.insights_overview_stage_index_hint(),
 		serve: () => m.insights_overview_stage_serve_hint()
 	};
+	// The time base of each tile (§10.9.3, I9): the range by event time, except Discover (cohort of
+	// first harvest) and Index (now).
+	const bases: Record<Stage, () => string> = {
+		discover: () => m.insights_overview_stage_time_harvest(),
+		fetch: () => m.insights_overview_stage_time_range(),
+		understand: () => m.insights_overview_stage_time_range(),
+		index: () => m.insights_overview_stage_time_now(),
+		serve: () => m.insights_overview_stage_time_range()
+	};
 	// Why a stage has no number, for the accessible name next to the dash.
 	const missing: Record<Stage, () => string> = {
 		discover: () => m.insights_overview_not_measured(),
@@ -76,6 +85,9 @@
 						>
 					{/if}
 					<span class="ins-muted">{hints[stage]()}</span>
+					<span class="ins-muted ins-stage-base" data-testid="insights-stage-{stage}-base"
+						>{bases[stage]()}</span
+					>
 				</a>
 			</li>
 		{/each}

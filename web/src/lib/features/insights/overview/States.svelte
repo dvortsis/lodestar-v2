@@ -17,7 +17,7 @@
 
 {#if kind === 'paused'}
 	<!-- The context bar keeps the one Resume button (§10.14: one next step), so none here. -->
-	<div class="ins-card">
+	<div class="ins-plain">
 		<EmptyState
 			title={m.insights_overview_paused_title()}
 			text={m.insights_overview_paused_body()}
@@ -27,7 +27,7 @@
 		</EmptyState>
 	</div>
 {:else}
-	<div class="ins-card">
+	<div class="ins-plain">
 		<EmptyState
 			title={m.insights_overview_starting_title()}
 			text={m.insights_overview_starting_body()}

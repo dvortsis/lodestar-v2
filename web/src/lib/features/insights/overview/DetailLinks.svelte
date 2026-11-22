@@ -26,7 +26,7 @@
 
 <ul class="ins-detail" data-testid="insights-detail">
 	{#each STAGES as stage (stage)}
-		<li class="ins-card">
+		<li class="ins-plain">
 			<a
 				class="ins-link target ins-card-title"
 				href={resolve(stageHref(stage, query, { compare: true }) as Route)}

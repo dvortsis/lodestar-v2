@@ -140,7 +140,7 @@
 </div>
 
 {#if overview.annotations.length}
-	<div class="ins-card" data-testid="insights-annotations">
+	<div class="ins-plain" data-testid="insights-annotations">
 		<div class="ins-card-head">
 			<h3 class="ins-card-title">{m.insights_overview_annotations()}</h3>
 			<a

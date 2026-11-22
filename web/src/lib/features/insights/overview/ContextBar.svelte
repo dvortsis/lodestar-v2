@@ -33,6 +33,9 @@
 		onpause: () => void;
 		onresume: () => void;
 		onintensity: (level: Intensity) => void;
+		/** The level Undo restores for a few seconds after a change (U26); `onundo` restores it. */
+		undo?: { level: Intensity; note: 'set' | 'undone' };
+		onundo?: () => void;
 	}
 	let {
 		height = $bindable(0),
@@ -48,7 +51,9 @@
 		oncompare,
 		onpause,
 		onresume,
-		onintensity
+		onintensity,
+		undo,
+		onundo
 	}: Props = $props();
 
 	const locale = $derived(currentLocale());
@@ -227,6 +232,20 @@
 		{:else}
 			<span class="ins-muted">{m.insights_overview_crawler_unknown()}</span>
 		{/if}
+		<!-- The region is always there so a screen reader announces the text when it appears. -->
+		<span class="ins-undo" role="status" data-testid="insights-intensity-undo">
+			{#if undo && crawler}
+				{undo.note === 'set'
+					? m.insights_overview_intensity_undo_text({ level: levelName })
+					: m.insights_overview_intensity_undone({ level: levelName })}
+				<Button
+					dense
+					onclick={() => onundo?.()}
+					disabled={busy === 'intensity'}
+					data-testid="insights-intensity-undo-button">{m.insights_overview_undo()}</Button
+				>
+			{/if}
+		</span>
 		{#if crawlerError}
 			<span class="ins-error" role="alert" data-testid="insights-crawler-error">
 				<IconError class="ins-icon-s" aria-hidden="true" />

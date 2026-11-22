@@ -33,17 +33,38 @@ test.describe('the story', () => {
 		const h2 = await page.locator('main h2').allTextContents();
 		expect(h2).toEqual([
 			'Status',
+			'Movement',
 			'Needs attention',
 			'Where torrents are lost',
-			'Movement',
 			'What is arriving',
 			'Serve',
 			'Detail'
 		]);
+		// The first line is the plain sentence (U25). The fixture has a stalled cohort and two
+		// exceptions, so it must not say "working".
+		await expect(page.getByTestId('insights-health-sentence')).toHaveText(
+			'Lodestar is running, but nothing new is being stored. 2 things need your attention.'
+		);
+		// Every strip tile names its time base (I9).
+		await expect(page.getByTestId('insights-stage-index-base')).toHaveText('Right now');
+		await expect(page.getByTestId('insights-stage-discover-base')).toHaveText('By first harvest');
+		await expect(page.getByTestId('insights-stage-fetch-base')).toHaveText('In this range');
 		// Every chart subtitle names its time base.
 		await expect(page.getByTestId('insights-page')).toContainText('Event time, in UTC');
 		await expect(page.getByTestId('insights-page')).toContainText('Discovery cohort');
 		await expect(page.getByTestId('insights-tz')).toHaveText('Times in UTC');
+	});
+
+	test('with nothing wrong the sentence says what was added, from the response', async ({
+		page,
+		mock,
+		go
+	}) => {
+		serve(mock, { exceptions: [] });
+		await go('/insights');
+		await expect(page.getByTestId('insights-health-sentence')).toHaveText(
+			'Lodestar is working. Over the last 7 days, it made 7,891 new torrents searchable. Nothing needs your attention.'
+		);
 	});
 
 	test('annotations are listed, gaps are not zeros, an incomplete cohort is labelled', async ({
@@ -390,6 +411,29 @@ test.describe('crawler controls', () => {
 		expect(mock.calls('patchCrawler')[0]!.postDataJSON()).toEqual({ intensity: 'low' });
 	});
 
+	test('Undo puts the level back, by keyboard, and goes away after 10 s', async ({
+		page,
+		mock,
+		go
+	}) => {
+		serve(mock);
+		mock.on('patchCrawler', crawlerFixture({ intensity: 'aggressive' }));
+		await go('/insights');
+		await page.getByRole('radio', { name: 'Aggressive' }).click();
+		const undo = page.getByTestId('insights-intensity-undo-button');
+		await expect(undo).toBeVisible();
+		await expect(page.getByTestId('insights-intensity-undo')).toHaveAttribute('role', 'status');
+		await undo.focus();
+		await page.keyboard.press('Enter');
+		await expect.poll(() => mock.calls('patchCrawler').length).toBe(2);
+		expect(mock.calls('patchCrawler')[1]!.postDataJSON()).toEqual({ intensity: 'balanced' });
+		await expect(undo).toBeHidden();
+		// A second change shows Undo again and it expires by itself.
+		await page.getByRole('radio', { name: 'Low' }).click();
+		await expect(undo).toBeVisible();
+		await expect(undo).toBeHidden({ timeout: 20_000 });
+	});
+
 	test('a failed intensity change shows what the server has', async ({ page, mock, go }) => {
 		serve(mock);
 		mock.error('patchCrawler', 500, 'internal', 'no');
@@ -406,6 +450,29 @@ test.describe('crawler controls', () => {
 			'Set by LODESTAR_INTENSITY'
 		);
 		await expect(page.getByRole('radio', { name: 'Low' })).toHaveCount(0);
+	});
+});
+
+test.describe('layout (wide)', () => {
+	test.use({ viewport: { width: 1440, height: 900 } });
+	test('trend 8 + needs attention 4 on one row, above the funnel (§10.9.6)', async ({
+		page,
+		mock,
+		go
+	}) => {
+		serve(mock);
+		await go('/insights');
+		const box = async (id: string) => (await page.locator(`#insights-${id}`).boundingBox())!;
+		await expect(page.locator('#insights-funnel')).toBeVisible();
+		const [move, exc, funnel] = [
+			await box('movement'),
+			await box('exceptions'),
+			await box('funnel')
+		];
+		expect(move.x).toBeLessThan(exc.x);
+		expect(Math.abs(move.y - exc.y)).toBeLessThan(2);
+		expect(move.width).toBeGreaterThan(exc.width * 1.5);
+		expect(funnel.y).toBeGreaterThan(Math.max(move.y + move.height, exc.y + exc.height) - 1);
 	});
 });
 
