@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T05:20:17Z",
+    "updated": "2026-11-22T06:32:15Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-api-openapi-400s",
-        "role": "build",
+        "slice": "X-checksum-wrap",
+        "role": "slice",
         "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
         "model": "opus",
-        "since": "2026-11-22T04:35Z",
-        "doing": "step 0 go (bad_path left for a follow-up); building"
+        "since": "2026-11-22T06:32:15Z",
+        "doing": "#1053 merged; step 0 (brief 671b935d)"
       },
       {
         "slot": 2,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
         "since": "2026-11-22T03:15Z",
-        "doing": "#1051 review CHANGES sent (level value, default-fixture test, nits)"
+        "doing": "#1051 ready 3a6edd34, delta runner-checked; CI"
       },
       {
         "slot": 3,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
         "since": "2026-11-22T04:35Z",
-        "doing": "step 0 go (a): keep 4 s, ignored measurement test, owner question for (b)"
+        "doing": "#1054 review CHANGES (measure with the product reserve); re-measuring, then step-0 update"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
