@@ -139,11 +139,15 @@
 
 <!-- One live region, always on the page, so a change in it is announced. -->
 <p class="sr-only" role="status">
-	{!query.trim() || !index || failed
+	{!query.trim()
 		? ''
-		: results.length
-			? m.settings_find_count({ count: results.length })
-			: m.settings_find_none({ query: query.trim() })}
+		: failed
+			? m.settings_find_failed()
+			: !index
+				? ''
+				: results.length
+					? m.settings_find_count({ count: results.length })
+					: m.settings_find_none({ query: query.trim() })}
 </p>
 
 {#if query.trim()}

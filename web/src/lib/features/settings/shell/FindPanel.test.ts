@@ -24,14 +24,16 @@ it('asks for the index once after a failure, and again only when the text change
 	const input = document.createElement('input');
 	document.body.append(input);
 	const { rerender } = render(FindPanel, { input, query: 'p', clear: () => {} });
-	await waitFor(() => expect(screen.getByText(/couldn't load/i)).toBeTruthy());
+	await waitFor(() => expect(screen.getAllByText(/couldn't load/i)[0]).toBeTruthy());
+	// The live region says so too, for a screen reader.
+	expect(screen.getByRole('status').textContent).toMatch(/couldn't load/i);
 	await tick();
 	expect(find.load).toHaveBeenCalledTimes(1);
 	// The same text with other spacing is the same query: no new request, a steady message.
 	await rerender({ input, query: 'p ', clear: () => {} });
 	await tick();
 	expect(find.load).toHaveBeenCalledTimes(1);
-	expect(screen.getByText(/couldn't load/i)).toBeTruthy();
+	expect(screen.getAllByText(/couldn't load/i)[0]).toBeTruthy();
 	// New text asks again, once.
 	await rerender({ input, query: 'pa', clear: () => {} });
 	await waitFor(() => expect(find.load).toHaveBeenCalledTimes(2));
