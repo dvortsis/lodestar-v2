@@ -447,6 +447,8 @@ class StartBlockControl(unittest.TestCase):
 class VmStatusMode(Base):
     """X-vm-status-mode: vm-status names the block's mode in a line the control side keeps."""
 
+    # The stubs for vm-status's own docker and systemctl calls are fixed answers
+    # (no collectors, boot guard held): these tests read only the mode line.
     def mode_lines(self, **env):
         self.make_block(**env)
         rc, lines, raw = self.run_script("vm-status.sh")
@@ -454,7 +456,7 @@ class VmStatusMode(Base):
         return [ln for ln in lines if ln.startswith("count block_mode_")]
 
     def test_abba_block(self):
-        self.assertEqual(self.mode_lines(), ["count block_mode_abba 1"])
+        self.assertEqual(self.mode_lines(MODE="abba"), ["count block_mode_abba 1"])
 
     def test_on_only_block(self):
         self.assertEqual(self.mode_lines(MODE="on", PURPOSE="screen"), ["count block_mode_on 1"])
@@ -469,6 +471,18 @@ class VmStatusMode(Base):
             with self.subTest(bad=bad):
                 self.setUp()
                 self.assertEqual(self.mode_lines(MODE=bad), ["count block_mode_unknown 1"])
+
+    def test_marker_without_block_env_is_unknown(self):
+        self.make_block()
+        (self.block / "block.env").unlink()
+        rc, lines, raw = self.run_script("vm-status.sh")
+        self.assertEqual((rc, [ln for ln in lines if "block_mode_" in ln]), (0, ["count block_mode_unknown 1"]), raw)
+
+    def test_two_mode_lines_are_unknown(self):
+        self.make_block(MODE="on")
+        (self.block / "block.env").write_text((self.block / "block.env").read_text() + "MODE=on\n")
+        rc, lines, raw = self.run_script("vm-status.sh")
+        self.assertEqual([ln for ln in lines if "block_mode_" in ln], ["count block_mode_unknown 1"], raw)
 
     def test_no_block_prints_no_mode(self):
         rc, lines, raw = self.run_script("vm-status.sh")

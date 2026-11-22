@@ -9,3 +9,7 @@
 
 ## Not changed
 Rules, the arms, the leak test, copy-off and every stop condition.
+
+## Edge cases
+- A marker with no readable `block.env`, more than one `MODE=` line, or any value but `on` or `abba` reads `unknown`. Only a readable file with no `MODE` key is `abba`.
+- `MODE=abba` in `block.env` reads `abba`, as the brief asks, although `block-lib.sh`'s `load_block_env` rejects it (start-block never writes it). `unknown` stays for what vm-status can't vouch for.

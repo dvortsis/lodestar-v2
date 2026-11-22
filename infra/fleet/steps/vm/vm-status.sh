@@ -28,9 +28,12 @@ NAME=run_clean; say test ! -e "$PIA_RUN"
 # each 1. A missing MODE is abba (the default; only on-only writes it). Any
 # other value is unknown, whatever the file holds.
 block_mode() {  # prints the bare mode word, for a count line
-  local m
-  if ! grep -q '^MODE=' "$BLOCK/block.env" 2>/dev/null; then printf abba; return; fi
-  m=$(sed -n 's/^MODE=//p' "$BLOCK/block.env" 2>/dev/null | head -n 1)
+  local f=$BLOCK/block.env n m
+  [[ -f $f && -r $f ]] || { printf unknown; return; }  # a marker without its block.env is a fault, not abba
+  n=$(grep -c '^MODE=' "$f" 2>/dev/null)
+  if [[ $n == 0 ]]; then printf abba; return; fi  # no MODE key: the default
+  [[ $n == 1 ]] || { printf unknown; return; }
+  m=$(sed -n 's/^MODE=//p' "$f" 2>/dev/null)
   case $m in on | abba) printf '%s' "$m" ;; *) printf unknown ;; esac
 }
 
