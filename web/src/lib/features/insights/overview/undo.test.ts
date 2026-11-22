@@ -110,7 +110,7 @@ describe('Undo for the intensity click (U26)', () => {
 		off();
 	});
 
-	it('expiry while Undo runs announces nothing, and focus on the line holds the 10 s', async () => {
+	it('focus on the line holds the 10 s, which starts again when focus leaves', async () => {
 		const { s, off } = await ready();
 		await s.setIntensity('low');
 		s.holdUndo(true);
@@ -132,5 +132,33 @@ describe('Undo for the intensity click (U26)', () => {
 		await pending;
 		expect(s.undo).toBeUndefined();
 		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it('expiry while an Undo request runs announces nothing', async () => {
+		const { s, off } = await ready();
+		await s.setIntensity('aggressive');
+		let release = () => {};
+		patch.mockImplementationOnce(() => new Promise((r) => (release = () => r({}))));
+		const undoing = s.undoIntensity();
+		await vi.advanceTimersByTimeAsync(10_100);
+		expect(s.undo).toBeUndefined();
+		release();
+		await undoing;
+		expect(s.undo).toBeUndefined();
+		off();
+	});
+
+	it('a hold left behind by a removed line does not stop the next one expiring', async () => {
+		const { s, off } = await ready();
+		await s.setIntensity('low');
+		s.holdUndo(true);
+		// The button is removed with focus on it, and no focusout arrives (Firefox).
+		await s.undoIntensity();
+		expect(s.undo).toBeUndefined();
+		await s.setIntensity('aggressive');
+		expect(s.undo).toBeDefined();
+		await vi.advanceTimersByTimeAsync(10_100);
+		expect(s.undo).toBeUndefined();
+		off();
 	});
 });

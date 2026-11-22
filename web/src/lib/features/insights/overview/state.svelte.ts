@@ -120,11 +120,14 @@ export function createInsights() {
 	function armUndo() {
 		clearTimeout(undoTimer);
 		if (disposed || undoHeld) return;
-		undoTimer = setTimeout(() => (undoStack = []), UNDO_MS);
+		undoTimer = setTimeout(dropUndo, UNDO_MS);
 	}
 	function dropUndo() {
 		clearTimeout(undoTimer);
 		undoStack = [];
+		// The line is gone, so nothing inside it can hold focus: Firefox sends no `focusout` when the
+		// focused button is removed, and a stale hold would stop the next line from expiring.
+		undoHeld = false;
 	}
 	let intensityBusy = false;
 	async function setIntensity(intensity: Intensity) {
@@ -247,7 +250,7 @@ export function createInsights() {
 		resume: () => act('resume', () => api.post('/crawler/resume')),
 		setIntensity,
 		undoIntensity,
-		/** The level Undo would restore, and whether the last step was a change or an undo. */
+		/** The Undo line while it shows: the level now in force (a change or an undo alike). */
 		get undo(): { level: Intensity } | undefined {
 			return undoStack.length ? { level: undoShown } : undefined;
 		},

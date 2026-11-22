@@ -77,7 +77,9 @@ describe('the health sentence says only what the data says', () => {
 		for (const [over, kind] of cases) {
 			const r = healthSentence(base(over));
 			expect(r.kind).toBe(kind);
-			expect(r.text).not.toMatch(/is working|Nothing needs/);
+			expect(r.text).not.toMatch(/is working/);
+			// Only a state with loaded data may speak of attention.
+			if (kind !== 'starting') expect(r.text).not.toMatch(/Nothing needs/);
 		}
 	});
 
@@ -93,6 +95,25 @@ describe('the health sentence says only what the data says', () => {
 		);
 		expect(degraded.kind).toBe('degraded');
 		expect(degraded.text).not.toContain('is working');
+	});
+
+	it("a paused crawler with the server's stale: paused is paused, not out of date", () => {
+		const ov = o(
+			{ health: { state: 'paused', reason: 'paused' } },
+			{ stale: { reason: 'paused', since: 1 } }
+		);
+		const r = healthSentence(base({ overview: ov }));
+		expect(r.kind).toBe('paused');
+		expect(r.text).not.toMatch(/out of date/);
+		expect(
+			healthSentence(base({ overview: overviewFixture({ kpi: ov.kpi, stale: ov.stale }) })).text
+		).toContain('2 things need your attention.');
+	});
+
+	it('paused and starting say what needs attention; stalled leaves it to its banner', () => {
+		const two = overviewFixture();
+		expect(healthSentence(base({ overview: two, startup: 'yes' })).text).toContain('2 things need');
+		expect(healthSentence(base({ stalled: true })).text).not.toMatch(/need/);
 	});
 
 	it('picks the kind in order: error, stale, paused, starting, stalled, degraded', () => {

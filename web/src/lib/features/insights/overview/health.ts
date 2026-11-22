@@ -40,8 +40,11 @@ export function healthKind({
 }: HealthInput): HealthKind {
 	if (phase === 'error') return 'error';
 	if (!overview) return 'loading';
+	// A paused crawler never flushes, so the server sends `stale: paused` with it once two minutes
+	// pass: that is the normal pause, not out-of-date numbers.
+	if (overview.kpi.health.state === 'paused' || overview.stale?.reason === 'paused')
+		return 'paused';
 	if (overview.stale) return 'stale';
-	if (overview.kpi.health.state === 'paused') return 'paused';
 	if (startup === 'yes') return 'starting';
 	// Whether it has only just started is not known yet: say nothing about "working".
 	if (startupCheck === 'pending') return 'loading';
@@ -71,13 +74,14 @@ export function healthSentence(input: HealthInput): { kind: HealthKind; text: st
 		case 'stale':
 			return { kind, text: m.insights_health_stale() };
 		case 'paused':
-			return { kind, text: m.insights_health_paused() };
+			return { kind, text: `${m.insights_health_paused()} ${attention(count, locale)}` };
 		case 'unknown':
 			return { kind, text: m.insights_health_unknown({ range: rangeText }) };
 		case 'starting':
-			return { kind, text: m.insights_health_starting() };
+			return { kind, text: `${m.insights_health_starting()} ${attention(count, locale)}` };
 		case 'stalled':
-			return { kind, text: `${m.insights_health_stalled()} ${attention(count, locale)}` };
+			// The stalled banner below says what to do, and counts the exceptions: say it once.
+			return { kind, text: m.insights_health_stalled() };
 		case 'degraded':
 			return { kind, text: `${m.insights_health_degraded()} ${attention(count, locale)}` };
 		default: {

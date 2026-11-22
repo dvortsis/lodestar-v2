@@ -34,7 +34,7 @@
 		onpause: () => void;
 		onresume: () => void;
 		onintensity: (level: Intensity) => void;
-		/** The level Undo restores for a few seconds after a change (U26); `onundo` restores it. */
+		/** Shown for a few seconds after an intensity change (U26): the level now in force. `onundo` puts back the one before it. */
 		undo?: { level: Intensity };
 		onundo?: () => void;
 		/** Focus entered or left the Undo line: the 10 s wait pauses while it is inside. */
@@ -279,7 +279,7 @@
 				<Button
 					dense
 					onclick={() => onundo?.()}
-					disabled={changing}
+					loading={changing}
 					data-testid="insights-intensity-undo-button">{m.insights_overview_undo()}</Button
 				>
 			{/if}

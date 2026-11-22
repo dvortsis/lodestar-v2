@@ -40,10 +40,10 @@ test.describe('the story', () => {
 			'Serve',
 			'Detail'
 		]);
-		// The first line is the plain sentence (U25). The fixture has a stalled cohort and two
-		// exceptions, so it must not say "working".
+		// The first line is the plain sentence (U25). The fixture has a stalled cohort, so it must
+		// not say "working"; the stalled banner under it carries the rest.
 		await expect(page.getByTestId('insights-health-sentence')).toHaveText(
-			'Lodestar is running, but nothing new is being stored. 2 things need your attention.'
+			'Lodestar is running, but nothing new is being stored.'
 		);
 		// Every strip tile names its time base (I9).
 		await expect(page.getByTestId('insights-stage-index-base')).toHaveText('Right now');
@@ -343,6 +343,9 @@ test.describe('the URL is the state', () => {
 		await go('/insights?range=all&compare=1');
 		await expect(page.getByTestId('insights-compare')).toBeDisabled();
 		await expect(page.getByTestId('insights-compare-why')).toHaveText('Not available for All');
+		await expect
+			.poll(() => mock.calls('getInsightsOverview').length, { timeout: 15_000 })
+			.toBeGreaterThan(0);
 		const query = new URL(mock.calls('getInsightsOverview')[0]!.url()).searchParams;
 		expect(query.get('compare')).toBeNull();
 	});
@@ -439,6 +442,21 @@ test.describe('crawler controls', () => {
 		await expect(undo).toBeHidden({ timeout: 20_000 });
 	});
 
+	test('Undo keeps keyboard focus while steps remain', async ({ page, mock, go }) => {
+		serve(mock);
+		mock.on('patchCrawler', crawlerFixture({ intensity: 'low' }));
+		await go('/insights');
+		await page.getByRole('radio', { name: 'Aggressive' }).click();
+		await expect(page.getByTestId('insights-intensity-undo-button')).toBeVisible();
+		await page.getByRole('radio', { name: 'Low' }).click();
+		const undo = page.getByTestId('insights-intensity-undo-button');
+		await undo.focus();
+		await page.keyboard.press('Enter');
+		await expect.poll(() => mock.calls('patchCrawler').length).toBe(3);
+		await expect(undo).toBeVisible();
+		await expect(undo).toBeFocused();
+	});
+
 	test('a failed intensity change shows what the server has', async ({ page, mock, go }) => {
 		serve(mock);
 		mock.error('patchCrawler', 500, 'internal', 'no');
@@ -489,7 +507,7 @@ test.describe('layout (wide)', () => {
 	});
 });
 
-test.describe('layout (wide)', () => {
+test.describe('layout (wide), the row', () => {
 	test.use({ viewport: { width: 1440, height: 900 } });
 	test('trend 8 + needs attention 4 on one row, above the funnel (§10.9.6)', async ({
 		page,
