@@ -63,8 +63,8 @@
 	// `import()` again (Chromium 157 refetches; 153 keeps the failure for the module graph). Retry
 	// reloads the page at the current URL, as Insights does. The tab's `window.name` carries a
 	// one-shot marker across the reload, never into the URL; it is read and cleared here, and the
-	// first load to settle after it sends focus to the results. The alert node stays while a retry
-	// fails again, so it is announced once.
+	// first load to settle after it sends focus to the results, if nothing else has focus. The
+	// alert node stays while a retry fails again, so it is announced once.
 	let retried = window.name == 'retry';
 	if (retried) window.name = '';
 	let loadingResults: Promise<unknown> | undefined;
@@ -82,7 +82,8 @@
 				Results = panel.default;
 				Facets = host.default;
 				Toolbar = bar.default;
-				if (retried) setTimeout(focusResults);
+				// Only while nothing has focus: a slow load never pulls it from typing (QueryBar's rule).
+				if (retried) setTimeout(() => document.activeElement == document.body && focusResults());
 				retried = false;
 			},
 			() => {
@@ -155,7 +156,7 @@
 				{#if Results}<Results focusBar={() => bar?.focusEnd()} />{:else if failed}
 					<div class="flex flex-col gap-4 p-6" role="alert">
 						{m.search_page_results_failed()}<button class="btn btn-primary" onclick={reload}
-							>{m.search_query_retry()}</button
+							>{m.search_page_retry()}</button
 						>
 					</div>
 				{/if}

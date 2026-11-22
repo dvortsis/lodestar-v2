@@ -210,7 +210,35 @@ test.describe('a lazy chunk fails to load', () => {
 		await expect.poll(() => gate.hit).toBeGreaterThan(before);
 		await expect(failed).toHaveText("Results couldn't load.Retry");
 		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toHaveCount(0);
-		// The one-shot marker was used by that load: a later success doesn't move focus.
+		// The failed load used up the one-shot marker (the next case shows a later load leaves focus alone).
+		expect(await page.evaluate(() => window.name)).toBe('');
+		expect(errors).toEqual([]);
+	});
+	test('Search results: after Retry on a bare /search, typing in the bar keeps focus and every key', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const errors: string[] = [];
+		page.on('pageerror', (error) => errors.push(error.message));
+		server(mock, () => body(hits(2)));
+		mock.on('searchIndexState', indexState(5_000_000));
+		const gate = await blockChunk(page, 'results-announce');
+		await go('/search');
+		const box = page.getByRole('combobox', { name: 'Search torrents' });
+		// With no query, the results load on the first interaction: clicking the bar starts it.
+		await box.click();
+		const failed = page.locator('#results [role="alert"]');
+		await expect(failed).toBeVisible();
+		gate.blocked = false;
+		await failed.getByRole('button', { name: 'Retry' }).click();
+		// After the reload the load starts with the click into the bar, so it settles while typing.
+		await expect(box).toBeVisible();
+		await box.click();
+		await page.keyboard.type('abcdef', { delay: 50 });
+		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
+		await expect(box).toBeFocused();
+		await expect(box).toHaveText('abcdef');
 		expect(await page.evaluate(() => window.name)).toBe('');
 		expect(errors).toEqual([]);
 	});
