@@ -116,7 +116,7 @@
 	"search_toolbar_sort_most_files": "文件最多",
 	"search_toolbar_sort_fewest_files": "文件最少",
 	"search_toolbar_compact": "紧凑",
-	"search_toolbar_view_count": "{view} · {count}",
+	"search_toolbar_more": "更多",
 	"search_toolbar_save": "保存搜索",
 	"search_toolbar_save_failed": "无法打开“保存搜索”。请重新加载页面后再试。",
 	"search_table_view": "视图",

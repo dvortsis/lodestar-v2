@@ -44,12 +44,6 @@
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
 }
-.tb-sort {
-	display: flex;
-	align-items: center;
-	gap: calc(var(--spacing) * 2);
-	white-space: nowrap;
-}
 /* "Still growing" stays visible, as one compact line on a phone: no icon, caption size, tight padding. */
 @media (width < 40rem) {
 	.rp-banner:has([data-testid='results-cold-start']) {
@@ -61,26 +55,51 @@
 		}
 	}
 }
-/* Below 640 px: one View menu (it holds the count, Select and Save); from 640 px the controls. */
-.tb-wide,
+/* Below 640 px Select and Save move into the More popover; labels stay for screen readers only. */
 .tb-narrow {
-	display: contents;
+	display: none;
+}
+.tb-lbl {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	white-space: nowrap;
+}
+.tb-more {
+	anchor-name: --tb-more;
+}
+.tb-pop {
+	position-area: bottom span-left;
+	position-anchor: --tb-more;
+	inset: auto;
+	margin: var(--spacing) 0 0;
+	padding: calc(var(--spacing) * 2);
+	border: var(--border) solid var(--color-field-border);
+	border-radius: var(--radius-box);
+	background: var(--color-base-100);
+	color: var(--color-base-content);
+	&:popover-open {
+		display: flex;
+		flex-direction: column;
+		gap: calc(var(--spacing) * 2);
+	}
 }
 @media (width < 40rem) {
-	.tb-wide,
-	.tb-count {
+	.tb-narrow {
+		display: block;
+	}
+	.tb-wide {
 		display: none;
 	}
-	.tb-sort > span {
+	.tb-count {
+		order: 1;
+		flex-basis: 100%;
+	}
+	.tb-lbl > span {
 		position: absolute;
 		overflow: hidden;
 		width: 1px;
 		height: 1px;
 		clip-path: inset(50%);
-	}
-}
-@media (width >= 40rem) {
-	.tb-narrow {
-		display: none;
 	}
 }

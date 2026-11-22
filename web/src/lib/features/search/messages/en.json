@@ -116,7 +116,7 @@
 	"search_toolbar_sort_most_files": "Most files",
 	"search_toolbar_sort_fewest_files": "Fewest files",
 	"search_toolbar_compact": "Compact",
-	"search_toolbar_view_count": "{view} · {count}",
+	"search_toolbar_more": "More",
 	"search_toolbar_save": "Save search",
 	"search_toolbar_save_failed": "Couldn't open Save search. Reload the page and try again.",
 	"search_table_view": "View",

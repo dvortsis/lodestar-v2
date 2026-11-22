@@ -49,15 +49,15 @@ test('sort goes to the URL and the request; Back walks it', async ({ page, go, m
 	await expect(page.getByLabel('Sort')).toHaveValue('-discovered');
 });
 
-test('density switches the rows and stays in the URL', async ({ page, go, mock }) => {
+test('the view switches the rows and stays in the URL', async ({ page, go, mock }) => {
 	server(mock, () => body(hits(3)));
 	await go('/search?q=lantern');
 	await expect(row(page, 1)).toHaveAttribute('data-density', 'comfortable');
-	await page.getByRole('radio', { name: 'Compact' }).click();
+	await page.getByTestId('view-select').selectOption('compact');
 	await expect(page).toHaveURL(/density=compact/);
 	await expect(row(page, 1)).toHaveAttribute('data-density', 'compact');
-	await expect(page.getByRole('radio', { name: 'Compact' })).toBeFocused();
-	await page.getByRole('radio', { name: 'Comfortable' }).click();
+	await expect(page.getByTestId('view-select')).toHaveValue('compact');
+	await page.getByTestId('view-select').selectOption('list');
 	await expect(page).not.toHaveURL(/density=/);
 	await expect(row(page, 1)).toHaveAttribute('data-density', 'comfortable');
 });
@@ -173,3 +173,28 @@ for (const mode of ['light', 'dark'] as const) {
 		}
 	});
 }
+
+test('on a phone the controls fit one row above the first result, and More is a disclosure', async ({
+	page,
+	go,
+	mock
+}) => {
+	server(mock, () => body(hits(3), { total: 1284 }));
+	await page.setViewportSize({ width: 390, height: 800 });
+	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible();
+	const filters = await page.getByTestId('facet-open').boundingBox();
+	const sort = await page.getByLabel('Sort').boundingBox();
+	const first = await row(page, 1).boundingBox();
+	// Filters and Sort share a line, and the first row starts well above the old 515 px.
+	expect(Math.abs(filters!.y - sort!.y)).toBeLessThan(16);
+	expect(first!.y).toBeLessThan(420);
+	await expect(page.getByTestId('select-mode')).toBeHidden();
+	const more = page.getByRole('button', { name: 'More', exact: true });
+	await more.click();
+	await expect(page.getByRole('button', { name: 'Save search' })).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(page.getByRole('button', { name: 'Save search' })).toBeHidden();
+	await expect(more).toBeFocused();
+	await expectNoA11yViolations(page);
+});

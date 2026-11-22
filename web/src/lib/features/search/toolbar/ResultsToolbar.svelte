@@ -5,7 +5,6 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import Select from '$lib/ui/fields/Select.svelte';
-	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import { formatCompact, formatCount } from '$lib/format';
@@ -23,12 +22,17 @@
 	const sorts = $derived(SORTS.map((s) => ({ value: s.value, label: s.label() })));
 	const sort = $derived(sortValue(search.sort));
 	const view = $derived(viewOf(page.url));
+	const views = $derived(VIEWS.map((v) => ({ value: v, label: viewLabels[v]() })));
 	const viewLabels: Record<View, () => string> = {
 		list: m.search_table_view_list,
 		compact: m.search_toolbar_compact,
 		table: m.search_table_view_table,
 		cards: m.search_cards_option
 	};
+
+	const toggle = () => (selection.mode = !selection.mode);
+	const shut = (e: MouseEvent) =>
+		(e.currentTarget as HTMLElement).closest<HTMLElement>('[popover]')?.hidePopover();
 
 	// The count of the rows shown: none while the first answer is out, or after it failed.
 	const count = $derived.by(() => {
@@ -55,26 +59,6 @@
 		void goto(viewHref(page.url, next), { replaceState: true, keepFocus: true, noScroll: true });
 	}
 
-	let Menu = $state<typeof import('$lib/ui/overlays/Menu.svelte').default>();
-	let menuOpen = $state(false);
-	let byKeyboard = false;
-	async function openMenu(event: MouseEvent) {
-		if (Menu) return; // Bits' trigger handles it from here
-		byKeyboard = event.detail === 0;
-		try {
-			Menu = (await import('$lib/ui/overlays/Menu.svelte')).default;
-			menuOpen = true;
-		} catch {
-			// The chunk didn't load: nothing opens, and the next press tries again.
-		}
-	}
-
-	function menuPick(id: string) {
-		if (id === 'select') selection.mode = !selection.mode;
-		else if (id === 'save') void save();
-		else setView(id as View);
-	}
-
 	let Dialog = $state<typeof import('$lib/features/alerts/SaveSearchDialog.svelte').default>();
 	let saving = $state(false);
 	let open = $state(false);
@@ -97,7 +81,7 @@
 	<div class="tb" data-testid="results-toolbar">
 		<p class="tb-count" data-testid="results-count">{count}</p>
 		<div class="tb-controls">
-			<label class="tb-sort" for="{id}-sort">
+			<label class="tb-lbl" for="{id}-sort">
 				<span>{m.search_toolbar_sort()}</span>
 				<Select
 					id="{id}-sort"
@@ -107,49 +91,37 @@
 					onchange={(e) => setSort(e.currentTarget.value)}
 				/>
 			</label>
-			<!-- Below 640 px one menu holds the view, Select and Save; from 640 px the three controls show.
-			     CSS picks one (toolbar.css): the hidden set is out of the tab order and the reader's tree. -->
-			<div class="tb-narrow">
-				<!-- The menu's code (Bits UI) loads on the first press, as the row menu's does. -->
-				{#snippet viewButton(props: Record<string, unknown>)}
-					<Button dense data-testid="view-menu" aria-haspopup="menu" onclick={openMenu} {...props}
-						>{m.search_toolbar_view_count({ view: viewLabels[view](), count })}</Button
-					>
-				{/snippet}
-				{#if Menu}
-					<Menu
-						bind:open={menuOpen}
-						autofocusFirst={byKeyboard}
-						label={m.search_table_view()}
-						items={[
-							...VIEWS.map((v) => ({ id: v, label: viewLabels[v]() })),
-							{ id: 'select', label: m.search_bulk_mode(), separatorBefore: true },
-							{ id: 'save', label: m.search_toolbar_save() }
-						]}
-						onSelect={menuPick}
-					>
-						{#snippet trigger({ props })}{@render viewButton(props)}{/snippet}
-					</Menu>
-				{:else}
-					{@render viewButton({})}
-				{/if}
-			</div>
-			<div class="tb-wide">
-				<SegmentedControl
+			<label class="tb-lbl" for="{id}-view">
+				<span>{m.search_table_view()}</span>
+				<Select
+					id="{id}-view"
+					data-testid="view-select"
 					dense
-					label={m.search_table_view()}
+					options={views}
 					value={view}
-					options={VIEWS.map((v) => ({ value: v, label: viewLabels[v]() }))}
-					onchange={(v) => setView(v as View)}
+					onchange={(e) => setView(e.currentTarget.value as View)}
 				/>
-				<Button
-					dense
-					aria-pressed={selection.mode}
-					data-testid="select-mode"
-					onclick={() => (selection.mode = !selection.mode)}>{m.search_bulk_mode()}</Button
-				>
-				<Button dense loading={saving} onclick={() => void save()}>{m.search_toolbar_save()}</Button
-				>
+			</label>
+			<!-- From 640 px Select and Save show; below it they sit in a disclosure (a native popover:
+			     Tab moves through it, Escape closes it and returns focus). CSS picks one (toolbar.css). -->
+			<Button
+				dense
+				aria-pressed={selection.mode}
+				data-testid="select-mode"
+				class="tb-wide"
+				onclick={toggle}>{m.search_bulk_mode()}</Button
+			>
+			<Button dense loading={saving} class="tb-wide" onclick={() => void save()}
+				>{m.search_toolbar_save()}</Button
+			>
+			<div class="tb-narrow">
+				<Button dense popovertarget="{id}-more" class="tb-more">{m.search_toolbar_more()}</Button>
+				<div popover="auto" id="{id}-more" class="tb-pop">
+					<Button dense aria-pressed={selection.mode} onclick={(e) => (toggle(), shut(e))}
+						>{m.search_bulk_mode()}</Button
+					>
+					<Button dense onclick={(e) => (void save(), shut(e))}>{m.search_toolbar_save()}</Button>
+				</div>
 			</div>
 		</div>
 	</div>

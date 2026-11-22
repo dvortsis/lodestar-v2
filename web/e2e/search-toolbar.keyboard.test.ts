@@ -39,16 +39,14 @@ test('with no list yet, Skip to results goes to the results region', async ({ pa
 	await expect(page.locator('#results')).toBeFocused();
 });
 
-test('density from the keys: the arrows move between Comfortable and Compact', async ({
-	page,
-	go,
-	kbd
-}) => {
+test('the view from the keys: the select changes the rows', async ({ page, go, kbd }) => {
 	await go('/search?q=lantern');
 	await expect(rowOf(page, 1)).toBeVisible();
-	await kbd.tabTo(page.getByRole('radio', { name: 'Comfortable' }));
-	await kbd.press('ArrowRight');
-	await expect(page.getByRole('radio', { name: 'Compact' })).toBeFocused();
+	const view = page.getByTestId('view-select');
+	await kbd.tabTo(view);
+	// Type-ahead picks the option by its first letters, with no popup to open (a native select).
+	await kbd.press('c');
+	await expect(view).toHaveValue('compact');
 	await expect(page).toHaveURL(/density=compact/);
 	await expect(row(page, 1)).toHaveAttribute('data-density', 'compact');
 });

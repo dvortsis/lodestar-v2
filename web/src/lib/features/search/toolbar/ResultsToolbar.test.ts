@@ -1,7 +1,7 @@
 // The toolbar against stand-ins: W5's state, the results store and kit's page. The count is
 // visual only; sort goes to W5, density to the URL, and Save opens the alerts' dialog.
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { hit } from '../results/fixtures';
 
 vi.setConfig({ testTimeout: 20_000 });
@@ -85,8 +85,8 @@ describe('ResultsToolbar', () => {
 
 	it('writes the view to the URL, replacing the entry', async () => {
 		render(ResultsToolbar);
-		expect(screen.getByRole('radio', { name: 'List' }).getAttribute('aria-checked')).toBe('true');
-		await fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+		expect((screen.getByLabelText('View') as HTMLSelectElement).value).toBe('list');
+		await fireEvent.change(screen.getByLabelText('View'), { target: { value: 'compact' } });
 		expect(goto).toHaveBeenCalledWith('/search?q=lantern&density=compact', {
 			replaceState: true,
 			keepFocus: true,
@@ -101,7 +101,7 @@ describe('ResultsToolbar', () => {
 		expect(replaceState).toHaveBeenLastCalledWith('/search?q=lantern', {});
 		expect(search.setSort).toHaveBeenCalledWith('-size');
 		visit('/t/' + 'a'.repeat(40) + '?q=lantern');
-		await fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+		await fireEvent.change(screen.getByLabelText('View'), { target: { value: 'compact' } });
 		await waitFor(
 			() =>
 				expect(goto).toHaveBeenCalledWith('/search?q=lantern&density=compact', expect.anything()),
@@ -115,23 +115,17 @@ describe('ResultsToolbar', () => {
 		await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy(), WAIT);
 		expect((screen.getByLabelText('Query') as HTMLInputElement).value).toBe('lantern');
 	});
+});
 
-	describe('below 640 px (CSS shows the menu, hides the controls)', () => {
-		it('shows one View menu holding the view, Select and Save, with the count in its name once', async () => {
-			visit('/search?q=lantern&density=compact');
-			render(ResultsToolbar);
-			const button = screen.getByRole('button', { name: 'Compact · 1,284 results' });
-			expect(button.getAttribute('aria-haspopup')).toBe('menu');
-			await fireEvent.click(button);
-			const items = await screen.findAllByRole('menuitem', undefined, WAIT);
-			expect(items.map((i) => i.textContent?.trim())).toEqual([
-				'List',
-				'Compact',
-				'Table',
-				'Cards',
-				'Select',
-				'Save search'
-			]);
-		});
+describe('the More popover (below 640 px)', () => {
+	it('is a native disclosure holding Select and Save', () => {
+		render(ResultsToolbar);
+		const more = screen.getByRole('button', { name: 'More', hidden: true });
+		const pop = document.getElementById(more.getAttribute('popovertarget')!)!;
+		expect(pop.getAttribute('popover')).toBe('auto');
+		expect([...pop.querySelectorAll('button')].map((b) => b.textContent?.trim())).toEqual([
+			'Select',
+			'Save search'
+		]);
 	});
 });
