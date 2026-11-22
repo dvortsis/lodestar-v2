@@ -11,14 +11,13 @@
 //! nor a large claim's first window longer than [`CHURN_WAIT`] while small
 //! claims churn. At the end every count is back to zero.
 //!
-//! Where [`MAX_WAIT`] is known to hold: both budgets at the default seeds,
-//! and the worker's at ten times as many (`POOL_MODEL_SEEDS=640`). At the
-//! test-sized budget with 640 seeds it doesn't: seven first reservations
-//! in five seeds (109, 111, 131, 495, 623) waited 30–44 s behind a growth
-//! past the grown claims' cap, which at that budget grows only once every
-//! other first request is gone. Every one was granted in the end
-//! (X-pool-first-request-docs; a follow-up asks whether such a growth
-//! should leave room for two first requests).
+//! [`MAX_WAIT`] holds at both budgets at the default seeds, and at ten
+//! times as many (`POOL_MODEL_SEEDS=640`). Before X-pool-past-cap-room, at
+//! the test-sized budget with 640 seeds, seven first reservations waited
+//! 30–44 s: a claim held back by its network's share lost its place in
+//! the queue each time, to younger claims of its own network. It now keeps
+//! it. `POOL_MODEL_MEASURE=1` counts waits past their bound instead of
+//! failing the seed, for comparing rules.
 //!
 //! The seeds are fixed, so a run is the same every time; a failure names
 //! its seed. Every wait is the paused clock's: nothing sleeps.
@@ -35,8 +34,7 @@ use lodestar_peer_wire::message::METADATA_PIECE;
 use super::{Budget, FetchedKey, Reservation, net_of};
 
 /// The seeds every run uses; `POOL_MODEL_SEEDS=n` runs seeds 1 to n
-/// instead (640 for a 10x run, which fails at the test-sized budget: see
-/// the module doc).
+/// instead (640 for a 10x run).
 const SEEDS: u64 = 64;
 /// The budgets the seeds run with: a test-sized one, and a worker's.
 const LIMIT: usize = 1_000_000;
@@ -80,14 +78,27 @@ fn first_of(total: usize) -> usize {
 }
 
 /// What a run did, per thread (`seeds` resets them, so a test's count is
-/// its own whichever thread runs it): first reservations, growths, waits for room over 1 s, and the
-/// most any network held in partial claims. `--nocapture` prints them.
+/// its own whichever thread runs it). `--nocapture` prints them.
 #[derive(Default, Clone, Copy, Debug)]
 struct Counts {
+    /// First reservations.
     claims: u64,
     growths: u64,
+    /// Waits for room over 1 s.
     slow_waits: u64,
+    /// The most any network held in partial claims.
     most_net_partial: u64,
+    /// Waits past their bound ([`MAX_WAIT`], or [`CHURN_WAIT`] for a large
+    /// claim among small churn). Always 0 unless `POOL_MODEL_MEASURE` is
+    /// set: otherwise the first fails its seed.
+    over_bound: u64,
+    /// The longest wait for room, in ms, and its seed.
+    worst_wait_ms: u64,
+    worst_seed: u64,
+    /// The most grown claims held together, and the most finished results
+    /// held, at any check.
+    most_grown: u64,
+    most_held: u64,
 }
 
 thread_local! {
@@ -158,6 +169,12 @@ fn check(b: &Budget, seed: u64) {
         s.partial,
         s.grown
     );
+    // Only the head of the partial claims' queue goes before whole claims.
+    assert!(
+        s.starved
+            .is_none_or(|id| s.partials.front().is_some_and(|&(_, head)| head == id)),
+        "seed {seed}: a starved claim that isn't the head"
+    );
     if let Some(w) = &s.wait {
         assert!(
             w.passes <= w.before,
@@ -170,6 +187,10 @@ fn check(b: &Budget, seed: u64) {
     // any later one only while the network stays within its share
     // (`net_partials_full`): so a network holds its share, or one first
     // request alone.
+    count(|c| {
+        c.most_grown = c.most_grown.max(s.grown);
+        c.most_held = c.most_held.max(s.held);
+    });
     let share = beside / super::PARTIAL_NET_SHARE;
     let one = (std::mem::size_of::<FetchedKey>() + FIRST_REQUEST_BYTES) as u64;
     for (n, held) in &s.partial_nets {
@@ -195,10 +216,25 @@ async fn granted(
     } else {
         count(|c| c.claims += 1);
     }
-    let got = timeout(bound, reserve).await;
-    if asked.elapsed() > Duration::from_secs(1) {
-        count(|c| c.slow_waits += 1);
-    }
+    // Measuring, a wait past its bound is counted, not failed, up to ten
+    // times the bound.
+    let measure = std::env::var_os("POOL_MODEL_MEASURE").is_some();
+    let got = timeout(if measure { bound * 10 } else { bound }, reserve).await;
+    let took = asked.elapsed();
+    count(|c| {
+        if took > Duration::from_secs(1) {
+            c.slow_waits += 1;
+        }
+        if got.is_ok() && took > bound {
+            c.over_bound += 1;
+            println!("seed {seed}: a {what} of {sizes:?} waited {took:?}");
+        }
+        let ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
+        if ms > c.worst_wait_ms {
+            c.worst_wait_ms = ms;
+            c.worst_seed = seed;
+        }
+    });
     if got.is_err() {
         let s = b.lock();
         panic!(
@@ -475,7 +511,11 @@ fn seeds(limit: usize) {
             .unwrap();
         rt.block_on(run(seed, limit));
     }
-    println!("budget {limit}, {n} seeds: {:?}", COUNTS.with(Cell::get));
+    let counts = COUNTS.with(Cell::get);
+    println!("budget {limit}, {n} seeds: {counts:?}");
+    if std::env::var_os("POOL_MODEL_MEASURE").is_none() {
+        assert_eq!(counts.over_bound, 0, "waits past their bound");
+    }
 }
 
 /// Every seed: the bounds hold throughout, no wait for room outlasts

@@ -258,19 +258,22 @@ pub const RESERVE_WAITS_FREE: u8 = 3;
 /// deadlocking:
 /// - **Growth goes first.** While a growth waits, nothing is granted that
 ///   would take the room it needs (small claims inside the floor, and a
-///   first window only if the waiting growth still fits beside it), so
+///   first request only if the waiting growth still fits beside it), so
 ///   the bytes it needs can only come free: fetches that hold their whole
 ///   reservation finish, and the consumer takes held results.
 /// - **Partial claims leave room for any one of them to grow.** A partial
 ///   claim is admitted only if the partial claims' bytes plus the largest
 ///   growth any of them still needs fit the budget. So once the rest has
 ///   drained, the oldest growth always fits beside the other partial
-///   claims, which wait behind it holding only their first windows.
+///   claims, which wait behind it holding only their first requests.
 ///
 /// Partial claims wait in their own queue. One held back by its own rule
 /// holds up nothing else; the oldest, when it passes its rule and only
 /// lacks room, goes before new whole claims, so steady small traffic
-/// can't keep a large dict out.
+/// can't keep a large dict out. One held back by its network's share waits
+/// apart, holding up no other network, but keeps its place: once the share
+/// has room, a network's oldest takes it back, so younger claims, of its
+/// network or another, never overtake it (X-pool-past-cap-room).
 ///
 /// Small dicts, which are most of them, keep room of their own
 /// (X-fetch-room-fix):
@@ -306,13 +309,28 @@ struct BudgetState {
     /// id. Only the oldest may take room, so a large one isn't starved by
     /// small ones.
     queue: VecDeque<u64>,
-    /// Waiting first reservations of partial claims, oldest first. Apart
-    /// from `queue`, so a partial claim held back by its own rule (a liar's
-    /// claim, perhaps) never holds up a whole one that fits.
-    partials: VecDeque<u64>,
+    /// Waiting first reservations of partial claims, oldest first, each as
+    /// (its place, claim id). Apart from `queue`, so a partial claim held
+    /// back by its own rule (a liar's claim, perhaps) never holds up a
+    /// whole one that fits. Only the front may take room.
+    ///
+    /// Bounded by the fetches in flight, one claim each: the pool's
+    /// `max_sockets` (400 by default, at most 4,096 in settings, 200 in a
+    /// worker). Finding the head is O(1): a claim its network's share holds
+    /// back waits in `apart`, not here, so nothing is scanned past.
+    partials: VecDeque<(u64, u64)>,
+    /// Partial claims held back by their network's share, by network,
+    /// oldest first, each with the place it keeps in `partials`. A
+    /// network's oldest takes its place back once the share has room, so
+    /// a younger claim of the same network never overtakes it, and while
+    /// it waits here it holds up no other network's claim.
+    apart: HashMap<Net, VecDeque<(u64, u64)>>,
+    /// The next place handed out in `partials`.
+    next_place: u64,
     /// The partial claim at the head of `partials` if it passes its own
     /// rule and only lacks room: it goes before whole first claims, and the
-    /// pool starts no fetch, until it's granted or leaves.
+    /// pool starts no fetch, until it's granted or leaves, or a claim that
+    /// takes its place back goes ahead of it. Never any claim but the head.
     starved: Option<u64>,
     /// Waiting growths, oldest first, each with the bytes it wants in all
     /// and its first window's bytes; they go before any first reservation
@@ -416,6 +434,34 @@ impl BudgetState {
         match self.growth.front() {
             Some(&(_, want, ..)) => floor.min(limit.saturating_sub(want)),
             None => floor,
+        }
+    }
+
+    /// The place `id` holds in `partials`, if it's there.
+    fn place(&self, id: u64) -> Option<u64> {
+        self.partials
+            .iter()
+            .find(|&&(_, q)| q == id)
+            .map(|&(place, _)| place)
+    }
+
+    /// Takes `id`'s place back in `partials`, in order of place.
+    fn rejoin(&mut self, place: u64, id: u64) {
+        let at = self.partials.partition_point(|&(p, _)| p < place);
+        self.partials.insert(at, (place, id));
+    }
+
+    /// Takes `claim` out of `partials` and its network's `apart` queue.
+    fn leave_partials(&mut self, claim: &Claim) {
+        self.partials.retain(|&(_, q)| q != claim.id);
+        if claim.apart.swap(false, Ordering::Relaxed)
+            && let Some(net) = claim.net
+            && let std::collections::hash_map::Entry::Occupied(mut waiting) = self.apart.entry(net)
+        {
+            waiting.get_mut().retain(|&(_, q)| q != claim.id);
+            if waiting.get().is_empty() {
+                waiting.remove();
+            }
         }
     }
 
@@ -577,6 +623,9 @@ struct Claim {
     long_wait: AtomicBool,
     /// Its fetch ended for falling behind the pace a large dict must keep.
     behind: AtomicBool,
+    /// It waits in its network's `apart` queue; changed only under the
+    /// budget's lock.
+    apart: AtomicBool,
 }
 
 impl Reservation {
@@ -613,6 +662,7 @@ impl Reservation {
             late_room_ms: AtomicU64::new(LATE_ROOM.as_millis() as u64),
             long_wait: AtomicBool::new(false),
             behind: AtomicBool::new(false),
+            apart: AtomicBool::new(false),
         }))
     }
 
@@ -682,16 +732,10 @@ impl Reservation {
             return true;
         }
         // A growth joins and leaves its queue in `grant`, as the caps let
-        // it; so does a partial claim its network's share holds back.
-        if enqueue && claim.bytes.load(Ordering::Relaxed) == 0 {
-            if want < want_total {
-                let room = budget.limit - budget.floor();
-                if !s.net_partials_full(claim.net, want, room) && !s.partials.contains(&claim.id) {
-                    s.partials.push_back(claim.id);
-                }
-            } else {
-                s.queue.push_back(claim.id);
-            }
+        // it; so does a partial claim, in `partials` or its network's
+        // `apart` queue.
+        if enqueue && claim.bytes.load(Ordering::Relaxed) == 0 && want >= want_total {
+            s.queue.push_back(claim.id);
         }
         false
     }
@@ -715,7 +759,6 @@ impl Reservation {
         // Partial and grown claims stay out of the floor.
         let large = s.partial.saturating_add(s.grown);
         let beside_floor = large.saturating_add(extra) <= limit - budget.floor();
-        let first_in = |q: &VecDeque<u64>| q.front().is_none_or(|&id| id == claim.id);
         // A first window let in while a growth waits.
         let mut during_wait_admit = false;
         // A growth that goes ahead of the waiting front.
@@ -823,25 +866,17 @@ impl Reservation {
             s.growth.retain(|&(id, ..)| id != claim.id);
         } else if partial {
             let room = limit - budget.floor();
-            if s.net_partials_full(claim.net, want, room) {
-                // Only its own network's partial claims hold it back: it
-                // waits apart and holds up nothing.
-                if s.partials.contains(&claim.id) || s.starved == Some(claim.id) {
-                    s.partials.retain(|&id| id != claim.id);
-                    if s.starved == Some(claim.id) {
-                        s.starved = None;
-                    }
-                    budget.settled.notify_one();
-                    budget.freed.notify_waiters();
-                }
+            if let Some(net) = claim.net
+                && !self.network_turn(s, net, want, room)
+            {
                 return false;
             }
-            // Past its network's share, it keeps a place in the queue, even
-            // if it waited apart before: no later claim overtakes it.
-            if !s.partials.contains(&claim.id) {
-                s.partials.push_back(claim.id);
+            if s.place(claim.id).is_none() {
+                let place = s.next_place;
+                s.next_place += 1;
+                s.partials.push_back((place, claim.id));
             }
-            if !first_in(&s.partials) {
+            if s.partials.front().map(|&(_, id)| id) != Some(claim.id) {
                 return false;
             }
             // While a growth waits, a first window is let in only if the
@@ -896,7 +931,8 @@ impl Reservation {
             // any other waits: room outside the floor then only comes free.
             let in_floor = small
                 && s.small.saturating_add(s.held).saturating_add(extra) <= s.small_room(limit);
-            if !(first_in(&s.queue) && fits && (!s.large_waits() || in_floor)) {
+            let first_in = s.queue.front().is_none_or(|&id| id == claim.id);
+            if !(first_in && fits && (!s.large_waits() || in_floor)) {
                 return false;
             }
         }
@@ -904,7 +940,7 @@ impl Reservation {
             s.starved = None;
         }
         if partial {
-            s.partials.retain(|&id| id != claim.id);
+            s.leave_partials(claim);
         }
         s.reserved += extra;
         let old_need = claim.need.load(Ordering::Relaxed);
@@ -940,6 +976,69 @@ impl Reservation {
         true
     }
 
+    /// Whether a partial claim from `net` may wait in `partials` now:
+    /// its network's share has room for `want`, and no older claim of its
+    /// network waits apart. Otherwise it waits in its network's `apart`
+    /// queue, keeping its place, and holds up nothing; when it's its
+    /// network's oldest and the share has room, it takes its place back.
+    fn network_turn(&self, s: &mut BudgetState, net: Net, want: u64, room: u64) -> bool {
+        let claim = &*self.0;
+        let budget = &*claim.budget;
+        let full = s.net_partials_full(Some(net), want, room);
+        if claim.apart.load(Ordering::Relaxed) {
+            let waiting = s
+                .apart
+                .get_mut(&net)
+                .expect("an apart claim's network queue");
+            if full || waiting.front().map(|&(_, id)| id) != Some(claim.id) {
+                return false;
+            }
+            let (place, id) = waiting.pop_front().expect("its front");
+            if waiting.is_empty() {
+                s.apart.remove(&net);
+            }
+            claim.apart.store(false, Ordering::Relaxed);
+            s.rejoin(place, id);
+            // Back at the head, ahead of a claim that only lacked room: that
+            // one no longer goes before whole claims, which may go again.
+            if s.partials.front().map(|&(_, q)| q) == Some(id)
+                && s.starved.is_some_and(|starved| starved != id)
+            {
+                s.starved = None;
+                budget.settled.notify_one();
+                budget.freed.notify_waiters();
+            }
+            return true;
+        }
+        let mine = s.place(claim.id);
+        let older_apart = s
+            .apart
+            .get(&net)
+            .and_then(|q| q.front())
+            .is_some_and(|&(place, _)| mine.is_none_or(|m| place < m));
+        if !full && !older_apart {
+            return true;
+        }
+        // Held back by its network alone: it waits apart, in its network's
+        // order, and holds up nothing.
+        let place = mine.unwrap_or_else(|| {
+            let place = s.next_place;
+            s.next_place += 1;
+            place
+        });
+        s.partials.retain(|&(_, id)| id != claim.id);
+        let waiting = s.apart.entry(net).or_default();
+        let at = waiting.partition_point(|&(p, _)| p < place);
+        waiting.insert(at, (place, claim.id));
+        claim.apart.store(true, Ordering::Relaxed);
+        if s.starved == Some(claim.id) {
+            s.starved = None;
+        }
+        budget.settled.notify_one();
+        budget.freed.notify_waiters();
+        false
+    }
+
     /// The bytes reserved.
     pub fn bytes(&self) -> u64 {
         self.0.bytes.load(Ordering::Relaxed)
@@ -954,14 +1053,15 @@ impl Reservation {
         let mine = claim.bytes.swap(0, Ordering::Relaxed);
         let need = claim.need.swap(0, Ordering::Relaxed);
         // A grown or small claim's end changes what the caps and the floor
-        // let in.
-        let counted = claim.kind.load(Ordering::Relaxed) != KIND_NONE;
+        // let in, and a partial claim's what its network's share does.
+        let counted = claim.kind.load(Ordering::Relaxed) != KIND_NONE || need > 0;
         s.uncount(claim, mine, need);
         s.reserved = s.reserved.saturating_sub(mine);
         s.held = s.held.saturating_add(weight);
         drop(s);
         // A grown claim's end also lets the next of its network, or one
-        // the cap held back, grow; a small claim's frees room in the floor.
+        // the cap held back, grow; a small claim's frees room in the floor;
+        // a partial claim's lets one its network's share held back in.
         if weight < mine || counted {
             claim.budget.freed.notify_waiters();
         }
@@ -1015,7 +1115,7 @@ impl Drop for Queued<'_> {
         let mut s = budget.lock();
         let id = self.0.id;
         s.queue.retain(|&q| q != id);
-        s.partials.retain(|&q| q != id);
+        s.leave_partials(self.0);
         s.growth.retain(|&(q, ..)| q != id);
         if s.starved == Some(id) {
             s.starved = None;
@@ -4768,7 +4868,11 @@ mod budget {
         });
         tokio::time::sleep(Duration::from_secs(5)).await;
         assert!(!wait.is_finished(), "past its network's share");
-        assert!(b.lock().partials.is_empty(), "it waits apart");
+        {
+            let s = b.lock();
+            assert!(s.partials.is_empty(), "it waits apart");
+            assert_eq!(s.apart[&net(1)].len(), 1, "in its network's queue");
+        }
         let other = window(&b, 2, now, total).await;
         drop(mine.pop());
         (&mut wait).await.unwrap();
@@ -4777,9 +4881,11 @@ mod budget {
         assert!(b.lock().partial_nets.is_empty());
     }
 
-    /// A partial claim held back by its network's share takes its place in
-    /// the queue once the share frees, even while another claim heads it:
-    /// it isn't left outside, for later claims to overtake.
+    /// A partial claim held back by its network's share keeps its place in
+    /// the queue: once the share frees, it goes before a younger claim of
+    /// another network that heads the queue meanwhile. (It used to queue
+    /// behind it, so younger claims could overtake it again and again:
+    /// X-pool-past-cap-room.)
     #[tokio::test(start_paused = true)]
     async fn a_claim_held_by_its_networks_share_keeps_its_turn() {
         let b = Arc::new(Budget::new(1_000_000));
@@ -4791,10 +4897,10 @@ mod budget {
             let held = held.clone();
             async move { held.reserve(60_000, 70_000).await }
         });
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        queued(&b, |s| s.apart.contains_key(&net(1))).await;
         assert!(b.lock().partials.is_empty(), "B waits apart");
-        // A grown claim, and C heading the queue, held by the admission
-        // rule.
+        // A grown claim, and C, younger than B, heading the queue, held by
+        // the admission rule.
         let d = window(&b, 3, 1_000, 200_000).await;
         d.reserve(200_000, 200_000).await;
         let c = Reservation::for_peer(b.clone(), Some(net(2)));
@@ -4803,21 +4909,289 @@ mod budget {
             async move { c.reserve(60_000, 760_000).await }
         });
         queued(&b, |s| s.partials.len() == 1).await;
-        // A ends: B's network has room, and B queues behind C.
+        // A ends: B takes its place back, ahead of C, and is let in.
         drop(a);
-        queued(&b, |s| s.partials.len() == 2).await;
-        assert!(!wait_b.is_finished(), "C still heads the queue");
-        // C leaves: B is let in.
+        tokio::time::timeout(Duration::from_secs(10), &mut wait_b)
+            .await
+            .expect("B goes before the younger C")
+            .unwrap();
+        assert!(!wait_c.is_finished(), "C still waits on its own rule");
         wait_c.abort();
         let _ = (&mut wait_c).await;
-        drop(c);
-        tokio::time::timeout(Duration::from_secs(1), &mut wait_b)
-            .await
-            .expect("B is let in once C has gone")
-            .unwrap();
-        drop((held, d));
+        drop((c, held, d));
         assert_eq!(used(&b), 0);
-        assert!(b.lock().partials.is_empty());
+        let s = b.lock();
+        assert!(s.partials.is_empty() && s.apart.is_empty());
+    }
+
+    /// Fills network 1's share with one partial claim, A, and has B, from
+    /// the same network, wait apart behind it.
+    async fn share_and_one_apart(
+        b: &Arc<Budget>,
+    ) -> (Reservation, Reservation, tokio::task::JoinHandle<()>) {
+        let a = window(b, 1, 60_000, 70_000).await;
+        let held = Reservation::for_peer(b.clone(), Some(net(1)));
+        let wait = tokio::spawn({
+            let held = held.clone();
+            async move { held.reserve(60_000, 70_000).await }
+        });
+        queued(b, |s| s.apart.get(&net(1)).is_some_and(|q| q.len() == 1)).await;
+        (a, held, wait)
+    }
+
+    /// A claim held back by its network's share is woken however the claim
+    /// holding the share leaves it: it grows, settles, is dropped, is
+    /// dropped while it waits to grow, or runs out its deadline waiting.
+    #[tokio::test(start_paused = true)]
+    async fn a_held_back_claim_is_woken_however_its_network_frees_its_share() {
+        for how in ["grows", "settles", "dropped", "cancelled", "deadline"] {
+            let b = Arc::new(Budget::new(1_000_000));
+            // A grown claim from another network keeps A's growth waiting
+            // for the cancelled and deadline paths: 700,000 doesn't fit
+            // beside it and the floor.
+            let other = window(&b, 2, 1_000, 100_000).await;
+            other.reserve(100_000, 100_000).await;
+            let (a, held, mut wait) = share_and_one_apart(&b).await;
+            // A grown claim is kept until B is in, so the growth alone wakes
+            // B.
+            let kept = match how {
+                "grows" => {
+                    a.reserve(70_000, 70_000).await;
+                    Some(a)
+                }
+                "settles" => {
+                    a.settle(a.bytes());
+                    drop(a);
+                    None
+                }
+                "dropped" => {
+                    drop(a);
+                    None
+                }
+                "cancelled" | "deadline" => {
+                    let total = 700_000;
+                    let mut grow = growing(&a, total);
+                    queued(&b, |s| s.growth.len() == 1).await;
+                    if how == "cancelled" {
+                        grow.abort();
+                        let _ = (&mut grow).await;
+                    } else {
+                        let r = a.clone();
+                        grow.abort();
+                        let _ = (&mut grow).await;
+                        let ran_out =
+                            tokio::time::timeout(Duration::from_secs(1), r.reserve(total, total))
+                                .await;
+                        assert!(ran_out.is_err(), "{how}: A's growth still waits");
+                    }
+                    drop(a);
+                    None
+                }
+                _ => unreachable!(),
+            };
+            tokio::time::timeout(Duration::from_secs(10), &mut wait)
+                .await
+                .unwrap_or_else(|_| panic!("{how}: B is woken and let in"))
+                .unwrap();
+            drop((held, other, kept));
+            b.release_held(b.usage().0);
+            assert_eq!(used(&b), 0, "{how}");
+            let s = b.lock();
+            assert!(s.partials.is_empty() && s.apart.is_empty(), "{how}");
+        }
+    }
+
+    /// A held-back claim dropped while it waits leaves its network's queue
+    /// at once: the next claim of that network isn't stuck behind it.
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_held_back_claim_leaves_no_dead_head() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let (a, oldest, wait_oldest) = share_and_one_apart(&b).await;
+        let next = Reservation::for_peer(b.clone(), Some(net(1)));
+        let mut wait_next = tokio::spawn({
+            let next = next.clone();
+            async move { next.reserve(60_000, 70_000).await }
+        });
+        queued(&b, |s| s.apart.get(&net(1)).is_some_and(|q| q.len() == 2)).await;
+        // The oldest held-back claim is cancelled and dropped.
+        wait_oldest.abort();
+        let _ = wait_oldest.await;
+        drop(oldest);
+        assert_eq!(b.lock().apart[&net(1)].len(), 1, "it left at once");
+        // The share frees: the next claim of the network goes.
+        drop(a);
+        tokio::time::timeout(Duration::from_secs(10), &mut wait_next)
+            .await
+            .expect("the next claim of the network goes")
+            .unwrap();
+        drop(next);
+        assert_eq!(used(&b), 0);
+        let s = b.lock();
+        assert!(s.partials.is_empty() && s.apart.is_empty());
+    }
+
+    /// A network's oldest held-back claim goes first once its share frees,
+    /// however its younger claims wake.
+    #[tokio::test(start_paused = true)]
+    async fn a_networks_oldest_held_back_claim_goes_first() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let (a, oldest, mut wait_oldest) = share_and_one_apart(&b).await;
+        let mut younger = Vec::new();
+        for n in 2..=5 {
+            let r = Reservation::for_peer(b.clone(), Some(net(1)));
+            let wait = tokio::spawn({
+                let r = r.clone();
+                async move { r.reserve(60_000, 70_000).await }
+            });
+            queued(&b, |s| s.apart.get(&net(1)).is_some_and(|q| q.len() == n)).await;
+            younger.push((r, wait));
+        }
+        drop(a);
+        tokio::time::timeout(Duration::from_secs(10), &mut wait_oldest)
+            .await
+            .expect("the oldest goes")
+            .unwrap();
+        // It fills the share again: every younger claim still waits apart.
+        queued(&b, |s| s.apart.get(&net(1)).is_some_and(|q| q.len() == 4)).await;
+        assert!(younger.iter().all(|(_, w)| !w.is_finished()));
+        drop(oldest);
+        for (r, mut wait) in younger {
+            tokio::time::timeout(Duration::from_secs(10), &mut wait)
+                .await
+                .expect("each younger claim goes in turn")
+                .unwrap();
+            drop(r);
+        }
+        assert_eq!(used(&b), 0);
+        let s = b.lock();
+        assert!(s.partials.is_empty() && s.apart.is_empty());
+    }
+
+    /// A younger claim of a network waits behind the network's older
+    /// held-back claim, even one small enough for what's left of the share:
+    /// a stream of small claims from its own network can't keep it out.
+    #[tokio::test(start_paused = true)]
+    async fn a_younger_claim_waits_behind_its_networks_held_back_one() {
+        let b = Arc::new(Budget::new(1_000_000));
+        // 40,000 of the 93,750 share is held: 60,000 more is past it,
+        // 20,000 more isn't.
+        let a = window(&b, 1, 40_000, 50_000).await;
+        let older = Reservation::for_peer(b.clone(), Some(net(1)));
+        let mut wait_older = tokio::spawn({
+            let older = older.clone();
+            async move { older.reserve(60_000, 70_000).await }
+        });
+        queued(&b, |s| s.apart.contains_key(&net(1))).await;
+        let younger = Reservation::for_peer(b.clone(), Some(net(1)));
+        let mut wait_younger = tokio::spawn({
+            let younger = younger.clone();
+            async move { younger.reserve(20_000, 30_000).await }
+        });
+        queued(&b, |s| s.apart.get(&net(1)).is_some_and(|q| q.len() == 2)).await;
+        assert!(!wait_younger.is_finished(), "it waits its turn");
+        drop(a);
+        tokio::time::timeout(Duration::from_secs(10), &mut wait_older)
+            .await
+            .expect("the older goes first")
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), &mut wait_younger)
+            .await
+            .expect("then the younger, beside it in the share")
+            .unwrap();
+        drop((older, younger));
+        assert_eq!(used(&b), 0);
+        let s = b.lock();
+        assert!(s.partials.is_empty() && s.apart.is_empty());
+    }
+
+    /// A held-back claim that takes its place back at the head, ahead of a
+    /// claim that only lacked room, ends that one's precedence: whole
+    /// claims go again while the new head waits on its own rule.
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_back_at_the_head_ends_anothers_precedence() {
+        let limit = 1_000_000;
+        let b = Arc::new(Budget::new(limit));
+        // Finished results fill most of the budget.
+        let results = Reservation::new(b.clone());
+        results.reserve(900_000, 900_000).await;
+        results.settle(results.bytes());
+        drop(results);
+        // A holds network 1's share; B, from network 1, waits apart, and
+        // needs more beside the floor than there is.
+        let a = window(&b, 1, 60_000, 70_000).await;
+        let b_claim = Reservation::for_peer(b.clone(), Some(net(1)));
+        let wait_b = tokio::spawn({
+            let r = b_claim.clone();
+            async move { r.reserve(60_000, 760_000).await }
+        });
+        queued(&b, |s| s.apart.contains_key(&net(1))).await;
+        // C, from network 2 and younger, heads the queue and only lacks
+        // room.
+        let c = Reservation::for_peer(b.clone(), Some(net(2)));
+        let wait_c = tokio::spawn({
+            let r = c.clone();
+            async move { r.reserve(60_000, 70_000).await }
+        });
+        queued(&b, |s| s.starved.is_some()).await;
+        // A grows, freeing network 1's share: B takes its place back ahead
+        // of C, and waits on its own rule.
+        a.reserve(70_000, 70_000).await;
+        queued(&b, |s| {
+            s.partials.front().map(|&(_, id)| id) == Some(b_claim.0.id) && s.starved.is_none()
+        })
+        .await;
+        // A small whole claim goes, which C's precedence would have kept
+        // out.
+        let small = Reservation::new(b.clone());
+        tokio::time::timeout(Duration::from_secs(10), small.reserve(20_000, 20_000))
+            .await
+            .expect("whole claims go again");
+        for wait in [wait_b, wait_c] {
+            wait.abort();
+            let _ = wait.await;
+        }
+        drop((a, b_claim, c, small));
+        b.release_held(b.usage().0);
+        assert_eq!(used(&b), 0);
+        let s = b.lock();
+        assert!(s.partials.is_empty() && s.apart.is_empty() && s.starved.is_none());
+    }
+
+    /// One network flooding partial claims past its share holds up no other
+    /// network's claim: those are let in at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_flooding_network_holds_up_no_other() {
+        let b = Arc::new(Budget::new(1_000_000));
+        let a = window(&b, 1, 60_000, 70_000).await;
+        let mut flood = Vec::new();
+        for _ in 0..200 {
+            let r = Reservation::for_peer(b.clone(), Some(net(1)));
+            let wait = tokio::spawn({
+                let r = r.clone();
+                async move { r.reserve(60_000, 70_000).await }
+            });
+            flood.push((r, wait));
+        }
+        queued(&b, |s| s.apart.get(&net(1)).is_some_and(|q| q.len() == 200)).await;
+        let mut others = Vec::new();
+        for n in 2..=6 {
+            others.push(window(&b, n, 60_000, 70_000).await);
+        }
+        assert!(
+            b.lock().partials.is_empty(),
+            "nothing queues behind the flood"
+        );
+        for (_, wait) in &flood {
+            wait.abort();
+        }
+        for (r, wait) in flood {
+            let _ = wait.await;
+            drop(r);
+        }
+        drop((a, others));
+        assert_eq!(used(&b), 0);
+        let s = b.lock();
+        assert!(s.partials.is_empty() && s.apart.is_empty());
     }
 
     /// An unproven claim's announced size doesn't count toward admission:
@@ -5948,7 +6322,7 @@ mod budget {
         // shows.
         until("the stalled fetch's reservation", async || {
             handle.queued().await; // a round of the pool publishes its stats
-            gauge(&stats.reserved_bytes) >= 64 << 10
+            gauge(&stats.reserved_bytes) >= 80 << 10
         })
         .await;
         assert!(gauge(&stats.reserved_bytes) < 100_000, "not its claim");
