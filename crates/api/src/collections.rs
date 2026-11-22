@@ -153,7 +153,10 @@ fn store_error(e: StoreError, field: &'static str) -> ApiError {
     path = "/collections",
     tag = "library",
     params(CollectionsQuery),
-    responses((status = 200, body = Vec<CollectionSummary>))
+    responses(
+        (status = 200, body = Vec<CollectionSummary>),
+        (status = 400, body = ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`hidden` isn't a boolean). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn list(
     State(s): State<ApiState>,
@@ -219,6 +222,7 @@ pub(crate) async fn create(
     params(("id" = i64, Path, description = "The collection's id."), CollectionQuery),
     responses(
         (status = 200, body = CollectionPage),
+        (status = 400, body = ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (a value of the wrong type: `after`, `hidden` or `limit`). Each names the parameter at fault in `field` where there is one."),
         (status = 404, body = ErrorEnvelope, description = "`collection_not_found`."),
     )
 )]

@@ -508,6 +508,48 @@ async fn it_is_served_open_as_generated() {
     assert_eq!(std::str::from_utf8(&bytes).unwrap(), openapi::json());
 }
 
+/// Operations that take query parameters but can't answer a 400, each
+/// with its reason. A route that reads its query with `Query<T>` never
+/// belongs here: that extractor answers `repeated_parameter` for any known
+/// parameter sent twice.
+const QUERY_WITHOUT_400: &[(&str, &str, &str)] = &[(
+    "GET",
+    "/feeds/{id}",
+    "`token` is read by the key guard, not `Query<T>`: a malformed or conflicting token is a 401, a bad id a 404",
+)];
+
+/// Every operation that reads its query documents its 400: a parameter
+/// sent twice is `repeated_parameter` and a bad value is `bad_parameter`
+/// on every one of them (X-api-openapi-400s).
+#[test]
+fn every_query_route_declares_a_400() {
+    let doc = doc();
+    let mut missing = Vec::new();
+    let mut checked = 0;
+    for (method, path, op) in operations(&doc) {
+        let takes_query = op["parameters"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["in"] == "query"));
+        if !takes_query {
+            continue;
+        }
+        checked += 1;
+        let excused = QUERY_WITHOUT_400
+            .iter()
+            .any(|(m, p, _)| *m == method && *p == path);
+        let has_400 = op["responses"].get("400").is_some();
+        assert!(
+            !(excused && has_400),
+            "{method} {path} declares a 400: take it off QUERY_WITHOUT_400"
+        );
+        if !excused && !has_400 {
+            missing.push(format!("{method} {path}"));
+        }
+    }
+    assert!(checked > 20, "only {checked} query operations found");
+    assert!(missing.is_empty(), "no 400 declared: {missing:#?}");
+}
+
 #[test]
 fn generation_is_stable() {
     assert_eq!(openapi::json(), openapi::json());

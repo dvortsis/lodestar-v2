@@ -358,6 +358,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`hidden` isn't a boolean). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -471,6 +481,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CollectionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (a value of the wrong type: `after`, `hidden` or `limit`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -2775,6 +2795,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`period` isn't `daily` or `weekly`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2830,6 +2860,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DiscoverResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`limit` isn't a whole number), `unknown_type` (`type`) or `bad_cursor` (a cursor this server didn't give out for Newest). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -3781,6 +3821,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`limit` isn't a whole number), `bad_limit` (`limit` outside 1–1000) or `bad_cursor` (not a review-queue cursor). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3948,6 +3998,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`adult` isn't a boolean, or `limit` isn't a whole number), `bad_limit` (`limit` outside 1–1000) or `bad_cursor` (not a review-queue cursor). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4026,6 +4086,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4073,6 +4143,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EventsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`from` or `to` is missing or isn't a whole number) or `bad_range` (`from` or `to`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -4163,6 +4243,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a missing or unknown `panel`, an unknown `reason`, a value of the wrong type, or `compare` isn't 0 or 1) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4237,6 +4327,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FetchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -4319,6 +4419,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4386,6 +4496,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, or `compare` isn't 0 or 1) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -4468,6 +4588,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4542,6 +4672,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnderstandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, `compare` isn't 0 or 1, or an unknown `reason`) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -6048,6 +6188,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`natural` isn't a boolean), `query_syntax` or `natural_too_long` (`q` is over 512 bytes or 32 tokens for `natural`). Each names the parameter at fault in `field`; `query_syntax` also gives `start` and `end`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -6434,7 +6584,7 @@
             }
           },
           "400": {
-            "description": "`bad_cursor`: a cursor this server didn't give out.",
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`limit` isn't a whole number) or `bad_cursor` (a cursor this server didn't give out). Each names the parameter at fault in `field` where there is one.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7181,6 +7331,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`preferences` isn't a boolean). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -7227,6 +7387,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImportReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`dry_run` isn't a boolean), each naming it in `field` where there is one; `bad_json` (the body isn't JSON) or `bad_body` (the body couldn't be read). A body of the wrong shape is a 422 `bad_body`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7967,6 +8137,16 @@
               }
             }
           },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type: `pos`, `limit` or `hidden`), `query_too_long` (`q`) or `bad_pos` (`pos` is past the end of `q`). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -8339,6 +8519,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FilesPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`offset` or `limit` isn't a whole number) or `bad_hash` (not a 40-character hex info hash). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -9041,7 +9231,7 @@
             }
           },
           "400": {
-            "description": "`bad_cursor`: a cursor this server didn't give out.",
+            "description": "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, or a `label` that isn't allowed) or `bad_cursor` (a cursor this server didn't give out). Each names the parameter at fault in `field` where there is one.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9089,6 +9279,16 @@
                   "items": {
                     "$ref": "#/components/schemas/LabelCount"
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`hidden` isn't a boolean). Each names the parameter at fault in `field` where there is one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }

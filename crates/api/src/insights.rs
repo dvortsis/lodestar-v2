@@ -1868,7 +1868,10 @@ fn apply_snapshot(r: &mut OverviewResponse, s: Snapshot) {
     path = "/insights/overview",
     tag = "insights",
     params(OverviewQuery),
-    responses((status = 200, body = OverviewResponse))
+    responses(
+        (status = 200, body = OverviewResponse),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type, or `compare` isn't 0 or 1) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn overview(
     State(s): State<ApiState>,
@@ -2147,7 +2150,10 @@ fn windows(w: Window, compare: bool, compacted: i64) -> (Window, Option<Window>)
     path = "/insights/events",
     tag = "insights",
     params(EventsQuery),
-    responses((status = 200, body = EventsResponse))
+    responses(
+        (status = 200, body = EventsResponse),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`from` or `to` is missing or isn't a whole number) or `bad_range` (`from` or `to`). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn events(
     State(s): State<ApiState>,

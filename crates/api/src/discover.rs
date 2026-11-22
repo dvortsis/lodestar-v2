@@ -89,7 +89,10 @@ fn tab(kind: Option<&str>) -> ApiResult<Option<&'static str>> {
     path = "/discover",
     tag = "discover",
     params(DiscoverQuery),
-    responses((status = 200, body = DiscoverResponse))
+    responses(
+        (status = 200, body = DiscoverResponse),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`limit` isn't a whole number), `unknown_type` (`type`) or `bad_cursor` (a cursor this server didn't give out for Newest). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn discover(
     State(s): State<ApiState>,

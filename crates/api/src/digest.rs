@@ -117,7 +117,10 @@ pub(crate) async fn digest(state: &ApiState, period: DigestPeriod) -> ApiResult<
     path = "/digest/preview",
     tag = "insights",
     params(DigestQuery),
-    responses((status = 200, body = DigestPreview))
+    responses(
+        (status = 200, body = DigestPreview),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`period` isn't `daily` or `weekly`). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 async fn preview(
     State(s): State<ApiState>,

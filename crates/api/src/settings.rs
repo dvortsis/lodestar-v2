@@ -785,12 +785,15 @@ fn http_status(why: &str) -> Option<u16> {
     path = "/settings/export",
     tag = "settings",
     params(ExportQuery),
-    responses((
-        status = 200,
-        description = "The file, as an attachment (`lodestar-settings.toml`).",
-        content_type = "application/toml",
-        body = String,
-    ))
+    responses(
+        (
+            status = 200,
+            description = "The file, as an attachment (`lodestar-settings.toml`).",
+            content_type = "application/toml",
+            body = String,
+        ),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`preferences` isn't a boolean). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn export(
     State(s): State<ApiState>,
@@ -826,6 +829,7 @@ pub(crate) async fn export(
     request_body = SettingsImport,
     responses(
         (status = 200, body = ImportReport),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once) or `bad_parameter` (`dry_run` isn't a boolean), each naming it in `field` where there is one; `bad_json` (the body isn't JSON) or `bad_body` (the body couldn't be read). A body of the wrong shape is a 422 `bad_body`."),
         (status = 409, body = SettingsErrorEnvelope, description = "`stale_revision`: a section changed since the dry run's `revisions`."),
         (status = 413, body = SettingsErrorEnvelope, description = "`import_too_large`: over 64 KiB."),
         (status = 422, body = SettingsErrorEnvelope, description = "`invalid_import` (not an export file), or a value `PATCH /settings` refuses (`invalid_setting`, `adult_confirmation_required`). Nothing is saved."),

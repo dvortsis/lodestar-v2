@@ -237,7 +237,10 @@ fn parse_error(e: ParseError) -> ApiError {
     path = "/parse",
     tag = "search",
     params(ParseQuery),
-    responses((status = 200, body = ParseResponse))
+    responses(
+        (status = 200, body = ParseResponse),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (`natural` isn't a boolean), `query_syntax` or `natural_too_long` (`q` is over 512 bytes or 32 tokens for `natural`). Each names the parameter at fault in `field`; `query_syntax` also gives `start` and `end`."),
+    )
 )]
 pub(crate) async fn parse_query(
     Query(p): Query<ParseQuery>,

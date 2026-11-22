@@ -430,7 +430,9 @@ fn render(columns: &[&str], rows: &[(&'static str, BTreeMap<String, Value>)]) ->
             (`lodestar-insights-<panel>-<from>-<to>.csv`).",
         content_type = "text/csv",
         body = String,
-    ))
+    ),
+    (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a missing or unknown `panel`, an unknown `reason`, a value of the wrong type, or `compare` isn't 0 or 1) or `bad_range` (`range`, `from` or `to`). Each names the parameter at fault in `field` where there is one."),
+    )
 )]
 pub(crate) async fn export_csv(
     State(s): State<ApiState>,
