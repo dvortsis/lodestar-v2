@@ -4,6 +4,8 @@ name: E2E
 # motion and keyboard-only projects (axe everywhere; baselines for key screens), then Lighthouse CI.
 # Nightly / manual: the `all-themes` project (axe on every route + key-screen baselines, 48 themes)
 # and the `pseudo` project (pseudo-locale build: overflow, clipping, hard-coded English).
+# Marker: on a same-repo PR carrying web/e2e/.update-snapshots, the fixture jobs also run, to
+# regenerate the real-server baselines (web/e2e/README.md "Updating snapshots").
 #
 # Everything runs in the Playwright image pinned below (match @playwright/test in web/package.json),
 # so text rendering is reproducible and the baselines are generated here, never on a laptop.
@@ -44,6 +46,8 @@ jobs:
         working-directory: .
     outputs:
       applies: ${{ steps.c.outputs.e2e }}
+      # web/e2e/.update-snapshots exists: this run regenerates baselines (see README "Updating snapshots").
+      marker: ${{ steps.marker.outputs.marker }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,6 +62,10 @@ jobs:
         shell: bash
         run: python3 .github/scripts/ci_changes.py "$EVENT" "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
       - run: python3 .github/scripts/test_ci_changes.py
+      - name: Baseline regeneration marker
+        id: marker
+        run: |
+          if [ -f web/e2e/.update-snapshots ]; then echo "marker=true" >> "$GITHUB_OUTPUT"; else echo "marker=false" >> "$GITHUB_OUTPUT"; fi
 
   e2e:
     name: playwright (core, matrix, sample, motion, keyboard)
@@ -122,11 +130,19 @@ jobs:
   # session's next push (removing web/e2e/.update-snapshots) re-runs CI.
   commit-baselines:
     name: commit regenerated baselines
-    needs: e2e
+    needs: [changes, e2e, fixture-build, fixture]
+    # `!cancelled()`: the fixture job is skipped on most runs, and a skipped need would skip this
+    # job too. Commit only when a run regenerated baselines, every job that ran succeeded (a
+    # cancelled or failed one commits nothing), and, on a marked pull request, the fixture job
+    # succeeded too: a failed fixture build must not commit the core baselines alone.
     if: >-
+      !cancelled() &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      needs.e2e.outputs.updated == 'true'
+      (needs.e2e.outputs.updated == 'true' || needs.fixture.outputs.updated == 'true') &&
+      (needs.e2e.result == 'success' || needs.e2e.result == 'skipped') &&
+      (needs.fixture.result == 'success' || needs.fixture.result == 'skipped') &&
+      (needs.changes.outputs.marker != 'true' || needs.fixture.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -144,14 +160,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      # v7 reads artifacts written by upload-artifact v7.
+      # v7 reads artifacts written by upload-artifact v7. One artifact per job that regenerated.
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        if: needs.e2e.outputs.updated == 'true'
         with:
           name: snapshot-baselines
           path: ${{ runner.temp }}/baselines
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        if: needs.fixture.outputs.updated == 'true'
+        with:
+          name: snapshot-baselines-fixture
+          path: ${{ runner.temp }}/baselines-fixture
       - name: Copy only snapshot PNGs into the tree
         env:
-          SRC: ${{ runner.temp }}/baselines
+          BASELINES: ${{ runner.temp }}/baselines
+          FIXTURE_BASELINES: ${{ runner.temp }}/baselines-fixture
         run: |
           set -euo pipefail
           DEST="$GITHUB_WORKSPACE/web/e2e"
@@ -160,32 +183,38 @@ jobs:
           if [ -L "$GITHUB_WORKSPACE/web" ] || [ -L "$DEST" ] || find "$DEST" -type l | grep -q .; then
             echo "refusing: symlink in web/e2e"; exit 1
           fi
-          # upload-artifact keeps the hierarchy after the first wildcard, so
-          # the artifact's root is web/e2e/. Map each file back under it and
-          # refuse anything that isn't a snapshot PNG.
-          cd "$SRC"
-          count=$(find . -type f | wc -l)
-          if [ "$count" -gt 2000 ]; then
-            echo "refusing: $count files (limit 2000)"; exit 1
-          fi
           re='^([A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+-snapshots/[A-Za-z0-9_.-]+-linux\.png$'
-          find . -type f -print0 | while IFS= read -r -d '' f; do
-            rel="${f#./}"
-            case "$rel" in
-              *..*) echo "refusing path: $rel"; exit 1 ;;
-            esac
-            if ! [[ $rel =~ $re ]]; then
-              echo "refusing path: $rel"; exit 1
+          # upload-artifact keeps the hierarchy after the first wildcard, so each artifact's root
+          # is web/e2e/. Map each file back under it and refuse anything that isn't a snapshot PNG.
+          copy_from() {
+            local SRC="$1"
+            [ -d "$SRC" ] || return 0
+            cd "$SRC"
+            local count
+            count=$(find . -type f | wc -l)
+            if [ "$count" -gt 2000 ]; then
+              echo "refusing: $count files (limit 2000)"; exit 1
             fi
-            if [ "$(stat -c %s "$f")" -gt 5242880 ]; then
-              echo "refusing: $rel is over 5 MB"; exit 1
-            fi
-            if [ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" != "89504e470d0a1a0a" ]; then
-              echo "not a PNG: $rel"; exit 1
-            fi
-            mkdir -p "$DEST/$(dirname -- "$rel")"
-            cp --remove-destination -- "$f" "$DEST/$rel"
-          done
+            find . -type f -print0 | while IFS= read -r -d '' f; do
+              rel="${f#./}"
+              case "$rel" in
+                *..*) echo "refusing path: $rel"; exit 1 ;;
+              esac
+              if ! [[ $rel =~ $re ]]; then
+                echo "refusing path: $rel"; exit 1
+              fi
+              if [ "$(stat -c %s "$f")" -gt 5242880 ]; then
+                echo "refusing: $rel is over 5 MB"; exit 1
+              fi
+              if [ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" != "89504e470d0a1a0a" ]; then
+                echo "not a PNG: $rel"; exit 1
+              fi
+              mkdir -p "$DEST/$(dirname -- "$rel")"
+              cp --remove-destination -- "$f" "$DEST/$rel"
+            done
+          }
+          (copy_from "$BASELINES")
+          (copy_from "$FIXTURE_BASELINES")
       - name: Commit and push to the PR branch
         env:
           BRANCH: ${{ github.head_ref }}
@@ -235,7 +264,7 @@ jobs:
   # never counts as acceptance. The session's next push removes the marker and re-runs.
   e2e-ok:
     name: e2e-ok
-    needs: [changes, e2e, commit-baselines, lighthouse]
+    needs: [changes, e2e, fixture, commit-baselines, lighthouse]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -250,13 +279,20 @@ jobs:
           UPDATED: ${{ needs.e2e.outputs.updated }}
           BASELINES: ${{ needs.commit-baselines.result }}
           LIGHTHOUSE: ${{ needs.lighthouse.result }}
+          FIXTURE: ${{ needs.fixture.result }}
+          FIXTURE_UPDATED: ${{ needs.fixture.outputs.updated }}
         run: |
-          echo "changes=$CHANGES applies=$APPLIES e2e=$E2E updated=$UPDATED commit-baselines=$BASELINES lighthouse=$LIGHTHOUSE"
+          echo "changes=$CHANGES applies=$APPLIES e2e=$E2E updated=$UPDATED fixture=$FIXTURE fixture-updated=$FIXTURE_UPDATED commit-baselines=$BASELINES lighthouse=$LIGHTHOUSE"
           case "$APPLIES" in true|false) ;; *) echo "applicability output is '$APPLIES', not true/false"; exit 1 ;; esac
           [ "$CHANGES" = success ] || { echo "change detection did not succeed"; exit 1; }
-          if [ "$UPDATED" = true ]; then
+          if [ "$UPDATED" = true ] || [ "$FIXTURE_UPDATED" = true ]; then
             echo "This run regenerated snapshot baselines, so it compared nothing. Remove web/e2e/.update-snapshots and push."; exit 1
           fi
+          # The fixture job is not a pull-request check: it runs on a pull request only to regenerate,
+          # so on every ordinary pull request (no marker) its result is `skipped`, which passes here
+          # exactly as before the fixture job was a need. Only failure or cancelled is red.
+          # (Defensive: a marked run is already red above; this keeps a failed fixture job red.)
+          case "$FIXTURE" in failure|cancelled) echo "fixture job result is '$FIXTURE'"; exit 1 ;; esac
           case "$BASELINES" in skipped) ;; *) echo "commit-baselines result '$BASELINES' (expected skipped)"; exit 1 ;; esac
           if [ "$APPLIES" = true ]; then
             [ "$E2E" = success ] || { echo "e2e applies but its job result is '$E2E'"; exit 1; }
@@ -485,7 +521,16 @@ jobs:
   # an artifact. Not a pull-request job and not part of `ci-ok`.
   fixture-build:
     name: build lodestar (fixture)
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.update_snapshots)
+    needs: changes
+    # Nightly and dispatch, as before; and a same-repo pull request that carries the marker file,
+    # to regenerate the fixture baselines (X-ui-checks-4). `changes` is only read for the marker.
+    if: >-
+      !cancelled() &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && !inputs.update_snapshots) ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        needs.changes.outputs.marker == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -514,9 +559,13 @@ jobs:
 
   fixture:
     name: playwright (fixture)
-    needs: fixture-build
+    needs: [changes, fixture-build]
+    # The `if` does not check `changes.result`: the nightly run must not depend on its change detection.
+    if: ${{ !cancelled() && needs.fixture-build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      updated: ${{ steps.pw.outputs.updated }}
     container:
       image: mcr.microsoft.com/playwright:v1.56.1-noble@sha256:f1e7e01021efd65dd1a2c56064be399f3e4de00fd021ac561325f2bfbb2b837a
     env:
@@ -552,7 +601,31 @@ jobs:
             sleep 0.5
           done
           echo "server not healthy within 120 s"; cat "$RUNNER_TEMP/fixture-server.log"; exit 1
-      - run: npx playwright test --project=fixture
+      # With the marker on a pull request, regenerate the fixture baselines (the screenshots in
+      # e2e/ui-checks/fixture-screens.fixture.test.ts); otherwise compare, as always.
+      - name: Playwright
+        id: pw
+        env:
+          MARKER: ${{ github.event_name == 'pull_request' && needs.changes.outputs.marker }}
+        run: |
+          if [ "$MARKER" = "true" ]; then
+            echo "UPDATE=1" >> "$GITHUB_ENV"
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+            npx playwright test --project=fixture --update-snapshots
+          else
+            npx playwright test --project=fixture
+          fi
+      - name: Upload regenerated fixture baselines
+        if: env.UPDATE == '1'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: snapshot-baselines-fixture
+          # Only the fixture specs' own baselines. This job checked out the OLD core, matrix and theme
+          # baselines and ran none of those projects: uploading them would put the old copies back
+          # over the e2e job's regenerated ones in the commit job.
+          path: |
+            web/e2e/**/*.fixture.test.ts-snapshots/*-linux.png
+          if-no-files-found: error
       - name: Stop the fixture server
         if: always()
         run: kill "$(cat "$RUNNER_TEMP/fixture-server.pid")" 2>/dev/null || true
