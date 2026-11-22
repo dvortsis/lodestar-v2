@@ -373,6 +373,7 @@ placement:
   - X-checksum-wrap
   - X-fixture-updates-on
   - X-pseudo-text-gaps
+  - X-search-retry-flush
   - X-offline-retry
   - X-offline-retry-nits
   - W*
@@ -500,6 +501,9 @@ placement:
   - X-api-openapi-repeated
   - X-flake-export-wal
   - X-flake-filter-trails
+  - X-workflow-tests-filter
+  - X-openapi-400s-tidy
+  - X-fixture-server-kill-on-drop
   - X-soak-screen-calibrate
   - X-collect-checklist-docker
   - X-collect-checklist-launch-2
@@ -615,6 +619,7 @@ placement:
   - CR-SAMPLE-BACKOFF-ESCALATE
   - X-sample-cooling-metric
   - CR-UTP-FIRST-WINDOW
+  - X-pool-first-request-docs
 - ws: ws-cr-live
   match:
   - CR-AB-*
@@ -1697,6 +1702,7 @@ roadmap:
     - X-search-chunk-retry
     - X-group-chip-label
     - X-pseudo-text-gaps
+    - X-search-retry-flush
   - id: trackq
     label: 'Track Q: code-review fixes'
     plain: 'The 2026-11-12 code review: worker lease reconciliation, the watch folder, uTP timeouts, specs that never run, an advisory check in CI and tests that sleep. The held security and content-safety fixes join by id only; their blocking and important findings must be closed for the 1.0 security gate.'
@@ -1899,6 +1905,11 @@ owner_queue:
   action: 'Grant the test-VM user ec2:DeleteVolume on its own test volumes (infra/dev-vm/aws-claude-testvm.json)? Today it has none, so a test volume that survives teardown waits for you to delete it, and a 100 GiB volume costs about $0.011/h (about $8 a month) until then. The runner recommends yes, scoped like the existing terminate permission (ManageOnlyOwnLodestarTestInstances): Project=Lodestar, Environment=Test, Purpose=X-test-vm and LaunchedBy=its own UserId'
   unblocks: Test lanes that clean up their own leftover volume
   when: Any time; IAM changes are yours
+- n: 34
+  type: decision
+  action: 'Should a metadata fetch over uTP get one extra 4 s for its first window, only while pieces are still arriving (CR-UTP-FIRST-WINDOW option (b), on top of (d), which merged as #1054)? A slow uTP peer could then hold its first claim for 8 s instead of 4 s; a silent peer still has 4 s, and TCP is unchanged. After (d), at most 9.25% of first windows still miss at 20% packet loss and 2.5% at 15%; the extension would save those that need under 8 s (not measured with it in place). The runner recommends no, unless live data show uTP paths at 15% loss or worse are common (docs/decisions/2026-11-22-CR-UTP-FIRST-WINDOW.md)'
+  unblocks: Fewer missed metadata fetches over lossy uTP paths, at a looser bound against slow peers
+  when: Any time; until then the 4 s deadline holds for every transport
 
 gates:
 - id: G-v05
