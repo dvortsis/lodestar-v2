@@ -14,8 +14,8 @@
 //! piece is asked for once, in order, within the announced size, with a
 //! bounded number outstanding, and none past the first window before the
 //! whole result is reserved; that with a reservation hook set, nothing is
-//! asked for before the first reservation, which covers the first window
-//! and no more; and that a result fits its reservation.
+//! asked for before the first reservation, which covers the first request
+//! (the window and one more piece) and no more; and that a result fits its reservation.
 //!
 //! The peer always ends by closing. The fetch keeps real deadlines (its
 //! timeout, the pace a large dict must keep, the first window's 4 s), so
@@ -38,13 +38,17 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
 use tokio::sync::mpsc;
 
-const SEEDS: std::ops::RangeInclusive<u64> = 1..=1500;
+/// Seeds run by default; `PEER_MODEL_SEEDS` sets another count.
+const SEEDS: u64 = 1500;
 const PIECE: usize = message::METADATA_PIECE;
 /// The BEP 10 message id.
 const EXTENDED: u8 = 20;
 const MAX_METADATA: usize = 2 << 20;
 /// Pieces a fetch may ask for before the whole result is reserved.
 const FIRST_PIECES: usize = 4;
+/// Pieces asked for, and reserved, before the window is in: the window
+/// and one more.
+const FIRST_REQUEST: usize = FIRST_PIECES + 1;
 /// Piece requests a fetch keeps outstanding at most.
 const WINDOW: usize = 64;
 const MAX_PEX: usize = 200;
@@ -105,9 +109,10 @@ fn dict_size(rng: &mut Rng) -> usize {
         1 => PIECE - 1 + rng.below(3),
         2 => 2 * PIECE - 1 + rng.below(3),
         3 => FIRST_PIECES * PIECE - 1 + rng.below(3),
-        4 => (FIRST_PIECES + 1) * PIECE + rng.below(PIECE),
-        5 => WINDOW * PIECE + rng.below(3 * PIECE),
-        6 => MAX_METADATA - rng.below(2 * PIECE),
+        4 => FIRST_REQUEST * PIECE + rng.below(PIECE),
+        5 => FIRST_PIECES * PIECE + 1 + rng.below(PIECE - 1),
+        6 => WINDOW * PIECE + rng.below(3 * PIECE),
+        7 => MAX_METADATA - rng.below(2 * PIECE),
         _ => 1 + rng.below(8 * PIECE),
     }
 }
@@ -172,6 +177,8 @@ struct Peer {
     /// A stalling peer: after serving this many pieces it sends nothing
     /// more and holds the connection open until the fetch leaves.
     stall_after: Option<usize>,
+    /// A peer that never sends this piece and serves every other.
+    withhold: Option<usize>,
     out: WriteHalf<DuplexStream>,
     asked: mpsc::UnboundedReceiver<usize>,
     seen: Shared,
@@ -267,9 +274,15 @@ impl Peer {
                 let ask = message::metadata_request(piece);
                 self.send(&extended(message::OUR_UT_METADATA, &ask)).await
             }
-            2 if !self.done.is_empty() => {
+            2 if self.done.iter().any(|&i| Some(i) != self.withhold) => {
                 // A piece again. Its bytes no longer matter: the first kept.
-                let mut done: Vec<usize> = self.done.iter().copied().collect();
+                // (Never the withheld one: it was never sent.)
+                let mut done: Vec<usize> = self
+                    .done
+                    .iter()
+                    .copied()
+                    .filter(|&i| Some(i) != self.withhold)
+                    .collect();
                 done.sort_unstable();
                 let i = done[self.rng.below(done.len())];
                 let bytes = self.rng.bytes(self.piece(i).len());
@@ -438,6 +451,10 @@ impl Peer {
             if i >= total {
                 continue; // asked past a size the peer lied about
             }
+            if self.withhold == Some(i) {
+                self.done.insert(i); // never sent; counted so the loop ends
+                continue;
+            }
             let mut bytes = self.piece(i).to_vec();
             let flipped = self.hostile && self.rng.chance(30);
             if flipped {
@@ -530,7 +547,7 @@ async fn watch(
         // Past the first window only with the whole result reserved (or
         // no reservation hook at all: `reserved` stays empty).
         let whole = s.reserved.last().is_none_or(|(now, total)| now == total);
-        if piece >= FIRST_PIECES && !whole {
+        if piece >= FIRST_REQUEST && !whole {
             s.wrong.push(format!(
                 "piece {piece} asked for before the whole was reserved"
             ));
@@ -548,9 +565,10 @@ fn reserve_hook(seen: Shared) -> Reserve {
         }
         match (s.reserved.len(), s.announced) {
             (0, Some(size)) => {
-                // The first step covers the first window (or all of a smaller
-                // dict) and no more: what's left is the rest of the dict.
-                let rest = size - size.min(FIRST_PIECES * PIECE);
+                // The first step covers the first request (or all of a
+                // smaller dict) and no more: what's left is the rest of the
+                // dict.
+                let rest = size - size.min(FIRST_REQUEST * PIECE);
                 if total.checked_sub(now) != Some(rest) {
                     s.wrong.push(format!(
                         "first reservation ({now}, {total}) for {size} leaves {:?}, not {rest}",
@@ -622,11 +640,18 @@ async fn run(seed: u64) -> Option<&'static str> {
         asked_tx,
     ));
     let pieces = info.len().div_ceil(PIECE);
-    let stall_after = stalling.then(|| rng.below(pieces));
+    let mut stall_after = stalling.then(|| rng.below(pieces));
+    // Some stall only by withholding the piece after the window: the
+    // window comes, so the whole is reserved and the pace must end it.
+    let withhold = (stalling && pieces > FIRST_REQUEST && rng.chance(4)).then_some(FIRST_PIECES);
+    if withhold.is_some() {
+        stall_after = None;
+    }
     let peer = Peer {
         rng: Rng::new(seed ^ 0xD1B5_4A32_D192_ED03),
         hostile,
         stall_after,
+        withhold,
         out: to_fetch,
         asked: asked_rx,
         seen: seen.clone(),
@@ -691,6 +716,28 @@ async fn run(seed: u64) -> Option<&'static str> {
             "seed {seed}: a stalled fetch took {took:?}, past {:?}",
             opts.timeout
         );
+        if withhold.is_some() {
+            // The window came: the whole was reserved, the rest asked for,
+            // and the pace (or the timeout) ended it, never the window.
+            if with_reserve {
+                assert_eq!(
+                    s.reserved.len(),
+                    2,
+                    "seed {seed}: piece 4 withheld, reserved {:?}",
+                    s.reserved
+                );
+            }
+            assert!(
+                s.asked.len() > FIRST_REQUEST,
+                "seed {seed}: piece 4 withheld, asked {:?}",
+                s.asked
+            );
+            return Some(match got {
+                Err(Error::Behind) => "withheld: behind",
+                Err(Error::Timeout) => "withheld: timeout",
+                _ => panic!("seed {seed}: piece 4 withheld, ended {got:?}"),
+            });
+        }
         return Some(match got {
             Err(Error::FirstWindow) => "first window",
             Err(Error::Behind) => "behind",
@@ -759,13 +806,19 @@ fn check_result(
 #[tokio::test(start_paused = true)]
 async fn fetches_end_right_whatever_the_peer_sends() {
     let mut stalls: BTreeMap<&str, usize> = BTreeMap::new();
-    for seed in SEEDS {
+    let seeds = std::env::var("PEER_MODEL_SEEDS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(SEEDS);
+    for seed in 1..=seeds {
         if let Some(how) = run(seed).await {
             *stalls.entry(how).or_default() += 1;
         }
     }
-    // Every deadline is reached by some stalled fetch.
-    for how in ["first window", "behind", "timeout"] {
+    eprintln!("{seeds} seeds, stalled fetches: {stalls:?}");
+    // Every deadline is reached by some stalled fetch, and the pace ends
+    // some fetch whose peer withheld only piece 4.
+    for how in ["first window", "behind", "timeout", "withheld: behind"] {
         assert!(
             stalls.contains_key(how),
             "no stalled fetch ended {how}: {stalls:?}"

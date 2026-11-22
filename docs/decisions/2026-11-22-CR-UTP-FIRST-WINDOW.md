@@ -85,7 +85,16 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
   - `the_window_is_still_its_four_pieces`;
   - every existing first-window and pace test is unchanged;
   - `tests/fetch.rs`'s up-front reservation is 5 pieces (`a_large_claim_reserves_its_first_window_until_the_window_arrives`; the runner approved that file for this slice).
-  - Mutation-checked: dropping the extra piece fails all three new tests. Waiting for every requested piece fails `the_window_is_still_its_four_pieces` and two existing pace tests.
+  - **The peer model** (`tests/peer_model.rs`, `fetches_end_right_whatever_the_peer_sends`; the runner approved that file for this slice):
+    - it checks that the first reservation is the first request (5 pieces, or all of a smaller dict) and that the whole is reserved only once pieces 0–3 are served;
+    - it has a case for a dict of exactly five pieces;
+    - it has a stalling peer that serves every piece but piece 4, which must end with the whole reserved, the rest asked for, and `Behind` or `Timeout`;
+    - `PEER_MODEL_SEEDS` sets the seed count. Before this change to the model, seed 4 failed on the old 4-piece expectation.
+    - **Default run, 1,500 seeds:** all pass. The stalled fetches ended 66 first window, 38 behind, 115 timeout, and 16 withheld-piece-4, all behind.
+    - **10× run, 15,000 seeds:** all pass. The stalled fetches ended 752 first window, 320 behind, 1,222 timeout, and 215 withheld-piece-4, all behind.
+  - Mutation-checked:
+    - dropping the extra piece fails all three new tests and the peer model (seed 4);
+    - waiting for every requested piece fails `the_window_is_still_its_four_pieces`, two existing pace tests and the peer model's withheld-piece-4 case (seed 101).
 
 ## The candidates and their cost
 - **(a) Keep 4 s and today's request.**
