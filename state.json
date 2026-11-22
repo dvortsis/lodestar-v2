@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T14:36Z",
+    "updated": "2026-11-22T14:39Z",
     "items": [
       {
         "slot": 1,
@@ -10666,9 +10666,12 @@
       },
       {
         "slot": 2,
-        "status": "idle",
-        "doing": "#1062 merged; next from the heartbeat queue check",
-        "since": "2026-11-22T14:25Z"
+        "slice": "X-search-toolbar",
+        "role": "slice",
+        "agent": "session_01MMjhnAa7HfaQXcvUi8EyoQ",
+        "model": "sonnet",
+        "since": "2026-11-22T14:39Z",
+        "doing": "step 0: toolbar height on phone and zoom"
       },
       {
         "slot": 3,
@@ -10681,9 +10684,12 @@
       },
       {
         "slot": 4,
-        "status": "idle",
-        "doing": "#1070 merged; next from the heartbeat queue check",
-        "since": "2026-11-22T14:36Z"
+        "slice": "X-insights-story",
+        "role": "slice",
+        "agent": "session_01MMjhn91TUNsrnanuJrszsr",
+        "model": "sonnet",
+        "since": "2026-11-22T14:39Z",
+        "doing": "step 0: Insights story findings"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
