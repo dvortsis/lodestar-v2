@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T07:18:44Z",
+    "updated": "2026-11-22T07:48:17Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-checksum-wrap",
+        "slice": "X-pseudo-text-gaps",
         "role": "slice",
         "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
         "model": "opus",
-        "since": "2026-11-22T06:32:15Z",
-        "doing": "#1055 ready f7d6f12e; fresh review running"
+        "since": "2026-11-22T07:48:17Z",
+        "doing": "#1055 merged; step 0 (brief 211d660f)"
       },
       {
         "slot": 2,
@@ -10680,7 +10680,7 @@
         "agent": "session_01MMjhnCq2XSL5oRQU72AcxH",
         "model": "opus",
         "since": "2026-11-22T07:18:44Z",
-        "doing": "launched; step 0 (brief 981b3852)"
+        "doing": "step 0 go: no cap raise, find >=60 B; building"
       },
       {
         "slot": 4,
