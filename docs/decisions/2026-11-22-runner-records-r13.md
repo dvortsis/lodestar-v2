@@ -1,4 +1,4 @@
-# runner-records-r13 decisions (#PRNUM)
+# runner-records-r13 decisions (#1074)
 
 The runner's records PR after r12 (#1068). It records the runner's calls on 2026-11-22Z for #1069 to #1072, the four Track U slices running now, and the slices they leave. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
