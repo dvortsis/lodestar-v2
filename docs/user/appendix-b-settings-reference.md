@@ -16,17 +16,20 @@ Every field in the Lodestar Unraid template in one table. The recommended value 
 
 ## Updates settings on Windows (newer than v0.5.1)
 
-These are in **Settings → Updates**. Each can also be set in `config.toml` or locked by a variable. v0.5.1 has none of them.
+These are in **Settings → Updates**. Each can also be set in `config.toml` or locked by a variable. A variable takes only the values in the last column, in lowercase. Any other value stops Lodestar from starting. v0.5.1 has none of them.
 
-| Setting (key) | Label | Default | Recommended | Notes |
-|---|---|---|---|---|
-| `updates.mode` (`LODESTAR_UPDATES`) | How to update | Off | Check and notify | Install automatically behaves like Check and notify on Windows. Container image updates is for Docker and Unraid. |
-| `updates.level` (`LODESTAR_UPDATES_LEVEL`) | Which releases | Fixes only | Fixes only | Used by automatic installs, which Windows doesn't run yet. |
-| `updates.security_fixes` (`LODESTAR_UPDATES_SECURITY_FIXES`) | Always install security fixes | On under Install automatically, off under Check and notify | Leave as it is | Nothing installs unattended on Windows, so it changes nothing there yet. |
-| `updates.channel` (`LODESTAR_UPDATES_CHANNEL`) | Channel | Stable | Stable | Nightly is for testing only. |
-| `updates.wait_days` (`LODESTAR_UPDATES_WAIT_DAYS`) | Days to wait after a release | 3 | 3 | 0 to 14. **Install now** ignores it. |
-| `updates.window` (`LODESTAR_UPDATES_WINDOW`) | Install window | `03:00-05:00` | Leave as it is | Local time. Automatic installs only; **Install now** ignores it. |
-| `updates.allow_reindex` (`LODESTAR_UPDATES_ALLOW_REINDEX`) | Allow search index rebuilds | On | On | Applies to automatic installs. |
+| Setting (key) | Label | Default | Recommended | Notes | Value in a variable |
+|---|---|---|---|---|---|
+| `updates.mode` (`LODESTAR_UPDATES`) | How to update | Off | Check and notify | Install automatically behaves like Check and notify on Windows. Container image updates is for Docker and Unraid. | `off`, `notify`, `auto` or `image` |
+| `updates.level` (`LODESTAR_UPDATES_LEVEL`) | Which releases | Fixes only | Fixes only | Used by automatic installs, which Windows doesn't run yet. | `fixes`, `features` or `all` |
+| `updates.security_fixes` (`LODESTAR_UPDATES_SECURITY_FIXES`) | Always install security fixes | On under Install automatically, off under Check and notify | Leave as it is | Nothing installs unattended on Windows, so it changes nothing there yet. | `auto`, `on` or `off` |
+| `updates.channel` (`LODESTAR_UPDATES_CHANNEL`) | Channel | Stable | Stable | Nightly is for testing only. | `stable`, `beta` or `nightly` |
+| `updates.wait_days` (`LODESTAR_UPDATES_WAIT_DAYS`) | Days to wait after a release | 3 | 3 | 0 to 14. **Install now** ignores it. | A whole number, `0` to `14` |
+| `updates.window` (`LODESTAR_UPDATES_WINDOW`) | Install window | `03:00-05:00` | Leave as it is | Local time. Automatic installs only; **Install now** ignores it. | A range like `03:00-05:00` |
+| `updates.allow_reindex` (`LODESTAR_UPDATES_ALLOW_REINDEX`) | Allow search index rebuilds | On | On | Applies to automatic installs. | `true` or `false` |
+| `updates.notify_before` (`LODESTAR_UPDATES_NOTIFY_BEFORE`) | Notify me: Before an automatic install | Off | Leave as it is | Saved now. Messages are sent once notification channels are set up. | `true` or `false` |
+| `updates.notify_after` (`LODESTAR_UPDATES_NOTIFY_AFTER`) | Notify me: After an update | On | Leave as it is | Same as above. | `true` or `false` |
+| `updates.notify_failure` (`LODESTAR_UPDATES_NOTIFY_FAILURE`) | Notify me: When an update fails or is rolled back | On | Leave as it is | Same as above. | `true` or `false` |
 
 ## Release scope
 
