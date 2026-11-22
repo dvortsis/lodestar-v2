@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T14:39Z",
+    "updated": "2026-11-22T15:33Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-pool-past-cap-room",
+        "slice": "X-units-typed",
         "role": "slice",
-        "agent": "session_01MMjhnCu7Lz36ja51ct62Rj",
+        "agent": "session_01MMjhnBpaU4uMckWHth6C5f",
         "model": "opus",
-        "since": "2026-11-22T13:28Z",
-        "doing": "step 0: pool past-cap room options"
+        "since": "2026-11-22T15:33Z",
+        "doing": "step 0: typed units, parse paths and stored-text proof"
       },
       {
         "slot": 2,
@@ -10675,12 +10675,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-fuzz-advisories",
+        "slice": "X-settings-find",
         "role": "slice",
-        "agent": "session_01MMjhnAzobbWgqB4Jv9cKbA",
+        "agent": "session_01MMjhn8dW836gVL7w6tkAZz",
         "model": "sonnet",
-        "since": "2026-11-22T14:25Z",
-        "doing": "step 0: advisory fix and fuzz deny config"
+        "since": "2026-11-22T15:33Z",
+        "doing": "step 0: Settings field search and Overview"
       },
       {
         "slot": 4,
