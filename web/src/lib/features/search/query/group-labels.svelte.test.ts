@@ -1,3 +1,4 @@
+import { flushSync } from 'svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Ast } from '$lib/state/search.svelte';
 import { chipClauses, label } from './clauses';
@@ -13,6 +14,10 @@ describe('the S1-20 check', () => {
 		expect(fitsValue('rarbg', 'RARBG')).toBe(true);
 		expect(fitsValue('ntb-hd', 'NTb-HD')).toBe(true);
 		expect(fitsValue('rarbg', 'rarbg')).toBe(true);
+		// Only upper case in the label over the value's lower case, as fit_label: never the reverse.
+		expect(fitsValue('RARBG', 'rarbg')).toBe(false);
+		expect(fitsValue('Rarbg', 'RARBG')).toBe(true);
+		expect(fitsValue('Rarbg', 'rarbg')).toBe(false);
 		// Another spelling, length or character never passes.
 		expect(fitsValue('rarbg', 'RARBG2')).toBe(false);
 		expect(fitsValue('rarbg', 'RARB6')).toBe(false);
@@ -59,6 +64,71 @@ describe('the session map', () => {
 		expect(groupText(value(1))).toBe('G1');
 		expect(groupText(value(2))).toBe('G2');
 		expect(groupText('new')).toBe('NEW');
+	});
+
+	it('moves every value a response lists to the newest end, so that response never evicts it', () => {
+		const value = (i: number) => `g${i}`;
+		rememberGroups({
+			values: Array.from({ length: CAP }, (_, i) => ({
+				value: value(i),
+				label: value(i).toUpperCase()
+			}))
+		});
+		// g0 is the oldest; this response lists it again, with the same label, beside a new value.
+		rememberGroups({
+			values: [
+				{ value: value(0), label: 'G0' },
+				{ value: 'new', label: 'NEW' }
+			]
+		});
+		expect(groupText(value(0))).toBe('G0');
+		expect(groupText('new')).toBe('NEW');
+		expect(groupText(value(1))).toBe(value(1)); // the oldest unlisted one went instead
+		// A relabel moves it too: g2 is now the oldest, and it isn't dropped by its own response.
+		rememberGroups({
+			values: [
+				{ value: value(2), label: 'G2' },
+				{ value: 'newer', label: 'NEWER' }
+			]
+		});
+		expect(groupText(value(2))).toBe('G2');
+		expect(groupText(value(3))).toBe(value(3));
+	});
+
+	it('follows the latest response: a value it lists with no label, or a failing one, loses its label', () => {
+		rememberGroups({
+			values: [
+				{ value: 'rarbg', label: 'RARBG' },
+				{ value: 'yts', label: 'YTS' }
+			]
+		});
+		// The server leaves `label` out when the winning spelling is the value (facets.rs).
+		rememberGroups({ values: [{ value: 'rarbg' }, { value: 'yts', label: 'YIFY' }] });
+		expect(groupText('rarbg')).toBe('rarbg');
+		expect(groupText('yts')).toBe('yts');
+		// An empty or missing facet changes nothing.
+		rememberGroups({ values: [{ value: 'evo', label: 'EVO' }] });
+		rememberGroups(undefined);
+		rememberGroups({ values: [] });
+		expect(groupText('evo')).toBe('EVO');
+	});
+});
+
+describe('the chip re-renders', () => {
+	it('a chip held in $derived shows the label once a response brings it', () => {
+		const node = group('rarbg');
+		const seen: string[] = [];
+		const stop = $effect.root(() => {
+			const text = $derived(chipClauses(node)[0]!.label.text);
+			$effect(() => {
+				seen.push(text);
+			});
+		});
+		flushSync();
+		rememberGroups({ values: [{ value: 'rarbg', label: 'RARBG' }] });
+		flushSync();
+		stop();
+		expect(seen).toEqual(['Release group: rarbg', 'Release group: RARBG']);
 	});
 });
 

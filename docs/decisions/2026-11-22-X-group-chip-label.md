@@ -11,7 +11,11 @@ Runner brief, 2026-11-22Z, with the runner's §2.26 calls on step 0. It follows 
 ## Where labels come from
 - **A page-session map** (`query/group-labels.svelte.ts`), filled from every `/facets` response's group facet, where the response lands (`facets.svelte.ts`). That covers the rail and the staged sheet.
 - **Not a separate click path.** The brief's "the label passed with the click" is a value the same response already listed, so it is already in the map.
-- **The S1-20 check on entry,** as the server's `fit_label` (`crates/search/src/facets.rs`): the same length, and each character equal or an ASCII letter differing only in case. Anything else never enters, so a label can't read as another group. Non-ASCII letters never re-case.
+- **The S1-20 check on entry,** matching the server's `fit_label` (`crates/search/src/facets.rs`): the same length, and each character either the value's own or an upper-case ASCII letter whose lower case is the value's. Only that direction counts. Anything else never enters, so a label can't read as another group.
+  - **NFKC:** `fit_label` also requires the label to be NFKC-stable. The client doesn't recheck that. A passing label differs from the value only in ASCII letters, so it's NFKC-stable whenever the value is, and the server sends only labels that passed `fit_label`.
+- **The latest response wins** (#1046 review):
+  - a value it lists with no `label` loses its entry (the server leaves the label out when the winning spelling is the value), as does a value with a failing label;
+  - every value it lists moves to the newest end, so the response that carries a selected group's label can never evict it.
 - **At most 500 labels,** the oldest dropped. The map lasts for the page session, so a facet refresh or a query without the group facet keeps them.
 - **Text only:** labels reach the page through Svelte's text binding, never HTML.
 - **Nothing is derived** from names. No label means today's lower-case value.
@@ -27,13 +31,15 @@ Runner brief, 2026-11-22Z, with the runner's §2.26 calls on step 0. It follows 
 - **With no rail response** (the group facet not loaded), the value shows, as before.
 
 ## Tests
-- `query/group-labels.test.ts`:
-  - the S1-20 cases: re-cased, other spellings, lengths and characters, the non-letter pairs 0x20 apart, and non-ASCII letters;
+- `query/group-labels.svelte.test.ts`:
+  - the S1-20 cases: upper case over the value's lower case only, other spellings, lengths and characters, and non-ASCII letters;
   - a failing label never enters the map;
   - the cap evicts the oldest entry;
-  - the chip with a label known and unknown;
-  - the AST and `rowOf` unchanged;
-  - other tags are untouched.
+  - a response's listed values move to the newest end, so it never evicts them, through both a same-label re-listing and a relabel;
+  - a value listed with no label, or with a failing one, loses its label;
+  - the chip with a label known and unknown, the AST and `rowOf` unchanged, and other tags untouched;
+  - **a chip held in `$derived` re-renders** with the label once a response brings it.
+- **Mutation checks** (#1046 review): a plain `Map` in place of `$state.raw` fails the re-render test, and dropping the move to the newest end fails the eviction and latest-response tests.
 - `facets/facets.test.ts`: a response's passing labels are kept, a failing one is dropped, and the labels last past a later response without the group facet.
 - **No e2e assertion:** no existing spec shows a labelled group facet. The OpenAPI mock sends no group labels, and the facet spec runs only against the local fixture backend.
 
