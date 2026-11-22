@@ -2,16 +2,23 @@
 //!
 //! Each seed runs a minute of claims against one [`Budget`]: small whole
 //! claims, and large ones that reserve peer-wire's first request (the
-//! first window and one more piece) and then grow, some
-//! past the grown claims' cap, and some whose first window never comes.
-//! Every claim comes from one of a few
-//! networks. Claims hold their room for a while, then become finished
-//! results or are dropped; a consumer that sometimes lags takes the
-//! results. Throughout, the budget's bounds are checked, and no wait for
-//! room may last longer than [`MAX_WAIT`] while traffic goes on, nor a
-//! large claim's first window longer than [`CHURN_WAIT`] while small claims
-//! churn. At the
-//! end every count is back to zero.
+//! first window and one more piece) and then grow, some past the grown
+//! claims' cap, and some whose first window never comes. Every claim comes
+//! from one of a few networks. Claims hold their room for a while, then
+//! become finished results or are dropped; a consumer that sometimes lags
+//! takes the results. Throughout, the budget's bounds are checked, and no
+//! wait for room may last longer than [`MAX_WAIT`] while traffic goes on,
+//! nor a large claim's first window longer than [`CHURN_WAIT`] while small
+//! claims churn. At the end every count is back to zero.
+//!
+//! Where [`MAX_WAIT`] is known to hold: both budgets at the default seeds,
+//! and the worker's at ten times as many (`POOL_MODEL_SEEDS=640`). At the
+//! test-sized budget with 640 seeds it doesn't: seven first reservations
+//! in five seeds (109, 111, 131, 495, 623) waited 30–44 s behind a growth
+//! past the grown claims' cap, which at that budget grows only once every
+//! other first request is gone. Every one was granted in the end
+//! (X-pool-first-request-docs; a follow-up asks whether such a growth
+//! should leave room for two first requests).
 //!
 //! The seeds are fixed, so a run is the same every time; a failure names
 //! its seed. Every wait is the paused clock's: nothing sleeps.
