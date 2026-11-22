@@ -141,6 +141,46 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   - **`failed: evidence_copied, start_block`:** the last block's evidence hasn't been copied off. Run `copy-off` first.
   - **Any other failure after the marker:** start-block stops Lodestar and the Docker proxy again, and the block stays recorded. Run `copy-off` to end it, then tell the runner.
     - If `copy-off` then answers `failed: evidence_present, copy_off`, the block failed before anything was staged, and can't be ended that way. Escalate to the owner for cleanup.
+  - **`failed: stacking_<reason>, args_valid, start_block`:** the rules' `winners` and `treatment` don't stack (3.3.1). Nothing started; the runner commits fixed rules.
+
+### 3.3.1 A stacked stage (CR-AB-1's later stages)
+A later stage tests one treatment **on top of the winners kept so far**: both arms run the winners, and only the treatment differs (X-fleet-stacked-arms).
+- **Write it in the rules** (`infra/fleet/steps/screen-rules.json`): `treatment` is the stage's key, and `winners` lists the earlier winners' keys. With no `winners` (or `[]`), the arms differ only in the treatment, as in stage 1.
+  ```json
+  {
+    "version": 1,
+    "screen": "lc-1",
+    "lodestar_image": "ghcr.io/dvortsis/lodestar-v2@sha256:<64 hex>",
+    "lodestar_commit": "<40 hex>",
+    "spec_commit": "<40 hex>",
+    "treatment": "lc",
+    "winners": ["adm", "utp"],
+    "segment_hours": 2,
+    "notice_version": 4
+  }
+  ```
+- **What the VM gets:** start-block writes the winners into `block.env`, joined by `-` (the step arguments allow no comma):
+  ```
+  TREATMENT=lc
+  WINNERS=adm-utp
+  ```
+  Every arm then starts with `adm`'s and `utp`'s switches on. Segments 2 and 3 also turn `lc`'s two switches on; segments 1 and 4 turn them off.
+- **What start-block refuses, before anything starts** (`failed: stacking_<reason>, args_valid, start_block`):
+  - an unknown key (`args_valid` alone);
+  - a winner listed twice (`stacking_repeated_winner`);
+  - a winner that is the treatment (`stacking_winner_is_treatment`).
+- **The keys,** each with the switches it turns on, as `analyze_cr.py --winners` names them. A test keeps this table equal to `block-lib.sh`'s:
+
+  | Key | Switches (`--winners` names) |
+  |---|---|
+  | `adm` | `coordinated_admission` |
+  | `utp` | `utp` |
+  | `route` | `route_backoff` |
+  | `lc` | `lookup_end`, `preset_slots` |
+  | `hint` | `hint_first` |
+  | `split` | `sampler_cooldown_split` |
+
+- **For the analysis,** write the winners file from that table: `winners: ["adm", "utp"]` becomes `{"winners": ["coordinated_admission", "utp"]}`, and pass it to every `segment` and to `effect` (`docs/soak/tools/linux/README.md`, stage 2).
 
 ### 3.4 `/fleet run arm-switch <vm>`, after each segment
 - **What it does:** the operator runs it shortly before a segment ends, at the booked times.

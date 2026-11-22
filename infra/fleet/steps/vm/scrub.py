@@ -80,7 +80,36 @@ def opt(check):
 
 
 SWITCHES = {k: opt(boolean) for k in ("safe_restart", "coordinated_admission", "responder_hints",
-                                       "streaming_peers", "target_prefixes", "utp", "route_backoff")}
+                                       "streaming_peers", "target_prefixes", "utp", "route_backoff",
+                                       # Stages 2 and 3, recorded since CR-COL-5/6 (a stacked block's winners).
+                                       "lookup_end", "preset_slots", "hint_first", "sampler_cooldown_split",
+                                       "sample_backoff_escalate")}
+# The treatment keys (block-lib.sh's TREATMENT_KEYS), exactly; anything else is dropped.
+TREATMENT_KEYS = ("adm", "utp", "route", "lc", "hint", "split")
+treatment_key = one_of(*TREATMENT_KEYS)
+
+
+# The stacked treatments (the collector's STACKED; block-lib.sh's STACKED_KEYS): a
+# segment of theirs is analysed against the earlier winners (r5.1 A2).
+STACKED_KEYS = ("lc", "hint", "split")
+# Each key's switches as analyze_cr.py's --winners names them (the collector's
+# TREATMENT_SWITCHES; a test pins this to block-lib.sh's switches_of).
+WINNER_NAMES = {"adm": ("coordinated_admission",), "utp": ("utp",), "route": ("route_backoff",),
+                "lc": ("lookup_end", "preset_slots"), "hint": ("hint_first",),
+                "split": ("sampler_cooldown_split",)}
+_NAMES = frozenset(n for names in WINNER_NAMES.values() for n in names)
+
+
+def report_winners(v):
+    """A report's `winners`: distinct switch names from WINNER_NAMES, as a whole."""
+    return isinstance(v, list) and all(isinstance(w, str) and w in _NAMES for w in v) and len(set(v)) == len(v)
+
+
+def winners_list(v):
+    """A stacked block's winners (X-fleet-stacked-arms): distinct treatment keys.
+    Checked as a whole, so one bad entry drops the list, never just itself."""
+    return (isinstance(v, list) and len(v) <= len(TREATMENT_KEYS) and all(treatment_key(w) for w in v)
+            and len(set(v)) == len(v))
 RESULT = {
     "schema_version": num, "state": word, "reason": word, "stop_mode": word, "samples": num, "ended": time,
     "suppression_ended": opt(lambda v: num(v) or time(v)), "baseline_started": opt(lambda v: num(v) or time(v)),
@@ -90,7 +119,7 @@ RESULT = {
     "shutdown": {"stop_mode": word, "exit_code": opt(num), "exit_confirmed": boolean, "signal_delivered": boolean},
 }
 REPORT = {
-    "schema": num, "kind": one_of("ab", "comb", "comparator"), "treatment": opt(one_of("adm", "utp", "route")), "rehearsal": boolean, "window_hours": num,
+    "schema": num, "kind": one_of("ab", "comb", "comparator"), "treatment": opt(treatment_key), "rehearsal": boolean, "window_hours": num,
     "hour_seconds": num, "state": word, "samples": num, "clean_stop": boolean, "verdict": one_of("valid", "invalid", "void"),
     "verdict_reasons": [word],
     "checks": [{"rule": rule, "check": word, "ok": boolean, "effect": word}],
@@ -102,10 +131,11 @@ REPORT = {
     "fetch": {k: opt(num) for k in ("attempts", "successes", "success_per_attempt", "connects_per_second")},
     "resources": {k: opt(num) for k in ("peak_private_bytes", "peak_working_set_bytes", "cpu_cores_mean")},
     "activity_notes": [{"category": word}],
+    "winners": report_winners,
 }
 SEGMENT = {"segment": num, "arm": one_of("control", "treatment"), "result": RESULT, "report": REPORT}
 DOC = {"version": num, "rules_commit": commit, "spec_commit": commit, "lodestar_commit": commit,
-       "image_digest": digest, "treatment": one_of("adm", "utp", "route"), "segment_hours": num,
+       "image_digest": digest, "treatment": treatment_key, "winners": winners_list, "segment_hours": num,
        "role": one_of("main", "worker"),
        "outages": num, "outage_notes": num, "host_guard_drops": count, "damaged": boolean,
        "segments": [SEGMENT]}
@@ -197,11 +227,20 @@ def collect(block: Path, out: Path, run=subprocess.run) -> dict:
         env[k] = v
     doc = {"version": 1, "rules_commit": env.get("RULES_COMMIT"), "spec_commit": env.get("SPEC_COMMIT"),
            "lodestar_commit": env.get("LODESTAR_COMMIT"), "image_digest": "sha256:" + env.get("IMAGE_DIGEST", ""),
-           "treatment": env.get("TREATMENT"), "segment_hours": int(env.get("SEGMENT_HOURS", "0") or 0),
+           "treatment": env.get("TREATMENT"),
+           "winners": [w for w in env.get("WINNERS", "").split("-") if w], "segment_hours": int(env.get("SEGMENT_HOURS", "0") or 0),
            "role": env.get("ROLE"), "outages": count_lines(block / "outages"),
            "outage_notes": count_lines(block / "notes"),
            "host_guard_drops": count_kind(block / "outages", "host_guard_dropped"), "damaged": damaged(block),
            "segments": []}
+    # A stacked treatment's segments are analysed against the winners (r5.1 A2): analyze_cr
+    # refuses one without --winners. The file goes to out, never into the evidence.
+    stacked = []
+    if env.get("TREATMENT") in STACKED_KEYS:
+        names = [n for k in doc["winners"] if k in WINNER_NAMES for n in WINNER_NAMES[k]]
+        winners_path = out / "winners.json"
+        winners_path.write_text(json.dumps({"winners": names}), encoding="ascii")
+        stacked = ["--winners", str(winners_path)]
     for n in range(1, 5):
         seg = block / "evidence" / f"seg-{n}"
         if not seg.is_dir():
@@ -209,7 +248,7 @@ def collect(block: Path, out: Path, run=subprocess.run) -> dict:
         report_path = out / f"seg-{n}.json"
         try:  # four segments at 120 s each fit copy-off's 600 s
             r = run([sys.executable, str(block / "tools" / "analyze_cr.py"), "segment", str(seg),
-                     "--output", str(report_path)], capture_output=True, timeout=120, check=False)
+                     "--output", str(report_path), *stacked], capture_output=True, timeout=120, check=False)
             report = read_json(report_path) if r.returncode == 0 else None
         except subprocess.TimeoutExpired:
             report = None
