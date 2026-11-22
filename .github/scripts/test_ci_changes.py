@@ -71,10 +71,11 @@ class InfraWorkflows(unittest.TestCase):
                   "x/.github/workflows/web.yml"]:
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
-    def test_the_operations_docs_turn_infra_on_and_near_misses_dont(self):
+    def test_the_operations_docs_turn_infra_on_but_not_the_imports_folder(self):
         for f in ["docs/operations/cloud-fleet-runbook.md", "docs/operations/lodestar-cloud-assets.md"]:
             self.assertTrue(ci_changes.INFRA.match(f), f)
-        for f in ["docs/operations", "docs/operationsx/a.md", "docs/architecture.md", "docs/user/01-install.md"]:
+        for f in ["docs/operations", "docs/operations/", "docs/operationsx/a.md", "docs/operations/imports/x.md",
+                  "docs/operations/imports/pilots/smoke/smoke.py", "docs/architecture.md", "docs/user/01-install.md"]:
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
 

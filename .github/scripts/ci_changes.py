@@ -26,8 +26,8 @@ request gets:
   workflow, the catalogue or the Rust constants the tool mirrors (COMPANION_PINS);
 - the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
   fmt/validate, PowerShell parse) only if it touches `infra/`, any workflow
-  file, the gluetun post-rules file,
-  `docs/user/03-keep-lodestar-safe.md`, `docs/operations/`, `docs/operations.md`, or what the fleet
+  file, the gluetun post-rules file, `docs/user/03-keep-lodestar-safe.md`,
+  a file directly in `docs/operations/`, `docs/operations.md`, or what the fleet
   tests read: `crates/lodestar/src/config.rs` and `docs/soak/tools/` (INFRA below);
 - the update-manifest round trip only if it touches the manifest builder,
   its tests, release.yml or `crates/update/` (UPDATE_MANIFEST below);
@@ -107,10 +107,11 @@ E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
 # The cloud infrastructure job (X-cloud-infra): Lambda tests, template rebuilds,
 # Terraform fmt/validate and a PowerShell parse check. Never touches a cloud.
 # Every workflow file too (X-infra-filter-workflows): infra/fleet/tests/test_workflow.py
-# globs .github/workflows/*.yml and the fleet and operator tests read others by
+# globs .github/workflows/*.yml and other fleet and operator tests read some by
 # name, so a change to any workflow can break them, and a workflow added later
-# is covered with no list to update. And all of docs/operations/, where the
-# fleet runbook that test_block.py reads lives.
+# is covered with no list to update. And the files directly in docs/operations/,
+# where the fleet runbook that test_block.py reads lives. Its imports/ subfolder
+# is not read by these tests, so it doesn't match.
 # The rules file and the docs that quote it: the fleet tests that read them run in this job.
 INFRA = re.compile(
     r"^(infra/"
@@ -118,7 +119,7 @@ INFRA = re.compile(
     # What infra/fleet/tests read: the crawler's switches and the soak collector
     # that names them (X-backoff-escalate-passthrough).
     r"|crates/lodestar/src/config\.rs$|docs/soak/tools/"
-    r"|docs/operations/"
+    r"|docs/operations/[^/]+$"
     r"|\.github/workflows/[^/]+\.ya?ml$)"
 )
 # The update manifest's builder, the workflow that signs with it, and the
