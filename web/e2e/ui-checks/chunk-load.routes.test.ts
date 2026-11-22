@@ -124,28 +124,73 @@ test.describe('a lazy chunk fails to load', () => {
 		).toHaveCount(0);
 	});
 
-	// EXPECTED GAP, not the wanted behaviour: when the Search results chunk fails, the page shows
-	// only the query bar, no results and no message, and raises an uncaught rejection, because
-	// `loadResults()` in src/routes/search/+page.svelte has no `.catch`. The follow-up slice
-	// X-search-chunk-retry adds a retry state; it must flip this case to assert that state
-	// (a role=alert message with a Retry that brings the results back) and drop the page error.
-	test('Search results (expected gap, X-search-chunk-retry): blank query-bar page and an uncaught error', async ({
-		page,
-		go,
-		mock
-	}) => {
+	// The results, facets and toolbar load as one lazy set. A failed set leaves an alert where the
+	// results go, with no uncaught rejection. Retry reloads the page (Chrome for Testing 153 keeps a
+	// failed dynamic import for the module graph, so a second `import()` can't recover), and the
+	// reload carries the URL's query, a new one typed in the failed state included.
+	async function failSearch(page: Page, go: (path: string) => Promise<unknown>, mock: OpenApiMock) {
 		const errors: string[] = [];
 		page.on('pageerror', (error) => errors.push(error.message));
 		server(mock, () => body(hits(2)));
 		mock.on('searchIndexState', indexState(5_000_000));
 		const gate = await blockChunk(page, 'results-announce');
 		await go('/search?q=lantern');
-		await expect(page.getByRole('combobox', { name: 'Search torrents' })).toBeVisible();
-		await expect.poll(() => gate.hit).toBeGreaterThan(0);
+		const failed = page.locator('#results [role="alert"]');
+		await expect(failed).toHaveText("Results couldn't load.Retry");
+		expect(gate.hit).toBeGreaterThan(0);
 		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toHaveCount(0);
-		await expect(page.getByTestId('results-announce')).toHaveCount(0);
+		return { errors, failed, gate };
+	}
+
+	/** Whether focus is inside the results region: never lost to the page body. */
+	const focusInResults = (page: Page) =>
+		page.evaluate(() => !!document.activeElement?.closest('#results'));
+
+	test('Search results: an alert where the results go, and Retry brings them back', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const { errors, failed, gate } = await failSearch(page, go, mock as OpenApiMock);
+		gate.blocked = false;
+		// Keyboard only: Tab from the query bar reaches Retry, and Enter runs it.
+		const retry = failed.getByRole('button', { name: 'Retry' });
+		await page.getByRole('combobox', { name: 'Search torrents' }).focus();
 		await expect
-			.poll(() => errors.filter((e) => e.includes('Failed to fetch dynamically imported module')))
-			.toHaveLength(1);
+			.poll(async () => {
+				await page.keyboard.press('Tab');
+				return retry.evaluate((el) => el === document.activeElement);
+			})
+			.toBe(true);
+		await page.keyboard.press('Enter');
+		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
+		await expect(failed).toHaveCount(0);
+		await expect.poll(() => focusInResults(page)).toBe(true);
+		expect(errors).toEqual([]);
+	});
+
+	test('Search results: a new query typed in the failed state, then Retry, shows its results', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const { errors, failed, gate } = await failSearch(page, go, mock as OpenApiMock);
+		// The alert is announced once: a new query's attempt that fails again keeps the same node.
+		await failed.evaluate((el) => el.setAttribute('data-first', ''));
+		const box = page.getByRole('combobox', { name: 'Search torrents' });
+		await box.click();
+		await page.keyboard.press('ControlOrMeta+a');
+		await page.keyboard.type('harbor');
+		await expect(page).toHaveURL(/[?&]q=harbor/);
+		await expect(page.locator('#results [role="alert"][data-first]')).toHaveCount(1);
+		await expect(failed).toHaveCount(1);
+		gate.blocked = false;
+		await failed.getByRole('button', { name: 'Retry' }).click();
+		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
+		await expect(page).toHaveURL(/[?&]q=harbor/);
+		await expect(box).toHaveText('harbor');
+		await expect(failed).toHaveCount(0);
+		await expect.poll(() => focusInResults(page)).toBe(true);
+		expect(errors).toEqual([]);
 	});
 });

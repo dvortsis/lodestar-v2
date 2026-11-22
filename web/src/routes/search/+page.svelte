@@ -59,7 +59,11 @@
 	let Results = $state<Panel>();
 	let Toolbar = $state<Bar>();
 	let Facets = $state<Host>();
+	// A failed set clears the cached promise, so a new query calls `import()` again (Chromium 157
+	// refetches; 153 keeps the failure for the module graph). Retry, and Enter in the bar, reload
+	// the page at the current URL, as Insights does; `#results` sends focus to the results after.
 	let loadingResults: Promise<unknown> | undefined;
+	let failed = $state<boolean>();
 	function loadResults() {
 		loadingResults ??= Promise.all([
 			import('$lib/features/search/results/ResultsPanel.svelte'),
@@ -68,21 +72,28 @@
 			import('$lib/features/search/results/results.css'),
 			import('$lib/features/search/toolbar/ResultsToolbar.svelte'),
 			import('$lib/features/search/toolbar/toolbar.css')
-		]).then(([panel, host, , , bar]) => {
-			Results = panel.default;
-			Facets = host.default;
-			Toolbar = bar.default;
-		});
+		]).then(
+			([panel, host, , , bar]) => {
+				Results = panel.default;
+				Facets = host.default;
+				Toolbar = bar.default;
+				if (location.hash == '#results') setTimeout(focusResults);
+			},
+			() => {
+				loadingResults = undefined;
+				failed = true;
+			}
+		);
+	}
+	function reload() {
+		location.replace('#results');
+		location.reload();
 	}
 	$effect(() => {
+		// QueryBar's own test, written the same way so the two compress together.
 		const p = page.url.searchParams;
-		if (
-			p.get('q') ||
-			p.get('browse') === '1' ||
-			p.get('hidden') === '1' ||
-			p.get('hidden') === 'true'
-		)
-			loadResults();
+		const hidden = p.get('hidden');
+		if (p.get('q') || p.get('browse') === '1' || hidden === '1' || hidden === 'true') loadResults();
 	});
 	onMount(() => onFirstInteraction(loadResults, KEYS_AFTER_MS));
 
@@ -92,6 +103,9 @@
 	// (the empty state, a skeleton, an error).
 	function skipToResults(event: MouseEvent) {
 		event.preventDefault();
+		focusResults();
+	}
+	function focusResults() {
 		const region = document.getElementById('results');
 		if (!region) return;
 		const row = region.querySelector<HTMLElement>('[role="grid"] [role="row"][tabindex="0"]');
@@ -134,7 +148,13 @@
 			<!-- S-search-3: the results toolbar; S-search-2: the results list. -->
 			<div id="results">
 				{#if Toolbar}<Toolbar />{/if}
-				{#if Results}<Results focusBar={() => bar?.focusEnd()} />{/if}
+				{#if Results}<Results focusBar={() => bar?.focusEnd()} />{:else if failed}
+					<div class="flex flex-col gap-4 p-6" role="alert">
+						{m.search_page_results_failed()}<button class="btn btn-primary" onclick={reload}
+							>{m.search_query_retry()}</button
+						>
+					</div>
+				{/if}
 			</div>
 			<!-- S-detail: DetailHost renders here; it decides the drawer's position per breakpoint. -->
 			<div id="search-drawer">
