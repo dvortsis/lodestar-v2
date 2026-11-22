@@ -3,7 +3,7 @@
 // client. At 390 px, tapping (touch), with nothing clipped sideways and the confirmation visible.
 // Waits are conditions with a 10 s deadline; no fixed sleeps. Named `.routes.test.ts` so the
 // `core` project picks it up.
-import { row as alertRow, saved } from '../../src/lib/features/alerts/fixtures';
+import type { components } from '../../src/lib/api/schema';
 import { body, hashOf, hits, indexState, row, server } from '../search-results.fixtures';
 import { expect as baseExpect, test } from '../support/test';
 
@@ -11,7 +11,32 @@ const expect = baseExpect.configure({ timeout: 10_000 });
 
 test.use({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
 
-const LANTERN = saved({ id: 1, name: 'Lantern Keeper releases', q: 'lantern keeper', unread: 1 });
+type Saved = components['schemas']['SavedSearchView'];
+type AlertRow = components['schemas']['AlertRow'];
+
+const T0 = 1_700_000_000;
+const LANTERN: Saved = {
+	alert: true,
+	alerts: 2,
+	ast: { op: 'all' },
+	created_at: T0,
+	id: 1,
+	last_alert_at: T0,
+	name: 'Lantern Keeper releases',
+	paused: false,
+	q: 'lantern keeper',
+	rss: false,
+	sort: null,
+	unread: 1,
+	updated_at: T0
+};
+/** One alert row for result `n`, its torrent taken from the Search fixtures. */
+const alertRow = (n: number, read: boolean): AlertRow => ({
+	id: n,
+	created_at: T0 + n,
+	read,
+	torrent: hits(3)[n]!
+});
 
 test('phone: open an alert, open it in Search, open a torrent, send it to the client', async ({
 	page,
