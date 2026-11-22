@@ -5,7 +5,6 @@
 	"search_page_results_failed": "Results couldn't load.",
 	"search_page_retry": "Retry",
 	"search_page_detail_failed": "Details couldn't load.",
-	"search_page_close": "Close",
 	"search_query_label": "Search torrents",
 	"search_query_placeholder": "Search by name, or add a filter such as res:1080p",
 	"search_query_placeholder_short": "Search, or filter: res:1080p",

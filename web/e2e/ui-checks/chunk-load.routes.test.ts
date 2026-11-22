@@ -382,7 +382,7 @@ test.describe('a lazy chunk fails to load', () => {
 		await expect(row(page, 1)).toBeVisible();
 		await rowOf(page, 1).focus();
 		await page.keyboard.press('Enter');
-		const failed = page.locator('#search-drawer [role="alert"]');
+		const failed = page.locator('[role="alert"]').filter({ hasText: "Details couldn't load." });
 		await expect(failed).toContainText("Details couldn't load.");
 		expect(gate.hit).toBeGreaterThan(0);
 		// The alert is announced, not focused: the row keeps focus.
@@ -409,26 +409,7 @@ test.describe('a lazy chunk fails to load', () => {
 		expect(errors).toEqual([]);
 	});
 
-	test('the detail drawer: Close leaves the failed drawer as closing it does', async ({
-		page,
-		go,
-		mock
-	}) => {
-		const { errors, failed } = await failDrawer(page, go, mock as OpenApiMock);
-		await failed.getByRole('button', { name: 'Close' }).click();
-		await expect(failed).toHaveCount(0);
-		await expect(page).toHaveURL(/\/search\?q=lantern(&|$)/);
-		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
-		// Focus goes back to the row, never to the page body.
-		await expect(rowOf(page, 1)).toBeFocused();
-		// The drawer's entry is gone: Back now leaves Search's own entry, never reopens the drawer.
-		expect(await page.evaluate(() => 'detail' in (history.state?.['sveltekit:states'] ?? {}))).toBe(
-			false
-		);
-		expect(errors).toEqual([]);
-	});
-
-	test('the detail drawer: Back leaves the failed drawer, and the alert goes with it', async ({
+	test("the detail drawer: Back clears the failed drawer's alert, and another row shows one", async ({
 		page,
 		go,
 		mock
@@ -438,6 +419,14 @@ test.describe('a lazy chunk fails to load', () => {
 		await expect(failed).toHaveCount(0);
 		await expect(page).toHaveURL(/\/search\?q=lantern(&|$)/);
 		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
+		// Back leaves focus where it was: the row that opened the drawer.
+		await expect(rowOf(page, 1)).toBeFocused();
+		// Another row: the chunk fails again, and one alert shows, never a second.
+		await rowOf(page, 2).focus();
+		await page.keyboard.press('Enter');
+		await expect(failed).toHaveCount(1);
+		await expect(failed).toContainText("Details couldn't load.");
+		await expect(rowOf(page, 2)).toBeFocused();
 		expect(errors).toEqual([]);
 	});
 });

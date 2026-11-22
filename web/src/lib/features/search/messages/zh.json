@@ -5,7 +5,6 @@
 	"search_page_results_failed": "结果无法加载。",
 	"search_page_retry": "重试",
 	"search_page_detail_failed": "详情无法加载。",
-	"search_page_close": "关闭",
 	"search_query_label": "搜索种子",
 	"search_query_placeholder": "按名称搜索，或添加筛选条件，例如 res:1080p",
 	"search_query_placeholder_short": "搜索，或筛选：res:1080p",
