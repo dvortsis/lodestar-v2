@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-22T18:01:33Z",
+  "updated_at": "2026-11-22T18:39:04Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-22T15:40:59Z",
+  "last_heartbeat": "2026-11-22T18:39:04Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T18:01:33Z",
+    "updated": "2026-11-22T18:39:04Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhn9gdfgFDtyqmPYioHq",
         "model": "sonnet",
         "since": "2026-11-22T18:01:33Z",
-        "doing": "step 0"
+        "doing": "PR 1 built locally; size calls given (Compare raise to measured, actions-menu entry); waits for .size-limit.mjs after X-insights-story-stages"
       },
       {
         "slot": 2,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhnAa7HfaQXcvUi8EyoQ",
         "model": "sonnet",
         "since": "2026-11-22T14:39Z",
-        "doing": "#1075 review CHANGES: fixing typing loss, skip link, banner, late-preference shift"
+        "doing": "round-2 fixes delta-checked by runner at 5906c800; CI running, then merge"
       },
       {
         "slot": 3,
@@ -10780,7 +10780,7 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-22T15:40:59Z",
+  "heartbeat": "2026-11-22T18:39:04Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
