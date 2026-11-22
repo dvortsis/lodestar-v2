@@ -7,11 +7,11 @@ This supersedes three points of `2026-11-22-X-search-chunk-retry.md` (#1057): "a
   - the server's `/parse` and its canonical form;
   - the raw text on a parse error;
   - `replaceState`, never a new history entry.
-- **`flush()` resolves at once when nothing is due.** Typed text is "due" from `setText` until its write commits. A structured edit or a submit leaves it set, so a later `flush()` repeats the parse, and the commit makes no history entry when the URL already matches.
+- **`flush()` resolves at once when nothing is due.** Typed text is "due" from `setText` until the URL holds it: `due` clears only after the commit, so a Retry during the debounce's own commit still writes (runner review). An outside URL change (`sync()`) clears it too, so Retry after "type, then Enter" makes no extra `/parse` (runner review). A structured edit or a submit leaves it set; a later `flush()` then repeats the parse, and the commit makes no history entry when the URL already matches.
 - **The wait is bounded at 1 s (`FLUSH_PARSE_MS`, runner).** Retry runs after something has already failed, often the network. If `/parse` hasn't answered within 1 s, the parse is cancelled and the raw text is written, as a parse error writes it. A debounce parse already in flight is restarted under the bound.
-- **A second Retry joins the flush already running (self-review).** Without that, its `slot.cancel()` would abort the first click's parse, and the first click would then reload at the old query.
+- **A second Retry joins the flush already running (self-review).** Without that, its write's parse would supersede the first click's (`latest()` aborts the previous run), and the first click would then reload at the old query. `flush()` has no `slot.cancel()` of its own: `latest().run()` already aborts the run in flight (runner review).
 - **`flush()` is for Retry only, right before a reload.** After a timeout the raw text is in the URL with no AST for it, which the reload resolves. If `flush()` rejects (a failed `goto`), the click's promise rejects and the page doesn't reload; Retry can be pressed again. A `.catch` would cost bytes the route doesn't have.
-- **The chain:** `Live.flush()`, then `QueryBar.flush()`, then `+page.svelte`'s Retry: `await bar?.flush()`, then the marker, then `location.reload()`. Before the editor has loaded there is no draft in W5, and nothing would ever write the URL, so Retry reloads as before.
+- **The chain:** `Live.flush()`, then `QueryBar.flush()`, then `+page.svelte`'s Retry: `await bar?.flush()`, then the marker, then `location.reload()`. The marker and reload happen only if the page is still `/search`: a user who went to Insights during the flush's wait isn't reloaded there, and no marker leaks into the next `/search` mount (runner review). Before the editor has loaded there is no draft in W5, and nothing would ever write the URL, so Retry reloads as before.
 - **Owns widened at step 0 (runner):**
   - `web/src/lib/state/search.svelte.ts` and its test;
   - `web/src/lib/features/search/query/{QueryBar.svelte,Live.svelte,types.ts}`.
@@ -24,29 +24,36 @@ This supersedes three points of `2026-11-22-X-search-chunk-retry.md` (#1057): "a
 
 ## A failed detail drawer says so (§10.5)
 - **The drawer's `import()` has a rejection handler.** A failed `DetailHost` chunk no longer raises an uncaught rejection.
-- **What shows, while `page.state` holds `detail`:** a `role="alert"` panel at the bottom edge with "Details couldn't load.", Retry and Close. The strings are route-only keys: `search_page_detail_failed` and `search_page_close`, with `search_page_retry` reused (en and zh).
-- **Placement uses only classes already in the global sheet,** so Search CSS stays 19,792 B: `flex flex-wrap items-center gap-4 p-6 fixed inset-x-4 bottom-4 z-50 bg-base-100 shadow large:left-auto`.
-  - **Why fixed:** `#search-drawer` is `display: contents` in the grid, so an in-flow alert would land under the rail or below the list.
-  - **Below `large`** it spans the width above the bottom edge, where the phone drawer sheet sits.
-  - **From `large` up** `large:left-auto` sizes it to its content at the right edge, where the overlay drawer opens.
-  - **Checked at 360 and 1440 px:** it never reaches the query bar, and it covers less of the list than the drawer would.
-- **Focus doesn't move to the panel.** `role="alert"` announces it, and the row that opened the drawer keeps focus. Retry and Close follow the results' own controls in Tab order (DOM order: `#results`, then `#search-drawer`).
+- **What shows, while `page.state` holds `detail`:** a `role="alert"` panel with "Details couldn't load." and Retry. The string is one route-only key, `search_page_detail_failed`, with `search_page_retry` reused (en and zh).
+- **The `hostFailed` flag resets before each `import()`** (runner review), so on a browser that refetches, an attempt in flight never shows an earlier failure.
+- **Placement: sticky at the top of `#results`, before the toolbar (runner review):** `sticky top-0 z-10 flex flex-wrap items-center gap-4 p-6 rounded-box border border-base-300 bg-base-100`.
+  - **The tokens are the Toaster's** (`rounded-box border border-base-300`, design-tokens.md §6). There's no `shadow`: it's Tailwind's default, not a token.
+  - **Why not fixed at the bottom, as first built:** that's the Toaster's own slot (`fixed inset-x-4 bottom-4 z-50`, `large:left-auto`), so a toast would cover the panel.
+  - **Why not fixed at the top:** the global sheet has only `top-0` for that, which covers the shell's top bar. At 360 px the panel would also come within about 9 px of the query bar (bar top y=121).
+  - **Why nothing new:** Search CSS has 8 B of headroom (19,792 / 19,800 B), so no new utility can be added. Every class above is already in the global sheet.
+  - **Where it sits:** in flow it's under the query bar and above the toolbar. While the list scrolls it sticks to the top of the results column, so it's in view wherever the row was opened. Checked at 360 and 1440 px: it's clear of the bar and of toasts.
+  - **The costs:** it pushes the list down about 90 px while shown, a layout shift on failure only. Retry comes before the row in Tab order, and focus isn't moved; the panel is `role="alert"`, so it's announced (runner: acceptable).
+- **Focus doesn't move to the panel.** `role="alert"` announces it, and the row that opened the drawer keeps focus.
 - **Retry is a plain `location.reload()` at the drawer's URL (`/t/<hash>?q=…`), with no marker.**
   - **What's lost:** SvelteKit doesn't restore shallow-routing `page.state` on a reload, so the torrent opens as its full detail page, and the results beside it are gone.
   - **What's kept:** the torrent, and Back returns to the search at its query.
   - **Why no marker:** `window.name` would outlive the reload into the next `/search` mount and move focus there.
-- **Close is `history.back()` (runner), then focus goes to the results' active row (self-review).** That's where a drawer's own close returns focus; without it, focus fell to the body when the panel unmounted (WCAG 2.4.3). It isn't `closeDetail()` from a dynamic import of `detail/open`, which cost 31 B more.
-  - **Opens from Search:** the two are the same, because every row open pushes the entry.
-  - **Back or Forward into a drawer entry:** `pushed` is false there, so `closeDetail()` would replace the entry with `/search?q=…`. `history.back()` steps back one entry instead.
-- **No Escape (runner: drop it before Close).** It cost 27 B, and with focus left on the row, Escape on the panel would rarely be reachable.
+- **No Close button, for the 45 kB cap (runner).**
+  - **It cost about 57 B:** the button and its en/zh "Close" key. It was built as `history.back()` with focus handed back to the row, and the review round's fixes left no room for it.
+  - **Back is the way out,** as it is for the drawer itself. Back clears `page.state.detail`, so the panel goes, and focus stays on the row that opened it. Opening another row replaces the state, so one panel shows, never two.
+  - **A later slice can add Close when there's room.** `history.back()` matches `closeDetail()` for every open from Search. It differs only for a drawer entry reached by Back or Forward, where `closeDetail()` replaces the entry with `/search?q=…`.
+- **No Escape either:** it cost 27 B, and with focus left on the row, Escape on the panel would rarely be reachable.
 
 ## Size (§10.1; the 45 kB cap stays, runner)
 - **Search route JS, measured with `npm run size:ci`:**
   - 44,847 B before;
   - 45,142 B for the first draft (+142 over the cap);
-  - **44,992 B final, with `main` merged: 8 B of headroom.**
+  - 44,992 B at #1065's first review, with Close;
+  - 45,008 B with the runner review's fixes and the panel moved;
+  - **44,945 B final (`size:ci`) and 44,951 B in a plain `npm run build` with size-limit, Close dropped: 55 B and 49 B of headroom.**
+- **The redundant `slot.cancel()` removed from `flush()` saves no route bytes.** W5 ships in the lazy Live and results chunks, not in the route's initial JS.
 - **Other entries:** Search CSS 19,792 B, Search results (lazy) 40,822 B and Detail drawer 28,274 B, all unchanged.
-- **Lighthouse `total-byte-weight` on bare `/search`:** 101,471 B on all three mobile runs, against 102,400 B. That's 101,325 B before.
+- **Lighthouse `total-byte-weight` on bare `/search`:** 101,421 B on all three mobile runs, against 102,400 B. That's 101,325 B before.
 - **Behaviour-neutral trims in owned files, each measured on the tree with this slice's code:**
   - **QueryBar (−43 B):**
     - Safari's `autocorrect="off"` is set in `onMount` instead of through a spread (−8 B). The spread made every attribute of the editor dynamic.
@@ -54,11 +61,9 @@ This supersedes three points of `2026-11-22-X-search-chunk-retry.md` (#1057): "a
     - No `type="button"` on the Syntax button, which isn't in a form (−5 B).
     - `onclick={openSyntax}`, and the inline styles without spaces (−11 B).
     - The static combobox now trips Svelte's `a11y_role_has_required_aria_props`, because the spread used to hide it. It's ignored where the existing comment explains it: ARIA 1.2 needs `aria-controls` only while the popup shows, which it never does yet.
-  - **`+page.svelte` (−16 B; Close's focus hand-back then costs +5 B):**
+  - **`+page.svelte` (−16 B):**
     - The first-run check shares the keys' `onMount` (−11 B).
     - The skip link's handler is inline (−5 B).
-  - **The drawer panel's compact layout and right alignment cost +10 B** over a plain full-width row.
-- **Close is in, at about 57 B.** If a later slice needs those bytes, Close is the piece to weigh first, because Back already closes the drawer.
 
 ## Tests
 - **W5 (`search.test.ts`):**
@@ -67,11 +72,15 @@ This supersedes three points of `2026-11-22-X-search-chunk-retry.md` (#1057): "a
   - the raw text on a parse error;
   - the raw text after a parse that never answers, at exactly the 1 s bound (fake timers);
   - a debounce parse in flight is restarted under the bound;
-  - a second flush joins the first: one request, one write.
+  - a second flush joins the first: one request, one write;
+  - a flush during the debounce's own commit still writes;
+  - an outside URL change (`sync()`) leaves nothing due.
 - **e2e (`chunk-load.routes.test.ts`):**
   - Retry within 100 ms of typing reloads at the typed query;
   - Retry while `/parse` hangs reloads at the raw text (two spaces kept). Only the bound can write it, so a missing bound fails at the 10 s deadline. There's no wall-clock assertion: the 1 s itself is pinned with fake timers;
+  - after Retry on bare `/search`, typing keeps focus and every key while the held results chunk settles. The chunk is held until typing starts, so the "nothing else has focus" guard is what the test proves;
   - after Retry on bare `/search`, a load the 30 s timer starts (`page.clock`) doesn't move focus off the body. The test waits for that load to settle: every chunk fetch answered, and the empty state shown where the browser refetched;
   - a blocked drawer chunk shows the alert with no page error and the row still focused, and Retry opens the full page;
-  - Close leaves `/search?q=…` with no drawer entry and focus on the row, and Back also hides the alert.
+  - Back clears the alert with focus on the row, and opening another row shows one alert, not two.
   - **No fixed sleeps.** The drawer chunk is found by the one chunk that preloads `DetailHostBody`'s stylesheet.
+  - **`blockChunk` retries a chunk fetch the preview server resets** (`ECONNRESET`, under parallel load), up to three tries at once. If every try resets, it aborts the route as a reset. That was a shared flake in this spec (runner: fix it here).
