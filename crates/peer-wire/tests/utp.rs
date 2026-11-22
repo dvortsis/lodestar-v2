@@ -9,7 +9,7 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_peer_wire::testing::{Accept, Behavior, FakePeer, Seed};
 use lodestar_peer_wire::utp::{Config, PacketSink, UtpSocket};
-use lodestar_peer_wire::{Encryption, Error, FetchOptions, FetchStats, Transport, fetch};
+use lodestar_peer_wire::{Encryption, Error, FetchOptions, FetchStats, Reserve, Transport, fetch};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
@@ -295,7 +295,7 @@ struct Loss {
 impl Loss {
     /// A link losing `rate` of its packets (below 50%: never two in a row).
     fn at(seed: u64, rate: f64) -> Loss {
-        debug_assert!((0.0..0.5).contains(&rate), "a loss rate below 50%: {rate}");
+        assert!((0.0..0.5).contains(&rate), "a loss rate below 50%: {rate}");
         Loss {
             rng: StdRng::seed_from_u64(seed),
             dropped_last: false,
@@ -339,13 +339,24 @@ impl PacketSink for LossySink {
     }
 }
 
-/// A client socket on a link that loses and reorders in both directions.
-fn lossy_client(seed: u64) -> UtpSocket {
+/// The task feeding a lossy client's socket: stopped when dropped, which
+/// closes its UDP socket and drops its handle on the uTP socket.
+struct Feeder(tokio::task::JoinHandle<()>);
+
+impl Drop for Feeder {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// A client socket on a link that loses and reorders in both directions,
+/// and the task feeding it (keep it as long as the socket is used).
+fn lossy_client(seed: u64) -> (UtpSocket, Feeder) {
     lossy_client_at(seed, 0.15)
 }
 
 /// [`lossy_client`] at another loss rate.
-fn lossy_client_at(seed: u64, rate: f64) -> UtpSocket {
+fn lossy_client_at(seed: u64, rate: f64) -> (UtpSocket, Feeder) {
     let std = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     std.set_nonblocking(true).unwrap();
     let sink = Arc::new(LossySink {
@@ -361,7 +372,7 @@ fn lossy_client_at(seed: u64, rate: f64) -> UtpSocket {
     );
     let udp = tokio::net::UdpSocket::from_std(std).unwrap();
     let feeder = utp.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let mut loss = Loss::at(seed ^ 0xff, rate);
         let mut buf = vec![0u8; 65_536];
         while let Ok((n, from)) = udp.recv_from(&mut buf).await {
@@ -370,7 +381,7 @@ fn lossy_client_at(seed: u64, rate: f64) -> UtpSocket {
             }
         }
     });
-    utp
+    (utp, Feeder(task))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -382,20 +393,21 @@ async fn fetches_over_a_lossy_link() {
         .into_iter()
         .enumerate()
     {
-        let utp = lossy_client(40 + i as u64);
+        let (utp, _feeder) = lossy_client(40 + i as u64);
         let peer =
             FakePeer::spawn_utp(vec![seed.clone()], Accept::Both, Behavior::Honest, vec![]).await;
         let o = FetchOptions {
             allow_private: true,
             timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(10),
-            // The product's 4 s first-window bound (X-fetch-first-window)
-            // is missed by about 2% of honest fetches over this link: a
-            // couple of retransmit timeouts in the window's ~55 packets
-            // use it up. Over 1,000 probe fetches the window took up to
-            // 9.8 s; 20 s covers that with margin, inside the 30 s
-            // deadline (X-flake-utp-lossy-win). The product keeps 4 s
-            // (CR-UTP-FIRST-WINDOW, `first_window_miss_rates`).
+            // Without a `reserve` (as here) all 8 pieces go out at once,
+            // and the product's 4 s first-window bound (X-fetch-first-window)
+            // is missed by about 2% of honest fetches over this link; with
+            // the product's reserve only the first window is asked for, and
+            // more miss (CR-UTP-FIRST-WINDOW, `first_window_miss_rates`).
+            // Over 1,000 probe fetches the window took up to 9.8 s; 20 s
+            // covers that with margin, inside the 30 s deadline
+            // (X-flake-utp-lossy-win).
             first_window_deadline: Duration::from_secs(20),
             ..utp_opts(utp.clone(), mode)
         };
@@ -409,22 +421,28 @@ async fn fetches_over_a_lossy_link() {
     }
 }
 
-/// One honest fetch over a lossy link: its outcome and how long it took.
+/// One honest fetch over a lossy link: its outcome, how long it took, and
+/// whether it missed the first window. With `reserve`, as the product
+/// always fetches (`pool.rs` calls `fetch_reserving`), only the first
+/// window's 4 pieces are asked for until they're in; without it, all 8 go
+/// out at once (#1008's probe).
 async fn lossy_fetch(
     seed: u64,
     rate: f64,
     first_window: Duration,
+    reserve: bool,
 ) -> (Result<(), String>, Duration, bool) {
     let info = info_dict(120_000);
     let s = Seed::v1(info.clone());
     let hash = InfoHash(s.info_hash);
-    let utp = lossy_client_at(seed, rate);
+    let (utp, _feeder) = lossy_client_at(seed, rate);
     let peer = FakePeer::spawn_utp(vec![s], Accept::Both, Behavior::Honest, vec![]).await;
     let o = FetchOptions {
         allow_private: true,
         timeout: Duration::from_secs(30),
         connect_timeout: Duration::from_secs(10),
         first_window_deadline: first_window,
+        reserve: reserve.then(|| Reserve(Arc::new(|_, _| Box::pin(async {})))),
         ..utp_opts(utp, Encryption::Disable)
     };
     let start = std::time::Instant::now();
@@ -436,11 +454,14 @@ async fn lossy_fetch(
 
 /// CR-UTP-FIRST-WINDOW's measurement (a measurement, not a disabled
 /// check): honest fetches of a 120 kB dict over the lossy link at 5, 10,
-/// 15 and 20% loss, each seed run with the product's 4 s first window and
-/// again with 20 s, 16 at a time. Prints, per loss rate, the first-window
-/// misses at 4 s, other failures, and the 20 s runs' total times.
-/// 400 fetches per run by default (`FIRST_WINDOW_FETCHES` changes it), about
-/// 32 min in a release build:
+/// 15 and 20% loss, with the product's request pattern (a reserve, so the
+/// first window's 4 pieces alone), each seed run with the product's 4 s
+/// first window and again with 20 s, 16 at a time. Prints, per loss rate,
+/// the first-window misses, other failures and total times.
+/// `FIRST_WINDOW_ALL_PIECES=1` asks for all 8 pieces at once instead
+/// (#1008's probe, not the product's pattern); `FIRST_WINDOW_ONLY_4S=1`
+/// skips the 20 s runs. 400 fetches per run by default
+/// (`FIRST_WINDOW_FETCHES` changes it), about 32 min in a release build:
 /// `cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates -- --ignored --nocapture`
 /// Results and the decision: `docs/decisions/2026-11-22-CR-UTP-FIRST-WINDOW.md`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -450,16 +471,24 @@ async fn first_window_miss_rates() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(400);
-    for rate in [0.05, 0.10, 0.15, 0.20] {
-        for (label, window) in [
+    let flag = |k: &str| std::env::var(k).is_ok_and(|v| v == "1");
+    let reserve = !flag("FIRST_WINDOW_ALL_PIECES");
+    let windows: &[(&str, Duration)] = if flag("FIRST_WINDOW_ONLY_4S") {
+        &[("4s", Duration::from_secs(4))]
+    } else {
+        &[
             ("4s", Duration::from_secs(4)),
             ("20s", Duration::from_secs(20)),
-        ] {
+        ]
+    };
+    println!("reserve (the product's pattern): {reserve}");
+    for rate in [0.05, 0.10, 0.15, 0.20] {
+        for &(label, window) in windows {
             let mut results = Vec::new();
             for chunk in (0..n).collect::<Vec<_>>().chunks(16) {
                 let mut set = tokio::task::JoinSet::new();
                 for &i in chunk {
-                    set.spawn(lossy_fetch(10_000 + i, rate, window));
+                    set.spawn(lossy_fetch(10_000 + i, rate, window, reserve));
                 }
                 while let Some(r) = set.join_next().await {
                     results.push(r.unwrap());
@@ -473,8 +502,8 @@ async fn first_window_miss_rates() {
             let missed = results.iter().filter(|r| r.2).count();
             let other: Vec<&String> = results
                 .iter()
+                .filter(|r| !r.2)
                 .filter_map(|r| r.0.as_ref().err())
-                .filter(|e| !e.contains("first window"))
                 .collect();
             let mut t = ok.clone();
             t.sort_by(f64::total_cmp);
