@@ -3017,7 +3017,7 @@ docs/               architecture.md (this plan), query-language.md, operations.m
 
 - `cargo test --workspace` (unit, property, and golden tests), `cargo clippy -D warnings`, `cd web && npx vitest run && npx playwright test`.
 - UI gates (§10.17):
-  - `npx size-limit` (first load ≤ 100 KB gzipped);
+  - `npm run size:ci` (first load ≤ 100 KB gzipped);
   - Lighthouse CI (LCP/INP/CLS);
   - axe on every screen × theme;
   - Playwright visual snapshots at 320/390/768/1024/1366/1920/2560;

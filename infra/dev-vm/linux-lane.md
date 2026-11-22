@@ -34,7 +34,7 @@ In this order, each with its wall time, pass/fail counts and the names of failin
 1. `cargo fmt --check`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
 3. `cargo test --workspace`. Then re-run each failing test 10 times on its own, to tell a flake from a real failure.
-4. In `web/`: `npm ci`, `npm run check`, `npx vitest run`, `npm run build`, `npx size-limit`.
+4. In `web/`: `npm ci`, `npm run check`, `npx vitest run`, `npm run build`, `npm run size:ci`.
 5. Playwright: run `npx playwright install --with-deps chromium` once. On this VM that's allowed; the "never playwright install" rule is for the cloud containers. Then run `npx playwright test --trace off`.
 6. The Docker image: build it with the repo's Dockerfile (find it under `packaging/`), start it on a fresh data directory, and check `/healthz`. Then stop it. No crawl yet: it isn't behind the tunnel.
 
