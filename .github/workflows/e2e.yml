@@ -2,7 +2,8 @@ name: E2E
 
 # PR run: Riverstone light/dark × 7 breakpoints × 2 densities, the rotating 6 themes, reduced
 # motion and keyboard-only projects (axe everywhere; baselines for key screens), then Lighthouse CI.
-# Nightly / manual: the `all-themes` project (axe on every route + key-screen baselines, 48 themes).
+# Nightly / manual: the `all-themes` project (axe on every route + key-screen baselines, 48 themes)
+# and the `pseudo` project (pseudo-locale build: overflow, clipping, hard-coded English).
 #
 # Everything runs in the Playwright image pinned below (match @playwright/test in web/package.json),
 # so text rendering is reproducible and the baselines are generated here, never on a laptop.
@@ -283,6 +284,20 @@ jobs:
         env:
           PLAYWRIGHT_HTML_OPEN: never
           PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-json/results.json
+      # The pseudo-locale check (X-ui-checks-3): every route built from longer, accented messages,
+      # for overflow, clipped text and hard-coded English. Nightly and manual only, like this whole
+      # job. It builds a scratch copy of web/ OUTSIDE the repository (scripts/pseudo-locale.mjs), so
+      # web/build, the Docker image and the release never see it. Its own report and output folders
+      # keep the all-themes diffs above intact; `!cancelled()` runs it even when all-themes failed.
+      # A failure here fails this job; the run summary below counts it with the all-themes run, so the
+      # tracking issue lists its failing specs too ("pseudo: " in front of each title).
+      - name: Pseudo-locale check
+        if: ${{ !cancelled() }}
+        run: npx playwright test --project=pseudo --reporter=list,html,json --output=test-results-pseudo
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+          PLAYWRIGHT_HTML_REPORT: playwright-report-pseudo
+          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-json-pseudo/results.json
       # Every run, pass or fail: counts and the failing spec titles, to the run page and as a
       # small artifact that `all-themes-issue` reads. This job runs npm code, so it holds no
       # write token; the titles come from the test code and are cleaned before anyone prints them.
@@ -296,25 +311,36 @@ jobs:
           const clean = (t) =>
             String(t).replace(/[^\x20-\x7e]/g, ' ').replace(/[`@<>|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
           const s = { available: false, passed: 0, failed: 0, flaky: 0, skipped: 0, errors: 0, failing: [], more: 0 };
-          try {
-            const r = JSON.parse(fs.readFileSync('playwright-json/results.json', 'utf8'));
-            const st = r.stats || {};
-            Object.assign(s, { available: true, passed: st.expected | 0, failed: st.unexpected | 0, flaky: st.flaky | 0, skipped: st.skipped | 0, errors: (r.errors || []).length });
-            const all = [];
-            const walk = (suite, trail) => {
-              const t = suite.title ? trail.concat(suite.title) : trail;
-              for (const spec of suite.specs || []) if (!spec.ok) all.push(clean(t.concat(spec.title).join(' / ')));
-              for (const c of suite.suites || []) walk(c, t);
-            };
-            for (const su of r.suites || []) walk(su, []);
-            s.failing = all.slice(0, 25);
-            s.more = Math.max(0, all.length - s.failing.length);
-          } catch (e) {
-            // No report: the run stopped before the tests produced one.
+          // The all-themes run and the pseudo-locale run (titles of the latter start "pseudo: ").
+          const all = [];
+          for (const [file, prefix] of [['playwright-json/results.json', ''], ['playwright-json-pseudo/results.json', 'pseudo: ']]) {
+            try {
+              const r = JSON.parse(fs.readFileSync(file, 'utf8'));
+              const st = r.stats || {};
+              s.available = true;
+              s.passed += st.expected | 0;
+              s.failed += st.unexpected | 0;
+              s.flaky += st.flaky | 0;
+              s.skipped += st.skipped | 0;
+              s.errors += (r.errors || []).length;
+              const walk = (suite, trail) => {
+                const t = suite.title ? trail.concat(suite.title) : trail;
+                for (const spec of suite.specs || []) if (!spec.ok) all.push(prefix + clean(t.concat(spec.title).join(' / ')));
+                for (const c of suite.suites || []) walk(c, t);
+              };
+              for (const su of r.suites || []) walk(su, []);
+            } catch (e) {
+              // No report from this run: it stopped before the tests produced one. Said per run,
+              // so a missing all-themes report is not hidden by a present pseudo-locale one.
+              all.push(`${prefix || 'all themes: '}no test report (the run stopped before the tests finished)`);
+              s.failed += 1;
+            }
           }
+          s.failing = all.slice(0, 25);
+          s.more = Math.max(0, all.length - s.failing.length);
           const md = s.available
-            ? [`**All themes:** ${s.passed} passed, ${s.failed} failed, ${s.flaky} flaky, ${s.skipped} skipped${s.errors ? `, ${s.errors} errors outside the tests` : ''}.`]
-            : ['**All themes:** no test report was produced (the run stopped before the tests finished).'];
+            ? [`**All themes and pseudo-locale:** ${s.passed} passed, ${s.failed} failed, ${s.flaky} flaky, ${s.skipped} skipped${s.errors ? `, ${s.errors} errors outside the tests` : ''}.`]
+            : ['**All themes and pseudo-locale:** no test report was produced (the run stopped before the tests finished).'];
           if (s.failing.length) {
             // A fenced block: a title can't contain a backtick, so it can't close the fence.
             md.push('', 'Failing specs:', '```', ...s.failing, ...(s.more ? [`and ${s.more} more`] : []), '```');
@@ -338,7 +364,9 @@ jobs:
           name: playwright-report-all-themes
           path: |
             web/playwright-report
+            web/playwright-report-pseudo
             web/test-results
+            web/test-results-pseudo
           retention-days: 14
 
   # One tracking issue for the nightly all-themes run (spec §10.17). It is its own job so the job
