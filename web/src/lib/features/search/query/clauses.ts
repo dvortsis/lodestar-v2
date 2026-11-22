@@ -12,6 +12,7 @@ import {
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
 import type { Ast } from '$lib/state/search.svelte';
+import { groupText } from './group-labels.svelte';
 
 /** A label piece: plain text, or a value shown in mono (`full` is read instead of `mono`). */
 export type Part = string | { mono: string; full?: string };
@@ -305,7 +306,8 @@ const CATEGORY: Record<string, () => string> = {
 
 function tagValue(key: Of<'tag'>['key'], value: string): Part[] {
 	const named = key === 'type' ? TYPE_VALUE[value] : key === 'adult' ? ADULT_VALUE[value] : null;
-	return [named ? named() : mono(value)];
+	// A release group as the rail names it, when the client holds that label (X-group-chip-label).
+	return [named ? named() : mono(key === 'group' ? groupText(value) : value)];
 }
 
 function shareLabel(node: Of<'share'>): Part[] {

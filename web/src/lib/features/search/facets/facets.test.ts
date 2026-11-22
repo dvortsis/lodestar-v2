@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '$lib/api/client';
 import type { Ast } from '$lib/state/search.svelte';
-import { response } from './fixtures';
+import { response, term } from './fixtures';
 
 const post = vi.hoisted(() => vi.fn());
 vi.mock('$lib/api/client', async (original) => ({
@@ -10,6 +10,7 @@ vi.mock('$lib/api/client', async (original) => ({
 }));
 
 const { createFacets } = await import('./facets.svelte');
+const { groupText, resetGroupLabels } = await import('../query/group-labels.svelte');
 
 const word = (w: string) => ({ op: 'word', field: 'any', word: w }) as unknown as Ast;
 const query = (w = 'lantern', over = {}) => ({
@@ -101,6 +102,27 @@ describe('the facets store', () => {
 		expect(post).toHaveBeenCalledTimes(2);
 		await f.load(query('lantern', { lease: 'L2' })); // a new snapshot: counted again
 		expect(post).toHaveBeenCalledTimes(3);
+	});
+});
+
+describe('group labels (X-group-chip-label)', () => {
+	it('keeps each response’s passing group labels for the chips, past the next response', async () => {
+		resetGroupLabels();
+		const group = term([
+			['rarbg', 9, 'selected'],
+			['yts', 3]
+		]);
+		group.values[0]!.label = 'RARBG';
+		group.values[1]!.label = 'YIFY'; // not a re-casing of `yts`: dropped
+		post.mockResolvedValueOnce(response({ facets: { group } }));
+		const f = createFacets();
+		await f.load(query());
+		expect(groupText('rarbg')).toBe('RARBG');
+		expect(groupText('yts')).toBe('yts');
+		// A later response without the group facet replaces the rail's data, not the labels.
+		post.mockResolvedValueOnce(response({ facets: {} }));
+		await f.load(query('other'));
+		expect(groupText('rarbg')).toBe('RARBG');
 	});
 });
 
