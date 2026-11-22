@@ -1,4 +1,4 @@
-# X-msi-upgrade-env-value decisions
+# X-msi-upgrade-env-value decisions (#1067)
 
 - **An MSI install or update drops the service's `Environment` registry value, by design.** `packaging/windows/main.wxs:44` uses `<MajorUpgrade AllowDowngrades="yes" />` with the default schedule, so the old product is removed first. `main.wxs:107-126` (`ServiceInstall`, `ServiceControl Remove="uninstall"`) deletes the whole `HKLM\SYSTEM\CurrentControlSet\Services\Lodestar` key, and the value goes with it. The in-app updater installs through the same MSI, so it behaves the same way.
 - **Declined: keeping the value in the MSI (option a).** Reading a `REG_MULTI_SZ` from the service key and writing it back needs a custom action. The value can hold user variables, possibly secrets, which the verbose MSI log (`/l*v`) would then record. It would also write inside the service-control-manager key that the service-account hardening relies on. The only value the MSI keeps across an upgrade stays `FirewallWeb`.
