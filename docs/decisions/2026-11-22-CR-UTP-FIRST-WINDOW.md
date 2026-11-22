@@ -34,9 +34,11 @@ Honest fetches of a 120 kB dict (8 pieces) over the in-process lossy link from `
 | Loss | Product today (window alone) | (d), the window and one more piece | #1008's pattern (all 8 pieces at once, not the product's) |
 |---|---|---|---|
 | 5% | 0 (0%) | 0 (0%) | 0 (0%) |
-| 10% | 8 (2.0%) | DPLUS10 | 0 (0%) |
-| 15% | 25 (6.25%) | DPLUS15 | 8 (2.0%) |
-| 20% | 75 (18.75%) | DPLUS20 | 32 (8.0%) |
+| 10% | 8 (2.0%) | 2 (0.5%) | 0 (0%) |
+| 15% | 25 (6.25%) | 10 (2.5%) | 8 (2.0%) |
+| 20% | 75 (18.75%) | 37 (9.25%) | 32 (8.0%) |
+
+- **The (d) column** is the change as built. An earlier run of a variant, which waited for every requested piece before moving on, gave 0, 7 and 45 at 10, 15 and 20%: the same order, within run-to-run noise.
 
 **With a 20 s window (the product's pattern today):** all 1,600 fetches succeeded. Whole-fetch time, p50 / p99 / max:
 
@@ -62,6 +64,7 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
   - the window is still pieces 0–3;
   - the 4 s deadline and `Error::FirstWindow` count only those four.
 - **Why it helps:** piece 3's last packets are followed by piece 4's, so a loss at the window's tail gets duplicate and selective ACKs and is fast-retransmitted.
+- **The bound, in plain words:** the full reservation and the pace clock start when pieces 0–3 are in, whatever piece 4 does.
 - **Past the window:**
   - once pieces 0–3 are in, the whole result is reserved and the rest is asked for, as before;
   - the pace starts then, without waiting for piece 4, which is already reserved;
@@ -81,7 +84,7 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
   - `a_five_piece_dict_is_reserved_and_asked_for_whole`;
   - `the_window_is_still_its_four_pieces`;
   - every existing first-window and pace test is unchanged;
-  - `tests/fetch.rs`'s up-front reservation is 5 pieces.
+  - `tests/fetch.rs`'s up-front reservation is 5 pieces (`a_large_claim_reserves_its_first_window_until_the_window_arrives`; the runner approved that file for this slice).
   - Mutation-checked: dropping the extra piece fails all three new tests. Waiting for every requested piece fails `the_window_is_still_its_four_pieces` and two existing pace tests.
 
 ## The candidates and their cost
@@ -100,5 +103,5 @@ cargo test --release -p lodestar-peer-wire --test utp first_window_miss_rates --
   - a slow peer's worst case on uTP goes from 4 s to 8 s;
   - a silent peer's stays 4 s;
   - TCP is unchanged.
-- **The gain left for it after (d):** the misses in the (d) column above, at most DPLUS20PCT at 20% loss and DPLUS15PCT at 15%. It would remove those that need under 8 s. That isn't measured with the extension in place.
+- **The gain left for it after (d):** the misses in the (d) column above, at most 9.25% at 20% loss and 2.5% at 15%. It would remove those that need under 8 s. That isn't measured with the extension in place.
 - **The runner's recommendation:** not to build it unless live data show uTP paths at 15% loss or worse are common. The runner adds the owner_queue entry in its records PR.
