@@ -153,6 +153,14 @@ impl std::fmt::Debug for Reserve {
 const FIRST_PIECES: usize = 4;
 /// The dict bytes the first request window covers.
 pub(crate) const FIRST_WINDOW: usize = FIRST_PIECES * METADATA_PIECE;
+/// Pieces asked for, and reserved, before the first window is in: the
+/// window and one more (CR-UTP-FIRST-WINDOW). The extra piece's data
+/// follows the window's last packets, so on a lossy uTP link a loss at the
+/// window's tail is repaired by a fast retransmit instead of waiting out a
+/// retransmit timeout. The window's deadline and [`Error::FirstWindow`]
+/// still count only the window's [`FIRST_PIECES`]; a peer that won't send
+/// pins 80 KiB for that time instead of 64 KiB.
+const FIRST_REQUEST: usize = FIRST_PIECES + 1;
 
 /// The heap bytes a [`Fetched`] can hold, for [`Reserve`]: the dict at
 /// `dict` bytes, the client name, and a full PEX list.
@@ -722,12 +730,14 @@ where
                     .filter(|s| *s > 0 && *s <= opts.max_metadata)
                     .ok_or(Error::MetadataSize(size.max(0) as u64))?;
                 their_metadata_id = Some(id);
-                // The first window's bytes are reserved before any is
-                // requested, so a full budget pauses here, not after the
-                // download. The rest waits until the peer has sent the window.
+                // The first request's bytes (the window and one more piece,
+                // `FIRST_REQUEST`) are reserved before any is requested, so a
+                // full budget pauses here, not after the download. The rest
+                // waits until the peer has sent the window.
                 if let Some(reserve) = &opts.reserve {
                     let total = result_bound(size, client.as_ref());
-                    let now = result_bound(size.min(FIRST_WINDOW), client.as_ref());
+                    let first = FIRST_REQUEST * METADATA_PIECE;
+                    let now = result_bound(size.min(first), client.as_ref());
                     reserve.reserve(now, total).await;
                     if now < total {
                         unreserved = Some(total);
@@ -737,7 +747,7 @@ where
                 // outside the reservation, in the socket's working memory.
                 let mut a = Assembly::new(size);
                 if unreserved.is_some() {
-                    a.limit = FIRST_PIECES;
+                    a.limit = FIRST_REQUEST;
                 }
                 while let Some(piece) = a.next_request() {
                     let request = message::metadata_request(piece);
@@ -781,8 +791,11 @@ where
                         // Past the first window only once all of it has
                         // arrived and the whole result is reserved: a peer
                         // pins a large claim only by sending 64 KiB first.
+                        // The first request's extra piece may still be on
+                        // its way; it's already reserved, and the pace
+                        // below starts without waiting for it.
                         if let (Some(total), Some(reserve)) = (unreserved, &opts.reserve) {
-                            if a.in_flight > 0 {
+                            if !a.window_is_in() {
                                 continue;
                             }
                             reserve.reserve(total, total).await;
@@ -1467,6 +1480,208 @@ mod tests {
                 && took <= FIRST_WINDOW_DEADLINE + Duration::from_millis(100),
             "ended after {took:?}"
         );
+        peer.abort();
+    }
+
+    /// A peer that records every metadata piece asked of it and serves only
+    /// those in `serve`, then says nothing more.
+    async fn recording(
+        mut stream: tokio::io::DuplexStream,
+        info: Vec<u8>,
+        serve: Vec<usize>,
+        asked: Arc<std::sync::Mutex<Vec<usize>>>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let key: [u8; 20] = Sha1::digest(&info).into();
+        let frame = |ext_id: u8, body: Vec<u8>| {
+            let mut f = ((body.len() + 2) as u32).to_be_bytes().to_vec();
+            f.extend([20, ext_id]);
+            f.extend(body);
+            f
+        };
+        let mut theirs = [0u8; HANDSHAKE_LEN];
+        stream.read_exact(&mut theirs).await.unwrap();
+        let hello = message::handshake(&key, b"-SC0001-scriptscript", true);
+        stream.write_all(&hello).await.unwrap();
+        let ext = message::our_extended_handshake(Some(info.len()));
+        stream.write_all(&frame(0, ext)).await.unwrap();
+        loop {
+            let mut len = [0u8; 4];
+            if stream.read_exact(&mut len).await.is_err() {
+                return;
+            }
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            if stream.read_exact(&mut body).await.is_err() {
+                return;
+            }
+            if body.len() < 2 || body[0] != 20 || body[1] != OUR_UT_METADATA {
+                continue;
+            }
+            let Ok(MetadataMessage::Request { piece }) =
+                message::parse_metadata_message(&body[2..])
+            else {
+                continue;
+            };
+            let piece = piece as usize;
+            asked.lock().unwrap().push(piece);
+            if !serve.contains(&piece) {
+                continue;
+            }
+            let start = piece * METADATA_PIECE;
+            let end = (start + METADATA_PIECE).min(info.len());
+            let reply = message::metadata_data(piece, info.len(), &info[start..end]);
+            if stream
+                .write_all(&frame(OUR_UT_METADATA, reply))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    /// Every `(now, total)` a [`recorded_reserve`] was asked for.
+    type Reserved = Arc<std::sync::Mutex<Vec<(usize, usize)>>>;
+
+    /// A reserve that records every `(now, total)` it's asked for.
+    fn recorded_reserve() -> (Reserve, Reserved) {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        let reserve = Reserve(Arc::new(move |now, total| {
+            seen.lock().unwrap().push((now, total));
+            Box::pin(async {})
+        }));
+        (reserve, calls)
+    }
+
+    /// CR-UTP-FIRST-WINDOW: a dict larger than the first request (six and
+    /// eight pieces) has the window and one more piece asked for, and
+    /// reserved, before anything arrives: pieces 0–4 and 80 KiB, never
+    /// the rest. A peer that sends none of it ends at the window's 4 s.
+    #[tokio::test(start_paused = true)]
+    async fn the_first_request_is_the_window_and_one_more_piece() {
+        for pieces in [6, 8] {
+            let size = pieces * METADATA_PIECE;
+            let info: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+            let key = InfoHash(Sha1::digest(&info).into());
+            let (ours, theirs) = tokio::io::duplex(1 << 20);
+            let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let peer = tokio::spawn(recording(theirs, info, vec![], asked.clone()));
+            let (reserve, calls) = recorded_reserve();
+            let mut opts = plain(Duration::from_secs(8));
+            opts.reserve = Some(reserve);
+            let got = timeout(
+                Duration::from_secs(8),
+                fetch_on_stream(ours, &key, &opts, false),
+            )
+            .await
+            .expect("it ends at the window");
+            assert!(matches!(got, Err(Error::FirstWindow)), "{pieces}: {got:?}");
+            assert_eq!(*asked.lock().unwrap(), [0, 1, 2, 3, 4], "{pieces} pieces");
+            let calls = calls.lock().unwrap().clone();
+            assert_eq!(calls.len(), 1, "{pieces}: {calls:?}");
+            let (now, total) = calls[0];
+            // The same bound over the result's other parts, so the dict
+            // bytes differ by exactly what's reserved.
+            assert_eq!(
+                total - now,
+                size - FIRST_REQUEST * METADATA_PIECE,
+                "{pieces}"
+            );
+            assert_eq!(FIRST_REQUEST * METADATA_PIECE, 80 << 10);
+            peer.abort();
+        }
+    }
+
+    /// A dict of five pieces fits the first request: it's reserved whole
+    /// and asked for in full, and served whole it's fetched.
+    #[tokio::test(start_paused = true)]
+    async fn a_five_piece_dict_is_reserved_and_asked_for_whole() {
+        let size = 5 * METADATA_PIECE;
+        let info: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        let key = InfoHash(Sha1::digest(&info).into());
+        let (ours, theirs) = tokio::io::duplex(1 << 20);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let peer = tokio::spawn(recording(
+            theirs,
+            info.clone(),
+            (0..5).collect(),
+            asked.clone(),
+        ));
+        let (reserve, calls) = recorded_reserve();
+        let mut opts = plain(Duration::from_secs(8));
+        opts.reserve = Some(reserve);
+        let got = timeout(
+            Duration::from_secs(8),
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await
+        .expect("in time")
+        .expect("fetched");
+        assert_eq!(got.info, info);
+        assert_eq!(*asked.lock().unwrap(), [0, 1, 2, 3, 4]);
+        let calls = calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0].0, calls[0].1, "reserved whole at once");
+        peer.abort();
+    }
+
+    /// The window is still pieces 0–3: a peer that sends the extra piece
+    /// but not piece 3 misses it at 4 s, and one that sends 0–3 but not the
+    /// extra piece has its window in, the rest asked for and its pace
+    /// checked (it falls behind at the first check, two seconds on).
+    #[tokio::test(start_paused = true)]
+    async fn the_window_is_still_its_four_pieces() {
+        let size = 8 * METADATA_PIECE;
+        let info: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        let key = InfoHash(Sha1::digest(&info).into());
+
+        let (ours, theirs) = tokio::io::duplex(1 << 20);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let peer = tokio::spawn(recording(
+            theirs,
+            info.clone(),
+            vec![0, 1, 2, 4],
+            asked.clone(),
+        ));
+        let mut opts = plain(Duration::from_secs(8));
+        opts.reserve = Some(Reserve(Arc::new(|_, _| Box::pin(async {}))));
+        let started = Instant::now();
+        let got = timeout(
+            Duration::from_secs(8),
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await
+        .expect("it ends at the window");
+        assert!(matches!(got, Err(Error::FirstWindow)), "{got:?}");
+        let took = started.elapsed();
+        assert!(
+            took >= FIRST_WINDOW_DEADLINE
+                && took <= FIRST_WINDOW_DEADLINE + Duration::from_millis(100),
+            "ended after {took:?}"
+        );
+        assert_eq!(*asked.lock().unwrap(), [0, 1, 2, 3, 4]);
+        peer.abort();
+
+        // The window without the extra piece: past it, the rest is asked
+        // for and the peer must keep pace.
+        let (ours, theirs) = tokio::io::duplex(1 << 20);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let peer = tokio::spawn(recording(theirs, info, vec![0, 1, 2, 3], asked.clone()));
+        let started = Instant::now();
+        let got = timeout(
+            Duration::from_secs(8),
+            fetch_on_stream(ours, &key, &opts, false),
+        )
+        .await
+        .expect("it ends at a check");
+        assert!(matches!(got, Err(Error::Behind)), "{got:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "at a check, not the deadline: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(*asked.lock().unwrap(), [0, 1, 2, 3, 4, 5, 6, 7]);
         peer.abort();
     }
 
