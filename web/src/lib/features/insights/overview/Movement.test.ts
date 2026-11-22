@@ -1,6 +1,7 @@
-// Movement's annotation notes (X-pseudo-text-gaps): an intensity change shows the level's
-// Settings label, and a level or kind this build doesn't know is a sentence of its own, never the
-// server's raw English word inserted into a translated one. Both locales.
+// Movement's annotation notes (X-pseudo-text-gaps): an intensity change shows the level's label
+// (Insights' own message, with the same words as Settings), and a level or kind this build doesn't
+// know is a sentence of its own, never the server's raw English word inserted into a translated
+// one. Both locales.
 import { cleanup, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initLocale } from '$lib/i18n/locale.svelte';
@@ -47,7 +48,7 @@ const note = (kind: string, text: string): Overview['annotations'][number] => ({
 });
 
 describe('Movement notes', () => {
-	it('an intensity change shows the Settings label for the level', () => {
+	it("an intensity change shows the level's label, with the same words as Settings", () => {
 		expect(notes([note('intensity', 'aggressive')], 'en')).toEqual([
 			'Intensity changed to Aggressive'
 		]);
@@ -61,6 +62,12 @@ describe('Movement notes', () => {
 		const [zh] = notes([note('intensity', 'turbo')], 'zh');
 		expect(zh).toBe('强度已更改');
 		expect(zh).not.toMatch(/turbo/);
+	});
+
+	it('a name off the object prototype is unknown too', () => {
+		expect(notes([note('intensity', 'constructor')], 'en')).toEqual(['Intensity changed']);
+		cleanup();
+		expect(notes([note('constructor', '')], 'en')).toEqual(['An unrecognised event']);
 	});
 
 	it('an unknown kind reads as a sentence, with no raw text', () => {

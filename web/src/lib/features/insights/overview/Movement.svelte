@@ -88,21 +88,24 @@
 		paused: () => m.insights_overview_note_paused(),
 		resumed: () => m.insights_overview_note_resumed(),
 		intensity: (t) => {
-			const level = levelText[t]?.();
+			const level = Object.hasOwn(levelText, t) ? levelText[t]!() : undefined;
 			return level
 				? m.insights_overview_note_intensity({ level })
 				: m.insights_overview_note_intensity_changed();
 		}
 	};
-	// The server sends the setting's value; show its label (the Settings words). A level or kind this build
-	// doesn't know is a sentence of its own, never the raw English word.
+	// The server sends the setting's value; show its label, Insights' own messages with the same words
+	// as Settings. A level or kind this build doesn't know (or a name like "constructor", which the
+	// own-key checks keep off the prototype) is a sentence of its own, never the raw English word.
 	const levelText: Record<string, () => string> = {
 		low: () => m.insights_overview_level_low(),
 		balanced: () => m.insights_overview_level_balanced(),
 		aggressive: () => m.insights_overview_level_aggressive()
 	};
 	const note = (a: Overview['annotations'][number]) =>
-		importText(a, locale) ?? kindText[a.kind]?.(a.text) ?? m.insights_overview_note_unrecognised();
+		importText(a, locale) ??
+		(Object.hasOwn(kindText, a.kind) ? kindText[a.kind]!(a.text) : undefined) ??
+		m.insights_overview_note_unrecognised();
 </script>
 
 <div class="ins-col" data-testid="insights-movement-charts">

@@ -24,11 +24,12 @@ Runner brief, 2026-11-22Z, from X-ui-checks-3 (#1045, `docs/decisions/2026-11-22
     - That chunk is counted in "Settings messages (on demand)", which went 4,259 → 4,435 B, past its 4.26 KB limit.
     - Nine Settings first-view screens also grew 13 B each.
     - With Insights' own copies, every Settings entry is unchanged. The cost is a second copy of three short strings per locale.
+- **Lookups are own-key only** (`Object.hasOwn`), so a value like `constructor` reads as unknown, not "[object Object]" (runner's review). The server sends only the known names today.
 - **A level this build doesn't know** reads `insights_overview_note_intensity_changed`: "Intensity changed" / 强度已更改, with no level.
 - **An unknown kind** reads `insights_overview_note_unrecognised`: "An unrecognised event" / 无法识别的事件.
   - **A sentence, not the kind as code:**
     - The raw kind (`import_removed`, say) means nothing to the reader.
-    - Shown as code, it would still be untranslated English in the list, its `aria-label` and the chart table.
+    - Shown as code, it would still be untranslated English in the list and its `aria-label`.
     - The CSV export keeps the raw kind for anyone who needs it.
   - `insights_overview_note_unknown` ("Event: {kind}") is removed. It had no other caller, in en or zh.
 - **Tests (`Movement.test.ts`):**
