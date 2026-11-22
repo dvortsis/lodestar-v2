@@ -31,8 +31,8 @@ request gets:
   tests read: `crates/lodestar/src/config.rs` and `docs/soak/tools/` (INFRA below);
 - the update-manifest round trip only if it touches the manifest builder,
   its tests, release.yml or `crates/update/` (UPDATE_MANIFEST below);
-- the RustSec advisory check only if it touches Cargo.lock, deny.toml, this
-  workflow or this file (ADVISORIES below). Main and the nightly always run it,
+- the RustSec advisory check only if it touches Cargo.lock, fuzz/Cargo.lock,
+  deny.toml, this workflow or this file (ADVISORIES below). Main and the nightly always run it,
   so an advisory published against a crate already locked turns main red the
   next night;
 - `web` and `e2e` for web.yml / e2e.yml (see WEB_INPUTS below). Those two
