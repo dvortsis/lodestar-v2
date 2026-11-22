@@ -457,8 +457,9 @@ async fn lossy_fetch(
 /// check): honest fetches of a 120 kB dict over the lossy link at 5, 10,
 /// 15 and 20% loss, with the product's request pattern (a reserve, so the
 /// first request's 5 pieces until the window is in), each seed run with
-/// the product's 4 s first window and again with 20 s, 16 at a time. Prints, per loss rate,
-/// the first-window misses, other failures and total times.
+/// the product's 4 s first window and again with 20 s, 16 at a time.
+/// Prints, per loss rate, the first-window misses, other failures and
+/// total times.
 /// `FIRST_WINDOW_ALL_PIECES=1` asks for all 8 pieces at once instead
 /// (#1008's probe, not the product's pattern); `FIRST_WINDOW_ONLY_4S=1`
 /// skips the 20 s runs. 400 fetches per run by default
