@@ -626,7 +626,10 @@ impl Sampler {
 
     fn uncount(&mut self, old: State) {
         if let State::Cooling { reason, .. } = old {
-            self.cooling_by[reason as usize] -= 1;
+            let n = &mut self.cooling_by[reason as usize];
+            // Only `put` adds Cooling records, so this never runs dry.
+            debug_assert!(*n > 0, "{reason:?} released more than counted");
+            *n = n.saturating_sub(1);
         }
     }
 

@@ -1557,7 +1557,7 @@ fn render_sample_cooling(o: &mut Out, d: &StatsSnapshot) {
     o.family(
         name,
         "gauge",
-        "Sampler cooldowns by why they began; they sum to dht_sample_cooling.",
+        "Sampler cooldowns by why they began; they sum to dht_sample_cooling as of each maintenance tick.",
     );
     for (i, reason) in CoolingReason::ALL.iter().enumerate() {
         o.value(

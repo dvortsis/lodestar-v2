@@ -555,6 +555,8 @@ proptest! {
                 Op::Restart => {
                     // S8: in flight → now + H.
                     s.seal_in_flight(now + h);
+                    // The sealed sampler's counts, before it's replaced.
+                    prop_assert_eq!(s.cooling_by_reason(), s.recount_cooling());
                     for (a, _) in flying.drain(..) {
                         truth.insert(a, (now + h, false));
                     }

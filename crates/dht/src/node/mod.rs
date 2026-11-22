@@ -382,7 +382,9 @@ pub struct Stats {
     /// Gauge: unexpired sample obligations.
     pub sample_cooling: AtomicU64,
     /// Gauge: those by why they cool, in [`CoolingReason::ALL`]'s order
-    /// (X-sample-cooling-metric); they sum to `sample_cooling`.
+    /// (X-sample-cooling-metric). Stored on the same maintenance tick as
+    /// `sample_cooling`, so they sum to it as of each tick; a reader that
+    /// overlaps a tick can see them differ by that tick's changes.
     pub sample_cooling_reason: [AtomicU64; CoolingReason::ALL.len()],
     /// Gauge: reserved sample requests.
     pub sample_inflight: AtomicU64,

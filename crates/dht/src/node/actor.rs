@@ -4290,6 +4290,71 @@ mod tests {
         assert_eq!(a.active_get_peers, 0);
     }
 
+    /// X-sample-cooling-metric: a consistent reply cools as `interval` only
+    /// with both BEP 51 fields and an interval within 6 h; without either,
+    /// or with a longer interval, it cools as `unsupported`, for the full
+    /// backoff and unscaled.
+    #[test]
+    fn a_reply_without_bep51_cools_as_unsupported() {
+        use super::super::CoolingReason as R;
+        let samples = || Some(crate::krpc::Samples::default());
+        for (samples, interval, want) in [
+            (samples(), Some(600), R::Interval),
+            (None, Some(600), R::Unsupported),
+            (samples(), None, R::Unsupported),
+            (samples(), Some(SAMPLE_INTERVAL + 1), R::Unsupported),
+            (None, None, R::Unsupported),
+        ] {
+            let (mut a, sockets) = fixture();
+            a.on_command(Command::SetSampleScale(3));
+            let remote = SocketAddr::from(([127, 0, 0, 9], 7000));
+            let now = Instant::now();
+            assert!(a.sampler.offer(candidate(remote), now));
+            a.sample_tick(&sockets, now);
+            let tid = a
+                .pending
+                .iter()
+                .find(|(_, p)| matches!(p.purpose, Purpose::Sample) && p.to == remote)
+                .map(|(t, _)| *t)
+                .expect("a sample sent");
+            let response = Response {
+                id: candidate(remote).id,
+                samples,
+                interval,
+                ..Default::default()
+            };
+            let tid_bytes = tid.to_be_bytes();
+            let msg = Message {
+                transaction_id: &tid_bytes,
+                version: None,
+                ip: None,
+                read_only: false,
+                body: Body::Response(response.clone()),
+            };
+            let before = Instant::now();
+            a.on_response(&sockets, 0, &msg, Some(&response), remote);
+            let after = Instant::now();
+            let by = a.sampler.cooling_by_reason();
+            let case = format!("samples {} interval {interval:?}", samples.is_some());
+            assert_eq!(by[want as usize], 1, "{case}: {by:?}");
+            assert_eq!(by.iter().sum::<usize>(), 1, "{case}: {by:?}");
+            // Unsupported is the full backoff, not scaled.
+            let until = a
+                .sampler
+                .restrictions(after)
+                .find(|(x, _)| *x == remote)
+                .map(|(_, u)| u)
+                .expect("cooling");
+            let wait = if want == R::Interval {
+                Duration::from_secs(600 * 3)
+            } else {
+                sampler::UNSUPPORTED_BACKOFF
+            };
+            assert!(until >= before + wait && until <= after + wait, "{case}");
+            assert_eq!(a.stats.snapshot().sample_stale, 0, "{case}");
+        }
+    }
+
     /// WK-10e: with a scale of N, a node that answers with interval I isn't
     /// sampled again for N × I, and a changed scale applies from the next
     /// answer; a failure isn't scaled.
