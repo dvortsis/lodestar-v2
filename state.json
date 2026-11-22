@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T13:28Z",
+    "updated": "2026-11-22T14:08Z",
     "items": [
       {
         "slot": 1,
@@ -10675,12 +10675,9 @@
       },
       {
         "slot": 3,
-        "slice": "X-size-limit-one-build",
-        "role": "slice",
-        "agent": "session_01MMjhn9KDorrarfD68zPhsC",
-        "model": "sonnet",
-        "since": "2026-11-22T13:28Z",
-        "doing": "step 0: why size-limit and size:ci differ"
+        "status": "idle",
+        "doing": "#1069 merged; waits for #1062, then X-fuzz-advisories",
+        "since": "2026-11-22T14:08Z"
       },
       {
         "slot": 4,
