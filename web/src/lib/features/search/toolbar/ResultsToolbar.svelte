@@ -5,7 +5,6 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import Select from '$lib/ui/fields/Select.svelte';
-	import SegmentedControl from '$lib/ui/controls/SegmentedControl.svelte';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { toast } from '$lib/ui/feedback/toasts.svelte';
 	import { formatCompact, formatCount } from '$lib/format';
@@ -15,17 +14,49 @@
 	import { ensureSearchPath } from '../query/path';
 	import { results } from '../results/results.svelte';
 	import { selection } from '../bulk/selection.svelte';
-	import { SORTS, sortValue, viewParamHref } from './toolbar';
+	import { SORTS, VIEWS, sortValue, viewHref } from './toolbar';
+	import { viewOf, type View } from './view';
 
 	const id = $props.id();
 	const locale = $derived(currentLocale());
 
 	const sorts = $derived(SORTS.map((s) => ({ value: s.value, label: s.label() })));
 	const sort = $derived(sortValue(search.sort));
-	const density = $derived.by(() => {
-		const d = page.url.searchParams.get('density');
-		return d === 'compact' || d === 'cards' ? d : 'comfortable';
+	// The account's Appearance density is the default view. Like the rows, the toolbar reads it with
+	// the URL, so a preference the shell applies late waits for the next query (view.ts).
+	const pref = () => document.documentElement.dataset.density;
+	// From the query string, so a new URL object with the same query (the drawer closing) re-reads nothing.
+	const qs = $derived(page.url.search);
+	const view = $derived(viewOf(qs, pref()));
+	const views = $derived(VIEWS.map((v) => ({ value: v, label: viewLabels[v]() })));
+	const viewLabels: Record<View, () => string> = {
+		list: m.search_table_view_list,
+		compact: m.search_toolbar_compact,
+		table: m.search_table_view_table,
+		cards: m.search_cards_option
+	};
+
+	// Below x-large the Filters host is out of flow (toolbar.css): this component, alive in every
+	// state, tells #results how much room it takes.
+	$effect(() => {
+		const rail = document.getElementById('search-rail');
+		const region = document.getElementById('results');
+		if (!rail || !region || typeof ResizeObserver !== 'function') return;
+		const set = () => {
+			const w = rail.offsetWidth;
+			const gap = parseFloat(getComputedStyle(rail.parentElement!).rowGap) || 0;
+			region.style.setProperty('--tb-inset', w ? `${w + 8}px` : '0px');
+			region.style.setProperty('--tb-rail-h', `${rail.offsetHeight + gap}px`);
+		};
+		set(); // before the first paint: the observer's first call comes a frame later
+		const ro = new ResizeObserver(set);
+		ro.observe(rail);
+		return () => ro.disconnect();
 	});
+
+	const toggle = () => (selection.mode = !selection.mode);
+	const shut = (e: MouseEvent) =>
+		(e.currentTarget as HTMLElement).closest<HTMLElement>('[popover]')?.hidePopover();
 
 	// The count of the rows shown: none while the first answer is out, or after it failed.
 	const count = $derived.by(() => {
@@ -45,13 +76,11 @@
 		void search.setSort(next);
 	}
 
-	const view = $derived(page.url.searchParams.get('view') === 'table' ? 'table' : 'list');
-
-	function setParam(key: 'density' | 'view', next: string) {
+	function setView(next: View) {
 		ensureSearchPath();
 		// A view parameter, not a search: it replaces the entry, so Back still walks searches.
-		// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewParamHref() keeps this page's own path
-		void goto(viewParamHref(page.url, key, next), {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- viewHref() keeps this page's own path
+		void goto(viewHref(page.url, next, pref()), {
 			replaceState: true,
 			keepFocus: true,
 			noScroll: true
@@ -80,7 +109,7 @@
 	<div class="tb" data-testid="results-toolbar">
 		<p class="tb-count" data-testid="results-count">{count}</p>
 		<div class="tb-controls">
-			<label class="tb-sort" for="{id}-sort">
+			<label class="tb-lbl" for="{id}-sort">
 				<span>{m.search_toolbar_sort()}</span>
 				<Select
 					id="{id}-sort"
@@ -90,34 +119,38 @@
 					onchange={(e) => setSort(e.currentTarget.value)}
 				/>
 			</label>
-			<SegmentedControl
-				dense
-				label={m.search_toolbar_density()}
-				value={density}
-				options={[
-					{ value: 'comfortable', label: m.search_toolbar_comfortable() },
-					{ value: 'compact', label: m.search_toolbar_compact() },
-					{ value: 'cards', label: m.search_cards_option() }
-				]}
-				onchange={(v) => setParam('density', v)}
-			/>
-			<SegmentedControl
-				dense
-				label={m.search_table_view()}
-				value={view}
-				options={[
-					{ value: 'list', label: m.search_table_view_list() },
-					{ value: 'table', label: m.search_table_view_table() }
-				]}
-				onchange={(v) => setParam('view', v)}
-			/>
+			<label class="tb-lbl" for="{id}-view">
+				<span>{m.search_table_view()}</span>
+				<Select
+					id="{id}-view"
+					data-testid="view-select"
+					dense
+					options={views}
+					value={view}
+					onchange={(e) => setView(e.currentTarget.value as View)}
+				/>
+			</label>
+			<!-- From 640 px Select and Save show; below it they sit in a disclosure (a native popover:
+			     Tab moves through it, Escape closes it and returns focus). CSS picks one (toolbar.css). -->
 			<Button
 				dense
 				aria-pressed={selection.mode}
 				data-testid="select-mode"
-				onclick={() => (selection.mode = !selection.mode)}>{m.search_bulk_mode()}</Button
+				class="tb-wide"
+				onclick={toggle}>{m.search_bulk_mode()}</Button
 			>
-			<Button dense loading={saving} onclick={() => void save()}>{m.search_toolbar_save()}</Button>
+			<Button dense loading={saving} class="tb-wide" onclick={() => void save()}
+				>{m.search_toolbar_save()}</Button
+			>
+			<div class="tb-narrow">
+				<Button dense popovertarget="{id}-more" class="tb-more">{m.search_toolbar_more()}</Button>
+				<div popover="auto" id="{id}-more" class="tb-pop">
+					<Button dense aria-pressed={selection.mode} onclick={(e) => (toggle(), shut(e))}
+						>{m.search_bulk_mode()}</Button
+					>
+					<Button dense onclick={(e) => (void save(), shut(e))}>{m.search_toolbar_save()}</Button>
+				</div>
+			</div>
 		</div>
 	</div>
 {/if}

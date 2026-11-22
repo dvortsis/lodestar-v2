@@ -4,8 +4,14 @@
 //! `query => message fragment` lines that must fail with that message.
 //! Mermaid and `text` blocks (a request body, say) are skipped; any
 //! other code block is an error, so nothing on the page goes unchecked.
+//! The page describes what a user types, so examples read with the
+//! typed-unit reading (§10.12); each also still parses as stored text.
 
-use lodestar_search::parse;
+use lodestar_search::{Node, ParseError, Units, parse_with};
+
+fn parse(q: &str) -> Result<Node, ParseError> {
+    parse_with(q, Units::Typed)
+}
 
 const PAGE: &str = include_str!("../../../docs/query-language.md");
 
@@ -37,11 +43,22 @@ fn examples_parse_as_documented() {
                 checked += 1;
                 match parse(line) {
                     Err(e) => problems.push(format!("line {at}: {line:?}: {e}")),
-                    // Text and AST agree: the canonical form parses back the same.
-                    Ok(node) if parse(&node.to_query()).as_ref() != Ok(&node) => {
-                        problems.push(format!("line {at}: {line:?} doesn't round-trip"));
+                    Ok(node) => {
+                        // Text and AST agree: the stored text parses back the
+                        // same under both readings, the typed echo as typed.
+                        let stored = node.to_query();
+                        let back = |units| parse_with(&stored, units).ok();
+                        if back(Units::Stored).as_ref() != Some(&node)
+                            || back(Units::Typed).as_ref() != Some(&node)
+                            || parse(&node.to_query_typed()).as_ref() != Ok(&node)
+                        {
+                            problems.push(format!("line {at}: {line:?} doesn't round-trip"));
+                        }
+                        // The stored path stays covered.
+                        if let Err(e) = parse_with(line, Units::Stored) {
+                            problems.push(format!("line {at}: {line:?} stored: {e}"));
+                        }
                     }
-                    Ok(_) => {}
                 }
             }
             Some("query-fail") => {

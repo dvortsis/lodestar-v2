@@ -13,7 +13,7 @@ test.beforeEach(({ mock }) => server(mock, () => body(hits(5), { total: 5 })));
 test('the View control switches to a real table and keeps it in the URL', async ({ page, go }) => {
 	await go('/search?q=lantern');
 	await expect(page.getByTestId('result-' + 'a'.repeat(39) + '1')).toBeVisible();
-	await page.getByRole('radio', { name: 'Table', exact: true }).click();
+	await page.getByTestId('view-select').selectOption('table');
 	await expect(page).toHaveURL(/view=table/);
 	const table = page.getByRole('table', { name: 'Matching torrents' });
 	await expect(table).toBeVisible();
@@ -21,7 +21,7 @@ test('the View control switches to a real table and keeps it in the URL', async 
 	await expect(table.getByRole('row')).toHaveCount(6);
 	await expect(page.getByTestId('table-title-1')).toHaveText('Lantern Keeper 1');
 	await expect(page.getByTestId('table-size-1')).toContainText('GiB');
-	await page.getByRole('radio', { name: 'List' }).click();
+	await page.getByTestId('view-select').selectOption('list');
 	await expect(page).not.toHaveURL(/view=/);
 	await expect(table).toHaveCount(0);
 });

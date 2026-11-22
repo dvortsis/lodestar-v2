@@ -3,6 +3,7 @@
 // to the defaults. Pure and unit-tested.
 export const COLUMN_IDS = [
 	'name',
+	'raw',
 	'type',
 	'size',
 	'files',
@@ -49,10 +50,13 @@ export function normalize(raw: unknown): ColumnPrefs {
 	if (typeof raw !== 'object' || raw === null) return base;
 	const o = raw as Record<string, unknown>;
 	const order = ids(o.order);
+	// Saved choices win: a store from before the Raw name column keeps its columns as they were.
+	const before = order.length > 0 && !order.includes('raw');
 	for (const id of COLUMN_IDS) if (!order.includes(id)) order.push(id);
 	const hidden = Array.isArray(o.hidden)
 		? ids(o.hidden).filter((id) => id !== REQUIRED)
 		: base.hidden;
+	if (before && !hidden.includes('raw')) hidden.push('raw');
 	return { order, hidden };
 }
 
@@ -122,3 +126,7 @@ export function ariaSort(current: string, field: string): 'ascending' | 'descend
 	if (current === `+${field}`) return 'ascending';
 	return current === `-${field}` || current === field ? 'descending' : 'none';
 }
+
+/** The raw name the Raw name column shows: only when it differs from the title, as the List does. */
+export const rawName = (hit: { title: string | null; name: string }): string | null =>
+	hit.title !== null && hit.title !== hit.name ? hit.name : null;

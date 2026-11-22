@@ -65,7 +65,7 @@ pub use lease::{EXACT_BUDGET, Lease, LeaseConfig, Leases, Page, Start};
 pub use live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
 pub use percolate::{Due, Matched, PercolateLimits, Percolation, percolate};
 pub use population::{Availability, FieldAvailability, Generations};
-pub use query::{Node, ParseError, parse};
+pub use query::{Node, ParseError, Units, parse, parse_with};
 pub use rebuild::{
     IndexVersion, Ranking, Rebuild, RebuildPhase, RebuildProgress, Serving, ServingConfig,
 };

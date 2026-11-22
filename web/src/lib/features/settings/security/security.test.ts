@@ -239,6 +239,16 @@ describe('Change password', () => {
 	}
 	const submit = () => fireEvent.click(screen.getByTestId('security-password-submit'));
 
+	it('keeps the submit button secondary until something is typed, then primary (UI review P17)', async () => {
+		render(SecurityScreen);
+		await screen.findByTestId('security-password');
+		const button = screen.getByTestId('security-password-submit');
+		expect(button.className).toContain('btn-outline');
+		expect(button.className).not.toContain('btn-primary');
+		await fireEvent.input(fields().current, { target: { value: 'x' } });
+		expect(button.className).toContain('btn-primary');
+	});
+
 	it('shows the rules before anything is sent', async () => {
 		render(SecurityScreen);
 		await screen.findByTestId('security-password');
@@ -501,6 +511,14 @@ describe('API keys and feed tokens', () => {
 		replies['GET /keys'] = () => ({ status: 200, body: { keys: [] } });
 		await fireEvent.click(screen.getAllByRole('button', { name: 'Try again' })[0]!);
 		expect(await screen.findByTestId('security-keys-empty')).toBeTruthy();
+	});
+
+	it('keeps Create secondary until the key has a name (UI review P17)', async () => {
+		const section = await keysSection();
+		const create = within(section).getByTestId('security-key-create');
+		expect(create.className).toContain('btn-outline');
+		await fireEvent.input(within(section).getByLabelText(/^Name/), { target: { value: 'Radarr' } });
+		expect(create.className).toContain('btn-primary');
 	});
 
 	it('refuses a nameless key or one with no scope without sending', async () => {

@@ -9,6 +9,14 @@
 	import Input from '$lib/ui/fields/Input.svelte';
 	import Kbd from '$lib/ui/labels/Kbd.svelte';
 
+	interface Row {
+		id: string;
+		title: string;
+		section: string;
+		keys: string[];
+		/** A "Settings: …" entry opens its field; a command runs through the registry. */
+		open?: () => void;
+	}
 	let { open = $bindable(false) }: { open?: boolean } = $props();
 
 	let query = $state('');
@@ -16,7 +24,31 @@
 	let wrap: HTMLDivElement | undefined = $state();
 
 	const available = $derived(keys.list().filter((c) => c.palette && c.active));
-	const results = $derived(filterCommands(available, query));
+	const commands = $derived(filterCommands(available, query));
+	// "Settings: …" entries: the Settings search index (X-settings-find) loads on the first search,
+	// so a palette that is never searched, or a signed-out one, costs nothing and shows no error.
+	let found = $state.raw<Row[]>([]);
+	$effect(() => {
+		const q = query;
+		found = [];
+		if (!open || !q.trim()) return;
+		let live = true;
+		void import('$lib/features/settings/shell/find-palette').then(
+			async (f) => {
+				const rows = await f.settingsRows(q);
+				if (live) found = rows;
+			},
+			() => {}
+		);
+		return () => {
+			live = false;
+		};
+	});
+	// Commands first, then settings; both are options of the one list.
+	const results = $derived<Row[]>([
+		...commands.map((c) => ({ id: c.id, title: c.title, section: c.section, keys: c.keys })),
+		...found
+	]);
 	const active = $derived(Math.min(selected, results.length - 1));
 
 	$effect(() => {
@@ -34,10 +66,11 @@
 		return () => cancelAnimationFrame(frame);
 	});
 
-	async function run(id: string) {
+	async function run(row: Row) {
 		open = false;
 		await tick(); // let the dialog restore focus first, so a command may move it
-		keys.run(id);
+		if (row.open) row.open();
+		else keys.run(row.id);
 	}
 
 	function onkeydown(e: KeyboardEvent) {
@@ -51,7 +84,7 @@
 			);
 		} else if (e.key === 'Enter' && results[active]) {
 			e.preventDefault();
-			void run(results[active].id);
+			void run(results[active]);
 		}
 	}
 </script>
@@ -91,7 +124,7 @@
 						active
 							? 'bg-selected'
 							: 'hover:bg-hover'}"
-						onclick={() => run(command.id)}
+						onclick={() => run(command)}
 						onpointermove={() => (selected = i)}
 					>
 						<span class="min-w-0 truncate">{command.title}</span>

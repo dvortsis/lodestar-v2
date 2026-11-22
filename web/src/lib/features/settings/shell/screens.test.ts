@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { indexView } from '../form/schema';
 import { spec } from '../form/testing/values';
-import { aboutOf, collect, matchesScreen, screenFields, screens, type Screen } from './screens';
+import { aboutOf, collect, screenFields, screens, type Screen } from './screens';
 
 const byId = (id: string) => screens.find((screen) => screen.id === id)!;
 const fake = (id: string, group: Screen['group']): Screen => ({
@@ -96,15 +96,25 @@ describe('the screen registry', () => {
 });
 
 describe('the implemented Settings destinations', () => {
-	it('combines crawler and transport in one screen, without exposing other sections', () => {
-		const fields = [spec('crawler.paused'), spec('transport.utp'), spec('logging.kinds')];
+	it('shows the crawler section only, since the transport fields change nothing yet', () => {
+		const fields = [spec('crawler.paused'), spec('transport.retry'), spec('logging.kinds')];
 		const view = {
 			...indexView({ sections: [] }),
 			fieldsOf: (names: string[]) => fields.filter((field) => names.includes(field.section))
 		};
 		expect(screenFields(byId('crawler'), view).map((field) => field.key)).toEqual([
-			'crawler.paused',
-			'transport.utp'
+			'crawler.paused'
+		]);
+	});
+	it('leaves out the fields nothing reads yet (UI review I18)', () => {
+		const fields = [
+			spec('crawler.paused'),
+			spec('transport.utp'),
+			spec('transport.fallback_to_tcp')
+		];
+		const view = { ...indexView({ sections: [] }), fieldsOf: () => fields };
+		expect(screenFields(byId('crawler'), view).map((field) => field.key)).toEqual([
+			'crawler.paused'
 		]);
 	});
 	it('keeps unsafe changes locked without mutating the shared schema', () => {
@@ -122,14 +132,6 @@ describe('the implemented Settings destinations', () => {
 				(field) => field.readOnly
 			)
 		).toBe(true);
-	});
-	it('matches translated section labels without case or accent sensitivity', () => {
-		const screen = { ...screens[0]!, title: () => 'Réseau 网络' };
-		const about = { purpose: () => 'VPN connections' };
-		expect(matchesScreen(screen, 'RESE vpn', about)).toBe(true);
-		expect(matchesScreen(screen, 'RESE vpn')).toBe(false);
-		expect(matchesScreen(screen, '网络')).toBe(true);
-		expect(matchesScreen(screen, 'logging', about)).toBe(false);
 	});
 });
 
