@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T00:38Z",
+    "updated": "2026-11-22T00:45Z",
     "items": [
       {
         "slot": 1,
@@ -10671,16 +10671,16 @@
         "agent": "session_01MMjhn8ztznTU8nYNhf6ck8",
         "model": "opus",
         "since": "2026-11-22T00:25Z",
-        "doing": "#1038 merged; step 0"
+        "doing": "step 0 approved (size:ci node wrapper, CSS asset names); building"
       },
       {
         "slot": 3,
-        "slice": "X-ui-checks-1",
+        "slice": "X-ui-checks-2",
         "role": "helper",
         "agent": "session_01MMjhnD5iaW7CGjAAtXeVfE",
         "model": "sonnet",
-        "since": "2026-11-21T23:00Z",
-        "doing": "#1036 review fixes pushed (d978df19), CI; part 2 built locally"
+        "since": "2026-11-22T00:45Z",
+        "doing": "#1036 merged; part 2 merging main then PR"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhnBqcyhqUKzg9tENnh2",
         "model": "opus",
         "since": "2026-11-22T00:25Z",
-        "doing": "#1029 merged; step 0: what holds the index at :353"
+        "doing": "step 0 approved (spawn mutex, flock fd inheritance); building"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
