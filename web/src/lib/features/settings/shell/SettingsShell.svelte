@@ -110,7 +110,7 @@
 	.settings-find {
 		order: 1;
 	}
-	:global(.settings-list) {
+	.settings-list {
 		order: 3;
 	}
 	.settings-content {

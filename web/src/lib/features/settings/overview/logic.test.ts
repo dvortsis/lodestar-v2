@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { STEPS, writeProgress } from '$lib/features/wizard/steps';
 import type { components } from '$lib/api/schema';
 import type { FieldKey, FieldSpec, SectionValues } from '../form/types';
 import {
 	changedFromDefault,
 	needsAttention,
 	retryIn,
+	skippedSteps,
 	startHere,
+	STEP_SCREEN,
 	startReason,
 	type StartFailure
 } from './logic';
@@ -271,5 +274,24 @@ describe('startHere', () => {
 			['skipped-storage', 'storage', 'skipped'],
 			['skipped-packs', 'filters', 'skipped']
 		]);
+	});
+});
+
+describe('skippedSteps', () => {
+	afterEach(() => sessionStorage.clear());
+	it('names a Settings screen for exactly the optional steps the wizard has', () => {
+		const optional = STEPS.filter((s) => s.optional);
+		expect(Object.keys(STEP_SCREEN).sort()).toEqual(optional.map((s) => s.id).sort());
+		for (const s of optional) expect(STEP_SCREEN[s.id]).toBe(s.settings);
+	});
+	it('reads the skipped steps from the wizard progress, and nothing when there is none', () => {
+		expect(skippedSteps()).toEqual([]);
+		writeProgress({ step: 'done', skipped: ['download', 'packs'], done: [] });
+		expect(skippedSteps()).toEqual([
+			{ step: 'download', screen: 'integrations' },
+			{ step: 'packs', screen: 'filters' }
+		]);
+		sessionStorage.setItem('lodestar.wizard', '{not json');
+		expect(skippedSteps()).toEqual([]);
 	});
 });

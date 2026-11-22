@@ -6,7 +6,7 @@ import IconAppearance from '~icons/ph/palette-bold';
 import IconBlocklists from '~icons/ph/prohibit-bold';
 import IconJobs from '~icons/ph/timer-bold';
 import IconKeyboard from '~icons/ph/keyboard-bold';
-import IconSources from '~icons/ph/rss-bold';
+import IconSources from '~icons/ph/plugs-bold';
 
 export const NAV_ICONS: Record<string, Component> = {
 	appearance: IconAppearance,

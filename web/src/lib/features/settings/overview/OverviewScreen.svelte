@@ -17,11 +17,11 @@
 	import { getSection } from '../form/requests';
 	import type { SectionValues } from '../form/types';
 	import { screens } from '../shell/screens';
-	import { readProgress, STEPS } from '$lib/features/wizard/steps';
 	import {
 		changedFromDefault,
 		needsAttention,
 		retryIn,
+		skippedSteps,
 		startHere,
 		startReason,
 		type Attention,
@@ -78,10 +78,7 @@
 				loadMessages(names)
 			]);
 			// The skipped first-run steps are the wizard's own progress, kept in this tab.
-			const skipped = readProgress().skipped.map((step) => ({
-				step,
-				screen: STEPS.find((s) => s.id === step)?.settings ?? 'general'
-			}));
+			const skipped = skippedSteps();
 			start = startHere(values as SectionValues[], skipped);
 			groups = changedFromDefault((key) => index.spec(key), values as SectionValues[], screenOf)
 				.map((g) => ({ ...g, title: titleOf(g.id) }))

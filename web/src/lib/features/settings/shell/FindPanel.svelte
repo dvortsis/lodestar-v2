@@ -121,7 +121,7 @@
 </script>
 
 {#if query.trim()}
-	<div class="settings-list">
+	<div class="find-list">
 		{#if failed}
 			<p role="status" class="text-small">{m.settings_find_failed()}</p>
 		{:else if !index}
@@ -168,3 +168,10 @@
 		{/if}
 	</div>
 {/if}
+
+<style>
+	/* Below 1024 px the Overview's list of screens comes last (SettingsShell). */
+	.find-list {
+		order: 3;
+	}
+</style>

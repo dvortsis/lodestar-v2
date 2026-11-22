@@ -246,3 +246,33 @@ export function startHere(
 	}
 	return rows;
 }
+
+/**
+ * The Settings screen each optional first-run step would have set (the wizard's `STEPS`, copied
+ * here so the Overview doesn't pull the wizard's module into the Welcome route's chunks; a test
+ * checks the two agree).
+ */
+export const STEP_SCREEN: Record<string, string> = {
+	network: 'network',
+	intensity: 'crawler',
+	storage: 'storage',
+	download: 'integrations',
+	packs: 'filters',
+	blocklists: 'blocklists',
+	updates: 'updates'
+};
+
+/** The first-run steps this tab skipped (the wizard's progress, in `sessionStorage`). */
+export function skippedSteps(): { step: string; screen: string }[] {
+	try {
+		const raw: unknown = JSON.parse(sessionStorage.getItem('lodestar.wizard') ?? 'null');
+		const skipped = (raw as { skipped?: unknown } | null)?.skipped;
+		return (Array.isArray(skipped) ? skipped : []).flatMap((step) =>
+			typeof step === 'string' && Object.hasOwn(STEP_SCREEN, step)
+				? [{ step, screen: STEP_SCREEN[step]! }]
+				: []
+		);
+	} catch {
+		return [];
+	}
+}

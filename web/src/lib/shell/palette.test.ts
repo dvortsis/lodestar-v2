@@ -5,30 +5,23 @@ import CommandPalette from './CommandPalette.svelte';
 
 configure({ defaultHidden: true });
 
-const nav = vi.hoisted(() => ({
-	goto: vi.fn(() => Promise.resolve()),
-	highlight: vi.fn(() => () => {})
+const nav = vi.hoisted(() => ({ open: vi.fn() }));
+vi.mock('$lib/features/settings/shell/find-palette', () => ({
+	settingsRows: (q: string) =>
+		Promise.resolve(
+			'pause crawling'.includes(q.trim())
+				? [
+						{
+							id: 'settings:/settings/crawler#crawler.paused',
+							title: 'Settings: Pause crawling',
+							section: 'Crawling › Crawler',
+							keys: [],
+							open: nav.open
+						}
+					]
+				: []
+		)
 }));
-vi.mock('$app/navigation', () => ({ goto: nav.goto }));
-vi.mock('$app/paths', () => ({ resolve: (path: string) => path }));
-// The Settings search index (X-settings-find) loads on the first search; a fake one here.
-vi.mock('$lib/features/settings/shell/find', () => {
-	const entry = {
-		screen: 'crawler',
-		screenTitle: 'Crawler',
-		label: 'Pause crawling',
-		trail: 'Crawling › Crawler',
-		href: '/settings/crawler#crawler.paused',
-		hay: 'pause crawling',
-		head: 'pause crawling',
-		spec: { key: 'crawler.paused' }
-	};
-	return {
-		loadFindIndex: () => Promise.resolve([entry]),
-		search: (all: (typeof entry)[], q: string) => all.filter((e) => e.hay.includes(q.trim())),
-		highlight: nav.highlight
-	};
-});
 
 const offs: (() => void)[] = [];
 const add = (id: string, title: string, run = () => {}, extra: Record<string, unknown> = {}) =>
@@ -123,7 +116,6 @@ describe('CommandPalette', () => {
 		);
 		await fireEvent.keyDown(input, { key: 'ArrowDown' });
 		await fireEvent.keyDown(input, { key: 'Enter' });
-		await waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/settings/crawler#crawler.paused'));
-		await waitFor(() => expect(nav.highlight).toHaveBeenCalledWith('crawler.paused'));
+		await waitFor(() => expect(nav.open).toHaveBeenCalledTimes(1));
 	});
 });

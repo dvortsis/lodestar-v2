@@ -217,7 +217,7 @@ export function highlight(key: FieldKey, within = 10_000): () => void {
 			? undefined
 			: el.animate?.([{ outlineColor: 'var(--color-primary)' }, { outlineColor: 'transparent' }], {
 					duration: 2000,
-					easing: 'ease-out'
+					easing: 'ease'
 				});
 		if (anim) anim.onfinish = clear;
 		else timer = setTimeout(clear, 2000);
