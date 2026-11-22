@@ -495,7 +495,8 @@ jobs:
       - run: python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version' && gpg --version | head -1
       - run: python3 -m unittest discover -s tools/companion-pins -p 'test_*.py' -v
 
-  # Every crate in Cargo.lock against the RustSec advisory database
+  # Every crate in Cargo.lock, and in fuzz/Cargo.lock (fuzz/ is its own workspace;
+  # X-fuzz-advisories), against the RustSec advisory database
   # (X-ci-advisories, INFRA-09): a vulnerability, an unsound or unmaintained
   # crate or a yanked version fails it, unless deny.toml ignores that advisory
   # with a reason and a review date. Main and the nightly always run it, so a
@@ -515,6 +516,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo install cargo-deny --version 0.20.2 --locked
       - run: cargo deny --locked check advisories
+      # cargo-deny finds the root deny.toml from here too, so the same rules apply.
+      - run: cargo deny --manifest-path fuzz/Cargo.toml --locked check advisories
 
   # The Windows collector's own fault-injection test: PID reuse, bounded
   # retries, safe binds. The rehearsal script needs a real crawler and stays
