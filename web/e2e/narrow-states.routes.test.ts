@@ -97,6 +97,15 @@ test.describe('Logs at 390 px', () => {
 		);
 		await expect(page.locator('.logs-line.logs-one')).toHaveCount(2);
 
+		// The toolbar buttons fade as they enable; axe must not sample a half-faded colour.
+		await expect(page.getByRole('button', { name: 'Copy visible' })).toBeEnabled();
+		await expect
+			.poll(() =>
+				page.evaluate(
+					() => document.getAnimations().filter((x) => x.playState === 'running').length
+				)
+			)
+			.toBe(0);
 		await expectNoA11yViolations(page);
 	});
 
