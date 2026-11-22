@@ -7,8 +7,8 @@ import { componentIds } from './scripts/event-names.mjs';
 import { checkFirstLoad, modulesIn, preloadedJs } from './scripts/first-load.mjs';
 import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
-// The limits are gated on the measurement build `npm run size:ci` makes (a fixed version name and
-// stable chunk names, vite.config.ts). A plain `npm run build` differs by a few bytes, so refuse
+// The limits are gated on the measurement build `npm run size:ci` makes (its rebuild sets a fixed
+// version name, with stable chunk names, vite.config.ts). A plain `npm run build` differs by a few bytes, so refuse
 // to measure it rather than print numbers CI won't see. The check never rebuilds: a size check
 // must not replace the `build/` the caller has.
 const MEASURED_VERSION = '0000000'; // LODESTAR_BUILD_VERSION in scripts/size-ci.mjs
@@ -21,7 +21,7 @@ const builtVersion = (() => {
 })();
 if (builtVersion !== MEASURED_VERSION) {
 	throw new Error(
-		'size-limit measures the build CI gates on: run `npm run size:ci` (a plain build differs by a few bytes).'
+		`size-limit only measures the build CI gates on (found version ${builtVersion ?? 'none, no build'}): run \`npm run size:ci\` (a plain build differs by a few bytes).`
 	);
 }
 
