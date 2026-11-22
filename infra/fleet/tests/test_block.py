@@ -2502,7 +2502,7 @@ class OnOnlyMode(Base):
         base = Scrubber.doc(self)
         for mode in ("abba", "on"):
             self.assertEqual(scrub.scrub({**base, "mode": mode})["mode"], mode)
-        for mode in ("ON", "on only", PRIVATE[0], "", 1, None, ["on"]):
+        for mode in ("both", "baab", "off", "ab", "ON", "on only", PRIVATE[0], "", 1, None, ["on"]):  # word-shaped but wrong too
             with self.subTest(mode=mode):
                 out = scrub.scrub({**base, "mode": mode})
                 self.assertNotIn("mode", out)
