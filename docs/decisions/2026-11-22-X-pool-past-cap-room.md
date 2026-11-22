@@ -20,18 +20,26 @@ Follows X-pool-first-request-docs (#1061). That slice found seven first reservat
 - **Why only at `LIMIT`:** at `WORKER` (4 MiB) a network's share is about 4 first requests (393,216 B), so a network is rarely past it.
 
 ## The rule
-- **Partial claims:** they queue in `partials` as (place, id), oldest first. Only the front may take room, as before.
-- **A claim held back by its network's share** moves to its network's `apart` queue, keeping its place. While it waits there it holds up no other network's claim.
-- **When the share has room, the network's oldest held-back claim takes its place back.** It is inserted by place, so it goes ahead of younger claims of any network. The younger claims of its network stay in `apart` behind it.
+- **Partial claims:** they queue in `partials` in order of place, the order they first asked in. Only the front may take room, as before.
+- **A claim held back by its network's share** waits in its network's `apart` queue, keeping its place. While it waits there it holds up no other network's claim.
+- **`BudgetState::order` keeps the front the oldest claim whose network's share has room for it.** It runs under the budget's lock on every look at the queue: each partial or whole claim's `grant`, and dispatch's `has_room`.
+  - A front its network's share holds back moves to `apart`. So does a front with an older claim of its own network waiting there.
+  - The oldest of the networks' oldest held-back claims that now fits, if it's older than the front, takes its place back at the front.
+  - A `starved` claim that's no longer the front loses its precedence, so whole claims and dispatch go again.
+  - When the front changes, the waiters and dispatch are woken. Called again, it changes nothing, so there's no notify loop.
+- **The order doesn't depend on which task runs first.** A first version let a held-back claim take its place back only when its own task polled. The fresh review showed that a younger head polled first could still take the room. On the multi-thread runtime that's the likely order, since its LIFO slot runs the most recently woken task first. `an_older_held_back_claim_goes_first_whoever_looks_first` polls the younger head in the test's own task, before the held-back claim's task runs.
 - **A new claim waits behind its network's held-back claims,** even one small enough for what's left of the share. Otherwise a stream of small claims from its own network could keep a larger one out, which is the same starvation.
-- **The head is found in O(1),** since nothing in `partials` is held back.
-  - `partials` is bounded by the fetches in flight, one claim each: `max_sockets`, which is 400 by default, at most 4,096 in settings, and 200 in a worker.
-  - The rejoin is one binary search and one insert per transition. It allocates nothing beyond the queues' own growth.
-  - Membership in `apart` is a flag on the claim, so a woken claim never scans its network's queue.
-- **`starved` stays on the head:**
-  - A claim that takes its place back at the head clears another claim's `starved`, and wakes whole claims and dispatch.
-  - Before, the head could change only by leaving.
-  - The model now checks on every tick that `starved` is only ever the head.
+- **The cost:**
+  - `partials` and `apart` together are bounded by the fetches in flight, one claim each: `max_sockets` as configured, which is 400 by default, 1,000 for the most intense preset, and 200 in a worker.
+  - `order` looks at the front and at each waiting network's oldest claim: O(networks waiting apart).
+  - A claim's place, and whether it's held back (`apart_ids`), are looked up without a scan.
+  - Nothing is allocated beyond the queues' own room.
+- **The model** now checks on every tick that:
+  - `starved` is only ever the head;
+  - both queues are in order of place;
+  - no claim is in both;
+  - no `apart` queue is empty;
+  - `apart_ids` matches the `apart` queues.
 
 ## A lost wake-up fixed on the way
 - **Before:** a partial claim that settled without growing woke nobody. `settle` woke waiters only for a grown or small claim, or one whose weight fell. So a claim its network's share held back stayed asleep until something else freed bytes.
@@ -54,14 +62,14 @@ All numbers are from the budget model: waits past 30 s, the worst wait, waits ov
 | (a) `largest_dict` leaves room for two first requests (margin 176,896 B, not 32 KiB) | 0; worst 18.4 s; 196,538; grown 566,832 | the worker's `MAX_METADATA` falls from 3,112,960 B to 2,968,832 B, a coverage cut |
 | (a′) a lone past-cap growth borrows one first request of the floor | not measured | loosens the floor against slow peers: the owner's (owner_queue n 34) |
 | (b) the margin scales with the budget (room / 4) | 0; worst 18.4 s; 196,486; grown 556,228 | the main node's `MAX_METADATA_MIB` falls from 47 to 36, and the worker's largest dict to 2.25 MiB |
-| **(d) held-back claims keep their place (chosen)** | **0; worst 18.9 s; 200,575; grown 700,106; held 999,863** | none; no bound moves |
+| **(d) held-back claims keep their place (chosen)** | **0; worst 19.9 s; 200,662; grown 700,106; held 999,863** | none; no bound moves |
 
 **The final head:**
 
 | Budget | Seeds | Past bound | Worst wait | Over 1 s | Most grown | Most held |
 |---|---|---|---|---|---|---|
-| `LIMIT` | 64 | 0 (c: 0) | 15.3 s (c: 15.3 s) | 19,443 (c: 19,440) | 699,903 | 998,908 |
-| `LIMIT` | 640 | 0 (c: 7) | 18.9 s (c: 43.6 s) | 200,575 (c: 200,323) | 700,106 | 999,863 |
+| `LIMIT` | 64 | 0 (c: 0) | 15.3 s (c: 15.3 s) | 19,499 (c: 19,440) | 699,903 | 998,908 |
+| `LIMIT` | 640 | 0 (c: 7) | 19.9 s (c: 43.6 s) | 200,662 (c: 200,323) | 700,106 | 999,863 |
 | `WORKER` | 64 | 0 (c: 0) | 3.6 s (c: 3.6 s) | 279 (c: 279) | 2,800,028 | 3,835,861 |
 | `WORKER` | 640 | 0 (c: 0) | 6.7 s (c: 6.7 s) | 3,659 (c: 3,659) | 2,800,028 | 4,173,612 |
 
@@ -85,15 +93,18 @@ All numbers are from the budget model: waits past 30 s, the worst wait, waits ov
   - `a_dropped_held_back_claim_leaves_no_dead_head`.
   - `a_networks_oldest_held_back_claim_goes_first`.
   - `a_younger_claim_waits_behind_its_networks_held_back_one`.
+  - `a_queued_younger_claim_does_not_pass_its_networks_older_one`.
+  - `an_older_held_back_claim_goes_first_whoever_looks_first`.
   - `a_claim_back_at_the_head_ends_anothers_precedence`.
   - `a_flooding_network_holds_up_no_other`.
 - **Mutations,** each in a scratch copy, then restored. Each failed a test:
   - no wake-up on settle;
-  - `Queued`'s drop leaving `apart` stale;
-  - rejoining at the back;
-  - ignoring older held-back claims;
-  - letting any held-back claim rejoin;
-  - keeping `starved` when a claim takes the head back.
+  - leaving a stale id in `apart_ids` when a held-back claim is dropped;
+  - a claim taking its place back at the back, not the front;
+  - taking it back only when `partials` is empty;
+  - keeping `starved` when a claim takes the head back;
+  - a front not held back for an older claim of its own network.
+- **One mutation survives on its own:** a new claim joining `partials` when an older claim of its network waits apart. `order` then holds it back once it reaches the front. Starting it apart only keeps claims already known to be held back out of `partials`, so the rule is kept as a cheap shortcut, not a guarantee.
 
 ## Nits from #1061's review
 - `pool.rs`'s budget doc says "first request" where a partial claim's first reservation is meant.

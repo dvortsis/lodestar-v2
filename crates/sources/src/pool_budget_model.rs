@@ -169,10 +169,35 @@ fn check(b: &Budget, seed: u64) {
         s.partial,
         s.grown
     );
+    // Waiting partial claims are in order of place, each in one queue,
+    // and no network's apart queue is empty.
+    assert!(
+        s.partials
+            .iter()
+            .zip(s.partials.iter().skip(1))
+            .all(|(x, y)| x.place < y.place),
+        "seed {seed}: partial claims out of order"
+    );
+    let mut apart = 0;
+    for q in s.apart.values() {
+        assert!(!q.is_empty(), "seed {seed}: an empty apart queue");
+        assert!(
+            q.iter()
+                .zip(q.iter().skip(1))
+                .all(|(x, y)| x.place < y.place),
+            "seed {seed}: an apart queue out of order"
+        );
+        apart += q.len();
+        assert!(q.iter().all(|w| s.apart_ids.contains(&w.id)));
+    }
+    assert_eq!(apart, s.apart_ids.len(), "seed {seed}: apart ids");
+    assert!(
+        s.partials.iter().all(|w| !s.apart_ids.contains(&w.id)),
+        "seed {seed}: a claim in both queues"
+    );
     // Only the head of the partial claims' queue goes before whole claims.
     assert!(
-        s.starved
-            .is_none_or(|id| s.partials.front().is_some_and(|&(_, head)| head == id)),
+        s.starved.is_none_or(|id| s.head() == Some(id)),
         "seed {seed}: a starved claim that isn't the head"
     );
     if let Some(w) = &s.wait {
@@ -492,7 +517,12 @@ async fn run(seed: u64, limit: usize) {
         "seed {seed}: maps left"
     );
     assert!(
-        s.queue.is_empty() && s.partials.is_empty() && s.growth.is_empty() && s.starved.is_none(),
+        s.queue.is_empty()
+            && s.partials.is_empty()
+            && s.apart.is_empty()
+            && s.apart_ids.is_empty()
+            && s.growth.is_empty()
+            && s.starved.is_none(),
         "seed {seed}: waiters left"
     );
 }
