@@ -8,6 +8,7 @@
 import { untrack } from 'svelte';
 import { ApiError, api, isAbort, latest } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
+import { rememberGroups } from '../query/group-labels.svelte';
 type Ast = components['schemas']['AstNode'];
 
 export type FacetsResponse = components['schemas']['FacetsResponse'];
@@ -73,6 +74,8 @@ export function createFacets() {
 				})
 			);
 			settledKey = key;
+			// The group labels the chips show (X-group-chip-label), kept past this response.
+			rememberGroups(data.facets.group);
 		} catch (e) {
 			if (isAbort(e)) return; // a newer request owns the state
 			const err = e instanceof ApiError ? e : new ApiError(0, 'unknown', String(e));

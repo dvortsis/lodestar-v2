@@ -15,7 +15,10 @@ export function discoverFixture(
 ): S['InsightsDiscoverResponse'] {
 	return {
 		by_ip_family: null,
-		by_source: [{ dropped: 3, key: 'dht', rediscovered: 40, reported: 900 }],
+		by_source: [
+			{ dropped: 3, key: 'dht', name: 'Mainline DHT', rediscovered: 40, reported: 900 },
+			{ dropped: 0, key: 'nyaa', name: 'Nyaa', rediscovered: 2, reported: 30 }
+		],
 		by_strategy: [
 			{ key: 'sample', reported: 600 },
 			{ key: 'get_peers', reported: 300 }

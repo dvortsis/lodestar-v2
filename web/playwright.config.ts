@@ -21,6 +21,10 @@ import { RIVERSTONE, rotationSeed, sampleThemes } from './e2e/support/themes';
 //                                 server (opt-in: --project=fixture or E2E_FIXTURE=1; nightly in e2e.yml)
 //   docs                          documentation screenshots into docs/user/images (opt-in:
 //                                 --project=docs or E2E_DOCS=1; `npm run docs:shots`)
+//   pseudo                        every route built from the pseudo-locale catalogue (longer, accented
+//                                 messages): overflow, clipping and hard-coded English, desktop and
+//                                 phone. Its own build and server (nightly; opt-in: --project=pseudo
+//                                 or E2E_PSEUDO=1); see scripts/pseudo-locale.mjs
 //   all-themes                    axe on every route in all 48 themes + the 46-theme key-route
 //                                 baselines (nightly; opt-in: --project=all-themes or E2E_ALL_THEMES=1)
 
@@ -41,6 +45,16 @@ const fixture =
 		.split(/[ =]/)
 		.some((a) => a === 'fixture' || a === 'fixture-writes');
 const docs = !!process.env.E2E_DOCS || process.argv.join(' ').split(/[ =]/).includes('docs');
+// The pseudo-locale project serves its own build (a scratch copy of web/ built from pseudo
+// messages) on its own port, and only when asked for, so a normal run never builds it.
+// Only `--project=pseudo` / `--project pseudo` selects it (not any argument that says "pseudo").
+const pseudo = !!process.env.E2E_PSEUDO || /--project[= ]pseudo(\s|$)/.test(process.argv.join(' '));
+// Workers load this file with their own argv, which lacks `--project=pseudo`; the environment is
+// inherited, so say it there.
+if (pseudo) process.env.E2E_PSEUDO = '1';
+const pseudoPort = Number(process.env.PW_PSEUDO_PORT || 4174);
+if (!Number.isInteger(pseudoPort) || pseudoPort < 1 || pseudoPort > 65535)
+	throw new Error('PW_PSEUDO_PORT must be a port number');
 const smoke = /smoke\.test\.ts$/;
 const matrixSpecs = [smoke, /states\.test\.ts$/];
 // The theme set's baselines (key screens × 46 non-Riverstone themes, at 1366) are shared by the
@@ -56,6 +70,7 @@ const coreSpecs = /(routes|tokens|harness|theme-gate|coverage)\.test\.ts$/;
 const keyboardSpecs = /\.keyboard\.test\.ts$/;
 const reducedMotionSpecs = /reduced-motion\.test\.ts$/;
 const allThemesSpecs = /all-themes\.test\.ts$/;
+const pseudoSpecs = /pseudo\.test\.ts$/;
 const desktop = { viewport: { width: DESKTOP.width, height: DESKTOP.height } };
 
 // The options a project's `use` may carry: Playwright's own plus this suite's `Appearance`.
@@ -131,6 +146,13 @@ const allThemesProject: Proj = {
 	use: desktop
 };
 
+// The pseudo-locale check: its own server, so its baseURL is that build.
+const pseudoProject: Proj = {
+	name: 'pseudo',
+	testMatch: pseudoSpecs,
+	use: { ...desktop, baseURL: `http://localhost:${pseudoPort}` }
+};
+
 // Every project, the opt-in ones included: the guard below reads this same list, so `projects`
 // (what runs) and what the guard counts as covered cannot drift apart.
 const optIn = (on: boolean, ...p: Proj[]) => (on ? p : []);
@@ -143,7 +165,8 @@ const everyProject: Proj[] = [
 	fixtureWrites,
 	fixtureReads,
 	docsShots,
-	allThemesProject
+	allThemesProject,
+	pseudoProject
 ];
 const projects = [
 	core,
@@ -153,7 +176,8 @@ const projects = [
 	keyboardOnly,
 	...optIn(fixture, fixtureWrites, fixtureReads),
 	...optIn(docs, docsShots),
-	...optIn(allThemes, allThemesProject)
+	...optIn(allThemes, allThemesProject),
+	...optIn(pseudo, pseudoProject)
 ];
 
 // Guard: every spec under e2e/ (everything Playwright's default `testMatch` would take, not just
@@ -193,14 +217,22 @@ export default defineConfig<Appearance>({
 	retries: 0,
 	workers: process.env.CI ? 4 : undefined,
 	reporter: [['list'], ['html', { open: 'never' }]],
-	webServer: {
-		command: 'npm run build && npm run preview -- --port ' + port + ' --strictPort',
-		env: { VITE_DEV_ROUTES: '1' },
-		port,
-		// A cold `npm run assets` takes ~73 s on CI.
-		timeout: 180_000,
-		reuseExistingServer: !process.env.CI
-	},
+	webServer: pseudo
+		? {
+				// Builds a scratch copy from the pseudo catalogue, then serves it; never web/build.
+				command: `node scripts/pseudo-locale.mjs run --port ${pseudoPort}`,
+				port: pseudoPort,
+				timeout: 600_000,
+				reuseExistingServer: !process.env.CI
+			}
+		: {
+				command: 'npm run build && npm run preview -- --port ' + port + ' --strictPort',
+				env: { VITE_DEV_ROUTES: '1' },
+				port,
+				// A cold `npm run assets` takes ~73 s on CI.
+				timeout: 180_000,
+				reuseExistingServer: !process.env.CI
+			},
 	use: {
 		baseURL: `http://localhost:${port}`,
 		...(chromiumPath ? { launchOptions: { executablePath: chromiumPath } } : {})

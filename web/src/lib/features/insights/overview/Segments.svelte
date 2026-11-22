@@ -3,7 +3,7 @@
 	// searchable torrents by event time and link to Search; source bars show yield by discovery
 	// cohort and link to the Discover page. The response carries no shares, so none are shown.
 	import { formatCount, formatPercent } from '$lib/format';
-	import { sourceIdLabel } from '$lib/format/label-source-names';
+	import { sourceLabel } from '$lib/format/label-source';
 	import { typeLabel } from '$lib/format/label-type';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -69,7 +69,7 @@
 	const sourceItems = $derived<BarItem[]>(
 		sources.map((s) => ({
 			key: s.key,
-			label: sourceIdLabel(s.key),
+			label: sourceLabel(s.key, s.name),
 			href: stageHref('discover', query),
 			value: s.yield,
 			text: formatPercent(s.yield, locale, 1),
@@ -145,7 +145,7 @@
 		{ key: 'searchable', label: m.searchable(), numeric: true }
 	]}
 	rows={sources.map((s) => ({
-		label: sourceIdLabel(s.key),
+		label: sourceLabel(s.key, s.name),
 		yield: formatPercent(s.yield, locale, 1),
 		harvested: formatCount(s.harvested, locale),
 		searchable: formatCount(s.searchable, locale)

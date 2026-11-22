@@ -4921,8 +4921,13 @@ export interface components {
         DiscoverSource: {
             /** Format: int64 */
             dropped: number;
-            /** @description The source's plugin name. */
+            /** @description The source plugin's manifest id, as `source:` takes it. */
             key: string;
+            /**
+             * @description The plugin's display name; its manifest id when this build doesn't
+             *     run that plugin, as provenance's `name`.
+             */
+            name: string;
             /** Format: int64 */
             rediscovered: number;
             /** Format: int64 */
@@ -9080,10 +9085,11 @@ export interface components {
             /** Format: int64 */
             searchable: number;
         };
+        /** @description A yield by some other key (`by_ip_family`). */
         SegmentYield: {
             /** Format: int64 */
             harvested: number;
-            /** @description The source plugin's name. */
+            /** @description What it's counted by. */
             key: string;
             /** Format: int64 */
             searchable: number;
@@ -9114,7 +9120,7 @@ export interface components {
              * @description Yield by the source that found each hash first, over final
              *     cohorts. Discovery cohort.
              */
-            by_source: components["schemas"]["SegmentYield"][];
+            by_source: components["schemas"]["SourceYield"][];
         };
         /**
          * @description Serve (§10.9.2 level 6). Every field is null until its counter exists:
@@ -10006,6 +10012,25 @@ export interface components {
              *     Applies at the next start.
              */
             schedule?: string[];
+        };
+        /** @description One source's yield (`segments.by_source`). */
+        SourceYield: {
+            /** Format: int64 */
+            harvested: number;
+            /** @description The source plugin's manifest id, as `source:` takes it. */
+            key: string;
+            /**
+             * @description The plugin's display name; its manifest id when this build doesn't
+             *     run that plugin, as provenance's `name`.
+             */
+            name: string;
+            /** Format: int64 */
+            searchable: number;
+            /**
+             * Format: double
+             * @description Searchable ÷ harvested, 0–1; null when it harvested nothing.
+             */
+            yield: number | null;
         };
         /** @description The stage strip (§10.9.1, `docs/metrics.md` §6.1). */
         Stages: {
