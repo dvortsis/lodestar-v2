@@ -100,12 +100,11 @@ test.describe('Logs at 390 px', () => {
 		// The toolbar buttons fade as they enable; axe must not sample a half-faded colour.
 		await expect(page.getByRole('button', { name: 'Copy visible' })).toBeEnabled();
 		await expect
-			.poll(() =>
-				page.evaluate(
-					() => document.getAnimations().filter((x) => x.playState === 'running').length
-				)
+			.poll(
+				() => page.evaluate(() => document.getAnimations().every((a) => a.playState !== 'running')),
+				{ timeout: 15_000, message: 'the toolbar buttons are still animating' }
 			)
-			.toBe(0);
+			.toBe(true);
 		await expectNoA11yViolations(page);
 	});
 
