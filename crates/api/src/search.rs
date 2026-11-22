@@ -15,7 +15,8 @@ use lodestar_search::query::TagKey;
 use lodestar_search::recovery::{self, RECOVERY_BUDGET};
 use lodestar_search::{
     CancelToken, Cursor, EXPLAIN_MAX, Error as SearchError, Explanation, Lease, Node, ParseError,
-    RebuildProgress, SearchSpec, Sort, Start, Unavailable, WEIGHTS, collapse, parse,
+    RebuildProgress, SearchSpec, Sort, Start, Unavailable, Units, WEIGHTS, collapse, parse,
+    parse_with,
 };
 use lodestar_store::{Enriched, RollupBy, Store};
 use rand::RngExt;
@@ -245,8 +246,10 @@ fn parse_error(e: ParseError) -> ApiError {
 pub(crate) async fn parse_query(
     Query(p): Query<ParseQuery>,
 ) -> ApiResult<axum::Json<ParseResponse>> {
-    let ast = parse(&p.q).map_err(parse_error)?;
-    let canonical = ast.to_query();
+    // The query bar's text: typed now (§10.12, U12), so `10GB` is 10 × 1000³
+    // bytes, and `canonical` echoes it for the bar and the URL.
+    let ast = parse_with(&p.q, Units::Typed).map_err(parse_error)?;
+    let canonical = ast.to_query_typed();
     let natural = p
         .natural
         .then(|| natural(&p.q))
@@ -747,7 +750,8 @@ async fn run_search(
             notices.push(SearchNotice::FieldsIncomplete);
         }
         Ok(axum::Json(SearchResponse {
-            canonical: ast.to_query(),
+            // Into the bar and the URL, which read it as typed (§10.12).
+            canonical: ast.to_query_typed(),
             explain,
             hits,
             limit,
@@ -836,8 +840,8 @@ fn recover(
         .zip(totals)
         .map(|((index, without), total)| ClauseRemoval {
             index,
-            clause: top[index].to_query(),
-            canonical: without.to_query(),
+            clause: top[index].to_query_typed(),
+            canonical: without.to_query_typed(),
             without,
             total: total.map(|t| t.value),
             total_approx: total.is_some_and(|t| t.approx),
@@ -1129,6 +1133,12 @@ fn explanation(e: &Explanation, served: &[SearchHit]) -> SearchExplain {
 /// A request's query: from `q`, or an `ast` the parser could have
 /// produced. `/facets` reads its query with this and runs it through
 /// [`base_query`] too, so it counts exactly what `/search` returns.
+///
+/// `q` is text the user types now, read with [`Units::Typed`] (§10.12,
+/// U12): the query bar, a typed facet value, `/search?q=`. `/facets`,
+/// `/export`, live search and saved searches read through here, so they
+/// all read the same set as `/search`. Stored text never comes through
+/// here: filter rules read with [`parse`] ([`Units::Stored`]).
 pub(crate) fn request_ast(ast: Option<Node>, q: Option<String>) -> ApiResult<Node> {
     let ast = match (ast, q) {
         (Some(ast), None) => {
@@ -1145,7 +1155,7 @@ pub(crate) fn request_ast(ast: Option<Node>, q: Option<String>) -> ApiResult<Nod
                 }
             }
         }
-        (None, q) => parse(q.as_deref().unwrap_or("")).map_err(parse_error)?,
+        (None, q) => parse_with(q.as_deref().unwrap_or(""), Units::Typed).map_err(parse_error)?,
         (Some(_), Some(_)) => {
             return Err(ApiError::bad_request(
                 "q_and_ast",

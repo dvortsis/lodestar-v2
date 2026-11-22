@@ -808,6 +808,108 @@ async fn saved_searches_round_trip() {
     assert_eq!(json_of(&f.app, get(&one, c)).await.0, StatusCode::NOT_FOUND);
 }
 
+/// Typed units (§10.12, U12): a saved search stores canonical text, and
+/// its `q` (what "Open in search" sends to `/search?q=`) finds what its
+/// alert finds, for a search saved before typed units too.
+#[tokio::test]
+async fn saved_searches_store_canonical_text_and_echo_typed_units() {
+    use lodestar_search::{Node, Units, parse_with};
+    use lodestar_store::SavedSearchInput;
+    // Between 10 GB and 10 GiB, over 10 GiB, and under 10 GB.
+    let f = fixture(
+        &[
+            t("Between", &[("", 10_000_000_500)]),
+            t("Over", &[("", 11 * GB)]),
+            t("Under", &[("", 5_000_000_000)]),
+        ],
+        true,
+    );
+    let c = session(&f).await;
+    let c = Some(c.as_str());
+    let hits = |body: &Value| -> Vec<String> {
+        let mut h: Vec<String> = body["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["name"].as_str().unwrap().to_owned())
+            .collect();
+        h.sort();
+        h
+    };
+    let search = |q: &str| {
+        let q = q.replace('>', "%3E");
+        get(&format!("/api/v1/search?q={q}"), c)
+    };
+    // The bar's text reads as typed.
+    let (_, b) = json_of(&f.app, search("size:>10GB")).await;
+    assert_eq!(hits(&b), ["Between", "Over"]);
+    assert_eq!(b["canonical"], json!("size:>10GB"));
+    let (_, b) = json_of(&f.app, search("size:>10GiB")).await;
+    assert_eq!(hits(&b), ["Over"]);
+
+    // Saved now: stored as bytes or IEC, echoed as typed.
+    let made = json_of(
+        &f.app,
+        send(
+            "POST",
+            "/api/v1/saved-searches",
+            c,
+            Some(json!({ "name": "Big", "q": "size:>10GB", "alert": true, "rss": false })),
+        ),
+    )
+    .await
+    .1;
+    assert_eq!(made["q"], json!("size:>10GB"));
+    let id = made["id"].as_i64().unwrap();
+    let store = Store::open(&f.db, StoreConfig::default()).unwrap();
+    let row = store.saved_search(id).unwrap().unwrap();
+    let ast: Node = serde_json::from_str(&row.ast).unwrap();
+    assert_eq!(ast, parse_with("size:>10GB", Units::Typed).unwrap());
+    for units in [Units::Stored, Units::Typed] {
+        assert_eq!(parse_with(&row.query, units).unwrap(), ast, "{}", row.query);
+    }
+    let (_, b) = json_of(&f.app, search(made["q"].as_str().unwrap())).await;
+    assert_eq!(hits(&b), ["Between", "Over"]);
+
+    // Saved before typed units: raw text `size:>10GB`, its AST at 10 GiB.
+    let old_ast = lodestar_search::parse("size:>10GB").unwrap();
+    let old_json = serde_json::to_string(&old_ast).unwrap();
+    let mut store = store;
+    let old = store
+        .create_saved_search(
+            &SavedSearchInput {
+                name: "Old",
+                query: "size:>10GB",
+                ast: &old_json,
+                sort: None,
+                alert: true,
+                rss: false,
+                channels: 0,
+                paused: false,
+            },
+            0,
+            1_700_000_000,
+        )
+        .unwrap();
+    drop(store);
+    let (_, view) = json_of(&f.app, get(&format!("/api/v1/saved-searches/{old}"), c)).await;
+    assert_eq!(view["q"], json!("size:>10GiB"));
+    // The link finds what the alert's AST finds.
+    let (_, by_link) = json_of(&f.app, search(view["q"].as_str().unwrap())).await;
+    let (_, by_ast) = json_of(
+        &f.app,
+        send(
+            "POST",
+            "/api/v1/search",
+            c,
+            Some(json!({ "ast": view["ast"] })),
+        ),
+    )
+    .await;
+    assert_eq!(hits(&by_link), ["Over"]);
+    assert_eq!(hits(&by_link), hits(&by_ast));
+}
+
 #[tokio::test]
 async fn saved_search_errors() {
     let (f, c) = ready().await;

@@ -48,6 +48,40 @@ describe('labels: every AST op', () => {
 		);
 	});
 
+	it('range: size and largest echo a typed decimal unit (U12), piece stays IEC', () => {
+		const GB = 1e9;
+		expect(text({ op: 'range', field: 'size', lo: 10 * GB, hi: null })).toBe(
+			`Size: at least 10${nb}GB`
+		);
+		// `>10GB` and `<10GB` are a byte past and short of it: they echo the size typed.
+		expect(text({ op: 'range', field: 'size', lo: 10 * GB + 1, hi: null })).toBe(
+			`Size: at least 10${nb}GB`
+		);
+		expect(text({ op: 'range', field: 'largest', lo: null, hi: GB - 1 })).toBe(
+			`Largest file: at most 1${nb}GB`
+		);
+		expect(text({ op: 'range', field: 'size', lo: 700e6, hi: 2e12 })).toBe(
+			`Size: 700${nb}MB to 2${nb}TB`
+		);
+		expect(text({ op: 'range', field: 'size', lo: 1.5 * GB, hi: 1.5 * GB })).toBe(
+			`Size: 1.5${nb}GB`
+		);
+		// Both a decimal and an IEC size: IEC, as the server echoes it.
+		expect(text({ op: 'range', field: 'size', lo: 4_096_000, hi: 4_096_000 })).toBe(
+			`Size: 3.91${nb}MiB`
+		);
+		expect(text({ op: 'range', field: 'size', lo: 10 * G, hi: null })).toBe(
+			`Size: at least 10.0${nb}GiB`
+		);
+		// Small byte counts stay bytes; piece lengths are IEC whatever the value.
+		expect(text({ op: 'range', field: 'size', lo: 999, hi: null })).toBe(
+			`Size: at least 999${nb}B`
+		);
+		expect(text({ op: 'range', field: 'piece', lo: 16e6, hi: 16e6 })).toBe(
+			`Piece size: 15.3${nb}MiB`
+		);
+	});
+
 	it('range: bytes, counts, scores and plain identifiers', () => {
 		expect(text({ op: 'range', field: 'size', lo: 4 * G + 1, hi: null })).toBe(
 			`Size: at least 4.00${nb}GiB`

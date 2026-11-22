@@ -138,13 +138,58 @@ const NUM_KEY: Record<Of<'range'>['field'], () => string> = {
 	dht: m.dht_estimate
 };
 
-/** Byte fields go through formatBytes; counts and scores through theirs; year, season and
- *  episode are identifiers, shown as plain integers (no grouping: "2019", not "2,019"). */
+const DECIMAL: [string, number][] = [
+	['TB', 1e12],
+	['GB', 1e9],
+	['MB', 1e6],
+	['KB', 1e3]
+];
+const IEC = [1024 ** 4, 1024 ** 3, 1024 ** 2, 1024];
+
+/** Significant digits of a whole number, trailing zeros dropped. */
+function significant(n: number): number {
+	let s = String(n);
+	while (s.length > 1 && s.endsWith('0')) s = s.slice(0, -1);
+	return s.length;
+}
+
+/**
+ * A size in the decimal unit the user typed (`10 GB`, `1.5 GB`, `700 MB`), or null when an IEC
+ * unit or plain bytes writes it with as few significant digits. The same rule as the server's
+ * typed echo (crates/search query.rs `typed_bytes_text`), on the exact byte value.
+ */
+function decimalEcho(n: number): string | null {
+	if (!Number.isSafeInteger(n) || n < 1000 || n % 1000 !== 0) return null;
+	const iec = IEC.find((u) => n % u === 0);
+	if (iec !== undefined && significant(n / iec) <= significant(n)) return null;
+	const [unit, mult] = DECIMAL.find(([, m]) => n >= m)!;
+	const frac = String(n % mult)
+		.padStart(Math.log10(mult), '0')
+		.replace(/0+$/, '');
+	return `${Math.floor(n / mult)}${frac ? `.${frac}` : ''}\u00a0${unit}`;
+}
+
+/**
+ * `size:` and `largest:` echo the unit the user typed (§10.12, U12): `10GB` shows "10 GB", not
+ * formatBytes' "9.31 GiB". It's the user's text, not a measured size, so it skips formatBytes (and
+ * keeps the query's `.` decimal point). A bound one byte short of (or past) a round size, as `<10GB`
+ * and `>10GB` give, echoes that size, as formatBytes rounds `<16GiB` to 16 GiB. Anything else is
+ * formatBytes, as before.
+ */
+function typedSize(n: number, locale: string): string {
+	const near = [n, n + 1, n - 1].map((v) => (v >= 1e6 || v === n ? decimalEcho(v) : null));
+	return near.find((e) => e !== null) ?? formatBytes(n, locale);
+}
+
+/** Byte fields go through formatBytes (size and largest echo a typed decimal unit); counts and
+ *  scores through theirs; year, season and episode are identifiers, shown as plain integers (no
+ *  grouping: "2019", not "2,019"). */
 function numValue(field: Of<'range'>['field'], n: number): string {
 	const locale = currentLocale();
 	switch (field) {
 		case 'size':
 		case 'largest':
+			return typedSize(n, locale);
 		case 'piece':
 			return formatBytes(n, locale);
 		case 'files':
