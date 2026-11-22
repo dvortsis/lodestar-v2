@@ -170,8 +170,9 @@ fn judgments(f: &Fixture) -> tempfile::TempDir {
 
 /// Read-held by every run of the tool, from spawn to exit; write-held while
 /// a test drops a lock it then expects free. A spawned child holds a copy of
-/// every descriptor in this process, other tests' flock lock files included,
-/// until its exec closes them, which can be after `spawn` returns. A lock
+/// every close-on-exec descriptor in this process, other tests' flock lock
+/// files included, until its exec closes them, which can be after `spawn`
+/// returns. A lock
 /// dropped meanwhile stays held. So no child may exist while one is dropped
 /// (docs/decisions/2026-11-22-X-relevance-finish-flake.md).
 static CHILDREN: RwLock<()> = RwLock::new(());

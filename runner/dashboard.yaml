@@ -372,6 +372,7 @@ placement:
   - X-group-chip-label
   - X-checksum-wrap
   - X-fixture-updates-on
+  - X-pseudo-text-gaps
   - X-offline-retry
   - X-offline-retry-nits
   - W*
@@ -465,6 +466,7 @@ placement:
   - X-msi-upgrade-env-value
   - X-leak-test-capture-kill
   - X-leaktest-wg0-flake
+  - X-leaktest-vpn-held-down
   - X-flake-states-clock
   - X-flake-e2e-expect-timeout
   - X-e2e-baseline-refresh
@@ -491,6 +493,9 @@ placement:
   - X-api-openapi-400s
   - X-testvm-delete-on-termination
   - X-fleet-stacked-arms
+  - X-block-on-only-mode
+  - X-infra-filter-workflows
+  - X-recased-word-flake
   - X-prefs-invisible-share
   - X-api-openapi-repeated
   - X-flake-export-wal
@@ -1691,6 +1696,7 @@ roadmap:
     - X-ui-checks-4
     - X-search-chunk-retry
     - X-group-chip-label
+    - X-pseudo-text-gaps
   - id: trackq
     label: 'Track Q: code-review fixes'
     plain: 'The 2026-11-12 code review: worker lease reconciliation, the watch folder, uTP timeouts, specs that never run, an advisory check in CI and tests that sleep. The held security and content-safety fixes join by id only; their blocking and important findings must be closed for the 1.0 security gate.'

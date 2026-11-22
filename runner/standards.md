@@ -23,7 +23,7 @@ The sources of truth, in order:
 - `npm run check`: svelte-check, eslint, prettier, the hex and arbitrary-value bans, and the message merge once W4 adds it
 - `npx vitest run`
 - `npm run build`
-- `npx size-limit`
+- `npm run size:ci`: CI's exact size measurement (the build, then the stable-name build and size-limit). Plain `npx size-limit` on the shipped build can be off by −19 to +35 B, so measure size limits with this.
 - `npx playwright test` for any route or component with an e2e spec. Chromium is at `/opt/pw-browsers`; never run `playwright install`.
 
 **Always:** `git fetch origin main` and merge it (never rebase a shared branch) before opening a PR, or before requesting review on a head that isn't fresh enough (`runner/README.md` step 4). Never push red.
