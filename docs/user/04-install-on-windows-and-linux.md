@@ -368,23 +368,24 @@ A setting locked by a `LODESTAR_UPDATES*` variable shows "Set by …" and can't 
 
 **Recommended:** use the setting in **Settings → Updates**, not a variable. The app keeps the setting in your data folder, so it survives every update.
 
-On Windows, a variable set on the Lodestar service **is lost on every install or update**, including **Install now**. An update removes the service and creates it again, and the variables go with it. You then see the setting unlocked, or Lodestar uses its default. Nothing warns you.
+On Windows, a variable set on the Lodestar service **is lost on every install or update**, including **Install now**. An update removes the service and creates it again, and the variables go with it. Lodestar then goes back to the setting saved in the app, or to its default. Nothing warns you.
 
-If you still need a variable, set it again after each install or update:
+If you still need a variable, set it again after each install or update. The names and allowed values are in [Appendix B](appendix-b-settings-reference.md). A wrong value stops Lodestar from starting. The command below replaces any variables already set on the service.
 
 1. Open **Start**, type **Command Prompt**, right-click it and select **Run as administrator**.
-2. In that Command Prompt, paste this command, with your own variable and value between the quotes:
+2. In that Command Prompt, paste this command, with your own variables between the quotes. Separate two or more with `\0`, as in `"LODESTAR_UPDATES=notify\0LODESTAR_UPDATES_CHANNEL=stable"`:
 
    ```bat
    reg add HKLM\SYSTEM\CurrentControlSet\Services\Lodestar /v Environment /t REG_MULTI_SZ /d "LODESTAR_UPDATES=notify" /f
    ```
 
-3. For two or more variables, separate them with `\0`. The command replaces any variables already set.
-4. Open **Services** (`services.msc`), select **Lodestar** and select **Restart**.
+3. Open **Services** (`services.msc`), select **Lodestar** and select **Restart**.
 
 **Result:** the setting shows "Set by …" again.
 
-Keep secrets out of service variables: any administrator can read them in the registry.
+**If Lodestar won't start,** remove the variables. In the same administrator Command Prompt, run `reg delete HKLM\SYSTEM\CurrentControlSet\Services\Lodestar /v Environment /f`, then restart the service.
+
+Keep secrets out of service variables: anyone who can sign in to this PC can read them in the registry.
 
 ### Know when an install can run
 
