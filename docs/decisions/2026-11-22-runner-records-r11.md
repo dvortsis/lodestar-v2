@@ -1,4 +1,4 @@
-# runner-records-r11 decisions
+# runner-records-r11 decisions (#1059)
 
 The runner's records PR after r10 (#1052). It records the runner's calls on 2026-11-22Z for #1048, #1051 and #1053 to #1057, and for the slices still running. Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
@@ -7,14 +7,14 @@ The runner's records PR after r10 (#1052). It records the runner's calls on 2026
   - **The coupling is kept (runner):** a PR marked for regeneration only commits its new baselines once the whole fixture suite is green, and `web/e2e/README.md` says so.
   - **The real test comes later:** the first nightly runs after 1da2253a test whether the fixture baselines hold across days, and whether the pseudo step holds in `all-themes`. The runner watches the nightly tracking issue.
 - **X-fixture-updates-on (#1051):** as r10 recorded, it switches on Updates only.
-  - Its refusals say why: `blocked_by` comes from the pure `policy::plan` plus a `fixture` capability.
+  - `/updates` says why the sample release isn't eligible: `blocked_by` comes from the pure `policy::plan` plus a `fixture` capability. Writes answer 409 with a `fixture` reason.
   - Its decisions file records the in-memory pause as a departure from DUR-26.
   - **A follow-up, X-fixture-server-kill-on-drop (below):** the test helper's child server outlives a panicking test.
 - **X-api-openapi-400s (#1053):** every route that reads its query declares its 400s. Its review's nits go to X-openapi-400s-tidy (below).
 - **CR-UTP-FIRST-WINDOW (#1054), runner calls under §2.26:**
   - **The 4 s first-window deadline stays.** The fix is option (d): for a dict over 5 pieces, the first request asks for 5 pieces, one more than the 64 KiB window. It reserves 80 KiB plus the bound up front; the full reservation and the pace start once the window is in.
-  - **Fix (a):** a dict of exactly 5 pieces keeps the 4-piece first request, reserves 64 KiB, then grows. An earlier draft reserved it whole, a claim over the pool's `SMALL_CLAIM` (80 KiB). That would have admitted it as a large claim without the floor, grown-cap or per-network checks (review, blocking).
-  - **The cost, in the pool's units:** about 87 KiB instead of about 71 KiB per waiting first request, so 18–20% fewer fit. Twenty silent peers pin about 1.7 MB of the 4 MiB pool, against about 1.4 MB before. No pool rule assumes a size.
+  - **The review fix:** a dict of exactly 5 pieces keeps the 4-piece first request, reserves 64 KiB, then grows. An earlier draft reserved it whole, a claim over the pool's `SMALL_CLAIM` (80 KiB). That would have admitted it as a large claim without the floor, grown-cap or per-network checks (review, blocking).
+  - **The cost, in the pool's units:** about 87 KiB instead of about 71 KiB per waiting first request, so 18–20% fewer fit when the budget binds. Twenty silent peers pin about 1.7 MB of a worker's 4 MiB budget, against about 1.4 MB before. No pool rule assumes a size.
   - **The result:** misses at 4 s, at 5/10/15/20% loss, went from 0/8/25/75 to 0/2/10/37 of 400.
   - **(b), a bounded uTP extension, is the owner's** (owner_queue n 34). It would loosen the bound against slow peers. (c), a longer deadline for every transport, is advised against.
   - **Its pool docs, fixtures and model** go to X-pool-first-request-docs (below).
@@ -49,7 +49,7 @@ The runner's records PR after r10 (#1052). It records the runner's calls on 2026
   - An abba rules file, and its args, stay byte-identical.
   - The evidence copy-off returns carries a `mode` field (a fixed value).
   - `analyze_cr` names `no_control_arm` instead of the generic order error.
-  - Its owns gain `infra/fleet/steps/rules.py`, `infra/fleet/steps/vm/scrub.py`, `docs/soak/tools/analyze_cr.py` and its test.
+  - Its owns gain `infra/fleet/steps/rules.py`, `infra/fleet/steps/vm/scrub.py`, `docs/soak/tools/analyze_cr.py` and its test. Its own PR updates its `slices.yaml` entry.
 - **Not new:** the vitest timeout in `screen.test.ts` that the #1053 session saw under load is X-filters-dialog-test-timeout, already fixed in #1035.
 
 ## Process
@@ -60,12 +60,12 @@ The runner's records PR after r10 (#1052). It records the runner's calls on 2026
 - **X-pool-first-request-docs:** the pool's docs, fixtures and budget model follow peer-wire's first request after #1054: 80 KiB plus the bound for a dict over 5 pieces, and 64 KiB then growth for a 5-piece dict.
   - The model's invariant slack becomes "share + one first request", and the model reserves peer-wire's sizes instead of a hand-written 64 KiB.
   - It also takes #1054's review nits in `fetch.rs` and `utp.rs`.
-  - Docs, fixtures and the model only; no pool rule changes.
+  - Docs, fixtures and the model only; no pool rule changes. `crates/peer-wire/src/lib.rs` is in its owns for one re-export only.
 - **X-search-retry-flush:**
   - Retry flushes the bar's text into the URL first, so a query typed within the bar's 200 ms debounce isn't lost.
   - A failed detail-drawer chunk shows a message, instead of an uncaught rejection and nothing.
   - The Retry marker is honoured only for a load that starts soon after the reload.
-  - It fixes the stale glob comment.
+  - It fixes the stale glob comment. It owns the Search messages for the drawer's failure text, so it never runs beside X-alert-noun.
   - No raise to the 45 kB cap.
 - **X-workflow-tests-filter:**
   - `test_workflow_concurrency.py` reads `web.yml` and `e2e.yml` but runs only when Rust changes; it should run on any workflow change.
