@@ -1,30 +1,43 @@
 //! The fetch pool's byte budget under random traffic, in paused time.
 //!
 //! Each seed runs a minute of claims against one [`Budget`]: small whole
-//! claims, and large ones that reserve a first window and then grow, some
-//! past the grown claims' cap, and some whose first window never comes.
-//! Every claim comes from one of a few
-//! networks. Claims hold their room for a while, then become finished
-//! results or are dropped; a consumer that sometimes lags takes the
-//! results. Throughout, the budget's bounds are checked, and no wait for
-//! room may last longer than [`MAX_WAIT`] while traffic goes on, nor a
-//! large claim's first window longer than [`CHURN_WAIT`] while small claims
-//! churn. At the
-//! end every count is back to zero.
+//! claims, and large ones that reserve peer-wire's first request (the
+//! first window and one more piece) and then grow, some past the grown
+//! claims' cap, and some whose first window never comes. Every claim comes
+//! from one of a few networks. Claims hold their room for a while, then
+//! become finished results or are dropped; a consumer that sometimes lags
+//! takes the results. Throughout, the budget's bounds are checked, and no
+//! wait for room may last longer than [`MAX_WAIT`] while traffic goes on,
+//! nor a large claim's first window longer than [`CHURN_WAIT`] while small
+//! claims churn. At the end every count is back to zero.
+//!
+//! Where [`MAX_WAIT`] is known to hold: both budgets at the default seeds,
+//! and the worker's at ten times as many (`POOL_MODEL_SEEDS=640`). At the
+//! test-sized budget with 640 seeds it doesn't: seven first reservations
+//! in five seeds (109, 111, 131, 495, 623) waited 30–44 s behind a growth
+//! past the grown claims' cap, which at that budget grows only once every
+//! other first request is gone. Every one was granted in the end
+//! (X-pool-first-request-docs; a follow-up asks whether such a growth
+//! should leave room for two first requests).
 //!
 //! The seeds are fixed, so a run is the same every time; a failure names
 //! its seed. Every wait is the paused clock's: nothing sleeps.
 
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio::time::{sleep, timeout};
 
-use super::{Budget, Reservation, net_of};
+use lodestar_peer_wire::message::METADATA_PIECE;
 
-/// The seeds every run uses.
-const SEEDS: std::ops::RangeInclusive<u64> = 1..=64;
+use super::{Budget, FetchedKey, Reservation, net_of};
+
+/// The seeds every run uses; `POOL_MODEL_SEEDS=n` runs seeds 1 to n
+/// instead (640 for a 10x run, which fails at the test-sized budget: see
+/// the module doc).
+const SEEDS: u64 = 64;
 /// The budgets the seeds run with: a test-sized one, and a worker's.
 const LIMIT: usize = 1_000_000;
 const WORKER: usize = 4 << 20;
@@ -37,6 +50,57 @@ const MAX_WAIT: Duration = Duration::from_secs(30);
 /// (the budget's `starved` rule).
 const CHURN_WAIT: Duration = Duration::from_secs(8);
 const NETWORKS: u64 = 6;
+
+/// Room for a full PEX list in a result, as peer-wire's `result_bound`
+/// has it: 200 peers.
+const PEX_BOUND: usize = 200 * std::mem::size_of::<std::net::SocketAddr>();
+/// What peer-wire reserves first, with no client name, for a dict of more
+/// than five pieces, in bytes: the window and one more piece (peer-wire's
+/// `FIRST_REQUEST`, 5 pieces; CR-UTP-FIRST-WINDOW) and the result's bound.
+/// It is the largest first reservation of a partial claim.
+const FIRST_REQUEST_BYTES: usize = 5 * METADATA_PIECE + PEX_BOUND;
+/// The same for a dict of exactly five pieces: the window alone.
+const FIVE_PIECE_FIRST_BYTES: usize = 4 * METADATA_PIECE + PEX_BOUND;
+
+/// What peer-wire reserves first for a result bound of `total` (a dict and
+/// the bound, no client name): [`FIRST_REQUEST_BYTES`] for a dict over five
+/// pieces, [`FIVE_PIECE_FIRST_BYTES`] for one of five, and the whole of a
+/// smaller one, so no whole claim is over [`super::SMALL_CLAIM`].
+/// [`peer_wire_reserves_these_first`] pins it to the real fetch, as
+/// `tests/pool.rs`'s `first_reservation` is pinned there.
+fn first_of(total: usize) -> usize {
+    let dict = total.saturating_sub(PEX_BOUND);
+    if dict > 5 * METADATA_PIECE {
+        FIRST_REQUEST_BYTES
+    } else if dict > 4 * METADATA_PIECE {
+        FIVE_PIECE_FIRST_BYTES
+    } else {
+        total
+    }
+}
+
+/// What a run did, per thread (`seeds` resets them, so a test's count is
+/// its own whichever thread runs it): first reservations, growths, waits for room over 1 s, and the
+/// most any network held in partial claims. `--nocapture` prints them.
+#[derive(Default, Clone, Copy, Debug)]
+struct Counts {
+    claims: u64,
+    growths: u64,
+    slow_waits: u64,
+    most_net_partial: u64,
+}
+
+thread_local! {
+    static COUNTS: Cell<Counts> = Cell::new(Counts::default());
+}
+
+fn count(f: impl FnOnce(&mut Counts)) {
+    COUNTS.with(|c| {
+        let mut n = c.get();
+        f(&mut n);
+        c.set(n);
+    });
+}
 
 /// xorshift64*.
 #[derive(Clone)]
@@ -102,10 +166,16 @@ fn check(b: &Budget, seed: u64) {
             w.before
         );
     }
+    // A network's first partial claim is admitted whatever its size, and
+    // any later one only while the network stays within its share
+    // (`net_partials_full`): so a network holds its share, or one first
+    // request alone.
     let share = beside / super::PARTIAL_NET_SHARE;
+    let one = (std::mem::size_of::<FetchedKey>() + FIRST_REQUEST_BYTES) as u64;
     for (n, held) in &s.partial_nets {
+        count(|c| c.most_net_partial = c.most_net_partial.max(*held));
         assert!(
-            *held <= share + super::SMALL_CLAIM,
+            *held <= share.max(one),
             "seed {seed}: network {n:?} holds {held} in partial claims"
         );
     }
@@ -119,7 +189,17 @@ async fn granted(
     sizes: (usize, usize),
     reserve: impl std::future::Future<Output = ()>,
 ) {
-    if timeout(bound, reserve).await.is_err() {
+    let asked = tokio::time::Instant::now();
+    if what == "growth" {
+        count(|c| c.growths += 1);
+    } else {
+        count(|c| c.claims += 1);
+    }
+    let got = timeout(bound, reserve).await;
+    if asked.elapsed() > Duration::from_secs(1) {
+        count(|c| c.slow_waits += 1);
+    }
+    if got.is_err() {
         let s = b.lock();
         panic!(
             "seed {seed}: a {what} of {sizes:?} waited past {bound:?}: reserved {} held {} \
@@ -163,17 +243,19 @@ async fn claim(b: Arc<Budget>, seed: u64, mut rng: Rng) {
             "first reservation",
             (seed, MAX_WAIT),
             &b,
-            (64 << 10, total),
-            r.reserve(64 << 10, total),
+            (first_of(total), total),
+            r.reserve(first_of(total), total),
         )
         .await;
         sleep(lodestar_peer_wire::FIRST_WINDOW_DEADLINE).await;
         return;
     } else if rng.chance(85) {
-        (64 << 10, rng.range(100_000 * k, 400_000 * k) as usize)
+        let total = rng.range(100_000 * k, 400_000 * k) as usize;
+        (first_of(total), total)
     } else {
         // Past the grown claims' cap: it grows only alone.
-        (64 << 10, rng.range(550_000 * k, 700_000 * k) as usize)
+        let total = rng.range(550_000 * k, 700_000 * k) as usize;
+        (first_of(total), total)
     };
     let net = rng.range(1, NETWORKS);
     let hold = Duration::from_millis(rng.range(50, 1_000));
@@ -181,7 +263,7 @@ async fn claim(b: Arc<Budget>, seed: u64, mut rng: Rng) {
     life(b, (seed, MAX_WAIT), rng, net, (window, total), hold, settle).await;
 }
 
-/// A claim from `net` of `sizes` (first window, whole), held for `hold`
+/// A claim from `net` of `sizes` (first request, whole), held for `hold`
 /// once it has all its room, then settled as a result or dropped. Its
 /// first reservation may wait up to `first_wait`; any other, [`MAX_WAIT`].
 async fn life(
@@ -240,7 +322,7 @@ async fn growth_pressure(b: Arc<Budget>, seed: u64, mut rng: Rng, length: Durati
             (seed, MAX_WAIT),
             Rng::new(rng.next()),
             n % NETWORKS + 1,
-            (64 << 10, total),
+            (first_of(total), total),
             hold,
             false,
         ));
@@ -262,8 +344,9 @@ async fn small_churn(b: Arc<Budget>, seed: u64, mut rng: Rng, length: Duration) 
     let mut claims = tokio::task::JoinSet::new();
     while start.elapsed() < length {
         let (sizes, hold, first_wait) = if rng.chance(3) {
+            let total = rng.range(300_000, 500_000) as usize;
             (
-                (64 << 10, rng.range(300_000, 500_000) as usize),
+                (first_of(total), total),
                 Duration::from_millis(500),
                 CHURN_WAIT,
             )
@@ -379,7 +462,12 @@ async fn run(seed: u64, limit: usize) {
 }
 
 fn seeds(limit: usize) {
-    for seed in SEEDS {
+    let n = std::env::var("POOL_MODEL_SEEDS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(SEEDS);
+    COUNTS.with(|c| c.set(Counts::default()));
+    for seed in 1..=n {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .start_paused(true)
@@ -387,6 +475,7 @@ fn seeds(limit: usize) {
             .unwrap();
         rt.block_on(run(seed, limit));
     }
+    println!("budget {limit}, {n} seeds: {:?}", COUNTS.with(Cell::get));
 }
 
 /// Every seed: the bounds hold throughout, no wait for room outlasts
@@ -396,9 +485,75 @@ fn the_budget_keeps_its_bounds_and_serves_every_claim() {
     seeds(LIMIT);
 }
 
-/// The same with a worker's budget, where a network's first windows have
+/// The same with a worker's budget, where a network's first requests have
 /// room for only a few.
 #[test]
 fn a_workers_budget_keeps_its_bounds_and_serves_every_claim() {
     seeds(WORKER);
+}
+
+/// The first `(now, total)` peer-wire's real fetch reserves for a dict of
+/// `size` bytes, from a scripted peer over an in-memory pipe that
+/// announces `size` and the client name "Lodestar". `tests/pool.rs` has
+/// the same peer for its `first_reservation`: change them together.
+async fn first_reserved(size: usize) -> (usize, usize) {
+    use lodestar_peer_wire::message::{self, HANDSHAKE_LEN};
+    use lodestar_peer_wire::{FetchOptions, Reserve, fetch_on_stream};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let key = lodestar_metainfo::InfoHash([7; 20]);
+    let (ours, mut theirs) = tokio::io::duplex(1 << 16);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let tx = std::sync::Mutex::new(Some(tx));
+    let opts = FetchOptions {
+        reserve: Some(Reserve(Arc::new(move |now, total| {
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send((now, total));
+            }
+            // Never granted: the fetch stops here, before any request.
+            Box::pin(std::future::pending())
+        }))),
+        ..FetchOptions::default()
+    };
+    let fetch = tokio::spawn(async move { fetch_on_stream(ours, &key, &opts, false).await });
+    // One deadline for the whole exchange, so a fetch that stops
+    // talking fails the test instead of hanging it.
+    let got = timeout(Duration::from_secs(10), async {
+        let mut hello = [0u8; HANDSHAKE_LEN];
+        theirs.read_exact(&mut hello).await.unwrap();
+        theirs
+            .write_all(&message::handshake(&key.0, b"-PW0001-firstrequest", true))
+            .await
+            .unwrap();
+        let ext = message::our_extended_handshake(Some(size));
+        let mut frame = ((ext.len() + 2) as u32).to_be_bytes().to_vec();
+        frame.extend([20, 0]);
+        frame.extend(ext);
+        theirs.write_all(&frame).await.unwrap();
+        rx.await.unwrap()
+    })
+    .await
+    .expect("peer-wire reserves at the extended handshake, within 10 s");
+    fetch.abort();
+    got
+}
+
+/// The model's sizes are peer-wire's: what the real fetch reserves first,
+/// and in all, for dicts from 1 KiB to 8 pieces, at and either side of
+/// each step, less the scripted peer's 8-byte client name.
+#[tokio::test]
+async fn peer_wire_reserves_these_first() {
+    let name = "Lodestar".len();
+    let p = METADATA_PIECE;
+    for size in [1 << 10, 4 * p, 4 * p + 1, 5 * p, 5 * p + 1, 6 * p, 8 * p] {
+        let (now, total) = first_reserved(size).await;
+        assert_eq!(total, size + PEX_BOUND + name, "a dict of {size}: whole");
+        assert_eq!(
+            now,
+            first_of(size + PEX_BOUND) + name,
+            "a dict of {size}: first"
+        );
+    }
+    assert_eq!(first_of(6 * p + PEX_BOUND), FIRST_REQUEST_BYTES);
+    assert_eq!(first_of(5 * p + PEX_BOUND), FIVE_PIECE_FIRST_BYTES);
 }
