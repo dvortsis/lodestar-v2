@@ -131,30 +131,27 @@ export const screens: readonly Screen[] = collect(
 	})
 );
 
+/**
+ * Fields the server stores and shows but nothing reads yet (`settings/transport.rs`: "change nothing
+ * but what's saved"), so a switch for them would do nothing. They're left out of the screens and of
+ * Settings search until they act (UI review I18).
+ */
+export const INERT: ReadonlySet<string> = new Set(['transport.utp', 'transport.fallback_to_tcp']);
+
 export function screenFields(screen: Screen, index: SettingsIndexView): FieldSpec[] {
-	return index.fieldsOf([...(screen.sections ?? [])]).map((spec) => ({
-		...spec,
-		readOnly:
-			spec.readOnly ||
-			screen.readOnly === true ||
-			(spec.danger !== undefined && spec.danger !== 'disruptive')
-	}));
+	return index
+		.fieldsOf([...(screen.sections ?? [])])
+		.filter((spec) => !INERT.has(spec.key))
+		.map((spec) => ({
+			...spec,
+			readOnly:
+				spec.readOnly ||
+				screen.readOnly === true ||
+				(spec.danger !== undefined && spec.danger !== 'disruptive')
+		}));
 }
 
 /** The screen's `About`, or none when it has none. A chunk that fails to load rejects. */
 export async function aboutOf(screen: Screen): Promise<About> {
 	return (await screen.about?.())?.[screen.id] ?? {};
-}
-
-/**
- * Navigation matching does not load any setting values or private data. It matches the title, and
- * the purpose once the screen's `about` has loaded.
- */
-export function matchesScreen(screen: Screen, query: string, about: About = {}): boolean {
-	const normalize = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
-	const haystack = normalize(`${screen.title()} ${about.purpose?.() ?? ''}`);
-	return normalize(query)
-		.trim()
-		.split(/\s+/)
-		.every((word) => haystack.includes(word));
 }

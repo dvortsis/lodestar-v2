@@ -1,10 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { STEPS, writeProgress } from '$lib/features/wizard/steps';
 import type { components } from '$lib/api/schema';
 import type { FieldKey, FieldSpec, SectionValues } from '../form/types';
 import {
 	changedFromDefault,
 	needsAttention,
 	retryIn,
+	skippedSteps,
+	startHere,
+	STEP_SCREEN,
 	startReason,
 	type StartFailure
 } from './logic';
@@ -216,5 +220,78 @@ describe('needsAttention', () => {
 		const [row] = needsAttention(system({ data_formats: { rebuild: { phase: 'building' } } }));
 		expect(row).toMatchObject({ kind: 'rebuilding', severity: 'info' });
 		expect(needsAttention(system({ data_formats: { rebuild: { phase: 'done' } } }))).toEqual([]);
+	});
+});
+
+describe('startHere', () => {
+	const none: SectionValues[] = [];
+	it('lists the five basics in order, with no state where the reads say nothing', () => {
+		const rows = startHere(none, []);
+		expect(rows.map((r) => r.id)).toEqual([
+			'client',
+			'notifications',
+			'updates',
+			'backups',
+			'password'
+		]);
+		expect(rows.map((r) => r.state)).toEqual(['none', 'none', 'off', undefined, undefined]);
+		expect(rows.map((r) => r.screen)).toEqual([
+			'integrations',
+			'notifications',
+			'updates',
+			'general',
+			'security'
+		]);
+	});
+
+	it('reads the state from the values already loaded', () => {
+		const rows = startHere(
+			[
+				section('integrations', { clients: v([{ id: 'a' }, { id: 'b' }], 'db') }),
+				section('notifications', { ntfy_url: v('https://ntfy.sh/x', 'db') }),
+				section('updates', { mode: v('notify', 'db') })
+			],
+			[]
+		);
+		expect(rows[0]).toMatchObject({ state: 'set', count: 2, configured: true });
+		expect(rows[1]).toMatchObject({ state: 'set', configured: true });
+		expect(rows[2]).toMatchObject({ state: 'set', configured: true });
+	});
+
+	it('treats an update mode of off, or a default, as off', () => {
+		expect(startHere([section('updates', { mode: v('off', 'db') })], [])[2]!.state).toBe('off');
+		expect(startHere([section('updates', { mode: v('notify') })], [])[2]!.state).toBe('off');
+	});
+
+	it('adds each skipped first-run step the basics do not cover, once', () => {
+		const rows = startHere(none, [
+			{ step: 'download', screen: 'integrations' },
+			{ step: 'storage', screen: 'storage' },
+			{ step: 'packs', screen: 'filters' },
+			{ step: 'blocklists', screen: 'filters' }
+		]);
+		expect(rows.slice(5).map((r) => [r.id, r.screen, r.state])).toEqual([
+			['skipped-storage', 'storage', 'skipped'],
+			['skipped-packs', 'filters', 'skipped']
+		]);
+	});
+});
+
+describe('skippedSteps', () => {
+	afterEach(() => sessionStorage.clear());
+	it('names a Settings screen for exactly the optional steps the wizard has', () => {
+		const optional = STEPS.filter((s) => s.optional);
+		expect(Object.keys(STEP_SCREEN).sort()).toEqual(optional.map((s) => s.id).sort());
+		for (const s of optional) expect(STEP_SCREEN[s.id]).toBe(s.settings);
+	});
+	it('reads the skipped steps from the wizard progress, and nothing when there is none', () => {
+		expect(skippedSteps()).toEqual([]);
+		writeProgress({ step: 'done', skipped: ['download', 'packs'], done: [] });
+		expect(skippedSteps()).toEqual([
+			{ step: 'download', screen: 'integrations' },
+			{ step: 'packs', screen: 'filters' }
+		]);
+		sessionStorage.setItem('lodestar.wizard', '{not json');
+		expect(skippedSteps()).toEqual([]);
 	});
 });

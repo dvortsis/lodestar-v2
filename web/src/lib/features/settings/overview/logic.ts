@@ -187,3 +187,95 @@ export function retryIn(
 	if (delta < 60) return { value: Math.round(delta), unit: 'second' };
 	return { value: Math.ceil(delta / 60), unit: 'minute' };
 }
+
+/** One row of Start here (§10.10.3): a thing most people set, with where it stands and one action. */
+export interface StartRow {
+	id: 'client' | 'notifications' | 'updates' | 'backups' | 'password' | `skipped-${string}`;
+	/** The screen that holds it (`/settings/<screen>`). */
+	screen: string;
+	/** Absent when the settings already read say nothing about it (backups, the password). */
+	state?: 'none' | 'set' | 'off' | 'skipped';
+	count?: number;
+	/** The update mode chosen (`updates.mode`), for the state in words. */
+	mode?: string;
+	/** Something is already chosen, so the action reads "Open" and not the first-time wording. */
+	configured: boolean;
+}
+
+const CHANNEL_FIELDS = new Set(['webhook_url', 'discord_url', 'ntfy_url', 'email_host']);
+
+/**
+ * The few things most people set, with their state taken from the values the Overview has already
+ * read (no request of its own), and one row for each first-run step the user skipped that none of
+ * those covers. A row stays once it's done: the list doubles as a summary of the basics.
+ */
+export function startHere(
+	values: readonly SectionValues[],
+	skipped: readonly { step: string; screen: string }[]
+): StartRow[] {
+	const section = (name: string) => values.find((v) => v.section === name)?.fields ?? {};
+	const clients = section('integrations')['clients']?.value;
+	const clientCount = Array.isArray(clients) ? clients.length : 0;
+	const channels = Object.entries(section('notifications')).some(
+		([name, v]) => CHANNEL_FIELDS.has(name) && v.source !== 'default'
+	);
+	const updates = section('updates')['mode'];
+	const updatesOff = !updates || updates.source === 'default' || updates.value === 'off';
+	const rows: StartRow[] = [
+		clientCount > 0
+			? { id: 'client', screen: 'integrations', state: 'set', count: clientCount, configured: true }
+			: { id: 'client', screen: 'integrations', state: 'none', configured: false },
+		{
+			id: 'notifications',
+			screen: 'notifications',
+			state: channels ? 'set' : 'none',
+			configured: channels
+		},
+		{
+			id: 'updates',
+			screen: 'updates',
+			state: updatesOff ? 'off' : 'set',
+			configured: !updatesOff,
+			...(!updatesOff && typeof updates?.value === 'string' ? { mode: updates.value } : {})
+		},
+		{ id: 'backups', screen: 'general', configured: false },
+		{ id: 'password', screen: 'security', configured: true }
+	];
+	const covered = new Set(rows.map((r) => r.screen));
+	for (const s of skipped) {
+		if (covered.has(s.screen)) continue;
+		covered.add(s.screen);
+		rows.push({ id: `skipped-${s.step}`, screen: s.screen, state: 'skipped', configured: false });
+	}
+	return rows;
+}
+
+/**
+ * The Settings screen each optional first-run step would have set (the wizard's `STEPS`, copied
+ * here so the Overview doesn't pull the wizard's module into the Welcome route's chunks; a test
+ * checks the two agree).
+ */
+export const STEP_SCREEN: Record<string, string> = {
+	network: 'network',
+	intensity: 'crawler',
+	storage: 'storage',
+	download: 'integrations',
+	packs: 'filters',
+	blocklists: 'blocklists',
+	updates: 'updates'
+};
+
+/** The first-run steps this tab skipped (the wizard's progress, in `sessionStorage`). */
+export function skippedSteps(): { step: string; screen: string }[] {
+	try {
+		const raw: unknown = JSON.parse(sessionStorage.getItem('lodestar.wizard') ?? 'null');
+		const skipped = (raw as { skipped?: unknown } | null)?.skipped;
+		return (Array.isArray(skipped) ? skipped : []).flatMap((step) =>
+			typeof step === 'string' && Object.hasOwn(STEP_SCREEN, step)
+				? [{ step, screen: STEP_SCREEN[step]! }]
+				: []
+		);
+	} catch {
+		return [];
+	}
+}

@@ -181,7 +181,7 @@
 	<div class="flex flex-wrap items-center gap-3">
 		<Button
 			type="submit"
-			variant="primary"
+			variant={typed ? 'primary' : 'secondary'}
 			loading={busy}
 			aria-disabled={busy || locked || undefined}
 			data-testid="security-password-submit">{m.settings_security_password_submit()}</Button

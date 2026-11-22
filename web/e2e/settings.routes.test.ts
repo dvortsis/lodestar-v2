@@ -128,11 +128,10 @@ test('desktop navigation, field labels and unknown destinations', async ({ page,
 	);
 	await expectNoA11yViolations(page);
 	await page.screenshot({ path: '../target/settings-desktop.png', fullPage: true });
-	await page.getByLabel('Find a section').fill('network');
-	await expect(
-		page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link')
-	).toHaveCount(1);
-	await page.getByRole('link', { name: 'Network & VPN', exact: true }).click();
+	// Settings search (X-settings-find): results replace the list, and a screen is one of them.
+	await page.getByLabel('Find a setting').fill('network');
+	await page.getByRole('option', { name: /^Network & VPN/ }).click();
+	await expect(page).toHaveURL(/\/settings\/network$/);
 	await expect(page.getByLabel('Web address', { exact: true })).not.toBeEditable();
 	await expect(page.getByText(/Network settings are read-only/)).toBeVisible();
 	expect(mock.calls('patchSettingsBatch')).toHaveLength(0);
@@ -220,8 +219,8 @@ for (const width of [390, 1366]) {
 test('direct Advanced field link opens its disclosure and focuses the control', async ({
 	page
 }) => {
-	await page.goto('/settings/crawler#transport.utp');
-	const control = page.getByRole('switch', { name: 'uTP (not active yet)', exact: true });
+	await page.goto('/settings/crawler#crawler.timeout_secs');
+	const control = page.getByRole('textbox', { name: 'Fetch timeout', exact: true });
 	await expect(control).toBeVisible();
 	await expect(control).toBeFocused();
 	await page.reload();
@@ -240,17 +239,13 @@ test('schema acquisition failure offers a working retry', async ({ page, go, moc
 	await expect(page.getByRole('switch', { name: 'Pause crawling' })).toBeVisible();
 });
 
-test('saves Crawler and Transport in one batch with separate revisions', async ({
+test('saves Crawler with its revision, and shows no switch for the stored-only transport fields', async ({
 	page,
 	go,
 	mock
 }) => {
 	const crawler = settingsValues('crawler', 3);
-	const transport = settingsValues('transport', 7);
-	mock.on('getSettings', (request) => ({
-		status: 200,
-		body: request.url().endsWith('/transport') ? transport : crawler
-	}));
+	mock.on('getSettings', () => ({ status: 200, body: crawler }));
 	mock.on('patchSettingsBatch', {
 		status: 200,
 		body: {
@@ -259,27 +254,21 @@ test('saves Crawler and Transport in one batch with separate revisions', async (
 					...crawler,
 					revision: 4,
 					fields: { ...crawler.fields, paused: value(true, 'db') }
-				},
-				transport: {
-					...transport,
-					revision: 8,
-					fields: { ...transport.fields, utp: value(true, 'db') }
 				}
 			}
 		}
 	});
 	await go('/settings/crawler');
+	// uTP and the TCP fallback are stored and shown only (UI review I18): no switch for them.
+	await expect(page.getByRole('switch', { name: 'Pause crawling' })).toBeVisible();
+	await expect(page.getByRole('switch', { name: /uTP/ })).toHaveCount(0);
 	await page.getByRole('switch', { name: 'Pause crawling' }).click();
-	await page.getByRole('switch', { name: 'uTP (not active yet)', exact: true }).click();
 	await page.getByRole('button', { name: 'Save changes', exact: true }).click();
 	await expect(page.getByTestId('save-bar-status')).toHaveText('Saved');
 	expect(mock.calls('patchSettingsBatch').map((request) => request.postDataJSON())).toEqual([
-		{ crawler: { paused: true, if_revision: 3 }, transport: { utp: true, if_revision: 7 } }
+		{ crawler: { paused: true, if_revision: 3 } }
 	]);
 	await expect(page.getByRole('switch', { name: 'Pause crawling' })).toBeChecked();
-	await expect(
-		page.getByRole('switch', { name: 'uTP (not active yet)', exact: true })
-	).toBeChecked();
 });
 
 test('server validation reveals and focuses a collapsed Advanced field', async ({ page, mock }) => {
@@ -405,7 +394,6 @@ test('failed Save on leaving keeps the current screen and its edits', async ({
 
 test('resync refreshes restart requirements and locks while preserving unrelated edits', async ({
 	page,
-	go,
 	mock
 }) => {
 	const events = await liveEvents(page);
@@ -415,9 +403,9 @@ test('resync refreshes restart requirements and locks while preserving unrelated
 		status: 200,
 		body: request.url().endsWith('/crawler') ? crawler : settingsValues('transport')
 	}));
-	await go('/settings/crawler');
+	await page.goto('/settings/crawler#crawler.timeout_secs');
 	await expect(page.getByTestId('settings-restart-count')).toContainText('1');
-	await page.getByRole('switch', { name: 'uTP (not active yet)', exact: true }).click();
+	await page.getByRole('textbox', { name: 'Fetch timeout', exact: true }).fill('30');
 	await expect
 		.poll(async () => (await events.requests()).length, { timeout: 10_000 })
 		.toBeGreaterThan(0);
@@ -426,9 +414,7 @@ test('resync refreshes restart requirements and locks while preserving unrelated
 	await events.send('resync', {});
 	await expect(page.getByRole('switch', { name: 'Pause crawling' })).toBeDisabled();
 	await expect(page.getByTestId('settings-restart-count')).toHaveCount(0);
-	await expect(
-		page.getByRole('switch', { name: 'uTP (not active yet)', exact: true })
-	).toBeChecked();
+	await expect(page.getByRole('textbox', { name: 'Fetch timeout', exact: true })).toHaveValue('30');
 	await expect(page.getByTestId('save-bar-status')).toContainText('1 unsaved change');
 	expect(mock.calls('patchSettingsBatch')).toHaveLength(0);
 });

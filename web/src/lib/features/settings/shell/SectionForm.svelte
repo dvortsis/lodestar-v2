@@ -109,7 +109,9 @@
 	{#if !visible.length}<p role="status">{m.settings_shell_no_changed()}</p>{/if}
 	{#each groups as group (group.group)}
 		<section class="flex flex-col gap-6" aria-label={settingText(group.labelKey) ?? group.group}>
-			<h2 class="text-body-lg font-semibold">{settingText(group.labelKey) ?? group.group}</h2>
+			{#if group.essentials.length}<h2 class="text-body-lg font-semibold">
+					{settingText(group.labelKey) ?? group.group}
+				</h2>{/if}
 			{#each group.essentials as spec (spec.key)}<SettingField {form} key={spec.key} />{/each}
 			{#if group.advanced.length}
 				<details

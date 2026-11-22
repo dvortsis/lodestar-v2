@@ -5,6 +5,24 @@ import CommandPalette from './CommandPalette.svelte';
 
 configure({ defaultHidden: true });
 
+const nav = vi.hoisted(() => ({ open: vi.fn() }));
+vi.mock('$lib/features/settings/shell/find-palette', () => ({
+	settingsRows: (q: string) =>
+		Promise.resolve(
+			'pause crawling'.includes(q.trim())
+				? [
+						{
+							id: 'settings:/settings/crawler#crawler.paused',
+							title: 'Settings: Pause crawling',
+							section: 'Crawling › Crawler',
+							keys: [],
+							open: nav.open
+						}
+					]
+				: []
+		)
+}));
+
 const offs: (() => void)[] = [];
 const add = (id: string, title: string, run = () => {}, extra: Record<string, unknown> = {}) =>
 	offs.push(keys.register({ id, title, run, ...extra }));
@@ -86,5 +104,18 @@ describe('CommandPalette', () => {
 		await fireEvent.keyDown(dialog, { key: 'Escape' });
 		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(run).not.toHaveBeenCalled();
+	});
+
+	it('adds "Settings: …" entries after the commands, and opens the field', async () => {
+		add('t.a', 'Pause everything');
+		render(CommandPalette, { open: true });
+		const input = await screen.findByRole('combobox');
+		await fireEvent.input(input, { target: { value: 'pause' } });
+		await waitFor(() =>
+			expect(options()).toEqual(['Pause everything', 'Settings: Pause crawling Crawling › Crawler'])
+		);
+		await fireEvent.keyDown(input, { key: 'ArrowDown' });
+		await fireEvent.keyDown(input, { key: 'Enter' });
+		await waitFor(() => expect(nav.open).toHaveBeenCalledTimes(1));
 	});
 });
