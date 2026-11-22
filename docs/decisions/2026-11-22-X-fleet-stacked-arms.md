@@ -1,4 +1,4 @@
-# X-fleet-stacked-arms decisions (#PR)
+# X-fleet-stacked-arms decisions (#1049)
 
 Runner brief, 2026-11-22Z. CR-AB-1's later stages each test one switch on top of the winners already kept (the owner asked for stacking on winners). Until now, a fleet A/B block's arms differed only in their treatment, and only `adm`, `utp` and `route` could be one.
 
