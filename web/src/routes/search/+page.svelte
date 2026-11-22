@@ -163,7 +163,7 @@
 			<div id="results">
 				{#if drawerOpen && hostFailed && !Host}
 					<div
-						class="sticky top-0 z-10 flex flex-wrap items-center gap-4 p-6 rounded-box border border-base-300 bg-base-100"
+						class="sticky top-0 z-10 mb-4 flex flex-wrap items-center gap-4 p-6 rounded-box border border-base-300 bg-base-100"
 						role="alert"
 					>
 						{m.search_page_detail_failed()}<button

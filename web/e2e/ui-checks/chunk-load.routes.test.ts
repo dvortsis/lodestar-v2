@@ -332,6 +332,38 @@ test.describe('a lazy chunk fails to load', () => {
 		expect(errors).toEqual([]);
 	});
 
+	test('Search results: leaving for Insights while Retry waits on /parse: no reload, no marker, no q', async ({
+		page,
+		go,
+		mock
+	}) => {
+		mock.on('getInsightsOverview', overviewFixture());
+		mock.on('getCrawler', crawlerFixture());
+		await page.clock.install();
+		const { errors, failed } = await failSearch(page, go, mock as OpenApiMock);
+		let loads = 0;
+		page.on('load', () => loads++);
+		// /parse never answers, so Retry's flush waits on its 1 s bound (the page's clock).
+		await page.route('**/api/v1/parse?**', () => undefined);
+		const box = page.getByRole('combobox', { name: 'Search torrents' });
+		await box.click();
+		await page.keyboard.press('ControlOrMeta+a');
+		await page.keyboard.type('harbor');
+		await failed.getByRole('button', { name: 'Retry' }).click();
+		await page.getByRole('link', { name: 'Insights', exact: true }).first().click();
+		await expect(page).toHaveURL((u) => u.pathname === '/insights');
+		await expect(page.getByTestId('insights-page')).toBeVisible();
+		// The bound passes: the flush gives up without writing, and Retry neither reloads nor marks.
+		await page.clock.runFor(1_500);
+		await expect(page.getByTestId('insights-page')).toBeVisible();
+		const url = new URL(page.url());
+		expect(url.pathname).toBe('/insights');
+		expect(url.searchParams.has('q')).toBe(false);
+		expect(loads).toBe(0);
+		expect(await page.evaluate(() => window.name)).toBe('');
+		expect(errors).toEqual([]);
+	});
+
 	test('Search results: after Retry, a load the 30 s timer starts never moves focus', async ({
 		page,
 		go,
@@ -415,18 +447,25 @@ test.describe('a lazy chunk fails to load', () => {
 		mock
 	}) => {
 		const { errors, failed } = await failDrawer(page, go, mock as OpenApiMock);
+		// Another row while the alert is up: the drawer's entry is replaced, and one alert stays.
+		const first = new URL(page.url()).pathname;
+		await rowOf(page, 2).focus();
+		await page.keyboard.press('Enter');
+		await expect(page).toHaveURL((u) => u.pathname.startsWith('/t/') && u.pathname !== first);
+		await expect(failed).toHaveCount(1);
+		await expect(rowOf(page, 2)).toBeFocused();
 		await page.goBack();
 		await expect(failed).toHaveCount(0);
 		await expect(page).toHaveURL(/\/search\?q=lantern(&|$)/);
 		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toBeVisible();
-		// Back leaves focus where it was: the row that opened the drawer.
-		await expect(rowOf(page, 1)).toBeFocused();
-		// Another row: the chunk fails again, and one alert shows, never a second.
-		await rowOf(page, 2).focus();
+		// Back leaves focus where it was: the last row that opened the drawer.
+		await expect(rowOf(page, 2)).toBeFocused();
+		// Another row after Back: the chunk fails again, and one alert shows, never a second.
+		await rowOf(page, 1).focus();
 		await page.keyboard.press('Enter');
 		await expect(failed).toHaveCount(1);
 		await expect(failed).toContainText("Details couldn't load.");
-		await expect(rowOf(page, 2)).toBeFocused();
+		await expect(rowOf(page, 1)).toBeFocused();
 		expect(errors).toEqual([]);
 	});
 });

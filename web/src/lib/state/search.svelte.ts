@@ -86,6 +86,8 @@ export function createSearchState(nav: Nav = kitNav) {
 	let due = false;
 	/** The flush under way: a second Retry waits for it instead of cancelling its parse. */
 	let flushing: Promise<void> | undefined;
+	/** Bumped by `cancelPending`: a write that started before it never commits after it. */
+	let generation = 0;
 	/** The `q` this state last wrote or adopted; a different one in the URL came from outside. */
 	let written: string | undefined;
 
@@ -127,6 +129,7 @@ export function createSearchState(nav: Nav = kitNav) {
 	async function write(within?: number) {
 		clearTimeout(timer);
 		const t = text;
+		const g = generation;
 		const canonical = await (within === undefined
 			? parse(t)
 			: new Promise<string | null | undefined>((done) => {
@@ -140,7 +143,8 @@ export function createSearchState(nav: Nav = kitNav) {
 						done(c);
 					});
 				}));
-		if (canonical === undefined || t !== text) return; // superseded, or typed on meanwhile
+		// Superseded, typed on meanwhile, or the editor left (a flush's bound outlives the page).
+		if (canonical === undefined || t !== text || g !== generation) return;
 		await commit(canonical ?? t, false);
 		// Only once the URL holds it: a Retry during the commit still waits for a write. Text typed
 		// meanwhile stays due.
@@ -163,6 +167,7 @@ export function createSearchState(nav: Nav = kitNav) {
 			parsing = false;
 			written = undefined;
 			due = false;
+			generation++;
 		},
 		get text() {
 			return text;

@@ -521,6 +521,18 @@ describe('flush (Search Retry, before its reload)', () => {
 		expect(f.calls).toEqual([]);
 	});
 
+	it('a flush waiting on its bound writes nothing once the editor leaves (cancelPending)', async () => {
+		const f = fakeNav('http://x/search?q=old');
+		const s = createSearchState(f.nav);
+		fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+		s.setText('left');
+		const flushed = s.flush();
+		s.cancelPending(); // the user went to another page: Live is destroyed
+		await vi.advanceTimersByTimeAsync(FLUSH_PARSE_MS);
+		await flushed;
+		expect(f.calls).toEqual([]);
+	});
+
 	it('restarts a debounce parse already in flight under the bound', async () => {
 		const f = fakeNav('http://x/search?q=old');
 		const s = createSearchState(f.nav);
