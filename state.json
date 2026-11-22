@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T12:55:00Z",
+    "updated": "2026-11-22T13:00:00Z",
     "items": [
       {
         "slot": 1,
@@ -10676,13 +10676,12 @@
       },
       {
         "slot": 3,
-        "slice": null,
+        "slice": "X-msi-upgrade-env-value",
         "role": "slice",
-        "agent": null,
+        "agent": "pending",
         "model": "sonnet",
-        "since": "2026-11-22T12:45:00Z",
-        "doing": "#1063 merged d423d00b; waits for r12 placements",
-        "status": "idle"
+        "since": "2026-11-22T13:00:00Z",
+        "doing": "launching; step 0 (brief briefs/X-msi-upgrade-env-value.md)"
       },
       {
         "slot": 4,
