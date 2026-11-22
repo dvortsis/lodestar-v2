@@ -54,7 +54,8 @@ test('leaving Search opens full-page detail and does not restore the old invoker
 	server(mock, () => body(hits(3)));
 	await go('/search?q=lantern');
 	await row(page, 1).click();
-	await page.getByTestId('detail-open-full').click();
+	await page.getByTestId('detail-actions-menu').click();
+	await page.getByRole('menuitem', { name: 'Open full page' }).click();
 	await expect(page.getByTestId('detail-view')).toHaveAttribute('data-mode', 'page');
 	await expect(page.getByTestId('query-editor')).toHaveCount(0);
 	// Reload loses the Search seed; detail now obtains its hit by hash.

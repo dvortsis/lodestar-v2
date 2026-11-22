@@ -118,9 +118,14 @@ test('from the drawer: Block this…, then Esc sends nothing and focus comes bac
 	await kbd.press('j');
 	await kbd.press('Enter');
 	await expect(page.getByTestId('drawer')).toBeVisible();
-	const invoker = page.getByTestId('detail-block');
+	const invoker = page.getByTestId('detail-actions-menu');
 	await expect(invoker).toBeEnabled();
 	await kbd.tabTo(invoker);
+	await kbd.press('Enter');
+	const item = page.getByRole('menuitem', { name: 'Block this…' });
+	await expect(item).toBeVisible();
+	await kbd.press('End');
+	await expect(item).toBeFocused();
 	await kbd.press('Enter');
 	await settled(page);
 	await expect(page.getByTestId('block-query')).toHaveText(`hash:${hashOf(2)}`);

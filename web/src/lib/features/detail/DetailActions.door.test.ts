@@ -13,7 +13,10 @@ it('says so with the error toast when the flows door fails to load', async () =>
 	const { toasts } = await import('$lib/ui/feedback/toasts.svelte');
 	toasts.items = [];
 	render(DetailActions, { detail: torrentDetail() });
-	await fireEvent.click(screen.getByTestId('detail-block'));
+	await fireEvent.click(screen.getByTestId('detail-actions-menu'));
+	await fireEvent.click(
+		await screen.findByRole('menuitem', { name: m.detail_block() }, { timeout: 10_000 })
+	);
 	await waitFor(() => expect(toasts.items.map((t) => t.kind)).toEqual(['error']), {
 		timeout: 10_000
 	});

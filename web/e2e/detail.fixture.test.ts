@@ -68,7 +68,7 @@ test('a Lantern Keeper version shows its composition', async ({ page }) => {
 test('a never-scraped torrent says so', async ({ page }) => {
 	const never = manifest().torrents.find((t) => t.swarm === null && t.content_type !== 'adult')!;
 	await page.goto(`/t/${never.hash}`);
-	await expect(page.getByTestId('detail-scrape-age')).toHaveText('Never scraped');
+	await expect(page.getByTestId('detail-swarm-empty')).toContainText('Never scraped');
 	await expect(page.getByTestId('detail-seeders')).toContainText('Never scraped');
 });
 

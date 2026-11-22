@@ -47,8 +47,17 @@ describe('Composition', () => {
 	});
 
 	it('maps an unknown group to Other rather than dropping it', () => {
-		render(Composition, { composition: [share('holograms', 10, 100)] });
-		expect(screen.getByTestId('detail-groups-item').textContent).toContain('Other · 1');
+		render(Composition, {
+			composition: [share('holograms', 10, 50), share('video', 10, 50)]
+		});
+		expect(screen.getAllByTestId('detail-groups-item')[0]!.textContent).toMatch(/Other · 1|Video/);
+		expect(document.body.textContent).toContain('Other · 1');
+	});
+
+	it('hides the list when there is one group: it would repeat the bar (I26)', () => {
+		render(Composition, { composition: [share('video', 10, 100)] });
+		expect(screen.getByTestId('detail-compbar')).toBeTruthy();
+		expect(screen.queryByTestId('detail-groups')).toBeNull();
 	});
 
 	it('says so in one line when there is nothing to show (padding only)', () => {
