@@ -19,8 +19,8 @@
 	let open = $state(true);
 	const size = $derived(bytesText(offer.size_bytes, currentLocale()));
 	// The checksum's halves: the one break opportunity is between them, so it wraps 32+32.
-	const shaHead = $derived(offer.sha256.slice(0, 32));
-	const shaTail = $derived(offer.sha256.slice(32));
+	const shaHead = $derived((offer.sha256 ?? '').slice(0, 32));
+	const shaTail = $derived((offer.sha256 ?? '').slice(32));
 	const rows = $derived([
 		[m.settings_companions_offer_program(), offer.name],
 		[

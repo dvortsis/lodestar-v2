@@ -140,6 +140,9 @@ test.describe('Settings → Companions', () => {
 				.annotations.push({ type: 'checksum lines', description: JSON.stringify(await lines()) });
 			// Nothing sticks out of the dialog sideways.
 			expect(await sha.evaluate((dd) => dd.scrollWidth <= dd.clientWidth)).toBe(true);
+			expect(await page.getByRole('dialog').evaluate((d) => d.scrollWidth <= d.clientWidth)).toBe(
+				true
+			);
 			const selected = await sha.evaluate((dd) => {
 				const range = document.createRange();
 				range.selectNodeContents(dd);
@@ -149,6 +152,9 @@ test.describe('Settings → Companions', () => {
 				return selection.toString();
 			});
 			expect(selected).toBe(SHA);
+			// Headless Chromium shares one clipboard across a worker's contexts: clear it first, so an
+			// earlier test's copy can't pass this read.
+			await page.evaluate(() => navigator.clipboard.writeText(''));
 			await page.keyboard.press('ControlOrMeta+c');
 			await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(SHA);
 		});
