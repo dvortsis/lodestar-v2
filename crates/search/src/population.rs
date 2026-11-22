@@ -75,7 +75,9 @@ pub const GENERATIONS: [(&str, u32); 13] = [
     ("group_key", 1),
     // GS-2: `lodestar_classify::group::band_terms` (plan Q9, Q10 (a)).
     ("group_minhash", 1),
-    ("name_trigram", 0),
+    // RX-1: `doc::trigram_tokens`, the grams of the name's first
+    // `TRIGRAM_PREFIX_BYTES` and the long-name marker (plan Q10 (a)).
+    ("name_trigram", 1),
     ("file.size_bucket", 1),
     ("file.category", 1),
     ("file.pieces_root", 1),
@@ -386,8 +388,11 @@ mod tests {
     #[test]
     fn a_fresh_index_is_complete_at_this_builds_generations() {
         let t = PopState::fresh(&gens(), Side::Torrents);
+        // RX-1 ships the trigram producer.
+        assert_eq!(t.availability("name_trigram"), Some(Availability::Ready));
+        let none = PopState::fresh(&gens().with("name_trigram", 0), Side::Torrents);
         assert_eq!(
-            t.availability("name_trigram"),
+            none.availability("name_trigram"),
             Some(Availability::NoProducer)
         );
         assert_eq!(t.availability("payload_sig"), Some(Availability::Ready));
@@ -411,10 +416,8 @@ mod tests {
         s.reconcile(&shipped, Side::Torrents, 500);
         let backfilling = |done| Some(Availability::Backfilling { done, upto: 500 });
         assert_eq!(s.availability("payload_sig"), backfilling(0));
-        assert_eq!(
-            s.availability("name_trigram"),
-            Some(Availability::NoProducer)
-        );
+        // A field at its shipped generation already stays complete.
+        assert_eq!(s.availability("name_trigram"), Some(Availability::Ready));
         assert_eq!(s.pending(), Some((0, 500)));
         s.advance(200);
         // Reopened (a restart): the walk goes on, whatever the index
@@ -432,18 +435,20 @@ mod tests {
     }
 
     /// GS-2 ships `group_minhash`, and a field without a producer
-    /// (`name_trigram`; `group_key` was this stand-in until GS-2b) stays
-    /// so: an index from GS-0's build walks for the one, and it isn't
-    /// Ready until that walk is done.
+    /// (`name_trigram` as GS-2's build had it, until RX-1; `group_key`
+    /// was this stand-in until GS-2b) stays so: an index from GS-0's
+    /// build walks for the one, and it isn't Ready until that walk is
+    /// done.
     #[test]
     fn the_minhash_producer_starts_a_walk_and_a_field_without_one_stays_so() {
-        let before = gens().with("group_minhash", 0);
+        let shipped = gens().with("name_trigram", 0);
+        let before = shipped.clone().with("group_minhash", 0);
         let mut s = PopState::fresh(&before, Side::Torrents);
         assert_eq!(
             s.availability("group_minhash"),
             Some(Availability::NoProducer)
         );
-        s.reconcile(&gens(), Side::Torrents, 300);
+        s.reconcile(&shipped, Side::Torrents, 300);
         assert_eq!(
             s.availability("group_minhash"),
             Some(Availability::Backfilling { done: 0, upto: 300 })
@@ -502,7 +507,8 @@ mod tests {
     #[test]
     fn walks_started_at_different_times_share_one_pass() {
         let mut s = PopState::default();
-        s.reconcile(&gens().with("payload_sig", 1), Side::Torrents, 100);
+        let before = gens().with("payload_sig", 1).with("name_trigram", 0);
+        s.reconcile(&before, Side::Torrents, 100);
         s.advance(60);
         s.reconcile(
             &gens().with("payload_sig", 1).with("name_trigram", 1),

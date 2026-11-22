@@ -49,8 +49,9 @@ pub const MAX_ALTERNATION: usize = 32;
 /// one unit, plus [`FOLD_PER_CASED`] per cased character. Calibrated at
 /// 0.1–2.5 ns a unit; `\p{Any}` costs about 2,290,000, so two of them
 /// fit. The slowest accepted patterns known translate in about 9–12 ms
-/// (`[\w.-]` 51 times, two `[[^a]b]`, two `\p{Any}`), and the verifier's
-/// compile takes as long again.
+/// (`[\w.-]` 51 times, two `[[^a]b]`, two `\p{Any}`). The verifier's
+/// compile (`regex_verify`) takes up to about 2.3 times that baseline
+/// for the shapes the compiled-size limit bounds (`\w{62}`).
 pub const MAX_FOLD_COST: u64 = 4_600_000;
 /// A fold step inside the case-fold table's span costs about ten steps
 /// outside it (measured: about 23 ns against 2–3 ns).
@@ -372,9 +373,22 @@ impl Bounds<'_> {
                 }
                 _ => RegexError::new(Reason::Syntax, "invalid class"),
             })?;
-        // An empty class (`\P{Any}`) translates to the byte class "fail".
+        // An empty class (`\P{Any}`) translates to the byte class "fail";
+        // a one-codepoint one (`\p{Zl}`) to a literal.
         Ok(match hir.kind() {
             HirKind::Class(Class::Unicode(c)) => c.clone(),
+            HirKind::Literal(l) => {
+                let one = std::str::from_utf8(&l.0).ok().and_then(|s| {
+                    let mut cs = s.chars();
+                    cs.next().filter(|_| cs.next().is_none())
+                });
+                match one {
+                    Some(c) => ClassUnicode::new([regex_syntax::hir::ClassUnicodeRange::new(c, c)]),
+                    // Never: a class item is one codepoint. Refused
+                    // rather than charged as nothing.
+                    None => return Err(RegexError::new(Reason::Syntax, "invalid class")),
+                }
+            }
             _ => ClassUnicode::empty(),
         })
     }
@@ -1357,6 +1371,15 @@ mod tests {
         assert!(cost(r"[[:alpha:]]") > cost(r"[a-zA-Z]"));
         // A nested bracket is folded once more.
         assert!(cost(r"[[\x{80}-\x{FFFF}]a]") > cost(r"[\x{80}-\x{FFFF}]") * 3 / 2);
+        // rv-755: an ASCII item and a set operation mark their bracket
+        // folded, so it's widened and charged again (the `true` flags in
+        // `class_item` and `class_set`).
+        assert!(cost(r"[[:upper:]]") > cost(r"[A-Z]") * 10);
+        assert!(cost(r"[A-Z--0]") > cost(r"[A-Z]") * 10);
+        // A one-codepoint property is that codepoint, not an empty set:
+        // negated, it's everything but it, not everything.
+        assert!(cost(r"\p{Zl}") > 0);
+        assert_ne!(cost(r"[^\p{Zl}]"), cost(r"[^\P{Any}]"));
     }
 
     #[test]

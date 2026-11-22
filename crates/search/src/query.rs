@@ -397,6 +397,13 @@ pub enum Node {
         from: u16,
         to: u16,
     },
+    /// `/…/` or `name:/…/` (§8): names the pattern matches anywhere, as
+    /// [`crate::regex`] parses it (case-insensitive unless `(?-i)`). The
+    /// pattern is checked when parsed and again when compiled, since a
+    /// stored query may come from elsewhere.
+    Regex {
+        pattern: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -550,6 +557,8 @@ enum Lex {
     /// `name:` followed by its raw value (possibly empty).
     Field(String, String),
     Word(String),
+    /// `/…/` or `name:/…/`: the pattern, `\/` unescaped.
+    Regex(String),
 }
 
 #[derive(Debug, Clone)]
@@ -603,6 +612,16 @@ fn lex(q: &str) -> Result<Vec<Spanned>, ParseError> {
                     close + 1,
                 );
                 i = close + 1;
+            }
+            b'/' => {
+                let (pattern, end) = regex_literal(q, i)?;
+                push(&mut out, Lex::Regex(pattern), start, end);
+                i = end;
+            }
+            b'n' if q[i..].starts_with(REGEX_FIELD) => {
+                let (pattern, end) = regex_literal(q, i + REGEX_FIELD.len() - 1)?;
+                push(&mut out, Lex::Regex(pattern), start, end);
+                i = end;
             }
             // Negation only when a term follows; `-` alone or before `)`
             // is just a word.
@@ -661,6 +680,48 @@ fn lex(q: &str) -> Result<Vec<Spanned>, ParseError> {
         }
     }
     Ok(out)
+}
+
+/// `name:` with a regex value.
+const REGEX_FIELD: &str = "name:/";
+
+/// The regex literal whose opening `/` is at byte `open`: everything up
+/// to the next `/` not escaped by a backslash, which the pattern can't
+/// hold otherwise (`\/` becomes `/`; any other escape stays, for the
+/// regex parser). Returns the pattern and the byte after the closing `/`.
+fn regex_literal(q: &str, open: usize) -> Result<(String, usize), ParseError> {
+    let mut pattern = String::new();
+    let mut chars = q[open + 1..].char_indices();
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '/' => {
+                let end = open + 1 + at + 1;
+                if pattern.is_empty() {
+                    return err("empty regex", open, end);
+                }
+                return Ok((pattern, end));
+            }
+            '\\' => match chars.next() {
+                Some((_, '/')) => pattern.push('/'),
+                Some((_, next)) => {
+                    pattern.push('\\');
+                    pattern.push(next);
+                }
+                None => pattern.push('\\'),
+            },
+            c => pattern.push(c),
+        }
+    }
+    err("regex without its closing '/'", open, q.len())
+}
+
+/// A regex leaf: the pattern checked under [`crate::regex`]'s limits,
+/// a refusal reported at the literal with its stable code.
+fn regex_node(pattern: String, start: usize, end: usize) -> Result<Node, ParseError> {
+    match crate::regex::parse(&pattern) {
+        Ok(_) => Ok(Node::Regex { pattern }),
+        Err(e) => err(format!("regex: {e}"), start, end),
+    }
 }
 
 // ---- parser ----------------------------------------------------------------
@@ -866,6 +927,10 @@ impl Parser<'_> {
                 self.leaf(start, end)?;
                 word(TextField::Any, &w, start, end)
             }
+            Lex::Regex(pattern) => {
+                self.leaf(start, end)?;
+                regex_node(pattern, start, end)
+            }
             Lex::Field(name, value) => {
                 self.leaf(start, end)?;
                 let kind = field(&name).expect("lexer checked");
@@ -907,13 +972,10 @@ fn phrase(field: TextField, text: &str, start: usize, end: usize) -> Result<Node
 }
 
 fn word(field: TextField, w: &str, start: usize, end: usize) -> Result<Node, ParseError> {
-    if field == TextField::Any {
-        if let Some(h) = bare_hash(w) {
-            return Ok(Node::Hash { hash: h });
-        }
-        if w.starts_with('/') {
-            return err("regex search arrives with the trigram index", start, end);
-        }
+    if field == TextField::Any
+        && let Some(h) = bare_hash(w)
+    {
+        return Ok(Node::Hash { hash: h });
     }
     if let Some(rest) = w.strip_prefix('~') {
         if rest.chars().count() < 3 {
@@ -1685,6 +1747,19 @@ impl Node {
         }
     }
 
+    /// Whether the query has a `/…/` clause anywhere. Its result isn't
+    /// cached: a time-budget stop makes it partial
+    /// ([`crate::regex_verify::stopped`]), and its lease holds a bitset
+    /// of matches per segment.
+    pub fn has_regex(&self) -> bool {
+        match self {
+            Node::And { of } | Node::Or { of } => of.iter().any(Node::has_regex),
+            Node::Not { of } => of.has_regex(),
+            Node::Regex { .. } => true,
+            _ => false,
+        }
+    }
+
     /// Canonical query text; [`parse`] of it gives back the same AST
     /// under either reading ([`Units`]). Sizes are bytes or IEC units
     /// only, so this is the text anything stored holds: every release
@@ -1764,6 +1839,19 @@ impl Node {
             }
             Node::Word { field, word } => {
                 let _ = write!(out, "{}{word}", text_field(*field));
+            }
+            // `/` escaped again, as the lexer reads it.
+            Node::Regex { pattern } => {
+                out.push('/');
+                let mut escaped = false;
+                for c in pattern.chars() {
+                    if c == '/' && !escaped {
+                        out.push('\\');
+                    }
+                    escaped = c == '\\' && !escaped;
+                    out.push(c);
+                }
+                out.push('/');
             }
             Node::Phrase { field, text } => {
                 let _ = write!(out, "{}\"{text}\"", text_field(*field));
@@ -2238,7 +2326,7 @@ mod tests {
         assert!(e("a*b").contains("'*'"));
         assert!(e("a NEAR/0 b").contains("NEAR"));
         assert!(e("size:5GB..1GB").contains("backwards"));
-        assert!(e("/S0[1-9]/").contains("regex"));
+        assert!(e("/S0[1-9/").contains("regex"));
         let err = parse("x sise:1").unwrap_err();
         assert_eq!((err.start, err.end), (2, 7));
     }

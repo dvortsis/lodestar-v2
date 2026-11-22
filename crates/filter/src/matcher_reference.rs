@@ -217,6 +217,8 @@ impl<'a> Doc<'a> {
             // A payload signature is the search index's (GS-0); rules block
             // payloads through CS-8's keys instead.
             Node::Sig { .. } => false,
+            // Regex search is the search index's (RX-1): the judge doesn't run it.
+            Node::Regex { .. } => false,
         }
     }
 

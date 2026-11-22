@@ -1464,6 +1464,8 @@ impl SearchIndex {
             utc_offset,
             buckets,
             visible: &[],
+            trigrams: self.availability_at("name_trigram", snapshot) == Availability::Ready,
+            cancel: Some(cancel),
         };
         let compile::Parts {
             query,
@@ -3025,14 +3027,11 @@ mod population_tests {
                 .is_some()
         );
         // Fields complete since the index opened, or not tracked, are
-        // complete in every snapshot; one without a producer in none.
+        // complete in every snapshot (RX-1 shipped `name_trigram`, the
+        // last field without a producer).
         assert!(index.prefilter("file.category", &partial, q()).is_some());
         assert!(index.prefilter("name", &partial, q()).is_some());
-        assert!(
-            index
-                .prefilter("name_trigram", &index.searcher(), q())
-                .is_none()
-        );
+        assert!(index.prefilter("name_trigram", &partial, q()).is_some());
     }
 
     #[test]

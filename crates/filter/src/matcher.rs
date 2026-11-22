@@ -493,7 +493,8 @@ pub(crate) fn compile(node: &Node) -> Compiled {
         | Node::Verified { .. }
         | Node::Source { .. }
         | Node::Network { .. }
-        | Node::Sig { .. } => Compiled::Leaf(Box::new(node.clone())),
+        | Node::Sig { .. }
+        | Node::Regex { .. } => Compiled::Leaf(Box::new(node.clone())),
     }
 }
 
@@ -1495,6 +1496,8 @@ impl<'a> Doc<'a> {
             // A payload signature is the search index's (GS-0); rules block
             // payloads through CS-8's keys instead.
             Node::Sig { .. } => false,
+            // Regex search is the search index's (RX-1): the judge doesn't run it.
+            Node::Regex { .. } => false,
             // Rules have no time zone: UTC.
             Node::TimeOfDay { from, to } => self.facts.is_some_and(|f| {
                 self.read_time.set(true);

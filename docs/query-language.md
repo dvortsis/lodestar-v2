@@ -450,6 +450,31 @@ A shortened signature is an error, so a typo never quietly finds nothing:
 sig:7a9f3c12 => use all 16 hex digits of a payload signature
 ```
 
+## Regular expressions
+
+A pattern between slashes matches anywhere in the torrent's name. `name:/…/` is the same thing.
+
+```query
+/S0[1-9]E\d+/
+name:/(720|1080)p/
+show /s\d\de\d\d/
+-/\bcam\b/
+/AC\/DC/
+```
+
+- **Case doesn't matter**, as in the rest of search: `/S01E02/` finds `s01e02`. Start with `(?-i)` to match case exactly.
+- **The syntax** is the usual one (character classes, `|`, `*`, `+`, `{2,4}`, `\d`, `\w`, `\b`), without look-around or back-references. Write a `/` inside the pattern as `\/`.
+- **Limits** keep one pattern from slowing every search: at most 512 bytes, nested at most 16 deep, repeat counts up to 100, and classes small enough to match quickly. A pattern over a limit is refused with the reason.
+- **Lodestar first narrows by the pattern's three-letter pieces**, then checks each remaining name. Patterns with no such piece (`/.+/`, `/\d/`) check every name, so they're slower: add a word beside them.
+- **A pattern that takes too long stops after 2 seconds** and shows what it found by then. The count is then a lower bound.
+- Filter rules don't run patterns: in a rule, `/…/` matches nothing.
+
+```query-fail
+/S0[1-9/ => regex_syntax
+/(?s)a/ => regex_flag_not_allowed
+/abc => closing
+```
+
 ## How results are ranked
 
 Order **by relevance** is the default. Other sorts are `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` and `seen`, each ascending or descending.
@@ -595,14 +620,7 @@ These are in the plan but don't work today. Each gives an error that says so, an
 
 | Plan | Today |
 |---|---|
-| `/S0[1-9]E\d+/` regular expressions | *regex search arrives with the trigram index* |
 | `resolved:plugin` | not a value; use `files`, `folder` or `structure` |
-
-Each of these fails with the message shown after `=>`:
-
-```query-fail
-/S0[1-9]E\d+/ => regex search arrives
-```
 
 ## Limits
 

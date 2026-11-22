@@ -54,6 +54,12 @@ pub(crate) struct Cx<'a> {
     /// set by [`compile`] for `sig:<info hash>`, whose reference torrent
     /// must pass them ([`SamePayload`]). Callers pass `&[]`.
     pub visible: &'a [Q],
+    /// Whether `name_trigram` is complete in the snapshot searched, so a
+    /// `/…/` clause may prefilter on it (RX-1); otherwise it verifies
+    /// every name.
+    pub trigrams: bool,
+    /// The search's token: a `/…/` clause's verifier stops with it.
+    pub cancel: Option<&'a crate::CancelToken>,
 }
 
 impl std::ops::Deref for Cx<'_> {
@@ -1063,6 +1069,18 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             }
         }
         Node::TimeOfDay { .. } => checked(node, f, now),
+        // The trigram prefilter, then the stored name verified under the
+        // time budget (`regex_verify`).
+        Node::Regex { pattern } => {
+            let trigram = (f.trigrams && f.name_trigram != ABSENT).then_some(f.name_trigram);
+            Box::new(crate::regex_verify::RegexQuery::new(
+                pattern,
+                f.name,
+                trigram,
+                crate::regex_verify::VERIFY_BUDGET,
+                f.cancel.cloned(),
+            ))
+        }
         Node::Hash { hash } => match hex20(hash) {
             Some(bytes) if f.hash != ABSENT => Box::new(TermQuery::new(
                 Term::from_field_bytes(f.hash, &bytes),

@@ -886,15 +886,27 @@ mod population {
             .into_iter()
             .map(|f| (f.field, f.availability))
             .collect();
-        let none = |f: &str| (f.to_owned(), Availability::NoProducer);
-        assert_eq!(un, [none("name_trigram")]);
+        // RX-1 shipped the last field without a producer (`name_trigram`).
+        assert_eq!(un, []);
         assert_eq!(index.availability("file.category"), Availability::Ready);
         assert_eq!(index.availability("file.pieces_root"), Availability::Ready);
         assert_eq!(index.availability("name"), Availability::Ready);
         // Only a complete field may be prefiltered on.
         assert!(index.availability("file.category").complete());
-        assert!(!index.availability("name_trigram").complete());
+        assert!(index.availability("name_trigram").complete());
         assert!(index.availability("name").complete());
+        let without = SearchIndex::in_memory()
+            .unwrap()
+            .with_generations(Generations::current().with("name_trigram", 0))
+            .unwrap();
+        let none = |f: &str| (f.to_owned(), Availability::NoProducer);
+        let un: Vec<(String, Availability)> = without
+            .unpopulated()
+            .into_iter()
+            .map(|f| (f.field, f.availability))
+            .collect();
+        assert_eq!(un, [none("name_trigram")]);
+        assert!(!without.availability("name_trigram").complete());
     }
 
     #[test]
@@ -1022,8 +1034,6 @@ mod population {
         for f in ["file.category", "file.pieces_root", "file.size_bucket"] {
             assert_eq!(index.availability(f), backfilling(0, 12), "{f}");
         }
-        // Fields without a producer have nothing to backfill.
-        assert_eq!(index.availability("name_trigram"), Availability::NoProducer);
         let mut w = index.writer(HEAP).unwrap();
         while w.catch_up(&mut store, 5).unwrap() > 0 {}
         w.commit().unwrap();
@@ -1036,7 +1046,8 @@ mod population {
         let tmp = tempfile::tempdir().unwrap();
         let dir = index_dir(tmp.path());
         let mut store = indexed(tmp.path(), 8);
-        let shipped = Generations::current().with("name_trigram", 1);
+        let next = Generations::current().get("name_trigram").unwrap() + 1;
+        let shipped = Generations::current().with("name_trigram", next);
         let index = SearchIndex::open(&dir)
             .unwrap()
             .with_generations(shipped.clone())
@@ -1058,7 +1069,10 @@ mod population {
             .with_generations(shipped)
             .unwrap();
         assert_eq!(index.availability("name_trigram"), Availability::Ready);
-        let index = SearchIndex::open(&dir).unwrap();
+        let index = SearchIndex::open(&dir)
+            .unwrap()
+            .with_generations(Generations::current().with("name_trigram", 0))
+            .unwrap();
         assert_eq!(index.availability("name_trigram"), Availability::NoProducer);
     }
 }
