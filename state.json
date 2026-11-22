@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T03:15Z",
+    "updated": "2026-11-22T03:20Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-insights-source-names",
+        "slice": "X-fleet-stacked-arms",
         "role": "build",
         "agent": "session_01MMjhn9Pr8JTBHWYRbL9oVK",
         "model": "opus",
-        "since": "2026-11-22T00:25Z",
-        "doing": "#1044 merged; #1039 fuzz-harness push (doc + json.rs), ready after fuzz green"
+        "since": "2026-11-22T03:20Z",
+        "doing": "#1039 merged; step 0"
       },
       {
         "slot": 2,
