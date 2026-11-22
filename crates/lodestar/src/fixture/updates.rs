@@ -24,12 +24,17 @@ use lodestar_api::updates::{
     Blocked, Capability, CheckState, CheckStatus, Policy, ReleaseInfo, RollbackInfo, Running,
     UpdatesApi, UpdatesError, UpdatesStatus, UpdatesUnavailable,
 };
+use lodestar_update::doc::{Level as ReleaseLevel, Release};
+use lodestar_update::semver::Version;
 use tokio::sync::watch;
 
 use crate::settings::updates::{Mode, Updates};
+use crate::update::policy;
 
 /// The sample release's age at the fixture's anchor: two days old.
 const RELEASE_AGE: i64 = 2 * 86_400;
+/// The sample release's notes.
+const NOTES: &str = "A sample release: this server runs on sample data and installs nothing.";
 
 /// The fixture's update state.
 pub struct Sample {
@@ -76,11 +81,69 @@ impl Sample {
         (self.settings.borrow().mode != Mode::Off, Some(self.anchor))
     }
 
+    /// The running version, or 0.0.0 if it doesn't parse.
+    fn running(&self) -> Version {
+        Version::parse(&self.version).unwrap_or_else(|_| Version::new(0, 0, 0))
+    }
+
     /// The one release the fixture offers: the next minor version after this one.
     fn release_version(&self) -> String {
-        let v = lodestar_update::semver::Version::parse(&self.version)
-            .unwrap_or_else(|_| lodestar_update::semver::Version::new(0, 0, 0));
-        lodestar_update::semver::Version::new(v.major, v.minor + 1, 0).to_string()
+        let v = self.running();
+        Version::new(v.major, v.minor + 1, 0).to_string()
+    }
+
+    /// The sample release, as a manifest would carry it. Never fetched,
+    /// never verified, and with no artifacts: nothing here can install.
+    fn release(&self) -> Release {
+        Release {
+            version: Version::new(self.running().major, self.running().minor + 1, 0),
+            date: u64::try_from(self.anchor - RELEASE_AGE).unwrap_or(0),
+            level: ReleaseLevel::Feature,
+            security: false,
+            manual_steps: false,
+            min_from: None,
+            withdrawn: false,
+            migrates: false,
+            reindex: false,
+            reindex_bytes: 0,
+            notes: NOTES.into(),
+            notes_url: None,
+            artifacts: vec![],
+        }
+    }
+
+    /// Why the sample release doesn't install automatically: the real
+    /// policy's reasons for these settings (mode, level, wait, pause), and
+    /// always `capability` (`fixture`), so it's never eligible.
+    fn blocked_by(&self, settings: &Updates, now: i64, paused: Option<i64>) -> Vec<Blocked> {
+        let release = [self.release()];
+        let running = self.running();
+        let plan = policy::plan(&policy::Inputs {
+            settings,
+            releases: &release,
+            current: true,
+            running: &running,
+            skipped: &[],
+            paused_until: paused,
+            held_in_process: false,
+            now,
+            window_from: &|t| t,
+            incapable: None,
+        });
+        let mut out: Vec<Blocked> = plan
+            .releases
+            .iter()
+            .flat_map(|a| &a.blocked_by)
+            .filter_map(|b| serde_json::to_value(b).ok())
+            .filter_map(|v| serde_json::from_value(v).ok())
+            .collect();
+        out.push(Blocked {
+            code: "capability".into(),
+            until: None,
+            via: None,
+            reason: Some(UpdatesUnavailable::Fixture.code().into()),
+        });
+        out
     }
 
     fn paused(&self) -> Option<i64> {
@@ -130,25 +193,18 @@ impl Sample {
             releases: vec![ReleaseInfo {
                 version: self.release_version(),
                 date: self.anchor - RELEASE_AGE,
-                level: "features".into(),
+                // The release's level word (`fix`, `feature`, `major`), as
+                // the engine sends it: not the policy's `features`.
+                level: "feature".into(),
                 security: false,
                 manual_steps: false,
                 migrates: false,
                 reindex: false,
                 reindex_bytes: 0,
-                notes: "A sample release: this server runs on sample data and installs nothing."
-                    .into(),
+                notes: NOTES.into(),
                 notes_url: None,
                 eligible: false,
-                blocked_by: paused
-                    .map(|until| Blocked {
-                        code: "paused".into(),
-                        until: Some(until),
-                        via: None,
-                        reason: None,
-                    })
-                    .into_iter()
-                    .collect(),
+                blocked_by: self.blocked_by(&s, (self.clock)(), paused),
                 installs_at: None,
             }],
             pending: None,
@@ -256,8 +312,21 @@ mod tests {
         assert_eq!(releases.len(), 1);
         assert_eq!(releases[0]["version"], "0.6.0");
         assert_eq!(releases[0]["date"], ANCHOR - RELEASE_AGE);
+        assert_eq!(releases[0]["level"], "feature", "a release level word");
         assert_eq!(releases[0]["eligible"], false);
         assert_eq!(releases[0]["notes_url"], serde_json::Value::Null);
+        // The real policy's reasons for the defaults (Notify, Fixes, a
+        // 3-day wait after a 2-day-old release), then the fixture's.
+        let wait = ANCHOR - RELEASE_AGE + 3 * 86_400;
+        assert_eq!(
+            releases[0]["blocked_by"],
+            serde_json::json!([
+                {"code": "mode"},
+                {"code": "level"},
+                {"code": "wait", "until": wait},
+                {"code": "capability", "reason": "fixture"},
+            ])
+        );
         assert_eq!(json["pending"], serde_json::Value::Null);
         assert_eq!(json["installing"], serde_json::Value::Null);
         let fixture = UpdatesError::Unavailable(UpdatesUnavailable::Fixture);
@@ -277,22 +346,34 @@ mod tests {
         assert_eq!(s.clear_history().await.unwrap_err(), fixture);
     }
 
-    /// Pausing shows in the policy and blocks the release; 0 resumes.
+    /// Pausing shows in the policy and blocks the release; 0 resumes. The
+    /// settings would install it (Auto, every level, no wait), so only the
+    /// pause and the fixture's capability block it.
     #[tokio::test]
     async fn pausing_and_resuming_show_without_timing() {
-        let (s, _tx) = sample(Mode::Auto);
+        let (s, tx) = sample(Mode::Auto);
+        tx.send_modify(|u| {
+            u.level = crate::settings::updates::Level::All;
+            u.wait_days = 0;
+        });
+        let fixture = serde_json::json!({"code": "capability", "reason": "fixture"});
         let paused = serde_json::to_value(s.pause(7).await.unwrap()).unwrap();
         let until = now() + 7 * 86_400;
         assert_eq!(paused["policy"]["paused_until"], until);
         assert_eq!(
             paused["releases"][0]["blocked_by"],
-            serde_json::json!([{"code": "paused", "until": until}])
+            serde_json::json!([{"code": "paused", "until": until}, fixture])
         );
+        assert_eq!(paused["releases"][0]["eligible"], false);
         let again = serde_json::to_value(UpdatesApi::status(&s).await).unwrap();
         assert_eq!(again["policy"]["paused_until"], until);
         let resumed = serde_json::to_value(s.pause(0).await.unwrap()).unwrap();
         assert_eq!(resumed["policy"]["paused_until"], serde_json::Value::Null);
-        assert_eq!(resumed["releases"][0]["blocked_by"], serde_json::json!([]));
+        assert_eq!(
+            resumed["releases"][0]["blocked_by"],
+            serde_json::json!([fixture])
+        );
+        assert_eq!(resumed["releases"][0]["eligible"], false);
     }
 
     /// The policy follows the saved settings, and so does `/system`'s row.

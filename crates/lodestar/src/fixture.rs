@@ -172,11 +172,18 @@ mod imp {
                 let built = manifest.as_ref().and_then(|v| v.get(VARIANT_KEY));
                 let asked = variant.map(Variant::name);
                 if built.map(serde_json::Value::as_str) != asked.map(Some) {
-                    let name = |v: Option<String>| v.unwrap_or_else(|| "default".into());
+                    // Debug-quoted (and other JSON re-encoded), so a crafted
+                    // manifest can't put terminal escapes on stderr.
+                    let built = match built {
+                        None => "default".to_string(),
+                        Some(serde_json::Value::String(v)) => format!("{v:?}"),
+                        Some(other) => other.to_string(),
+                    };
+                    let asked = asked.map_or("default".to_string(), |v| format!("{v:?}"));
                     Found::Foreign(format!(
-                        "it was built as the {} fixture and this run asks for the {} one",
-                        name(built.map(|v| v.as_str().map_or(v.to_string(), str::to_owned))),
-                        name(asked.map(str::to_owned))
+                        "it was built as the {built} fixture and this run asks for the {asked} \
+                         one (if a build of the {asked} one was interrupted, delete the folder to \
+                         rebuild it)"
                     ))
                 } else if marked(&dir.join(data::DB)) {
                     Found::Fixture { anchor }
@@ -626,17 +633,27 @@ mod imp {
             record(&manifest, on).unwrap();
             assert_eq!(inspect(dir.path(), on), Found::Fixture { anchor: 7200 });
             assert!(matches!(inspect(dir.path(), None), Found::Foreign(_)));
-            for odd in ["\"backups\"", "\"\"", "null", "1", "[\"updates-on\"]"] {
+            let escape = "\"\\u001b[2J\"";
+            let odd = [
+                "\"backups\"",
+                "\"\"",
+                "null",
+                "1",
+                "[\"updates-on\"]",
+                escape,
+            ];
+            for odd in odd {
                 let text = format!(
                     "{{\"format\": {}, \"anchor\": 7200, \"variant\": {odd}}}",
                     data::FORMAT
                 );
                 std::fs::write(&manifest, text).unwrap();
                 for v in [None, on] {
-                    assert!(
-                        matches!(inspect(dir.path(), v), Found::Foreign(_)),
-                        "{odd} {v:?}"
-                    );
+                    let Found::Foreign(why) = inspect(dir.path(), v) else {
+                        panic!("{odd} {v:?} served");
+                    };
+                    // The manifest's text is quoted, never written raw.
+                    assert!(!why.chars().any(char::is_control), "{why:?}");
                 }
             }
         }

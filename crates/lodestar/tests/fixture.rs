@@ -31,6 +31,38 @@ fn manifest(dir: &Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(dir.join(data::MANIFEST)).unwrap()).unwrap()
 }
 
+/// Runs `serve --fixture DIR` that should be refused: its exit code and
+/// stderr. A start that serves instead fails the test within 30 s rather
+/// than hanging it (the child is killed).
+fn refused(dir: &Path) -> (Option<i32>, String) {
+    let err = tempfile::NamedTempFile::new().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
+        .args(["serve", "--fixture"])
+        .arg(dir)
+        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
+        .env_remove("LODESTAR_DATA_DIR")
+        .stdout(std::process::Stdio::null())
+        .stderr(err.reopen().unwrap())
+        .spawn()
+        .unwrap();
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > std::time::Duration::from_secs(30) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "not refused within 30 s: {}",
+                std::fs::read_to_string(err.path()).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    (status.code(), std::fs::read_to_string(err.path()).unwrap())
+}
+
 fn u(v: &Value) -> u64 {
     v.as_u64().unwrap_or_else(|| panic!("not a count: {v}"))
 }
@@ -122,6 +154,11 @@ fn serves_what_the_manifest_says() {
     let port = server.port;
     let cookie = server.login();
     check_queries(port, &cookie, &m, false);
+    // X-fixture-updates-on: the default fixture's Updates stay
+    // unavailable (`fixture`), never the variant's sample.
+    let updates = json(port, "/api/v1/updates", &cookie);
+    assert_eq!(updates["unavailable"], "fixture", "{updates}");
+    assert_eq!(updates["releases"], serde_json::json!([]), "{updates}");
 
     // `hidden=true` adds exactly the filter-hidden torrents.
     let counts = &m["counts"];
@@ -335,14 +372,8 @@ fn a_foreign_folder_is_refused_untouched() {
     for (file, content) in [("notes.txt", "mine"), ("lodestar.db", "a real install")] {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(file), content).unwrap();
-        let out = Command::new(env!("CARGO_BIN_EXE_lodestar"))
-            .args(["serve", "--fixture"])
-            .arg(dir.path())
-            .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
-            .output()
-            .unwrap();
-        assert_eq!(out.status.code(), Some(3), "{out:?}");
-        let stderr = String::from_utf8_lossy(&out.stderr);
+        let (code, stderr) = refused(dir.path());
+        assert_eq!(code, Some(3), "{stderr}");
         assert!(stderr.contains("refusing"), "{stderr}");
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -446,6 +477,8 @@ fn the_updates_on_variant_serves_updates_and_installs_nothing() {
     assert_eq!(s["capability"]["reason"], "fixture");
     assert_eq!(s["rollback"]["available"], false);
     assert_eq!(s["releases"].as_array().unwrap().len(), 1, "{s}");
+    assert_eq!(s["releases"][0]["level"], "feature", "{s}");
+    assert_eq!(s["releases"][0]["eligible"], false, "{s}");
     let system = json(port, "/api/v1/system", &cookie);
     assert_eq!(system["fixture"], true, "{system}");
 
@@ -456,11 +489,25 @@ fn the_updates_on_variant_serves_updates_and_installs_nothing() {
         s["policy"]["paused_until"].as_i64().unwrap() > anchor,
         "{s}"
     );
-    assert_eq!(s["releases"][0]["blocked_by"][0]["code"], "paused");
+    let codes = |s: &Value| -> Vec<String> {
+        s["releases"][0]["blocked_by"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(codes(&s).contains(&"paused".to_string()), "{s}");
+    assert_eq!(
+        codes(&s).last().map(String::as_str),
+        Some("capability"),
+        "{s}"
+    );
     let resumed = post(port, "/api/v1/updates/pause", &cookie, r#"{"days":0}"#);
     assert!(resumed.starts_with("HTTP/1.0 200"), "{resumed}");
     let s = json(port, "/api/v1/updates", &cookie);
     assert_eq!(s["policy"]["paused_until"], Value::Null, "{s}");
+    assert!(!codes(&s).contains(&"paused".to_string()), "{s}");
 
     let version = s["releases"][0]["version"].as_str().unwrap().to_string();
     for (path, body) in [
@@ -490,14 +537,8 @@ fn the_updates_on_variant_serves_updates_and_installs_nothing() {
 
     // The same folder without the variant: refused, untouched.
     let before = std::fs::read_to_string(dir.join(data::MANIFEST)).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_lodestar"))
-        .args(["serve", "--fixture", &shown])
-        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
-        .env_remove("LODESTAR_DATA_DIR")
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(3), "{out:?}");
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let (code, stderr) = refused(&dir);
+    assert_eq!(code, Some(3), "{stderr}");
     assert!(
         stderr.contains("refusing") && stderr.contains("updates-on"),
         "{stderr}"
