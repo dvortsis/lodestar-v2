@@ -197,7 +197,9 @@ test('on a phone the controls fit one row above the first result, and More is a 
 	const sort2 = await page.getByLabel('Sort').boundingBox();
 	expect(wide!.x + wide!.width).toBeLessThanOrEqual(sort2!.x);
 	await expect(page.getByTestId('select-mode')).toBeHidden();
-	const more = page.getByRole('button', { name: 'More', exact: true });
+	const more = page
+		.getByTestId('results-toolbar')
+		.getByRole('button', { name: 'More', exact: true });
 	await more.click();
 	await expect(page.getByRole('button', { name: 'Save search' })).toBeVisible();
 	await page.keyboard.press('Escape');
