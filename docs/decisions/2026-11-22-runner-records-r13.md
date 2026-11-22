@@ -37,10 +37,10 @@ The runner's records PR after r12 (#1068). It records the runner's calls on 2026
   - **One view switcher (List, Compact, Table, Cards)** replaces the density control and the view toggle. This refines §10.2 and §10.4, and old `density=` and `view=` URLs map to it. §10.10's per-account Appearance density preference stays, and sets the switcher's default.
   - **The index-growing banner stays undismissible,** because it says results are incomplete. Under 640 px it's one compact line.
   - **Size calls:**
-    - Search cards rises to the measured 8.11 kB, from 8.01 kB;
-    - the Results toolbar gets no raise (5.13 kB against 4.6 kB). The slice builds a lighter version first: a native `<select>` for View on a phone, and a native popover for Select and Save, with no menu library.
+    - **No raises.** Search cards stays at 8.01 kB: the raw name on cards measured 8.11 kB, so the slice finds the 97 B inside the chunk, or drops the raw name on cards only and keeps it in the other views;
+    - the Results toolbar also stays at 4.6 kB (it measured 5.13 kB). The slice built a lighter version: a native `<select>` for View on a phone, and a native popover for Select and Save, with no menu library.
     - The rules it moves into the lazy `toolbar.css` need a layout-shift check.
-  - **Owns gain** `results/results.css` (two rules only), `web/.size-limit.mjs` (the Search cards and Results toolbar entries only) and its decisions file.
+  - **Owns gain** `results/results.css` (two rules only), `web/.size-limit.mjs` (the Search cards and Results toolbar entries only, with no raise) and its decisions file.
   - I15's Resolution column moves to X-hit-resolution (below). The slice keeps the Raw name column.
 - **X-insights-story, split into two PRs:**
   - PR 1, the overview: U25, I25, I9, P14, P16, U26, P10's cohort copy and 03-n.
