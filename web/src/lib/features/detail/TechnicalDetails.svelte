@@ -6,6 +6,7 @@
 	import { m } from '$lib/paraglide/messages.js';
 	import Badge from '$lib/ui/labels/Badge.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
+	import './technical.css';
 	import type { SearchHit, TorrentDetail } from './cache';
 
 	interface Props {
@@ -29,10 +30,8 @@
 
 <section class="ls-detail-section" aria-labelledby="{id}-h" data-section="technical">
 	<details data-testid="detail-technical">
-		<summary class="ls-focus cursor-pointer font-semibold" id="{id}-h"
-			>{m.detail_technical()}</summary
-		>
-		<dl class="ls-detail-facts mt-3">
+		<summary class="ls-focus ls-detail-disclosure" id="{id}-h">{m.detail_technical()}</summary>
+		<dl class="ls-detail-facts ls-detail-disclosed">
 			<dt>{m.detail_piece_size()}</dt>
 			<dd class="tabular-nums" data-testid="detail-piece-size">
 				{formatBytes(detail.piece_len, locale)}

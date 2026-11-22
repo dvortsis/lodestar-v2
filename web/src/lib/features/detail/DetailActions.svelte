@@ -135,7 +135,7 @@
 	{/if}
 {/if}
 {#if hint}
-	<p class="basis-full text-small text-muted-text" data-testid="detail-client-hint">
+	<p class="ls-detail-hint" data-testid="detail-client-hint">
 		{m.detail_client_hint()}
 		<a class="link" href={resolve('/settings/[section]', { section: 'integrations' })}
 			>{m.detail_client_setup()}</a

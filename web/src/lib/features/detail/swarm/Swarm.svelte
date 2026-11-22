@@ -6,6 +6,7 @@
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
+	import './swarm.css';
 	import type { TorrentDetail } from '../cache';
 	import SwarmChart from './SwarmChart.svelte';
 	import { trackerHost } from './tracker';
@@ -48,31 +49,29 @@
 		<SwarmChart samples={series.samples} bucket={series.bucket} />
 	{/if}
 	{#if trackers.length > 0}
-		<div class="overflow-x-auto">
-			<table class="w-full text-left text-small" data-testid="detail-swarm-trackers">
-				<caption class="py-1 text-left text-muted-text">{m.detail_swarm_trackers_caption()}</caption
-				>
+		<div class="ls-detail-scroll">
+			<table class="ls-detail-table" data-testid="detail-swarm-trackers">
+				<caption>{m.detail_swarm_trackers_caption()}</caption>
 				<thead>
 					<tr>
-						<th scope="col" class="pe-3 font-medium">{m.detail_swarm_col_tracker()}</th>
-						<th scope="col" class="px-2 text-right font-medium">{m.seeders()}</th>
-						<th scope="col" class="px-2 text-right font-medium">{m.leechers()}</th>
-						<th scope="col" class="px-2 text-right font-medium">{m.detail_swarm_col_completed()}</th
-						>
-						<th scope="col" class="ps-2 font-medium">{m.detail_swarm_col_checked()}</th>
+						<th scope="col">{m.detail_swarm_col_tracker()}</th>
+						<th scope="col">{m.seeders()}</th>
+						<th scope="col">{m.leechers()}</th>
+						<th scope="col">{m.detail_swarm_col_completed()}</th>
+						<th scope="col">{m.detail_swarm_col_checked()}</th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each trackers as t, i (i)}
 						{@const host = trackerHost(t.url)}
-						<tr class="border-t border-base-300" data-testid="detail-swarm-tracker">
-							<th scope="row" class="pe-3 font-normal break-all" data-testid="detail-swarm-host"
+						<tr data-testid="detail-swarm-tracker">
+							<th scope="row" data-testid="detail-swarm-host"
 								>{host ?? m.detail_swarm_tracker_unknown()}</th
 							>
-							<td class="px-2 text-right tabular-nums">{formatCount(t.seeders, locale)}</td>
-							<td class="px-2 text-right tabular-nums">{formatCount(t.leechers, locale)}</td>
-							<td class="px-2 text-right tabular-nums">{formatCount(t.completed, locale)}</td>
-							<td class="ps-2 whitespace-nowrap"><RelativeTime seconds={t.at} /></td>
+							<td data-num>{formatCount(t.seeders, locale)}</td>
+							<td data-num>{formatCount(t.leechers, locale)}</td>
+							<td data-num>{formatCount(t.completed, locale)}</td>
+							<td data-when><RelativeTime seconds={t.at} /></td>
 						</tr>
 					{/each}
 				</tbody>

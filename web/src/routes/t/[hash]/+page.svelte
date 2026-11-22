@@ -47,7 +47,7 @@
 		<div class="contents ls-detail-page">
 			<!-- eslint-disable svelte/no-navigation-without-resolve -- resolve('/search') plus the page's own query string -->
 			<a
-				class="ls-focus link inline-flex items-center gap-1 text-body"
+				class="ls-focus link ls-detail-back"
 				href={resolve('/search') + search}
 				data-testid="detail-back-search">{m.detail_back_search()}</a
 			>
@@ -56,7 +56,7 @@
 				class="flex max-w-(--manuscript-width) flex-wrap items-start justify-between gap-x-4 gap-y-2"
 			>
 				<h1 class={PAGE_H1} tabindex="-1">{showBidi(model.title) || m.torrent()}</h1>
-				<div class="ls-detail-row basis-full medium:basis-auto">
+				<div class="ls-detail-row ls-detail-page-actions">
 					<DetailActions detail={model.detail} mode="page" />
 				</div>
 			</header>

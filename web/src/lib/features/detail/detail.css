@@ -72,28 +72,16 @@
 	min-width: 0;
 }
 
-/* The Swarm line: the plot with its peak label at the top start and 0 at the bottom start. */
-.ls-detail-chart {
-	--ls-chart-height: calc(var(--spacing) * 24);
-	display: grid;
-	grid-template-columns: max-content minmax(0, 1fr);
-	grid-template-rows: var(--ls-chart-height);
-	column-gap: calc(var(--spacing) * 2);
+.ls-detail-hint {
+	flex-basis: 100%;
+	font-size: var(--text-small);
+	line-height: var(--text-small--line-height);
+	color: var(--color-muted-text);
 }
-.ls-detail-chart > svg {
-	grid-column: 2;
-	grid-row: 1;
-}
-.ls-detail-chart-max,
-.ls-detail-chart-zero {
-	grid-column: 1;
-	grid-row: 1;
-}
-.ls-detail-chart-zero {
-	align-self: end;
-	text-align: end;
-}
-.ls-detail-chart-max {
-	align-self: start;
-	text-align: end;
+.ls-detail-label {
+	display: block;
+	margin-block-end: calc(var(--spacing) * 1);
+	font-size: var(--text-small);
+	line-height: var(--text-small--line-height);
+	color: var(--color-muted-text);
 }

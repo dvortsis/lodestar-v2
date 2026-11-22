@@ -234,9 +234,7 @@
 >
 	<div class="ls-detail-row">
 		<div class="ls-detail-grow">
-			<label class="mb-1 block text-small text-muted-text" for={filterId}
-				>{m.detail_tree_filter()}</label
-			>
+			<label class="ls-detail-label" for={filterId}>{m.detail_tree_filter()}</label>
 			<Input
 				id={filterId}
 				type="search"

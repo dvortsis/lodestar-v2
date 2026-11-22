@@ -41,13 +41,13 @@
 		data-points={chart.points.length}
 	>
 		<div class="ls-detail-row text-small text-muted-text">
-			<span class="inline-flex items-center gap-1" data-testid="detail-swarm-legend-seeders"
-				><svg class="h-2 w-5" viewBox="0 0 20 4" aria-hidden="true"
+			<span class="ls-detail-key" data-testid="detail-swarm-legend-seeders"
+				><svg viewBox="0 0 20 4" aria-hidden="true"
 					><path d="M0 2h20" stroke="var(--data-1)" stroke-width="2" fill="none" /></svg
 				>{m.seeders()}</span
 			>
-			<span class="inline-flex items-center gap-1" data-testid="detail-swarm-legend-leechers"
-				><svg class="h-2 w-5" viewBox="0 0 20 4" aria-hidden="true"
+			<span class="ls-detail-key" data-testid="detail-swarm-legend-leechers"
+				><svg viewBox="0 0 20 4" aria-hidden="true"
 					><path
 						d="M0 2h20"
 						stroke="var(--data-2)"
@@ -63,16 +63,12 @@
 			>
 		</div>
 		<div class="ls-detail-chart">
-			<span
-				class="ls-detail-chart-max tabular-nums text-small text-muted-text"
-				data-testid="detail-swarm-max">{count(chart.max)}</span
-			>
+			<span class="ls-detail-chart-max" data-testid="detail-swarm-max">{count(chart.max)}</span>
 			<svg
 				viewBox="0 0 {W} {H}"
 				preserveAspectRatio="none"
 				role="img"
 				aria-label={m.detail_swarm_chart_label()}
-				class="h-(--ls-chart-height) w-full overflow-visible border-b border-s border-base-300"
 			>
 				{#each chart.lines as line (line.key)}
 					{@const color = line.key === 'seeders' ? 'var(--data-1)' : 'var(--data-2)'}
@@ -109,9 +105,9 @@
 					</rect>
 				{/each}
 			</svg>
-			<span class="ls-detail-chart-zero tabular-nums text-small text-muted-text">0</span>
+			<span class="ls-detail-chart-zero">0</span>
 		</div>
-		<div class="ls-detail-row justify-between text-small text-muted-text tabular-nums">
+		<div class="ls-detail-axis">
 			<span data-testid="detail-swarm-from"
 				>{formatDate(chart.from, locale, { timeZone: zone })}</span
 			>
