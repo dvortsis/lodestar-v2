@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T09:52:00Z",
+    "updated": "2026-11-22T10:27:00Z",
     "items": [
       {
         "slot": 1,
@@ -10662,16 +10662,16 @@
         "agent": "session_01MMjhnBpFNkqSRJbKoL98DZ",
         "model": "opus",
         "since": "2026-11-22T09:52:00Z",
-        "doing": "launched; step 0 (brief eea35e5c); #1056 merged 151993bb"
+        "doing": "#1061 ready 12ce586a; fresh review"
       },
       {
         "slot": 2,
-        "slice": "X-infra-filter-workflows",
+        "slice": "X-workflow-tests-filter",
         "role": "slice",
         "agent": "session_01MMjhnAtTMJUdkNfg1nuMEj",
         "model": "sonnet",
-        "since": "2026-11-22T09:21:00Z",
-        "doing": "#1058 68d7eb1d nits pushed; CI"
+        "since": "2026-11-22T10:27:00Z",
+        "doing": "#1058 merged fabc3ff0; same session, step 0 (brief ee13cbf7)"
       },
       {
         "slot": 3,
@@ -10680,7 +10680,7 @@
         "agent": "session_01MMjhn9FudTFDiafHhoEKK1",
         "model": "opus",
         "since": "2026-11-22T09:21:00Z",
-        "doing": "step 0 go (mode on only with purpose screen); building"
+        "doing": "#1060 ready e043954e; fresh review"
       },
       {
         "slot": 4,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhn9moy1oBVXSpM5GdsK",
         "model": "opus",
         "since": "2026-11-22T09:45:00Z",
-        "doing": "launched; step 0 (brief e989e3b1); r11 #1059 merged 05e2b1aa"
+        "doing": "building (Close needs >=35 B trim in QueryBar, else drop)"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
