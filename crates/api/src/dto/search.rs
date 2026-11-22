@@ -9,7 +9,9 @@ use utoipa::{IntoParams, ToSchema};
 #[serde(default)]
 #[into_params(parameter_in = Query)]
 pub struct ParseQuery {
-    /// The query text; empty matches everything.
+    /// The query text; empty matches everything. Sizes read as typed:
+    /// `GB` is 10^9 bytes, `GiB` 2^30 (on `size:` and `largest:`; stored
+    /// filter rules keep the 1,024 reading).
     pub q: String,
     /// Also read `q` as natural phrasing ("4k movies from 2020 over
     /// 10gb") and propose the query it means, in `natural`.
@@ -39,7 +41,7 @@ pub struct ParseResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "ast": { "op": "and", "of": [] },
-    "canonical": "res:2160p type:movie year:2020 size:>=10GiB",
+    "canonical": "res:2160p type:movie year:2020 size:>=10GB",
     "chips": [
         { "from": { "end": 2, "start": 0 }, "text": "res:2160p" },
         { "from": { "end": 9, "start": 3 }, "text": "type:movie" }
@@ -50,7 +52,8 @@ pub struct NaturalProposal {
     #[serde(serialize_with = "super::sorted")]
     #[schema(value_type = AstNode)]
     pub ast: Node,
-    /// The proposed query; it always parses back to `ast`.
+    /// The proposed query; it parses back to the same AST under the
+    /// typed reading (`10GB` is 10^9 bytes), as `q` does.
     pub canonical: String,
     /// The recognised clauses, in the order they appear.
     pub chips: Vec<NaturalChip>,
@@ -72,7 +75,9 @@ pub struct NaturalChip {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 #[serde(default)]
 pub struct SearchRequest {
-    /// The query text. Send `q` or `ast`, not both.
+    /// The query text. Send `q` or `ast`, not both. Sizes read as typed:
+    /// `GB` is 10^9 bytes, `GiB` 2^30 (on `size:` and `largest:`; stored
+    /// filter rules keep the 1,024 reading).
     pub q: Option<String>,
     /// A query AST, as `/parse` returns it; it must be one the parser
     /// could produce.
@@ -166,7 +171,9 @@ fn flag<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
 /// `GET`/`POST /search`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SearchResponse {
-    /// The query as the server understood it.
+    /// The query as the server understood it, as the user would type it
+    /// (sizes in the unit typed, `size:>10GB`): it reads back the same
+    /// as `q`.
     pub canonical: String,
     /// Present only when asked for with `explain`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

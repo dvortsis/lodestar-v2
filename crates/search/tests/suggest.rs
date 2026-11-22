@@ -12,9 +12,15 @@ use lodestar_search::natural::{
 };
 use lodestar_search::query::TagKey;
 use lodestar_search::suggest::{self, Kind, Request, Shown, Suggestion};
-use lodestar_search::{CancelToken, LiveConfig, LiveIndexer, Node, SearchIndex, parse};
+use lodestar_search::{CancelToken, LiveConfig, LiveIndexer, Node, SearchIndex, Units, parse};
 use lodestar_store::{Filtered, Held, NewTorrent, Refiled, SourceId, Store, StoreConfig, flags};
 use proptest::prelude::*;
+
+/// Natural phrasing is text typed now: it and its proposals read with
+/// the typed-unit reading (§10.12, U12).
+fn typed(q: &str) -> Result<Node, lodestar_search::ParseError> {
+    lodestar_search::parse_with(q, Units::Typed)
+}
 
 /// Names in id order, with whether a filter rule hid them.
 const TORRENTS: &[(&str, bool)] = &[
@@ -763,7 +769,7 @@ fn a_new_index_directory_gets_its_own_title_set() {
 const NATURAL: &[(&str, &str)] = &[
     (
         "4k movies from 2020 over 10gb",
-        "res:2160p type:movie year:2020 size:>=10GiB",
+        "res:2160p type:movie year:2020 size:>=10GB",
     ),
     ("1080p tv shows", "res:1080p type:tv"),
     ("the dark knight in 4k", "the dark knight res:2160p"),
@@ -779,11 +785,11 @@ const NATURAL: &[(&str, &str)] = &[
     ("french movies", "lang:fr type:movie"),
     (
         "english audiobooks under 500mb",
-        "lang:en type:audiobook size:<=500MiB",
+        "lang:en type:audiobook size:<=500MB",
     ),
     ("ebooks added this week", "type:ebook discovered:<7d"),
-    ("software under 1 gb", "type:software size:<=1GiB"),
-    ("games over 50 gb", "type:game size:>=50GiB"),
+    ("software under 1 gb", "type:software size:<=1GB"),
+    ("games over 50 gb", "type:game size:>=50GB"),
     (
         "4k hdr dolby vision movies",
         "res:2160p hdr:hdr,dv type:movie",
@@ -792,7 +798,7 @@ const NATURAL: &[(&str, &str)] = &[
     ("breaking bad season 1 episode 5", "breaking bad s:1 e:5"),
     ("movies without subtitles", "type:movie -has:subs"),
     ("movies with subtitles", "type:movie has:subs"),
-    ("mkv files over 4gb", "ext:mkv size:>=4GiB"),
+    ("mkv files over 4gb", "ext:mkv size:>=4GB"),
     ("linux iso", "linux ext:iso"),
     ("star wars 1977", "star wars year:1977"),
     ("movies after 2015", "type:movie year:>=2016"),
@@ -802,8 +808,8 @@ const NATURAL: &[(&str, &str)] = &[
     ("1999-2001 films", "year:1999..2001 type:movie"),
     ("more than 10 files", "files:>=11"),
     ("at least 100 files", "files:>=101"),
-    ("between 1 and 4 gb", "size:1GiB..4GiB"),
-    ("between 1gb and 4gb", "size:1GiB..4GiB"),
+    ("between 1 and 4 gb", "size:1GB..4GB"),
+    ("between 1gb and 4gb", "size:1GB..4GB"),
     ("last 3 days", "discovered:<3d"),
     ("today 1080p", "discovered:<1d res:1080p"),
     ("recent anime", "discovered:<7d anime"),
@@ -882,7 +888,7 @@ const NATURAL: &[(&str, &str)] = &[
     ("german dubbed movies", "lang:de type:movie"),
     (
         "movies under 700mb in 720p",
-        "type:movie size:<=700MiB res:720p",
+        "type:movie size:<=700MB res:720p",
     ),
     ("a b c", "a b c"),
     ("", ""),
@@ -899,7 +905,7 @@ fn natural_phrasing_goldens() {
                 got.canonical
             ));
         }
-        assert_eq!(parse(&got.canonical).unwrap(), got.ast, "{phrase}");
+        assert_eq!(typed(&got.canonical).unwrap(), got.ast, "{phrase}");
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     assert!(NATURAL.len() >= 30);
@@ -1090,7 +1096,7 @@ fn refused_rightly(phrase: &str, e: NaturalError) -> Result<(), TestCaseError> {
         NaturalError::TooLong => prop_assert!(long, "{}", phrase),
         NaturalError::TooManyWords => prop_assert!(!long && many(), "{}", phrase),
         NaturalError::Syntax => {
-            prop_assert!(!long && !many() && parse(phrase).is_err(), "{}", phrase)
+            prop_assert!(!long && !many() && typed(phrase).is_err(), "{}", phrase)
         }
     }
     Ok(())
@@ -1102,7 +1108,7 @@ fn refused_rightly(phrase: &str, e: NaturalError) -> Result<(), TestCaseError> {
 #[test]
 fn natural_refuses_valid_query_past_the_cap() {
     let phrase = r#"-(4k | x) -(4k | x) (a | b) -(4k | x) -(4k | x) -x265 -x265 -"cam rip""#;
-    assert!(parse(phrase).is_ok());
+    assert!(typed(phrase).is_ok());
     assert_eq!(natural(phrase), Err(NaturalError::TooManyWords));
     refused_rightly(phrase, NaturalError::TooManyWords).unwrap();
     assert!(refused_rightly(phrase, NaturalError::Syntax).is_err());
@@ -1120,11 +1126,13 @@ proptest! {
             Ok(n) => n,
             Err(e) => return refused_rightly(&phrase, e),
         };
-        let parsed = parse(&n.canonical).unwrap();
+        let parsed = typed(&n.canonical).unwrap();
         prop_assert_eq!(&parsed, &n.ast);
-        prop_assert_eq!(parsed.to_query(), n.canonical.clone());
+        prop_assert_eq!(parsed.to_query_typed(), n.canonical.clone());
+        // What would be stored reads the same under the typed reading.
+        prop_assert_eq!(typed(&parsed.to_query()).ok(), Some(parsed.clone()));
         for c in &n.chips {
-            prop_assert!(parse(&c.text).is_ok(), "{}", c.text);
+            prop_assert!(typed(&c.text).is_ok(), "{}", c.text);
             prop_assert!(c.from.0 < c.from.1 && c.from.1 <= phrase.chars().count());
         }
     }
@@ -1148,10 +1156,10 @@ proptest! {
             Ok(n) => n,
             Err(e) => return refused_rightly(&phrase, e),
         };
-        let strict = parse(&phrase).unwrap();
+        let strict = typed(&phrase).unwrap();
         let pieces = lodestar_search::natural::pieces(&phrase).unwrap();
         let ph = |i: usize| format!("zzrun{i}");
-        let Ok(skeleton) = parse(&lodestar_search::natural::join(&pieces, Some(&ph))) else {
+        let Ok(skeleton) = typed(&lodestar_search::natural::join(&pieces, Some(&ph))) else {
             return Err(TestCaseError::fail(format!("no skeleton for {phrase}")));
         };
         let runs: Vec<(String, String)> = pieces
@@ -1162,13 +1170,13 @@ proptest! {
             })
             .collect();
         // The skeleton with the runs as written is the strict parse.
-        let as_written = substitute(&skeleton, &|i| parse(&runs[i].0).ok());
+        let as_written = substitute(&skeleton, &|i| typed(&runs[i].0).ok());
         prop_assert_eq!(flat(as_written), flat(Some(strict.clone())), "{}", phrase);
         // With the runs as read, it's the proposal (unless it fell back
         // to the query as typed).
-        if lodestar_search::query::parse(&lodestar_search::natural::join(&pieces, None)).is_ok() {
+        if typed(&lodestar_search::natural::join(&pieces, None)).is_ok() {
             let as_read = substitute(&skeleton, &|i| {
-                (!runs[i].1.is_empty()).then(|| parse(&runs[i].1).unwrap())
+                (!runs[i].1.is_empty()).then(|| typed(&runs[i].1).unwrap())
             });
             prop_assert_eq!(flat(as_read), flat(Some(n.ast.clone())), "{}", phrase);
         } else {

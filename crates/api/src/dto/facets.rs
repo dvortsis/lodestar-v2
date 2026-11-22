@@ -15,8 +15,8 @@ use super::search::AstNode;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct FacetsRequest {
-    /// The query text, as `/search` takes it. Send `q` or `ast`, not
-    /// both.
+    /// The query text, as `/search` takes it (sizes read as typed:
+    /// `GB` is 10^9 bytes). Send `q` or `ast`, not both.
     pub q: Option<String>,
     /// A query AST, as `/parse` returns it.
     #[schema(value_type = Option<AstNode>)]

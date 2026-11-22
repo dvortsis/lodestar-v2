@@ -262,8 +262,14 @@ Ranges work the same way everywhere:
 | `size:1GiB..<4GiB` | from 1 GiB up to, but not including, 4 GiB |
 | `size:..2GiB`, `size:1GB..` | open-ended |
 
-- **Units:** `B`, `KB`, `MB`, `GB`, `TB`, and the `KiB`, `MiB`… spellings, also single letters (`1.5G`). All of them are 1024-based, the same as the sizes the UI shows. No unit means bytes.
-- **How Lodestar writes sizes back:** in the largest unit that fits exactly (`size:4GiB`), or in bytes when no unit does. A one-sided bound one byte short of (or past) a unit is written in its exclusive form: `size:<16GiB`, `size:>4GiB`.
+- **Units mean what you type.** `KB`, `MB`, `GB` and `TB` count in thousands: `size:>10GB` is more than 10,000,000,000 bytes. `KiB`, `MiB`, `GiB` and `TiB` count in 1,024s: `size:>10GiB` is more than 10,737,418,240 bytes, about 7% more. Letter case doesn't matter. No unit means bytes.
+  - Single letters (`1.5G`, `700M`) count in 1,024s, like `GiB` and `MiB`.
+  - `piece:` always counts in 1,024s, because piece lengths are powers of two: `piece:16MB` is 16 MiB.
+  - Lodestar *shows* sizes in `KiB`, `MiB` and `GiB`. Your search keeps the unit you typed: for `size:>=10GB` the filter chip reads "Size: at least 10 GB", and the address bar keeps `size:>=10GB`.
+- **Saved filter rules keep their meaning.** A filter rule, an `unless` query or an allow entry is stored text, and stored text keeps the older reading: `KB`, `MB`, `GB` and `TB` there count in 1,024s, so a rule that has always hidden torrents under 1 GiB still does. Lodestar now writes stored text only in bytes or in `KiB`, `MiB`, `GiB` and `TiB`, which every version reads the same way. Alerts are stored the same way: an alert made from `size:>10GB` is stored as `size:>9765625KiB` and shown as `size:>10GB`.
+  - This also covers a rule you type now in **Filters**: there, `GB` still counts in 1,024s, unlike the search bar. To avoid any doubt, write rules with `GiB`, `MiB` or plain bytes, which mean the same everywhere.
+- **How Lodestar writes sizes back:** in the unit you'd type with the fewest digits: `size:>10GB`, `size:1.5GB`, `size:4GiB`, or bytes when no unit fits. A one-sided bound one byte short of (or past) a unit is written in its exclusive form: `size:<16GiB`, `size:>4GiB`, `size:<1GB`.
+- **Links and API calls:** `/search?q=` reads sizes as typed. A link written before this change with `GB` in it now finds sizes about 7% smaller.
 - **Fields using bytes:** `size:` (total), `largest:` (the biggest file), `piece:` (the **piece length**: torrents are shared in equal-sized pieces, and this is the size of one, e.g. `piece:16MB`).
 - **Fields using plain numbers:** `files:` (file count, `files:>=10`), `year:`, `s:`, `e:`, `junk:`.
 
@@ -278,6 +284,7 @@ size:1GiB..<4GiB
 size:..2GiB
 size:1GB..
 size:1.5G
+size:>10GiB
 largest:>2GB
 piece:16MB
 files:>=10

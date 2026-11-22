@@ -86,6 +86,7 @@ fn view(store: &Store, adult: bool, s: SavedSearchSummary) -> ApiResult<SavedSea
         visible_alerts(store, s.search.id, adult)?
     };
     let ast: Node = serde_json::from_str(&s.search.ast).map_err(internal)?;
+    let q = ast.to_query_typed();
     Ok(SavedSearchView {
         alert: s.search.alert,
         alerts,
@@ -95,7 +96,12 @@ fn view(store: &Store, adult: bool, s: SavedSearchSummary) -> ApiResult<SavedSea
         last_alert_at,
         name: s.search.name,
         paused: s.search.paused,
-        q: s.search.query,
+        // From the stored AST every time, as the user would type it
+        // (§10.12, U12): shown, and what "Open in search" sends to
+        // `/search?q=`, which reads it as typed. A search saved before
+        // typed units has raw text like `size:>10GB` and a 10 GiB AST; its
+        // `q` is `size:>10GiB`, so the link finds what the alert does.
+        q,
         rss: s.search.rss,
         sort: s.search.sort,
         unread,
@@ -113,13 +119,27 @@ fn summary_of(store: &Store, adult: bool, id: i64) -> ApiResult<SavedSearchView>
         .and_then(|s| view(store, adult, s))
 }
 
-/// The query as stored: the text sent (or the AST's canonical text) and
-/// the AST as JSON. Errors from the parser keep their span.
+/// The query as stored: the AST's canonical text and the AST as JSON.
+/// Errors from the parser keep their span.
+///
+/// `q` reads as typed (`10GB` is 10 × 1000³ bytes), but what's stored is
+/// [`Node::to_query`]: bytes or IEC units only, which every release
+/// reads the same way (§10.12). Typed text is never persisted.
 fn query_of(ast: Option<Node>, q: Option<String>) -> ApiResult<(String, String)> {
-    let text = q.clone();
     let node = search::request_ast(ast, q)?;
+    let text = node.to_query();
+    if text.len() > lodestar_search::query::MAX_QUERY_BYTES {
+        return Err(ApiError::bad_request(
+            "query_syntax",
+            format!(
+                "The query is over {} bytes once written out in full.",
+                lodestar_search::query::MAX_QUERY_BYTES
+            ),
+        )
+        .field("q"));
+    }
     let json = serde_json::to_string(&node).map_err(internal)?;
-    Ok((text.unwrap_or_else(|| node.to_query()), json))
+    Ok((text, json))
 }
 
 /// A sort the search endpoints accept, as sent.
@@ -341,9 +361,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_query_is_the_text_sent_or_the_asts() {
+    fn the_query_is_the_asts_canonical_text() {
         let (q, ast) = query_of(None, Some("  knight  1080p".into())).unwrap();
-        assert_eq!(q, "  knight  1080p");
+        assert_eq!(q, "knight 1080p");
         assert!(ast.contains("knight"));
         let node = lodestar_search::parse("knight 1080p").unwrap();
         let (q, _) = query_of(Some(node), None).unwrap();
@@ -351,6 +371,46 @@ mod tests {
         let (q, ast) = query_of(None, None).unwrap();
         assert_eq!(q, "");
         assert!(serde_json::from_str::<Node>(&ast).is_ok());
+    }
+
+    /// What's stored for a typed `size:>10GB` reads the same set under the
+    /// stored reading, the typed reading and the parser before typed
+    /// units (which read bytes and IEC units exactly as `Units::Stored`
+    /// does; `lodestar_search::query`'s tests pin that).
+    #[test]
+    fn a_typed_size_is_stored_canonical() {
+        use lodestar_search::{Units, parse_with};
+        for typed in [
+            "size:>10GB",
+            "largest:1.5GB..<2TB name:x",
+            "size:<1GB file:(size:>50MB)",
+        ] {
+            let (q, json) = query_of(None, Some(typed.into())).unwrap();
+            let ast: Node = serde_json::from_str(&json).unwrap();
+            assert_eq!(ast, parse_with(typed, Units::Typed).unwrap());
+            assert!(
+                !q.contains("GB") && !q.contains("MB") && !q.contains("TB"),
+                "{q}"
+            );
+            assert_eq!(parse_with(&q, Units::Stored).unwrap(), ast, "{q}");
+            assert_eq!(parse_with(&q, Units::Typed).unwrap(), ast, "{q}");
+        }
+        let (q, _) = query_of(None, Some("size:>10GB".into())).unwrap();
+        assert_eq!(q, "size:>9765625KiB");
+    }
+
+    #[test]
+    fn a_query_too_long_once_written_out_is_refused() {
+        // Within the limit as typed, past it as canonical text: `res:4k`
+        // is written `res:2160p`.
+        let max = lodestar_search::query::MAX_QUERY_BYTES;
+        let mut typed = "res:4k ".repeat(60);
+        typed.push_str(&"x".repeat(max - typed.len()));
+        assert_eq!(typed.len(), max);
+        assert!(lodestar_search::parse_with(&typed, lodestar_search::Units::Typed).is_ok());
+        let e = query_of(None, Some(typed)).unwrap_err();
+        assert_eq!(e.code(), "query_syntax");
+        assert!(e.to_string().contains("written out in full"), "{e}");
     }
 
     #[test]
