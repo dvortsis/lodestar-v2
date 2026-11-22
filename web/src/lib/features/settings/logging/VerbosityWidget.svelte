@@ -31,7 +31,7 @@
 
 <style>
 	/* Below 640 px the five long labels are a list, one per row, not a ragged wrap. */
-	@media (max-width: 39.99rem) {
+	@media (width < 40rem) {
 		.verb :global(div) {
 			display: grid;
 		}

@@ -159,6 +159,9 @@ describe('the screen', () => {
 		const external = container.querySelectorAll('a[target="_blank"]');
 		expect(external.length).toBeGreaterThan(0);
 		for (const a of external) expect(a.querySelector('svg')).toBeTruthy();
+		// Started (and the update and connection checks) show the date as text, not only in a tooltip.
+		const started = screen.getByText('Started').nextElementSibling!;
+		expect(started.querySelector('span[aria-hidden="true"]')?.textContent).toMatch(/·.*\d/);
 		// The build date is visible text in the row, not only a tooltip.
 		expect(screen.getByText('Build date').nextElementSibling?.textContent).toMatch(/\d/);
 	});

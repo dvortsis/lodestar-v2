@@ -75,6 +75,14 @@ test.describe('Logs at 390 px', () => {
 		// Nothing in the list moved while it loaded (the later presses are the user's own input).
 		expect(await page.evaluate(() => window.__logShifts)).toEqual([]);
 
+		// The first paint's row estimate is the measured two-line height, so rows don't move once measured.
+		const heights = await page
+			.locator('.logs-line')
+			.evaluateAll((els) =>
+				els.map((e) => (e.parentElement as HTMLElement).getBoundingClientRect().height)
+			);
+		expect(heights).toEqual([44, 44]);
+
 		// A component chip shows its state with an icon as well as colour.
 		const chip = page.getByRole('button', { name: 'dht', exact: true });
 		await chip.click();
@@ -87,6 +95,7 @@ test.describe('Logs at 390 px', () => {
 			'aria-pressed',
 			'false'
 		);
+		await expect(page.locator('.logs-line.logs-one')).toHaveCount(2);
 
 		await expectNoA11yViolations(page);
 	});

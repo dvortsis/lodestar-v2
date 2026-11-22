@@ -81,7 +81,7 @@
 	// `null` is "not chosen yet": the row's own CSS decides (wrapped below 640 px, one line above), so
 	// the list never switches layout after the first paint. A press of the toggle fixes it either way.
 	let wrap = $state<boolean | null>(null);
-	const NARROW = '(max-width: 39.99rem)';
+	const NARROW = '(width < 40rem)';
 	let narrow = $state(typeof matchMedia === 'function' && matchMedia(NARROW).matches);
 	onMount(() => {
 		if (typeof matchMedia !== 'function') return;
@@ -279,11 +279,7 @@
 				</Banner>
 			{/if}
 
-			<div
-				class="logs-toolbar flex flex-wrap items-center gap-2"
-				role="toolbar"
-				aria-label={m.logs_toolbar()}
-			>
+			<div class="logs-toolbar flex flex-wrap gap-2" role="toolbar" aria-label={m.logs_toolbar()}>
 				<label class="logs-field">
 					<span class="text-caption text-muted-text">{m.logs_level_label()}</span>
 					<Select
@@ -406,13 +402,13 @@
 				{:else}
 					<!-- Announcements are off: a live stream read aloud is unusable (§10.10.12). -->
 					<div role="log" aria-live="off" aria-label={m.logs_list_label()} class="h-full">
-						{#key wrapped}
+						{#key wrap}
 							<VirtualList
 								items={view.lines}
 								getKey={keyOf}
 								label={m.logs_list_label()}
 								measureRows
-								estimateSize={wrapped && wrap === null ? ROW_TWO_LINES : 28}
+								estimateSize={wrapped ? ROW_TWO_LINES : 28}
 								bind:activeIndex
 								onActivate={(_, l) => toggle(keyOf(l))}
 								class="font-mono text-small"

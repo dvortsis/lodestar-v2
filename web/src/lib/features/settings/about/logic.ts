@@ -26,8 +26,10 @@ export function isStale(ui: string | null | undefined, server: string | null | u
 export function showUiBuild(id: string | null | undefined, info: System): string | null {
 	const v = (id ?? '').trim();
 	if (v === '' || v === '0.0.0') return null;
-	const same = [info.version, info.build.commit].filter((x): x is string => !!x);
-	return same.some((x) => x === v || x.startsWith(v) || v.startsWith(x)) ? null : v;
+	const commit = info.build.commit ?? '';
+	const repeats =
+		v === info.version || (v.length >= 7 && /^[0-9a-f]+$/i.test(v) && commit.startsWith(v));
+	return repeats ? null : v;
 }
 
 /** `https://host/owner/repo` from the build's `repository`, or null when it isn't a plain https URL. */

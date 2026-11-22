@@ -147,10 +147,14 @@
 		}
 	]);
 	// A section the server can't build yet (every `needs_*` reason) is left out, not shown as an empty
-	// shell (§10.7, X-narrow-states). `search_disabled` never gets here: it is the page's own empty state.
+	// shell (§10.7, X-narrow-states); so is one still loading, so Newest's width doesn't change when the
+	// answer arrives. Other reasons keep their short notice.
 	const sections = $derived(
-		allSections.filter(
-			(s) => !(s.group?.status === 'unavailable' && s.group.reason?.startsWith('needs_'))
+		allSections.flatMap((s) =>
+			s.group !== null &&
+			!(s.group.status === 'unavailable' && s.group.reason?.startsWith('needs_'))
+				? [{ ...s, group: s.group }]
+				: []
 		)
 	);
 </script>
@@ -347,11 +351,7 @@
 									<header class="dsc-panel-head">
 										<h2 id="discover-{s.id}-h" class="dsc-panel-title">{s.title()}</h2>
 									</header>
-									{#if s.group === null}
-										{#if d.loading}<div class="dsc-skeletons">
-												<Skeleton class="dsc-skeleton-row" />
-											</div>{/if}
-									{:else if s.group.status === 'unavailable'}
+									{#if s.group.status === 'unavailable'}
 										{@const why = s.group.reason ? unavailableText(s.group.reason) : null}
 										<div class="dsc-unavailable" data-testid="discover-{s.id}-unavailable">
 											<Info class="dsc-icon" aria-hidden="true" />
@@ -425,7 +425,7 @@
 		overflow-x: auto;
 		animation: dsc-fade linear both;
 		animation-timeline: scroll(self inline);
-		animation-range: 0 calc(var(--spacing) * 10);
+		animation-range: calc(100% - var(--spacing) * 10) 100%;
 		mask-image: linear-gradient(to right, black calc(100% - var(--dsc-fade)), transparent);
 		border-bottom: var(--border) solid var(--color-base-300);
 	}

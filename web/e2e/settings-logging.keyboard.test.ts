@@ -216,6 +216,24 @@ test.describe('keyboard: Settings → Logging', () => {
 		});
 	});
 
+	test('Verbosity is one choice per row on a phone', async ({ page, go }) => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await go('/settings/logging');
+		await expect(page.getByRole('radio', { name: 'Normal (info)' })).toBeVisible();
+		const boxes = await page
+			.getByRole('radio')
+			.evaluateAll((els) =>
+				els
+					.filter((el) => /\((error|warn|info|debug|trace)\)/.test(el.textContent ?? ''))
+					.map((el) => el.getBoundingClientRect())
+			);
+		expect(boxes).toHaveLength(5);
+		for (const [i, b] of boxes.entries()) {
+			expect(Math.abs(b.x - boxes[0]!.x)).toBeLessThan(1);
+			if (i > 0) expect(b.y).toBeGreaterThan(boxes[i - 1]!.y + 1);
+		}
+	});
+
 	test('renders, and saves Verbosity with an event change', async ({ page, go, kbd }) => {
 		await go('/settings/logging');
 		await expect(page.getByRole('heading', { level: 1, name: 'Logging' })).toBeVisible();

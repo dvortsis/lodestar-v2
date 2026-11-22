@@ -419,6 +419,14 @@ describe('Rising and Recently resolved', () => {
 		expect(document.querySelector('.dsc-grid')?.classList.contains('dsc-solo')).toBe(true);
 	});
 
+	it('keeps the side column out while loading, so Newest does not change width', async () => {
+		mount();
+		expect(screen.queryByTestId('discover-rising')).toBeNull();
+		expect(document.querySelector('.dsc-side')).toBeNull();
+		await screen.findByTestId('discover-newest-total');
+		expect(document.querySelector('.dsc-side')).toBeNull();
+	});
+
 	it('hides every needs_* reason, one section at a time', async () => {
 		handler = () =>
 			response({
