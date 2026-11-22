@@ -148,21 +148,37 @@ for (const width of [1366, 768, 390, 360, 320]) {
 		await page.addInitScript(() => {
 			const w = window as unknown as { __cls: number };
 			w.__cls = 0;
+			(w as unknown as { __mine: number }).__mine = 0;
 			new PerformanceObserver((list) => {
 				for (const e of list.getEntries() as unknown as {
 					value: number;
 					hadRecentInput: boolean;
-				}[])
-					if (!e.hadRecentInput) w.__cls += e.value;
+					sources?: { node?: Node | null }[];
+				}[]) {
+					if (e.hadRecentInput) continue;
+					w.__cls += e.value;
+					// Attribution: a shift whose moved node is the Filters host, the toolbar or anything in
+					// the results region is this slice's, at any size.
+					const own = (e.sources ?? []).some((x) => {
+						const n = x.node?.nodeType === 3 ? x.node.parentElement : (x.node as Element | null);
+						return !!n?.closest?.('#search-rail, #results');
+					});
+					if (own) (w as unknown as { __mine: number }).__mine += e.value;
+				}
 			}).observe({ type: 'layout-shift', buffered: true });
 		});
 		await go('/search?q=lantern');
 		await expect(count(page)).toHaveText('3 results');
 		await expect(row(page, 1)).toBeVisible();
-		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
-		// Below x-large the Filters host is out of flow in every state: no shift at all. A desktop page
-		// may carry a sub-pixel one (about 1e-4) that has nothing to do with it.
-		expect(cls).toBeLessThan(width < 1024 ? 1e-9 : 1e-3);
+		const { cls, mine } = await page.evaluate(() => ({
+			cls: (window as unknown as { __cls: number }).__cls,
+			mine: (window as unknown as { __mine: number }).__mine
+		}));
+		// A shift of the Filters host, the toolbar or the results region fails at any size. What is
+		// left (CI's fonts leave a sub-pixel 1e-5 here and there, outside those elements) is bounded
+		// far under the page's 0.02 budget.
+		expect(mine).toBe(0);
+		expect(cls).toBeLessThan(0.001);
 	});
 }
 
@@ -182,12 +198,23 @@ for (const width of [768, 390, 320]) {
 		await page.addInitScript(() => {
 			const w = window as unknown as { __cls: number };
 			w.__cls = 0;
+			(w as unknown as { __mine: number }).__mine = 0;
 			new PerformanceObserver((list) => {
 				for (const e of list.getEntries() as unknown as {
 					value: number;
 					hadRecentInput: boolean;
-				}[])
-					if (!e.hadRecentInput) w.__cls += e.value;
+					sources?: { node?: Node | null }[];
+				}[]) {
+					if (e.hadRecentInput) continue;
+					w.__cls += e.value;
+					// Attribution: a shift whose moved node is the Filters host, the toolbar or anything in
+					// the results region is this slice's, at any size.
+					const own = (e.sources ?? []).some((x) => {
+						const n = x.node?.nodeType === 3 ? x.node.parentElement : (x.node as Element | null);
+						return !!n?.closest?.('#search-rail, #results');
+					});
+					if (own) (w as unknown as { __mine: number }).__mine += e.value;
+				}
 			}).observe({ type: 'layout-shift', buffered: true });
 		});
 		// A slow CPU, as on CI: the first frames come apart.
@@ -207,10 +234,15 @@ for (const width of [768, 390, 320]) {
 		await go('/search?q=lantern');
 		await expect(count(page)).toHaveText('3 results', { timeout: 30_000 });
 		await expect(row(page, 1)).toBeVisible({ timeout: 30_000 });
-		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
-		// Below x-large the Filters host is out of flow in every state: no shift at all. A desktop page
-		// may carry a sub-pixel one (about 1e-4) that has nothing to do with it.
-		expect(cls).toBeLessThan(width < 1024 ? 1e-9 : 1e-3);
+		const { cls, mine } = await page.evaluate(() => ({
+			cls: (window as unknown as { __cls: number }).__cls,
+			mine: (window as unknown as { __mine: number }).__mine
+		}));
+		// A shift of the Filters host, the toolbar or the results region fails at any size. What is
+		// left (CI's fonts leave a sub-pixel 1e-5 here and there, outside those elements) is bounded
+		// far under the page's 0.02 budget.
+		expect(mine).toBe(0);
+		expect(cls).toBeLessThan(0.001);
 	});
 }
 
@@ -329,12 +361,23 @@ for (const width of [390, 1440]) {
 		await page.addInitScript(() => {
 			const w = window as unknown as { __cls: number };
 			w.__cls = 0;
+			(w as unknown as { __mine: number }).__mine = 0;
 			new PerformanceObserver((list) => {
 				for (const e of list.getEntries() as unknown as {
 					value: number;
 					hadRecentInput: boolean;
-				}[])
-					if (!e.hadRecentInput) w.__cls += e.value;
+					sources?: { node?: Node | null }[];
+				}[]) {
+					if (e.hadRecentInput) continue;
+					w.__cls += e.value;
+					// Attribution: a shift whose moved node is the Filters host, the toolbar or anything in
+					// the results region is this slice's, at any size.
+					const own = (e.sources ?? []).some((x) => {
+						const n = x.node?.nodeType === 3 ? x.node.parentElement : (x.node as Element | null);
+						return !!n?.closest?.('#search-rail, #results');
+					});
+					if (own) (w as unknown as { __mine: number }).__mine += e.value;
+				}
 			}).observe({ type: 'layout-shift', buffered: true });
 		});
 		await page.goto('/search?q=lantern');
