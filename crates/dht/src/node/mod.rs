@@ -381,6 +381,9 @@ pub struct Stats {
     pub sample_failures: AtomicU64,
     /// Gauge: unexpired sample obligations.
     pub sample_cooling: AtomicU64,
+    /// Gauge: those by why they cool, in [`CoolingReason::ALL`]'s order
+    /// (X-sample-cooling-metric); they sum to `sample_cooling`.
+    pub sample_cooling_reason: [AtomicU64; CoolingReason::ALL.len()],
     /// Gauge: reserved sample requests.
     pub sample_inflight: AtomicU64,
     /// Ignored stale sampler completions.
@@ -521,6 +524,7 @@ impl Stats {
             samples_sent: g(&self.samples_sent),
             sample_failures: g(&self.sample_failures),
             sample_cooling: g(&self.sample_cooling),
+            sample_cooling_reason: std::array::from_fn(|i| g(&self.sample_cooling_reason[i])),
             sample_inflight: g(&self.sample_inflight),
             sample_stale: g(&self.sample_stale),
             peer_admitted: g(&self.peer_admitted),
@@ -736,6 +740,54 @@ impl TargetKind {
     }
 }
 
+/// Why a node is cooling in the sampler's table
+/// (`dht_sample_cooling_reason{reason}`, X-sample-cooling-metric). A fixed
+/// set named from the code, never from network input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CoolingReason {
+    /// An answer's cooldown: the node's interval.
+    Interval,
+    /// A reply without the BEP 51 fields, or a KRPC 204.
+    Unsupported,
+    /// No reply: the full backoff.
+    Timeout,
+    /// An error reply other than 204, or an inconsistent one: the full
+    /// backoff.
+    Error,
+    /// A first failure's short backoff, a timeout or an error
+    /// (`dht.sample_backoff_escalate` on only).
+    FirstFailure,
+    /// A restriction restored by the restart proof.
+    Restored,
+    /// A sample in flight at a clean stop, sealed by the restart proof.
+    Sealed,
+}
+
+impl CoolingReason {
+    pub const ALL: [CoolingReason; 7] = [
+        CoolingReason::Interval,
+        CoolingReason::Unsupported,
+        CoolingReason::Timeout,
+        CoolingReason::Error,
+        CoolingReason::FirstFailure,
+        CoolingReason::Restored,
+        CoolingReason::Sealed,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CoolingReason::Interval => "interval",
+            CoolingReason::Unsupported => "unsupported",
+            CoolingReason::Timeout => "timeout",
+            CoolingReason::Error => "error",
+            CoolingReason::FirstFailure => "first_failure",
+            CoolingReason::Restored => "restored",
+            CoolingReason::Sealed => "sealed",
+        }
+    }
+}
+
 /// Why an admitted request left the queue without starting
 /// (`dht_peer_queued_dropped_total{reason}`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -877,6 +929,8 @@ pub struct StatsSnapshot {
     pub samples_sent: u64,
     pub sample_failures: u64,
     pub sample_cooling: u64,
+    /// By [`CoolingReason::ALL`]'s order.
+    pub sample_cooling_reason: [u64; CoolingReason::ALL.len()],
     pub sample_inflight: u64,
     pub sample_stale: u64,
     pub peer_admitted: u64,

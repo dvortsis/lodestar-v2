@@ -189,12 +189,13 @@ fn a_full_filter_leaves_the_table_full() {
     assert!(s.reserve(wide(1), 1, now));
     // Past the filter's horizon: it can't take it.
     let past = MINUTE * (spill::HORIZON_MIN + 10);
-    s.states.insert(
+    s.put(
         wide(1),
         State::Cooling {
             until: now + past,
             token: 1,
             struck: false,
+            reason: CoolingReason::Interval,
         },
     );
     s.expiry.insert((now + past, 1, wide(1)));
@@ -535,7 +536,11 @@ proptest! {
                 }
                 Op::Fail(i) if !flying.is_empty() => {
                     let (a, t) = flying.remove(usize::from(i) % flying.len());
-                    prop_assert!(s.fail(a, t, MAX_INTERVAL, now));
+                    if i % 2 == 0 {
+                        prop_assert!(s.fail(a, t, MAX_INTERVAL, now));
+                    } else {
+                        prop_assert!(s.fail_reply(a, t, MAX_INTERVAL, now));
+                    }
                     // With escalation on, at least the first failure's
                     // backoff (exactly so in escalate_tests); off, in full.
                     let end = now + if escalate { FIRST_FAILURE_BACKOFF } else { MAX_INTERVAL };
@@ -570,6 +575,7 @@ proptest! {
                 _ => {}
             }
             prop_assert!(s.known() <= cap, "the table holds at most its capacity");
+            prop_assert_eq!(s.cooling_by_reason(), s.recount_cooling());
             prop_assert!(s.spill_counts().1 <= spill::BYTES);
         }
     }

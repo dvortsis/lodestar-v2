@@ -444,7 +444,12 @@ proptest! {
                 Op::Fail(i) if !flying.is_empty() => {
                     let (a, t, reserved) = flying.remove(usize::from(i) % flying.len());
                     let live = streak.remove(&a).is_some_and(|end| reserved < end);
-                    prop_assert!(s.fail(a, t, FULL, now));
+                    // A timeout or an error reply, by the op's index.
+                    if i % 2 == 0 {
+                        prop_assert!(s.fail(a, t, FULL, now));
+                    } else {
+                        prop_assert!(s.fail_reply(a, t, FULL, now));
+                    }
                     let first = escalate && !live;
                     let want = if first { FIRST_FAILURE_BACKOFF } else { FULL };
                     prop_assert_eq!(eligible_at(&s, a, now), now + want);
@@ -469,11 +474,11 @@ proptest! {
             let mut struck = 0;
             for (a, st) in &s.states {
                 match *st {
-                    State::Cooling { until, token: k, struck: false } => {
+                    State::Cooling { until, token: k, struck: false, .. } => {
                         plain += 1;
                         prop_assert!(s.expiry.contains(&(until, k, *a)));
                     }
-                    State::Cooling { until, token: k, struck: true } => {
+                    State::Cooling { until, token: k, struck: true, .. } => {
                         short += 1;
                         prop_assert!(s.short.contains(&(until, k, *a)));
                         prop_assert!(s.struck.contains(&(forget_of(until), k, *a)));
@@ -484,6 +489,10 @@ proptest! {
                     }
                     State::InFlight { .. } => {}
                 }
+            }
+            prop_assert_eq!(s.cooling_by_reason(), s.recount_cooling());
+            if !escalate {
+                prop_assert_eq!(s.cooling_by_reason()[CoolingReason::FirstFailure as usize], 0);
             }
             prop_assert_eq!(s.expiry.len(), plain);
             prop_assert_eq!(s.short.len(), short);
@@ -513,4 +522,102 @@ fn split_on_a_table_of_streaks_still_admits() {
     assert!(!s.saturated());
     sample(&mut s, wide(3), 3, t1);
     assert_eq!(s.struck(), 1);
+}
+
+/// X-sample-cooling-metric: the non-zero reasons, by name.
+fn reasons(s: &Sampler) -> Vec<(&'static str, usize)> {
+    let by = s.cooling_by_reason();
+    assert_eq!(by, s.recount_cooling());
+    CoolingReason::ALL
+        .iter()
+        .zip(by)
+        .filter(|(_, n)| *n > 0)
+        .map(|(r, n)| (r.as_str(), n))
+        .collect()
+}
+
+/// Every way a record starts or stops cooling moves its reason's count,
+/// and only its own.
+#[test]
+fn cooling_reasons_follow_every_transition() {
+    let t0 = Instant::now();
+    let five = Duration::from_secs(300);
+
+    // Switch off: an answer, a no-support reply, a timeout, an error.
+    let mut s = Sampler::default();
+    sample(&mut s, wide(1), 1, t0);
+    s.complete_scaled(wide(1), 1, five, 2, t0);
+    sample(&mut s, wide(2), 2, t0);
+    s.complete_unsupported(wide(2), 2, t0);
+    sample(&mut s, wide(3), 3, t0);
+    s.fail(wide(3), 3, FULL, t0);
+    sample(&mut s, wide(4), 4, t0);
+    s.fail_reply(wide(4), 4, FULL, t0);
+    assert_eq!(
+        reasons(&s),
+        [
+            ("interval", 1),
+            ("unsupported", 1),
+            ("timeout", 1),
+            ("error", 1)
+        ]
+    );
+    assert_eq!(eligible_at(&s, wide(2), t0), t0 + UNSUPPORTED_BACKOFF);
+    // Reserving over an ended cooldown takes it out; pruning ends the rest.
+    sample(&mut s, wide(1), 5, t0 + five * 2);
+    assert_eq!(
+        reasons(&s),
+        [("unsupported", 1), ("timeout", 1), ("error", 1)]
+    );
+    s.complete_scaled(wide(1), 5, five, 1, t0 + five * 2);
+    s.prune(t0 + FULL);
+    assert_eq!(reasons(&s), []);
+
+    // Switch on: a first failure, its end, and a second in a row.
+    let mut s = on();
+    sample(&mut s, wide(1), 1, t0);
+    s.fail(wide(1), 1, FULL, t0);
+    sample(&mut s, wide(2), 2, t0);
+    s.fail_reply(wide(2), 2, FULL, t0);
+    assert_eq!(reasons(&s), [("first_failure", 2)]);
+    let t1 = t0 + FIRST_FAILURE_BACKOFF;
+    s.prune(t1);
+    // A remembered streak isn't cooling.
+    assert_eq!((reasons(&s), s.struck()), (vec![], 2));
+    sample(&mut s, wide(1), 3, t1);
+    s.fail(wide(1), 3, FULL, t1);
+    sample(&mut s, wide(2), 4, t1);
+    s.fail_reply(wide(2), 4, FULL, t1);
+    assert_eq!(reasons(&s), [("timeout", 1), ("error", 1)]);
+
+    // The restart proof: a seal, a restore, and a restore over a cooldown.
+    let mut s = Sampler::default();
+    sample(&mut s, wide(1), 1, t0);
+    s.seal_in_flight(t0 + FULL);
+    assert_eq!(reasons(&s), [("sealed", 1)]);
+    let mut s = Sampler::default();
+    s.restore(wide(1), t0 + FULL);
+    sample(&mut s, wide(2), 2, t0);
+    s.complete(wide(2), 2, five, t0);
+    s.restore(wide(2), t0 + FULL);
+    assert_eq!(reasons(&s), [("restored", 2)]);
+}
+
+/// Split on, a cooldown moved to the spill filter leaves the table, and
+/// its reason's count, as a streak does.
+#[test]
+fn a_spilled_cooldown_leaves_its_reason() {
+    let mut s = Sampler::split_with_capacity(2).with_escalation(true);
+    let t0 = Instant::now();
+    sample(&mut s, wide(1), 1, t0);
+    s.complete(wide(1), 1, Duration::from_secs(3600), t0);
+    sample(&mut s, wide(2), 2, t0);
+    s.fail(wide(2), 2, FULL, t0);
+    assert_eq!(reasons(&s), [("interval", 1), ("first_failure", 1)]);
+    sample(&mut s, wide(3), 3, t0);
+    assert_eq!(reasons(&s), [("first_failure", 1)]);
+    s.complete(wide(3), 3, FULL, t0);
+    sample(&mut s, wide(4), 4, t0);
+    assert_eq!(reasons(&s), [("interval", 1)]);
+    assert!(s.spill_used() >= 2);
 }

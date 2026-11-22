@@ -1866,16 +1866,20 @@ impl Actor {
                     }
                     // WK-10e: a node's interval is waited this install's
                     // share times over; a failure or no support isn't.
-                    let (wait, scale) = if supported {
+                    let completed = if supported {
                         let secs = r.interval.unwrap_or(SAMPLE_INTERVAL);
-                        (
+                        self.sampler.complete_scaled(
+                            from,
+                            tid,
                             Duration::from_secs(u64::from(secs)),
                             self.cfg.sample_interval_scale,
+                            now_i,
                         )
                     } else {
-                        (sampler::UNSUPPORTED_BACKOFF, 1)
+                        // UNSUPPORTED_BACKOFF, unscaled.
+                        self.sampler.complete_unsupported(from, tid, now_i)
                     };
-                    if !self.sampler.complete_scaled(from, tid, wait, scale, now_i) {
+                    if !completed {
                         Stats::inc(&self.stats.sample_stale);
                     }
                 }
@@ -1889,11 +1893,10 @@ impl Actor {
                     let unknown = matches!(&msg.body,
                         Body::Error(e) if e.code == error_code::METHOD_UNKNOWN);
                     if unknown {
-                        self.sampler
-                            .complete(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
+                        self.sampler.complete_unsupported(from, tid, now_i);
                     } else {
                         self.sampler
-                            .fail(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
+                            .fail_reply(from, tid, sampler::UNSUPPORTED_BACKOFF, now_i);
                     }
                 }
             }
@@ -2993,6 +2996,14 @@ impl Actor {
         self.stats
             .sample_cooling
             .store(self.sampler.cooling() as u64, Ordering::Relaxed);
+        for (gauge, n) in self
+            .stats
+            .sample_cooling_reason
+            .iter()
+            .zip(self.sampler.cooling_by_reason())
+        {
+            gauge.store(n as u64, Ordering::Relaxed);
+        }
         let sampling = self.cfg.harvest.sample && !self.paused && self.proof.may_sample(now_i);
         self.stats.sample_full_seconds.store(
             self.sampler.full_time(now_i, sampling).as_secs(),
@@ -4344,6 +4355,22 @@ mod tests {
         }
         // A 204 completes in full; every other failure starts a streak.
         let failure_streaks = |f: Failure| !matches!(f, Failure::Error(error_code::METHOD_UNKNOWN));
+        // X-sample-cooling-metric: the reason a cooldown of `wait` counts
+        // under.
+        let reason = |f: Failure, wait: Duration| {
+            use super::super::CoolingReason as R;
+            match f {
+                Failure::Error(error_code::METHOD_UNKNOWN) => R::Unsupported,
+                _ if wait == sampler::FIRST_FAILURE_BACKOFF => R::FirstFailure,
+                Failure::Timeout => R::Timeout,
+                Failure::Error(_) | Failure::Inconsistent => R::Error,
+            }
+        };
+        let counted = |a: &Actor, want: super::super::CoolingReason| {
+            let by = a.sampler.cooling_by_reason();
+            assert_eq!(by[want as usize], 1, "{want:?} in {by:?}");
+            assert_eq!(by.iter().sum::<usize>(), 1, "{by:?}");
+        };
         let short = sampler::FIRST_FAILURE_BACKOFF;
         let full = sampler::MAX_INTERVAL;
         for (escalate, failure, first, second) in [
@@ -4429,6 +4456,7 @@ mod tests {
                 until
             };
             let until = round(&mut a, first);
+            counted(&a, reason(failure, first));
             // The cooldown ends (on the paused clock); the next sample
             // fails the same way.
             tokio::time::advance(until - Instant::now()).await;
@@ -4440,6 +4468,7 @@ mod tests {
                 "{failure:?}: a streak kept"
             );
             round(&mut a, second);
+            counted(&a, reason(failure, second));
             assert_eq!(a.stats.snapshot().sample_failures, 2);
         }
     }
