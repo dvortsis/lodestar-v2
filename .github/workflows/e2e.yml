@@ -4,6 +4,8 @@ name: E2E
 # motion and keyboard-only projects (axe everywhere; baselines for key screens), then Lighthouse CI.
 # Nightly / manual: the `all-themes` project (axe on every route + key-screen baselines, 48 themes)
 # and the `pseudo` project (pseudo-locale build: overflow, clipping, hard-coded English).
+# Marker: on a same-repo PR carrying web/e2e/.update-snapshots, the fixture jobs also run, to
+# regenerate the real-server baselines (web/e2e/README.md "Updating snapshots").
 #
 # Everything runs in the Playwright image pinned below (match @playwright/test in web/package.json),
 # so text rendering is reproducible and the baselines are generated here, never on a laptop.
@@ -558,7 +560,7 @@ jobs:
   fixture:
     name: playwright (fixture)
     needs: [changes, fixture-build]
-    # Not bound to `changes`: the nightly run must not depend on its change detection.
+    # The `if` does not check `changes.result`: the nightly run must not depend on its change detection.
     if: ${{ !cancelled() && needs.fixture-build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
