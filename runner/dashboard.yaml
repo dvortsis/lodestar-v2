@@ -367,6 +367,10 @@ placement:
   - X-ui-checks-2
   - X-ui-checks-3
   - X-ui-checks-4
+  - X-search-chunk-retry
+  - X-group-chip-label
+  - X-checksum-wrap
+  - X-fixture-updates-on
   - X-offline-retry
   - X-offline-retry-nits
   - W*
@@ -912,6 +916,7 @@ held:
 - X-rejudge-pending-gate  # held (owner-decisions §2.71)
 - PK-nightly-host  # approved (§2.69 item 10) but launches only once the nightly key exists and the Nightly channel is offered (§2.52)
 expanded:
+- X-ui-checks
 - E-v06-sources
 - E-M6
 - E-v06-workers
@@ -1678,7 +1683,12 @@ roadmap:
     - X-alert-noun-text
     - X-client-handoff
     - X-help
-    - X-ui-checks
+    - X-ui-checks-1
+    - X-ui-checks-2
+    - X-ui-checks-3
+    - X-ui-checks-4
+    - X-search-chunk-retry
+    - X-group-chip-label
   - id: trackq
     label: 'Track Q: code-review fixes'
     plain: 'The 2026-11-12 code review: worker lease reconciliation, the watch folder, uTP timeouts, specs that never run, an advisory check in CI and tests that sleep. The held security and content-safety fixes join by id only; their blocking and important findings must be closed for the 1.0 security gate.'
