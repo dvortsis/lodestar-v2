@@ -10,13 +10,13 @@ const UNITS: { unit: Intl.RelativeTimeFormatUnit; seconds: number }[] = [
 	{ unit: 'second', seconds: 1 }
 ];
 
-// Fallback for the `just_now` message until W4 supplies it; callers pass the translated string.
-const JUST_NOW: Record<string, string> = { en: 'just now', zh: '刚刚' };
-
 export interface RelativeOptions {
 	/** Current time in Unix seconds. Defaults to the clock; pass it to re-render once a minute. */
 	now?: number;
-	/** The translated `just_now` message, shown when |Δ| < 45 s. */
+	/**
+	 * The catalogue's `common_just_now`, shown when |Δ| < 45 s. Without it, Intl's own word for
+	 * the moment ("now", "现在"): localized in every locale, with no English kept here.
+	 */
 	justNow?: string;
 }
 
@@ -35,7 +35,7 @@ export function formatRelative(
 	if (!isNum(now)) return DASH;
 	const delta = seconds - now;
 	if (Math.abs(delta) < 45) {
-		return opts.justNow ?? JUST_NOW[locale] ?? JUST_NOW[locale.split('-')[0] ?? ''] ?? 'just now';
+		return opts.justNow ?? relativeFormat(locale).format(0, 'second');
 	}
 	const step = UNITS.find((u) => Math.abs(delta) >= u.seconds) ?? UNITS[UNITS.length - 1];
 	return relativeFormat(locale).format(Math.trunc(delta / step!.seconds), step!.unit);

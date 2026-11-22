@@ -6,4 +6,4 @@ Pure formatters, one module per metric, from `docs/metrics.md` §3 (sizes, count
 - Value states (§1): `null`/`undefined`/non-finite → `—`; `0` → `0`; `{ value, approx: true }` → `≈ value` (also for sampled values; the panel shows the `sampled_note` message once).
 - `Intl` instances are cached per locale and options in `shared.ts`.
 - `formatBytesParts`, `formatLatencyParts` and `formatSpanParts` return `{ value, unit }` for axis labels; `sizeBinEdges` / `sizeBinLabel` label the log-2 size histogram (§5a).
-- Messages stay outside: `formatRate` wraps `{n}/h` itself and `formatRelative` takes the translated `just_now` string in `opts.justNow` until W4 lands.
+- Messages stay outside: `formatRate` wraps `{n}/h` itself and `formatRelative` takes the moment's word in `opts.justNow`. The UI (`RelativeTime`) passes the catalogue's `common_just_now`; a direct caller that passes none gets Intl's own word ("now", "现在"), never built-in English.
