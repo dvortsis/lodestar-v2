@@ -8699,6 +8699,13 @@ export interface components {
             /** Format: int64 */
             piece_len: number;
             /**
+             * @description The release resolution the name gives, as `res:` takes it
+             *     (`480p` to `4320p`, `1080i`; `4k` reads as `2160p`); null = none
+             *     in the name, or not classified.
+             * @example 1080p
+             */
+            resolution: string | null;
+            /**
              * @description How the title was found when the name wasn't informative:
              *     `files`, `folder` or `structure`; null = from the name itself, or
              *     not classified.

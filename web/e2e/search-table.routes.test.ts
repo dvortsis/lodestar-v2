@@ -69,7 +69,50 @@ test('the column chooser hides, moves and remembers columns in this browser', as
 	const order = await page
 		.locator('thead th')
 		.evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.testid));
-	expect(order.indexOf('table-th-size')).toBeLessThan(order.indexOf('table-th-type'));
+	expect(order.indexOf('table-th-res')).toBeLessThan(order.indexOf('table-th-type'));
+});
+
+test('the Resolution column shows the release resolution, or — when the name has none', async ({
+	page,
+	go,
+	mock
+}) => {
+	const [a, b] = hits(2);
+	server(mock, () =>
+		body(
+			[
+				{ ...a!, resolution: '2160p' },
+				{ ...b!, resolution: null }
+			],
+			{ total: 2 }
+		)
+	);
+	await go('/search?q=lantern&view=table');
+	const table = page.getByRole('table', { name: 'Matching torrents' });
+	await expect(table.getByRole('columnheader', { name: 'Resolution' })).toBeVisible();
+	await expect(page.getByTestId('table-res-1')).toHaveText('2160p');
+	await expect(page.getByTestId('table-res-2')).toHaveText('—');
+	// Not a server sort: a plain header.
+	await expect(page.getByTestId('table-th-res').getByRole('button')).toHaveCount(0);
+});
+
+test('a column choice saved before Resolution keeps its columns, with Resolution hidden', async ({
+	page,
+	go
+}) => {
+	await page.addInitScript(() =>
+		localStorage.setItem(
+			'lodestar.search.columns',
+			JSON.stringify({ order: ['name', 'raw', 'type', 'size', 'files'], hidden: [] })
+		)
+	);
+	await go('/search?q=lantern&view=table');
+	await expect(page.getByTestId('table-th-type')).toBeVisible();
+	await expect(page.getByTestId('table-th-raw')).toBeVisible();
+	await expect(page.getByTestId('table-th-res')).toHaveCount(0);
+	await page.getByTestId('table-columns').click();
+	await page.getByTestId('table-chooser').getByTestId('table-col-res').check();
+	await expect(page.getByTestId('table-th-res')).toBeVisible();
 });
 
 test('corrupt saved columns fall back to the defaults', async ({ page, go }) => {

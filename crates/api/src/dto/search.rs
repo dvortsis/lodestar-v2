@@ -519,6 +519,11 @@ pub struct SearchHit {
     pub metadata_at: i64,
     pub name: String,
     pub piece_len: u64,
+    /// The release resolution the name gives, as `res:` takes it
+    /// (`480p` to `4320p`, `1080i`; `4k` reads as `2160p`); null = none
+    /// in the name, or not classified.
+    #[schema(required = true, example = "1080p")]
+    pub resolution: Option<String>,
     /// How the title was found when the name wasn't informative:
     /// `files`, `folder` or `structure`; null = from the name itself, or
     /// not classified.

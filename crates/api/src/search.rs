@@ -1399,6 +1399,8 @@ pub(crate) fn enrich(hit: &mut SearchHit, e: Option<Enriched>) {
     };
     if let Ok(r) = Record::decode(&e.data) {
         hit.title = r.release("title").map(str::to_string);
+        // The stored form is the one the `res:` tag indexes.
+        hit.resolution = r.release("res").map(str::to_string);
         hit.resolved_via = r.resolved.map(|v| v.as_str().to_string());
         hit.content_type = Some(r.content_type.as_str().to_string());
         hit.adult_kind = r.adult_kind.map(|k| k.as_str().to_string());
@@ -1904,5 +1906,92 @@ mod tests {
             (Some(2_104.5), 24.0)
         );
         assert!(!got.cold_start && got.growing);
+    }
+
+    fn bare_hit(name: &str) -> SearchHit {
+        let row = lodestar_store::TorrentRow {
+            id: 1,
+            info_hash: lodestar_metainfo::InfoHash([0xab; 20]),
+            info_hash_v2: None,
+            name: name.to_string(),
+            name_raw: None,
+            size: 1 << 30,
+            piece_len: 1 << 20,
+            piece_count: 1 << 10,
+            file_count: 1,
+            info_size: 100,
+            flags: 0,
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_000,
+            last_seen_at: 1_700_000_000,
+            sources: 0,
+            first_source: None,
+        };
+        torrents::hit(&row, 0.0, None, swarm::Summary::default())
+    }
+
+    fn classified(name: &str) -> (Record, Enriched) {
+        let c = lodestar_classify::classify(name, &[]);
+        let record = Record::new(&c);
+        let e = Enriched {
+            version: lodestar_classify::ENRICHMENT_VERSION,
+            content_type: c.content_type.code(),
+            junk_score: c.junk.score,
+            comp: c.composition.encode(),
+            data: record.encode(),
+        };
+        (record, e)
+    }
+
+    #[test]
+    fn a_hits_resolution_is_the_value_res_filters_on() {
+        for (name, alias, want) in [
+            ("Some.Movie.2020.2160p.WEB-DL.x265-GRP", "2160p", "2160p"),
+            ("Some.Movie.2020.4K.WEB-DL.x265-GRP", "4k", "2160p"),
+            ("Some.Show.S01E02.1080p.WEB.h264-GRP", "1080", "1080p"),
+            ("Some.Show.S01E02.1080i.HDTV-GRP", "1080i", "1080i"),
+            ("Some.Show.S01E02.720p.HDTV.x264-GRP", "720P", "720p"),
+        ] {
+            let (record, e) = classified(name);
+            let mut hit = bare_hit(name);
+            enrich(&mut hit, Some(e));
+            let got = hit.resolution.as_deref();
+            assert_eq!(got, Some(want), "{name}");
+            // The index holds it as this `res:` tag...
+            let doc = lodestar_search::DocEnrichment::new(&record, None);
+            assert!(doc.tags.contains(&format!("res:{want}")), "{name}");
+            // ...and `res:<value>` reads exactly as the alias a user types.
+            assert_eq!(
+                lodestar_search::parse(&format!("res:{want}")).unwrap(),
+                lodestar_search::parse(&format!("res:{alias}")).unwrap(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hit_without_a_resolution_has_null() {
+        // A name without one, no stored enrichment, and a record this
+        // build can't read all leave it null, and it's always sent.
+        let (_, e) = classified("Some.Album.2019.FLAC-GRP");
+        let mut hit = bare_hit("Some.Album.2019.FLAC-GRP");
+        enrich(&mut hit, Some(e.clone()));
+        assert_eq!(hit.resolution, None);
+        let json = serde_json::to_value(&hit).unwrap();
+        assert_eq!(json.get("resolution"), Some(&serde_json::Value::Null));
+
+        let mut hit = bare_hit("x");
+        enrich(&mut hit, None);
+        assert_eq!(hit.resolution, None);
+
+        let mut hit = bare_hit("x");
+        enrich(
+            &mut hit,
+            Some(Enriched {
+                data: b"not a record".to_vec(),
+                ..e
+            }),
+        );
+        assert_eq!(hit.resolution, None);
     }
 }
