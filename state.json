@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T14:08Z",
+    "updated": "2026-11-22T14:25Z",
     "items": [
       {
         "slot": 1,
@@ -10666,18 +10666,18 @@
       },
       {
         "slot": 2,
-        "slice": "X-workflow-tests-filter",
-        "role": "slice",
-        "agent": "session_01MMjhnAtTMJUdkNfg1nuMEj",
-        "model": "sonnet",
-        "since": "2026-11-22T10:27:00Z",
-        "doing": "#1062 rv1062 APPROVE; fixes local, pushes after #1064 (url RustSec fix) lands"
+        "status": "idle",
+        "doing": "#1062 merged; next from the heartbeat queue check",
+        "since": "2026-11-22T14:25Z"
       },
       {
         "slot": 3,
-        "status": "idle",
-        "doing": "#1069 merged; waits for #1062, then X-fuzz-advisories",
-        "since": "2026-11-22T14:08Z"
+        "slice": "X-fuzz-advisories",
+        "role": "slice",
+        "agent": "session_01MMjhnAzobbWgqB4Jv9cKbA",
+        "model": "sonnet",
+        "since": "2026-11-22T14:25Z",
+        "doing": "step 0: advisory fix and fuzz deny config"
       },
       {
         "slot": 4,
