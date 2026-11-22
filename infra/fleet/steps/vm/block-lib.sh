@@ -312,8 +312,27 @@ wait_api() {  # at least one try, then up to API_WAIT seconds (tests shorten it)
     sleep 3
   done
 }
-# Lodestar's arm for segment $1 of the ABBA block: control, treatment, treatment, control.
-arm_of() { case $1 in 2 | 3) echo treatment ;; *) echo control ;; esac; }
+# Lodestar's arm for segment $1. An ABBA block (MODE abba, the default): control,
+# treatment, treatment, control. An on-only block (MODE on, X-block-on-only-mode):
+# the treatment in every segment. Only MODE as args or block.env give it counts
+# (start-block and load_block_env unset the environment's).
+arm_of() {
+  [[ ${MODE:-abba} == on ]] && { echo treatment; return; }
+  case $1 in 2 | 3) echo treatment ;; *) echo control ;; esac
+}
+# mode_check MODE PURPOSE WINNERS: 0 for a valid combination, or 1 with the
+# reason on stdout. On-only (MODE on) has no control arm, so it's only for a
+# screen that declares it needs none (PURPOSE screen), and never for a stacked
+# stage (WINNERS), whose control is the winners (r5.1 A2): mode_needs_control.
+# PURPOSE goes only with on-only: purpose_needs_on_mode. Empty MODE is abba.
+mode_check() {
+  local mode=${1:-abba} purpose=$2 winners=$3
+  case $mode in
+    abba) [[ -z $purpose ]] || { echo purpose_needs_on_mode; return 1; } ;;
+    on) [[ $purpose == screen && -z $winners ]] || { echo mode_needs_control; return 1; } ;;
+    *) echo unknown_mode; return 1 ;;
+  esac
+}
 # Every crawler switch, as the collector's SWITCH_ENV names them; compose.yaml
 # passes each through by bare name (infra/fleet/tests checks the three agree).
 CRAWLER_SWITCHES=(
@@ -381,7 +400,7 @@ stacking() {
 }
 # arm_env segment: the crawler switches start_lodestar sets for segment's arm,
 # one NAME=value per line. The winners are on in both arms; the treatment's are
-# on in B (segments 2 and 3) and off in A (1 and 4).
+# on in B (segments 2 and 3, or every segment on-only) and off in A (1 and 4).
 arm_env() {
   local value=false v
   [[ $(arm_of "$1") == treatment ]] && value=true
@@ -549,7 +568,7 @@ collector_ok() {
 load_block_env() {
   local f=$BLOCK/block.env k v
   [[ -f $f ]] || return 1
-  unset IMAGE_DIGEST LOCAL_IMAGE_ID WINNERS  # only the file's pin and winners count, never the environment's
+  unset IMAGE_DIGEST LOCAL_IMAGE_ID WINNERS MODE PURPOSE  # only the file's pin, winners and mode count, never the environment's
   while IFS='=' read -r k v; do
     case $k in
       IMAGE_DIGEST | LOCAL_IMAGE_ID) [[ $v =~ ^[0-9a-f]{64}$ ]] || return 1 ;;
@@ -558,6 +577,8 @@ load_block_env() {
       WINNERS) [[ $v =~ ^(($TREATMENT_KEYS)(-($TREATMENT_KEYS))*)?$ ]] || return 1 ;;  # empty: none
       SEGMENT_HOURS) [[ $v =~ ^[23]$ ]] || return 1 ;;
       ROLE) [[ $v =~ ^(main|worker)$ ]] || return 1 ;;
+      MODE) [[ $v == on ]] || return 1 ;;  # written only for on-only; abba is its absence
+      PURPOSE) [[ $v == screen ]] || return 1 ;;
       *) return 1 ;;
     esac
     printf -v "$k" '%s' "$v"
@@ -566,7 +587,7 @@ load_block_env() {
   [[ -z ${IMAGE_DIGEST:-} && -n ${LOCAL_IMAGE_ID:-} || -n ${IMAGE_DIGEST:-} && -z ${LOCAL_IMAGE_ID:-} ]] || return 1
   [[ -n ${LODESTAR_COMMIT:-} && -n ${SPEC_COMMIT:-} && -n ${TREATMENT:-} \
     && -n ${SEGMENT_HOURS:-} && -n ${ROLE:-} ]] || return 1
-  stacking "$TREATMENT" "${WINNERS:-}" >/dev/null
+  stacking "$TREATMENT" "${WINNERS:-}" >/dev/null && mode_check "${MODE:-}" "${PURPOSE:-}" "${WINNERS:-}" >/dev/null
 }
 watcher_active() { systemctl is-active --quiet "$WATCHER_UNIT" 2>/dev/null; }
 # The boot guard: a oneshot that Docker requires (a drop-in), run before the

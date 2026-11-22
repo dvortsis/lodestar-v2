@@ -4,7 +4,7 @@ cloud screen's rule 2: the rules are committed before the screen starts).
 `run start-block <vm> <rules-commit>` reads RULES_PATH at that commit, never
 from this checkout or a comment. The rules commit is an ancestor of main
 (checked by act), so a change to the rules is a reviewed PR. The file is
-JSON with exactly these keys:
+JSON with exactly these keys (the optional ones as noted):
 
     {
       "version": 1,
@@ -14,9 +14,20 @@ JSON with exactly these keys:
       "spec_commit": "<40 hex>",                 # the collector's --spec-commit (CR-SPEC in force)
       "treatment": "adm",                        # adm | utp | route | lc | hint | split
       "winners": [],                             # optional, non-empty for lc/hint/split only: earlier winners
+      "mode": "abba",                            # optional: abba (the default) | on, with purpose
+      "purpose": "screen",                       # optional, with "mode": "on" only
       "segment_hours": 2,                        # 2 or 3 (screen rule 3)
       "notice_version": 4                        # the Legal Notice version start-block accepts (4 on main, 2026-11-11)
     }
+
+`mode` and `purpose` (X-block-on-only-mode) are optional too. `"mode": "abba"`
+(the default, and what an absent mode means) is the A/B block: control,
+treatment, treatment, control. `"mode": "on"` runs the treatment in every
+segment, so there's no control and no A/B verdict: it's accepted only with
+`"purpose": "screen"` (a screen that declares it needs no control, such as a
+fresh-database screen) and never with `winners` (a stacked stage's control is
+the winners). `purpose` goes only with `"mode": "on"`. Any other combination
+refuses; start-block refuses it again (block-lib.sh mode_check).
 
 `winners` (X-fleet-stacked-arms) lists treatment keys, each at most once and
 none the treatment: a stacked stage (lc, hint or split) tests its treatment on
@@ -46,7 +57,8 @@ HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 SCREEN = re.compile(r"[a-z0-9-]{1,40}\Z")
 KEYS = {"version", "screen", "lodestar_image", "lodestar_commit", "spec_commit", "treatment", "segment_hours",
         "notice_version"}
-OPTIONAL = {"winners"}
+OPTIONAL = {"winners", "mode", "purpose"}
+MODES = ("abba", "on")
 # The treatment keys (block-lib.sh's TREATMENT_KEYS; the collector's TREATMENT_SWITCHES).
 TREATMENTS = ("adm", "utp", "route", "lc", "hint", "split")
 # The stacked ones (the collector's STACKED): only they take winners (r5.1 A2).
@@ -80,10 +92,20 @@ def parse(text: bytes) -> dict:
           and len(set(winners)) == len(winners) and doc["treatment"] not in winners
           and (not winners or doc["treatment"] in STACKED)
           and _int(doc["segment_hours"]) and doc["segment_hours"] in (2, 3)
-          and _int(doc["notice_version"]) and 1 <= doc["notice_version"] <= 999999)
+          and _int(doc["notice_version"]) and 1 <= doc["notice_version"] <= 999999
+          and _mode_ok(doc.get("mode", "abba"), doc.get("purpose"), "purpose" in doc, winners))
     if not ok:
         raise bad
-    return dict(doc, winners=list(winners), image_digest=image.group(1))
+    return dict(doc, winners=list(winners), mode=doc.get("mode", "abba"), image_digest=image.group(1))
+
+
+def _mode_ok(mode, purpose, has_purpose, winners) -> bool:
+    """On-only has no control arm: only for a screen that needs none, never a stacked stage."""
+    if not isinstance(mode, str) or mode not in MODES:
+        return False
+    if mode == "on":
+        return purpose == "screen" and isinstance(purpose, str) and not winners
+    return not has_purpose  # a purpose, even null, goes only with on-only
 
 
 def read(commit: str, repo: str, run=subprocess.run) -> tuple[dict, dict[str, bytes]]:
@@ -101,9 +123,11 @@ def read(commit: str, repo: str, run=subprocess.run) -> tuple[dict, dict[str, by
 def args(rules: dict, rules_commit: str, vm: str, block_id: str) -> dict[str, str]:
     """start-block's arguments (remote.payload checks their shape again). The
     winners are joined by '-', which the arguments' shape allows; none, no
-    WINNERS argument."""
+    WINNERS argument. MODE and PURPOSE only for on-only, so an abba block's
+    arguments are as before."""
     winners = {"WINNERS": "-".join(rules["winners"])} if rules.get("winners") else {}
-    return {**winners, "IMAGE_DIGEST": rules["image_digest"], "LODESTAR_COMMIT": rules["lodestar_commit"],
+    on = {"MODE": "on", "PURPOSE": "screen"} if rules.get("mode") == "on" else {}
+    return {**winners, **on, "IMAGE_DIGEST": rules["image_digest"], "LODESTAR_COMMIT": rules["lodestar_commit"],
             "SPEC_COMMIT": rules["spec_commit"], "RULES_COMMIT": rules_commit, "TREATMENT": rules["treatment"],
             "SEGMENT_HOURS": str(rules["segment_hours"]), "ROLE": vm, "NOTICE_VERSION": str(rules["notice_version"]),
             "BLOCK_ID": block_id}
