@@ -8,20 +8,24 @@ import { checkFirstLoad, modulesIn, preloadedJs } from './scripts/first-load.mjs
 import { requireMeasuredJs, routeFiles } from './scripts/size-entries.mjs';
 
 // The limits are gated on the measurement build `npm run size:ci` makes (its rebuild sets a fixed
-// version name, with stable chunk names, vite.config.ts). A plain `npm run build` differs by a few bytes, so refuse
-// to measure it rather than print numbers CI won't see. The check never rebuilds: a size check
-// must not replace the `build/` the caller has.
+// version name, with stable chunk names, vite.config.ts). A plain `npm run build` differs by a few
+// bytes, so refuse to measure it rather than print numbers CI won't see. The check never rebuilds:
+// a size check must not replace the `build/` the caller has. It looks only at the version, so a
+// hand-run `LODESTAR_BUILD_VERSION=0000000 vite build` without `LODESTAR_STABLE_NAMES=1` would
+// pass it: a guard, not proof.
 const MEASURED_VERSION = '0000000'; // LODESTAR_BUILD_VERSION in scripts/size-ci.mjs
-const builtVersion = (() => {
+const VERSION_FILE = 'build/_app/version.json';
+const found = (() => {
+	if (!existsSync(VERSION_FILE)) return 'none, no build';
 	try {
-		return JSON.parse(readFileSync('build/_app/version.json', 'utf8')).version;
+		return String(JSON.parse(readFileSync(VERSION_FILE, 'utf8')).version);
 	} catch {
-		return undefined;
+		return 'unreadable';
 	}
 })();
-if (builtVersion !== MEASURED_VERSION) {
+if (found !== MEASURED_VERSION) {
 	throw new Error(
-		`size-limit only measures the build CI gates on (found version ${builtVersion ?? 'none, no build'}): run \`npm run size:ci\` (a plain build differs by a few bytes).`
+		`size-limit only measures the build CI gates on (found version ${found}): run \`npm run size:ci\` (a plain build differs by a few bytes).`
 	);
 }
 
@@ -38,7 +42,7 @@ const monoFonts = [font('atkinson-hyperlegible-mono-latin')];
 // §10.17 brand gate: no brand raster (/brand/**/*.{avif,webp,png}) may be in the first-load set.
 // Scenes load lazily with the states that use them; a raster referenced from the html, the search
 // route's JS or its CSS would be fetched (or preloaded) on first paint. Throwing here fails
-// `npx size-limit` before any size is measured.
+// `npm run size:ci` before any size is measured.
 const BRAND_RASTER = /\/brand\/(?!favicons\/)[^"'`\s)]*\.(?:avif|webp|png)/g;
 const firstLoad = ['build/index.html', ...search.js, ...search.css].filter((f) => existsSync(f));
 const leaks = firstLoad.flatMap((file) =>
