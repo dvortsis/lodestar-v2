@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T12:38:49Z",
+    "updated": "2026-11-22T12:45:00Z",
     "items": [
       {
         "slot": 1,
@@ -10675,12 +10675,13 @@
       },
       {
         "slot": 3,
-        "slice": "X-openapi-400s-tidy",
+        "slice": null,
         "role": "slice",
-        "agent": "session_01MMjhn9GaKErH14DpxeLZZo",
+        "agent": null,
         "model": "sonnet",
-        "since": "2026-11-22T10:45:00Z",
-        "doing": "#1063 rv1063 APPROVE + fixes f93da609; CI running, then merge"
+        "since": "2026-11-22T12:45:00Z",
+        "doing": "#1063 merged d423d00b; waits for r12 placements",
+        "status": "idle"
       },
       {
         "slot": 4,
