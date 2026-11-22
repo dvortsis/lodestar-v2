@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T10:27:00Z",
+    "updated": "2026-11-22T10:50:00Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhnBpFNkqSRJbKoL98DZ",
         "model": "opus",
         "since": "2026-11-22T09:52:00Z",
-        "doing": "#1061 ready 12ce586a; fresh review"
+        "doing": "#1061 rv1061 APPROVE 12ce586a; CI running, then merge"
       },
       {
         "slot": 2,
@@ -10671,16 +10671,16 @@
         "agent": "session_01MMjhnAtTMJUdkNfg1nuMEj",
         "model": "sonnet",
         "since": "2026-11-22T10:27:00Z",
-        "doing": "#1058 merged fabc3ff0; same session, step 0 (brief ee13cbf7)"
+        "doing": "step 0 go (Option A: ci.yml changes-job step, lint duplicate removed); building"
       },
       {
         "slot": 3,
-        "slice": "X-block-on-only-mode",
+        "slice": "X-openapi-400s-tidy",
         "role": "slice",
-        "agent": "session_01MMjhn9FudTFDiafHhoEKK1",
-        "model": "opus",
-        "since": "2026-11-22T09:21:00Z",
-        "doing": "#1060 ready e043954e; fresh review"
+        "agent": "pending",
+        "model": "sonnet",
+        "since": "2026-11-22T10:50:00Z",
+        "doing": "#1060 merged e3b3c7ba; launching (brief briefs/X-openapi-400s-tidy.md)"
       },
       {
         "slot": 4,
