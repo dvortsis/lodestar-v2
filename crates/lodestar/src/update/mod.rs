@@ -106,7 +106,9 @@ pub struct Started {
 }
 
 /// Starts the engine, except for a fixture (served offline: nothing is
-/// checked). On Windows it's the [`windows::check`] notifier, which
+/// checked). A fixture of the `updates-on` variant answers from a fixed
+/// sample instead, which builds no client and holds no key
+/// ([`crate::fixture::updates`]). On Windows it's the [`windows::check`] notifier, which
 /// installs nothing yet. `busy` names what keeps an install waiting (a
 /// rebuild under way).
 pub fn start(
@@ -126,6 +128,19 @@ pub fn start(
         task: None,
     };
     if crate::fixture::active() {
+        if let Some(anchor) = crate::fixture::updates_on() {
+            let sample = std::sync::Arc::new(crate::fixture::updates::Sample::new(
+                version.clone(),
+                anchor,
+                settings.subscribe(),
+            ));
+            let row = sample.clone();
+            return Started {
+                api: sample,
+                row: Some(std::sync::Arc::new(move || row.summary())),
+                task: None,
+            };
+        }
         return unavailable(lodestar_api::updates::UpdatesUnavailable::Fixture);
     }
     #[cfg(windows)]
