@@ -45,7 +45,11 @@ pub struct Server {
     child: Child,
     pub port: u16,
     ports: std::sync::mpsc::Receiver<u16>,
-    log: std::thread::JoinHandle<String>,
+    /// Taken by [`stop`](Server::stop), which is why this is an `Option`:
+    /// a type with a `Drop` can't be moved out of.
+    log: Option<std::thread::JoinHandle<String>>,
+    /// Set once the child has been waited for, so `Drop` doesn't kill again.
+    reaped: bool,
 }
 
 pub fn spawn(args: &[&str], env: &[(&str, &str)]) -> Server {
@@ -85,7 +89,8 @@ pub fn spawn(args: &[&str], env: &[(&str, &str)]) -> Server {
         child,
         port: 0,
         ports,
-        log,
+        log: Some(log),
+        reaped: false,
     }
 }
 
@@ -126,6 +131,12 @@ impl Server {
             .to_string()
     }
 
+    /// The child's process id.
+    #[allow(dead_code)] // only `fixture_server_drop.rs` reads it
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     /// SIGTERM; returns the log after a clean exit.
     pub fn stop(mut self) -> String {
         let killed = Command::new("kill")
@@ -134,8 +145,21 @@ impl Server {
             .unwrap();
         assert!(killed.success());
         let exit = self.child.wait().unwrap();
-        let log = self.log.join().unwrap();
+        self.reaped = true;
+        let log = self.log.take().unwrap().join().unwrap();
         assert!(exit.success(), "exit {exit:?}: {log}");
         log
+    }
+}
+
+/// A test that panics between `spawn` and `stop` must not leave its child
+/// running. A hard kill is enough here; only `stop` needs a clean exit.
+/// This never panics, including while a panic is already unwinding.
+impl Drop for Server {
+    fn drop(&mut self) {
+        if !self.reaped {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
