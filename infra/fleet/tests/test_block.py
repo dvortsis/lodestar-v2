@@ -2336,3 +2336,188 @@ class StackedArms(Base):
         self.assertEqual(rc, 0, raw)
         self.assertNotIn("LODESTAR_DHT_UTP", (self.stub / "arm.env").read_text())
 
+
+
+ON_ONLY = {"MODE": "on", "PURPOSE": "screen"}
+
+
+def analyzer():
+    """docs/soak/tools/analyze_cr.py, the analyzer a rules commit stages (standard library only)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("analyze_cr_on_only", ROOT / "docs/soak/tools/analyze_cr.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class OnOnlyMode(Base):
+    """X-block-on-only-mode: MODE=on runs the treatment in every segment, for a screen
+    that needs no control (PURPOSE=screen); abba stays the default and is unchanged."""
+
+    def arm(self):
+        return dict(ln.split("=", 1) for ln in (self.stub / "arm.env").read_text().splitlines())
+
+    def test_rules_take_an_on_only_mode_for_a_screen_alone(self):
+        on = rules.parse(json.dumps({**RULES, "mode": "on", "purpose": "screen"}).encode())
+        a = rules.args(on, RC, "main", "42-1")
+        self.assertEqual((a["MODE"], a["PURPOSE"]), ("on", "screen"))
+        remote.payload({}, a)  # both fit the argument shape
+        plain = rules.args(rules.parse(json.dumps(RULES).encode()), RC, "main", "42-1")
+        for over in ({}, {"mode": "abba"}):  # abba, named or not: the arguments are as before
+            with self.subTest(over=over):
+                self.assertEqual(rules.args(rules.parse(json.dumps({**RULES, **over}).encode()), RC, "main", "42-1"),
+                                 plain)
+        self.assertNotIn("MODE", plain)
+        self.assertNotIn("PURPOSE", plain)
+
+    def test_rules_refuse_on_only_where_a_control_is_needed(self):
+        cases = {"on without a purpose": {"mode": "on"},
+                 "on for another purpose": {"mode": "on", "purpose": "ab"},
+                 "on for a stacked stage": {"mode": "on", "purpose": "screen", "treatment": "lc", "winners": ["utp"]},
+                 "a purpose on an abba block": {"purpose": "screen"},
+                 "a purpose with abba named": {"mode": "abba", "purpose": "screen"},
+                 "an unknown mode": {"mode": "baab"}, "a mode in capitals": {"mode": "ON"},
+                 "a mode as a list": {"mode": ["on"]}, "a mode as a boolean": {"mode": True},
+                 "a null mode": {"mode": None}, "a purpose as a list": {"mode": "on", "purpose": ["screen"]},
+                 "free text": {"mode": "on; reboot", "purpose": "screen"}}
+        for name, over in cases.items():
+            with self.subTest(name), self.assertRaises(remote.StepRefused):
+                rules.parse(json.dumps({**RULES, **over}).encode())
+
+    def test_abba_is_unchanged(self):
+        for over in ({}, {"MODE": "abba"}):
+            with self.subTest(over=over):
+                self.setUp()
+                self.args(**over)
+                rc, lines, raw = self.run_script("start-block.sh")
+                self.assertEqual(rc, 0, raw)
+                self.assertNotIn("ok mode_on", lines)
+                env = (self.block / "block.env").read_text()
+                self.assertEqual(env.count("\n"), 7)  # no MODE or PURPOSE line
+                self.assertNotIn("MODE", env)
+                self.assertEqual(self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"], "false")  # segment 1: control
+        for seg, want in ((1, "true"), (2, "true"), (3, "false")):  # into segments 2, 3 and 4
+            with self.subTest(seg=seg):
+                self.setUp()
+                self.make_block(segment=seg)
+                self.finish_segment(seg)
+                rc, _, raw = self.run_script("arm-switch.sh", MODE="on", PURPOSE="screen")  # the environment's never count
+                self.assertEqual(rc, 0, raw)
+                self.assertEqual(self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"], want)
+
+    def test_on_only_runs_the_treatment_in_every_segment(self):
+        self.args(**ON_ONLY)
+        rc, lines, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok mode_on", lines)
+        self.assertEqual(lines[-1], "ok start_block")
+        env = (self.block / "block.env").read_text()
+        self.assertIn("MODE=on\nPURPOSE=screen\n", env)
+        self.assertEqual(self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"], "true")  # segment 1
+        self.assertEqual(self.arm()["LODESTAR_DHT_SAFE_RESTART"], "true")
+        for seg in (1, 2, 3):  # into segments 2, 3 and 4
+            with self.subTest(seg=seg):
+                self.setUp()
+                self.make_block(segment=seg, **ON_ONLY)
+                self.finish_segment(seg)
+                rc, lines, raw = self.run_script("arm-switch.sh")
+                self.assertEqual(rc, 0, raw)
+                self.assertIn(f"count block_segment {seg + 1}", lines)
+                self.assertEqual(self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"], "true")
+        self.setUp()
+        self.make_block(segment=4, **ON_ONLY)  # the block still ends after segment 4
+        self.finish_segment(4)
+        rc, lines, raw = self.run_script("arm-switch.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok block_ended", lines)
+
+    def test_on_only_is_refused_where_a_control_is_needed(self):
+        for over, why in (({"MODE": "on"}, "mode_needs_control"),
+                          ({"MODE": "on", "PURPOSE": "screen", "TREATMENT": "lc", "WINNERS": "utp"},
+                           "mode_needs_control"),
+                          ({"PURPOSE": "screen"}, "purpose_needs_on_mode"),
+                          ({"MODE": "abba", "PURPOSE": "screen"}, "purpose_needs_on_mode")):
+            with self.subTest(over=over):
+                self.setUp()
+                self.args(**over)
+                rc, lines, raw = self.run_script("start-block.sh")
+                self.assertEqual((rc, lines), (1, [f"fail {why}", "fail args_valid", "fail start_block"]), raw)
+                self.assertFalse((self.block / "marker").exists())
+                self.assertEqual(self.log(), "")  # nothing started, not even the leak test's Docker
+        # Mid-block, block.env is checked again on every read.
+        for env in ({"MODE": "on"}, {"PURPOSE": "screen"}, {"MODE": "abba"},
+                    {**ON_ONLY, "TREATMENT": "lc", "WINNERS": "utp"}, {"MODE": "on;reboot", "PURPOSE": "screen"}):
+            with self.subTest(env=env):
+                self.setUp()
+                self.make_block(segment=1, **env)
+                self.finish_segment(1)
+                rc, lines, _ = self.run_script("arm-switch.sh")
+                self.assertEqual((rc, lines[-2:]), (1, ["fail block_env", "fail arm_switch"]))
+                self.assertNotIn("compose", self.log())
+
+    def test_a_bad_mode_fails_args_valid(self):
+        for over in ({"MODE": "both"}, {"MODE": "ON"}, {"MODE": "on;reboot"}, {"MODE": ""},
+                     {"MODE": "on", "PURPOSE": "Screen"}, {"MODE": "on", "PURPOSE": "screen x"}):
+            with self.subTest(over=over):
+                self.setUp()
+                self.args(**over)
+                rc, lines, _ = self.run_script("start-block.sh")
+                self.assertEqual((rc, lines), (1, ["fail args_valid", "fail start_block"]))
+                self.assertEqual(self.log(), "")
+
+    def test_copy_off_marks_an_on_only_block(self):
+        for env, mode, arms in (({}, "abba", ["control", "treatment", "treatment", "control"]),
+                                (ON_ONLY, "on", ["treatment"] * 4)):
+            with self.subTest(mode=mode):
+                tmp = Path(tempfile.mkdtemp())
+                self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+                block, out = tmp / "block", tmp / "out"
+                for n in range(1, 5):
+                    (block / "evidence" / f"seg-{n}").mkdir(parents=True)
+                (block / "tools").mkdir()
+                out.mkdir()
+                values = {"IMAGE_DIGEST": DIGEST, "LODESTAR_COMMIT": LC, "SPEC_COMMIT": SC, "RULES_COMMIT": RC,
+                          "TREATMENT": "adm", "SEGMENT_HOURS": "2", "ROLE": "main", **env}
+                (block / "block.env").write_text("".join(f"{k}={v}\n" for k, v in values.items()))
+
+                def run(argv, **_):
+                    Path(argv[argv.index("--output") + 1]).write_text(json.dumps(raw_report()))
+                    return subprocess.CompletedProcess(argv, 0)
+
+                doc = scrub.collect(block, out, run=run)
+                self.assertEqual(doc["mode"], mode)
+                self.assertEqual([s["arm"] for s in doc["segments"]], arms)
+                self.assertEqual(scrub.scrub(doc), doc)  # the control plane's second pass keeps it
+
+    def test_the_scrubber_keeps_only_a_known_mode(self):
+        base = Scrubber.doc(self)
+        for mode in ("abba", "on"):
+            self.assertEqual(scrub.scrub({**base, "mode": mode})["mode"], mode)
+        for mode in ("ON", "on only", PRIVATE[0], "", 1, None, ["on"]):
+            with self.subTest(mode=mode):
+                out = scrub.scrub({**base, "mode": mode})
+                self.assertNotIn("mode", out)
+                self.assertNotIn(PRIVATE[0], scrub.dumps(out).decode())
+
+    def test_analysis_gives_an_on_only_block_no_ab_verdict(self):
+        """The `effect` judgement reads the arms from each segment's recorded switches:
+        all on, it names no_control_arm, so the block is invalid and never fitted."""
+        analyze_cr = analyzer()
+
+        def seg(on, i):
+            r = raw_report()
+            r.update(kind="ab", treatment="adm", verdict="valid", verdict_reasons=[], clean_stop=True)
+            r["identity"] = {"image_digest": "sha256:" + DIGEST,
+                             "switches": {"safe_restart": True, "coordinated_admission": on}}
+            r["timeline"] = {"process_start_utc": f"2026-11-22T{i * 3:02d}:00:00Z",
+                             "last_scrape_utc": f"2026-11-22T{i * 3 + 2:02d}:58:00Z"}
+            return r
+
+        on_only = [seg(True, i) for i in range(4)]
+        judged = analyze_cr.judge_block(on_only, "adm")
+        self.assertFalse(judged["valid"])
+        self.assertEqual(judged["order"], "BBBB")
+        self.assertIn("no_control_arm", judged["problems"])
+        abba = analyze_cr.judge_block([seg(arm == "B", i) for i, arm in enumerate("ABBA")], "adm")
+        self.assertNotIn("no_control_arm", abba["problems"])
+        self.assertNotIn("order_not_abba_or_baab", abba["problems"])
