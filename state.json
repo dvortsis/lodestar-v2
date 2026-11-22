@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-22T15:40:59Z",
+  "updated_at": "2026-11-22T15:45:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T15:40:59Z",
+    "updated": "2026-11-22T15:45:29Z",
     "items": [
       {
         "slot": 1,
@@ -10671,7 +10671,7 @@
         "agent": "session_01MMjhnAa7HfaQXcvUi8EyoQ",
         "model": "sonnet",
         "since": "2026-11-22T14:39Z",
-        "doing": "step 0: toolbar height on phone and zoom"
+        "doing": "building; lighter Results toolbar before any size call"
       },
       {
         "slot": 3,
@@ -10689,7 +10689,7 @@
         "agent": "session_01MMjhn91TUNsrnanuJrszsr",
         "model": "sonnet",
         "since": "2026-11-22T14:39Z",
-        "doing": "step 0: Insights story findings"
+        "doing": "PR 1 (#1073) open: applying the runner calls; PR 2 stage pages after it"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
