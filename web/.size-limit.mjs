@@ -1383,7 +1383,9 @@ export default [
 	// S-privacy-banner: measured + 10%.
 	entry('Privacy banner (on demand)', privacyBannerLazy, '3.71 KB'),
 	// runner §2.26, UP-1: measured 4220 B, the watch labels.
-	entry('Settings messages (on demand)', settingsMessagesLazy, '4.25 KB'),
+	// X-web-build-determinism (runner §2.26): 4,259 B on stable chunk names, 4,247 B with content
+	// hashes; the names are measurement-only, their offset is −18 to +32 B.
+	entry('Settings messages (on demand)', settingsMessagesLazy, '4.26 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
@@ -1646,7 +1648,8 @@ export default [
 	// X-labels (runner §2.26): 7,963 → 8,007 B, the composition text in lower case.
 	// X-facet-group-case (runner §2.18 port): main measures up to 8,012 B (build wobble;
 	// X-web-build-determinism).
-	entry('Search cards (lazy)', cardsLazy, '8.02 KB'),
+	// X-web-build-determinism (runner §2.26): 7,998 B with stable names (7,992 B with content hashes).
+	entry('Search cards (lazy)', cardsLazy, '8.01 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),

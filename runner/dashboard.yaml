@@ -350,6 +350,7 @@ placement:
   - X-outputs-e2e-race
   - X-safety-undo-danger
   - X-undo-danger-tests
+  - X-web-build-determinism
   - X-filters-dialog-test-timeout
   - X-ui-plan-r5
   - X-page-frame

@@ -64,10 +64,12 @@ jobs:
       - run: npm run check
       - run: npx vitest run
       - run: npm run build
-      # Size is measured on a rebuild with a fixed version name: the commit SHA otherwise changes
-      # the app id and chunk hashes (tens of bytes of noise per route). Only the version string differs
-      # from the build above.
-      - run: LODESTAR_BUILD_VERSION=0000000 npx vite build
+      # Size is measured on a rebuild with a fixed version name (the commit SHA otherwise changes
+      # the app id and chunk hashes) and chunk names from each chunk's modules, not its bytes
+      # (LODESTAR_STABLE_NAMES, web/vite.config.ts), so an unrelated change doesn't move other
+      # routes' sizes (X-web-build-determinism). The build above keeps the shipped config.
+      - run: npx vite build
+        env: { LODESTAR_BUILD_VERSION: '0000000', LODESTAR_STABLE_NAMES: '1' }
       - run: npx size-limit
 
   # The one check to require in the ruleset. Always reports; passes when `web` passed or was
