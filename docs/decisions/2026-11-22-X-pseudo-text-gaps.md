@@ -43,7 +43,8 @@ Runner brief, 2026-11-22Z, from X-ui-checks-3 (#1045, `docs/decisions/2026-11-22
 - `scripts/pseudo-locale.test.ts` passes unchanged.
 
 ## Sizes (`npm run size:ci`, gzip; main d4f1446c → branch)
-- **Search route JS (initial): unchanged at 44,682 B.** The relative-time chunk isn't in Search's first view.
+- **Re-measured after merging main bcdd514b** (#1051, #1057): every figure below is the same, with the own-key lookups in.
+- **Search route JS (initial): unchanged by this PR.** It's 44,682 B on d4f1446c, and 44,847 B on both main bcdd514b (#1057's change) and this branch. The relative-time chunk isn't in Search's first view.
 - **Search results (lazy): 40,822 → 40,841 B.** The limit goes from 40.84 to 40.85 kB, the measured size rounded up to 0.01 kB (runner, §2.26). It's the only limit that moves.
 - **The cause:** about 19 B in each chunk that uses RelativeTime. That's the `m` import and the `common_just_now` message module (en and zh), minus the removed 18 B English table.
 
