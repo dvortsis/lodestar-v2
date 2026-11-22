@@ -714,6 +714,20 @@ class EffectTests(unittest.TestCase):
         self.assertIn("image_digest_differs", analyze_cr.judge_block(digests, "utp")["problems"])
         dead = block("ABBA", [0, 110, 110, 100])
         self.assertIn("control_did_not_crawl", analyze_cr.judge_block(dead, "utp")["problems"])
+
+    def test_an_on_only_block_has_no_ab_verdict(self):
+        """X-block-on-only-mode: the treatment in every segment means no control, so the
+        block is invalid with the real reason named, and the effect fit never uses it."""
+        on = block("BBBB", [110, 111, 112, 113])
+        judged = analyze_cr.judge_block(on, "utp")
+        self.assertFalse(judged["valid"])
+        self.assertIn("no_control_arm", judged["problems"])
+        self.assertIn("order_not_abba_or_baab", judged["problems"])  # the order refusal stays
+        self.assertFalse(judged["loss_without_fit"])
+        out = self.effect([on, block("BBBB", [110, 111, 112, 113], start=12)])
+        self.assertEqual((out["outcome"], out["decided"], out["valid_blocks"]), ("not_decidable", False, 0))
+        self.assertNotIn("fit", out)  # no valid block, so no effect fit
+        self.assertNotIn("no_control_arm", analyze_cr.judge_block(block("ABBA", [100, 110, 110, 100]), "utp")["problems"])
         invalid = block("ABBA", [100, 110, 110, 100])
         invalid[1]["verdict"] = "invalid"
         self.assertIn("segment_invalid", analyze_cr.judge_block(invalid, "utp")["problems"])

@@ -132,7 +132,7 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   3. It writes the durable block marker (`/var/lib/lodestar-block/marker`).
   4. It starts Lodestar on a fresh data directory, in gluetun's network namespace, with the candidate image.
   5. It accepts the Legal Notice version the rules name, and sets a random admin password that stays root-only on the VM.
-  6. It starts segment 1's collector (the control arm) and the outage watcher, then returns. The block runs on its own.
+  6. It starts segment 1's collector (the control arm; the treatment for an on-only block, 3.3.2) and the outage watcher, then returns. The block runs on its own.
 - **Works:** `run start-block main: done; <n> ok; …, block_segment 1`, after the leak test's own counters.
 - **Fails:**
   - **The failed names end `leak_test_passed, start_block`:** the leak test failed (its own failed names come first). It's a stop, as in 3.2.
@@ -142,6 +142,7 @@ In words: up → deliver-pia → (leak test) → start-block → four segments w
   - **Any other failure after the marker:** start-block stops Lodestar and the Docker proxy again, and the block stays recorded. Run `copy-off` to end it, then tell the runner.
     - If `copy-off` then answers `failed: evidence_present, copy_off`, the block failed before anything was staged, and can't be ended that way. Escalate to the owner for cleanup.
   - **`failed: stacking_<reason>, args_valid, start_block`:** the rules' `winners` and `treatment` don't stack (3.3.1). Nothing started; the runner commits fixed rules.
+  - **`failed: mode_needs_control, args_valid, start_block`** or **`failed: purpose_needs_on_mode, args_valid, start_block`:** the rules ask for an on-only block where a control is needed, or name a purpose without one (3.3.2). Nothing started; the runner commits fixed rules.
 
 ### 3.3.1 A stacked stage (CR-AB-1's later stages)
 A later stage tests one treatment **on top of the winners kept so far**: both arms run the winners, and only the treatment differs (X-fleet-stacked-arms).
@@ -182,10 +183,43 @@ A later stage tests one treatment **on top of the winners kept so far**: both ar
 
 - **For the analysis,** write the winners file from that table: `winners: ["adm", "utp"]` becomes `{"winners": ["coordinated_admission", "utp"]}`, and pass it to every `segment` and to `effect` (`docs/soak/tools/linux/README.md`, stage 2).
 
+### 3.3.2 An on-only block (a screen that needs no control)
+By default a block is **ABBA**: segment 1 is the control, 2 and 3 the treatment, 4 the control again. An A/B verdict needs that control. A screen that needs the treatment on in every segment, such as a fresh-database screen, uses an **on-only** block instead (X-block-on-only-mode).
+- **When to use it:** only for a screen whose question isn't "is the treatment better than the control". It has no control, so it gives **no A/B result**. Never use it for a stage of CR-AB-1.
+- **Write it in the rules:** add `"mode": "on"` and `"purpose": "screen"`. Without them, or with `"mode": "abba"`, the block is ABBA exactly as before.
+  ```json
+  {
+    "version": 1,
+    "screen": "fresh-db-1",
+    "lodestar_image": "ghcr.io/dvortsis/lodestar-v2@sha256:<64 hex>",
+    "lodestar_commit": "<40 hex>",
+    "spec_commit": "<40 hex>",
+    "treatment": "adm",
+    "mode": "on",
+    "purpose": "screen",
+    "segment_hours": 2,
+    "notice_version": 4
+  }
+  ```
+- **What's refused,** by the control plane when it reads the rules (`the screen rules at that commit are malformed`) and again by start-block on the VM, which names the reason:
+  - `"mode": "on"` without `"purpose": "screen"` (`mode_needs_control`);
+  - `"mode": "on"` with `winners`: a stacked stage's control is the winners (`mode_needs_control`);
+  - `"purpose"` without `"mode": "on"` (`purpose_needs_on_mode`);
+  - any other mode or purpose value (`args_valid` alone).
+- **What the VM gets:** `block.env` gains `MODE=on` and `PURPOSE=screen`. start-block's answer counts one more `ok` than an abba block's (its `mode_on` line); the sure check is the `MODE=on` line in `/var/lib/lodestar-block/block.env`. Every segment starts Lodestar with the treatment's switches on. Everything else is the same as an ABBA block: the leak test, the host and boot guards, arm-switch after each segment, copy-off. No stop condition changes.
+- **In the evidence:** copy-off marks the block `"mode": "on"` and every segment's `arm` as `treatment`. `analyze_cr.py effect` refuses such a block with `no_control_arm` (and `order_not_abba_or_baab`), so it never counts toward an A/B outcome. Each segment's own `segment` report reads as usual.
+- **A fresh-database screen's restart drill** (on the test VM, `infra/dev-vm/linux-lane.md` §2 step 5, with the commands at the end of §6): let Lodestar run **at least 12 hours** on its fresh database before the restart. An earlier restart doesn't test what the screen is for. That run uses the screen's own switches, the treatment on, not the shipped defaults of `linux-lane.md` §2 step 4.
+  - A fleet on-only block can't give that: arm-switch restarts Lodestar after every segment (every 2 or 3 hours), and the block ends after segment 4 (8 or 12 hours). Use the fleet block for the treatment-on segments; do the 12-hour restart on the test VM.
+- **Checking a running Lodestar's switches:** the image has no `env` binary, so `docker exec lodestar env` fails. Read the main process's environment from the host instead:
+  ```bash
+  sudo cat /proc/"$(sudo docker inspect -f '{{.State.Pid}}' lodestar)"/environ | tr '\0' '\n' | grep '^LODESTAR_DHT_'
+  ```
+  Only the `LODESTAR_DHT_` lines matter here; don't copy the rest anywhere.
+
 ### 3.4 `/fleet run arm-switch <vm>`, after each segment
 - **What it does:** the operator runs it shortly before a segment ends, at the booked times.
   1. It waits up to 15 minutes for the segment's collector to finish its window. The collector stops Lodestar itself.
-  2. It starts Lodestar alone on the next arm, without recreating gluetun.
+  2. It starts Lodestar alone on the next arm (on-only: the treatment again, 3.3.2), without recreating gluetun.
   3. It starts the next segment's collector.
   4. After segment 4, it ends the block instead.
 - **Works:** `done; <n> ok; block_segment 2, switch_seconds <s>`. A switch must take under 10 minutes (CR-SPEC 2.3). After segment 4: `done; <n> ok; block_segment 4`. A later `vm-status` then shows no `block_segment`.
@@ -358,6 +392,8 @@ sudo LODESTAR_IMAGE=ghcr.io/dvortsis/lodestar-v2@sha256:<IMAGE_DIGEST> DOCKER_GI
   docker compose -f /home/lodestar/lodestar/compose.yaml restart lodestar
 ```
 `<IMAGE_DIGEST>` is the `IMAGE_DIGEST=` line of `/var/lib/lodestar-block/block.env`; for a locally built image, use `LODESTAR_IMAGE=sha256:<LOCAL_IMAGE_ID>` from its `LOCAL_IMAGE_ID=` line. A restart doesn't recreate the container, so it keeps the image and switches it started with.
+
+For a fresh-database screen, run it only once Lodestar has run at least 12 hours on that database (3.3.2). To check the switches before and after, read them from `/proc/<pid>/environ` (3.3.2); the image has no `env` binary.
 
 ## 7. Renewing the VPN, host keys, and where the evidence lands
 - **`/fleet run renew-vpn <vm>`** delivers the PIA login again, through the same `deliver-pia` chain as after `up`. It first answers `run renew-vpn <vm>: deliver the PIA login again (deliver-pia, under this run's lock)`, then:
