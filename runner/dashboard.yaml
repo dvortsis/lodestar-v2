@@ -356,6 +356,7 @@ placement:
   - X-ctl-geometry
   - X-labels
   - X-facet-group-case
+  - X-builder-group-case
   - X-insights-source-names
   - X-shell-home
   - X-narrow-states
