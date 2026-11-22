@@ -194,8 +194,8 @@ mod tests {
             ),
             ("udp://t%E3%80%82example:6969/a", "udp://t.example:6969/a"),
             ("udp://8.8.8.8:6969/a", "udp://8.8.8.8:6969/a"),
-            // url 2.5.8 leaves `^` unencoded in a path.
-            ("http:1.1/announce^x", "http://1.0.0.1/announce^x"),
+            // url 2.5.9 percent-encodes `^` in a path (2.5.8 left it as is).
+            ("http:1.1/announce^x", "http://1.0.0.1/announce%5Ex"),
         ] {
             assert_eq!(public_tracker_url(raw).as_deref(), Some(kept), "{raw}");
         }
