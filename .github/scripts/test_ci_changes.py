@@ -54,6 +54,20 @@ class Infra(unittest.TestCase):
             self.assertFalse(ci_changes.INFRA.match(f), f)
 
 
+class FleetTestInputs(unittest.TestCase):
+    """infra/fleet/tests read the crawler's switches from config.rs and the collector's
+    SWITCH_ENV, so a change to either runs them (X-backoff-escalate-passthrough: #1029
+    added a switch to config.rs and merged without the infra job)."""
+
+    def test_the_switch_sources_turn_infra_on_and_near_misses_dont(self):
+        for f in ["crates/lodestar/src/config.rs", "docs/soak/tools/linux/collect.py",
+                  "docs/soak/tools/analyze_cr.py", "docs/soak/tools/linux/README.md"]:
+            self.assertTrue(ci_changes.INFRA.match(f), f)
+        for f in ["crates/lodestar/src/config.rs.bak", "crates/lodestar/src/config/mod.rs",
+                  "crates/lodestar/src/main.rs", "docs/soak/README.md", "docs/soak/toolsx/a.py"]:
+            self.assertFalse(ci_changes.INFRA.match(f), f)
+
+
 class FleetEmergencyDown(unittest.TestCase):
     def test_the_workflow_turns_infra_on_and_near_misses_dont(self):
         self.assertTrue(ci_changes.INFRA.match(".github/workflows/fleet-emergency-down.yml"))

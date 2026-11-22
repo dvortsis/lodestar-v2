@@ -27,7 +27,8 @@ request gets:
 - the cloud infrastructure checks (Lambda tests, template rebuilds, Terraform
   fmt/validate, PowerShell parse) only if it touches `infra/`, the fleet,
   fleet-emergency-down and operator workflows, the gluetun post-rules file,
-  `docs/user/03-keep-lodestar-safe.md` or `docs/operations.md` (INFRA below);
+  `docs/user/03-keep-lodestar-safe.md`, `docs/operations.md`, or what the fleet
+  tests read: `crates/lodestar/src/config.rs` and `docs/soak/tools/` (INFRA below);
 - the update-manifest round trip only if it touches the manifest builder,
   its tests, release.yml or `crates/update/` (UPDATE_MANIFEST below);
 - the RustSec advisory check only if it touches Cargo.lock, deny.toml, this
@@ -111,6 +112,9 @@ E2E = re.compile(rf"^({WEB_INPUTS}|crates/api/|\.github/workflows/e2e\.yml$)")
 INFRA = re.compile(
     r"^(infra/"
     r"|packaging/companions/gluetun-post-rules\.txt$|docs/user/03-keep-lodestar-safe\.md$|docs/operations\.md$"
+    # What infra/fleet/tests read: the crawler's switches and the soak collector
+    # that names them (X-backoff-escalate-passthrough).
+    r"|crates/lodestar/src/config\.rs$|docs/soak/tools/"
     r"|\.github/workflows/(fleet|fleet-emergency-down|operator-wake|operator-apply|operator-injection|operator-tripwire[\w-]*)\.yml$)"
 )
 # The update manifest's builder, the workflow that signs with it, and the
