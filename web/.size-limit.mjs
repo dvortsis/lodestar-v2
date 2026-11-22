@@ -439,9 +439,17 @@ const settingsAbout = [/features\/settings\/screens2?\/about\.ts$/];
 // The generated screens' navigation icons (X-settings-registry-slim), loaded after the navigation
 // shows like the connection screens' (`Screen.iconLoad`); every first view stops at them.
 const settingsIcons = [/features\/settings\/screens\/icons\.ts$/];
+// Finding a setting (X-settings-find): the index, the results panel, the `/` key and the lazy
+// navigation icons load when the box is first focused or the command palette is first searched,
+// so every first view stops at them. "Settings find (on demand)" gates them.
+const settingsFind = [
+	/features\/settings\/shell\/(find|find-keys|find-palette|nav-icons)\.ts$/,
+	/features\/settings\/shell\/FindPanel\.svelte$/
+];
 const settingsFirstView = [
 	...settingsOnDemand,
 	...settingsIcons,
+	...settingsFind,
 	...insightsDigest,
 	...settingsEdit,
 	...settingsConnections,
@@ -472,6 +480,10 @@ const settingsShellView = own('/settings/[section]', {
 const settingsIconsLazy = requireMeasuredJs(
 	'Settings screen icons (on demand)',
 	onDemandOf('/settings/[section]', settingsIcons)
+);
+const settingsFindLazy = requireMeasuredJs(
+	'Settings find (on demand)',
+	onDemandOf('/settings/[section]', settingsFind)
 );
 const settingsAboutLazy = requireMeasuredJs(
 	'Settings screen purposes (on demand)',
@@ -1395,7 +1407,7 @@ export default [
 	// OUT-2 (runner §2.26): back under the §10.1 cap (44.98 KB measured) after the registry's
 	// default-only glob; it had been 45.1 KB at 45.06 KB measured.
 	// X-session-draft-keep (runner §2.26): 45 → 45.5 KB, measured 45.45, for the same safety code.
-	entry('Settings section (own JS + CSS)', settingsSectionView, '45.58 KB'),
+	entry('Settings section (own JS + CSS)', settingsSectionView, '45.7 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1492,12 +1504,16 @@ export default [
 	// 34.04, Notifications 45.51 → 45.66, Insights 45.3 → 45.45, Language 45.1 → 45.24 KB (+30 to
 	// +150 B each): the one h1 class string (28 px display, focus ring, wrap-anywhere) where it was
 	// `text-title font-semibold`.
+	// X-settings-find (runner §2.26): field search's first-view wiring (the lazy import, the `/` key,
+	// the lazy nav icons) and the two I18 fixes cost 88 to 117 B on each of these, measured on main
+	// at 45.55 (Section), 31.51 (Filters), 34.04 (Sources), 45.63 (Notifications), 45.41 (Insights)
+	// and 45.24 KB (Language, 45.2 before). Limits = measured, rounded up to 0.01 KB.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
 			`Settings ${name} (first view)`,
 			files,
 			name === 'FiltersScreen'
-				? '31.53 KB'
+				? '31.64 KB'
 				: name === 'JobsScreen'
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
@@ -1505,13 +1521,13 @@ export default [
 						: name === 'CompanionsScreen'
 							? '33 KB'
 							: name === 'SourcesScreen'
-								? '34.04 KB'
+								? '34.15 KB'
 								: name === 'NotificationsScreen'
-									? '45.66 KB'
+									? '45.78 KB'
 									: name === 'InsightsScreen'
-										? '45.45 KB'
+										? '45.56 KB'
 										: name === 'LanguageScreen'
-											? '45.24 KB'
+											? '45.33 KB'
 											: '45 KB'
 		)
 	),
@@ -1580,6 +1596,7 @@ export default [
 		'29.4 KB'
 	),
 	entry('Settings screen icons (on demand)', settingsIconsLazy, '1.66 KB'),
+	entry('Settings find (on demand)', settingsFindLazy, '5.87 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
 		'Alert dialogs (on demand)',
