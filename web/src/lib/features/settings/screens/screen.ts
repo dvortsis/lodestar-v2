@@ -17,7 +17,7 @@ export const screens: Screen[] = [
 		title: () => m.settings_shell_crawler(),
 		about,
 		iconLoad: () => icons().then((mod) => ({ default: mod.crawler })),
-		sections: ['crawler', 'transport']
+		sections: ['crawler']
 	},
 	{
 		id: 'network',
