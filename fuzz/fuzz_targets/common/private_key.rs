@@ -8,10 +8,13 @@
 //! plugin's parser that reads it, correctly, as an ordinary key. A
 //! harness skips only its comparison through `Value` for such a document.
 //!
-//! The keys are compared once unescaped, as `serde_json` compares them,
-//! so `"$serde_json::private::RawValue"` counts too. The walk reads
-//! keys as plain strings through `deserialize_any`, which `serde_json`
-//! never treats specially.
+//! Only a key written without escapes counts, because `serde_json`
+//! matches the token on the key's raw text: `"\u0024serde_json::…"` is an
+//! ordinary key to it, so a harness still compares that document
+//! (`fuzz/seeds/tpdb/private_raw_value_key_escaped.json` is the evidence:
+//! it never tripped the old harness). The walk reads keys through
+//! `deserialize_any`, which `serde_json` never treats specially, and a key
+//! counts only when it's handed over borrowed: unchanged from the input.
 
 use serde::de::{Deserializer, MapAccess, SeqAccess, Visitor};
 

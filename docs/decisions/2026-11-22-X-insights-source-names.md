@@ -31,7 +31,7 @@ Runner brief, 2026-11-21Z, from X-labels (#1023): "Insights by-source rows carry
   - `tpdb` and `stashdb` (the one other harness that compares a plugin through `serde_json::Value`) skip only that comparison when a key written without escapes starts `$serde_json::private::`. Every other check still runs. The check is in `fuzz/fuzz_targets/common/private_key.rs`.
   - An escaped key (`\u0024serde_json…`) isn't the token to `serde_json`, so it's still compared.
   - Two seeds keep both cases: `seeds/tpdb/private_raw_value_key.json` (the crash) and `…_escaped.json`. Run as inputs, the first crashes the old harness and passes the new one.
-- **`fuzz/fuzz_targets/json.rs` has the same blind spot** (it fuzzes `sources-feeds`' shared reader). `{"$serde_json::private::RawValue":"[1]"}` makes its `serde_json` side read `[1]`. It's outside this slice; named to the runner.
+- **`fuzz/fuzz_targets/json.rs` had the same blind spot** (it fuzzes `sources-feeds`' shared reader): `{"$serde_json::private::RawValue":"[1]"}` made its `serde_json` side read `[1]`. It gets the same skip, folded in here at the runner's call. `seeds/json/private_raw_value_key.json` keeps the case.
 
 ## Who sees the names
 - The Insights routes are `auth::protected`, and they already list every source's id. A name says nothing a viewer couldn't already see there, so §18.7's private-source rule is unchanged.
