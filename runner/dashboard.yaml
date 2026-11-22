@@ -488,7 +488,6 @@ placement:
   - X-api-openapi-400s
   - X-testvm-delete-on-termination
   - X-fleet-stacked-arms
-  - X-backoff-escalate-passthrough
   - X-prefs-invisible-share
   - X-api-openapi-repeated
   - X-flake-export-wal
@@ -1683,7 +1682,6 @@ roadmap:
     - X-alert-noun-text
     - X-client-handoff
     - X-help
-    - X-ui-checks
     - X-ui-checks-1
     - X-ui-checks-2
     - X-ui-checks-3
