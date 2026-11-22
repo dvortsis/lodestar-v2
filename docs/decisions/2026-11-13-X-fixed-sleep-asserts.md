@@ -2,7 +2,7 @@
 
 Track Q (code review 2026-11-12: TEST-02, DHT-03, LOGSET-04, WEBCORE-05). Tests only; no product code changed. Applies CLAUDE.md "Multi-session work" (owner, `docs/owner-decisions.md` §2.24).
 
-- **Absence is shown by ordering, not by time.** A check that something did _not_ happen follows a positive event that has to come after it, never a sleep. Three patterns cover every case here:
+- **Absence is shown by ordering, not by time.** A check that something did *not* happen follows a positive event that has to come after it, never a sleep. Three patterns cover every case here:
   - **The DHT node's actor is a barrier.** One task handles every datagram, tick and command in turn, so a `snapshot()` returns only after whatever was in progress when it was sent. `network.rs` (read-only node, denied addresses) waits for the counter that shows the event happened, then takes a snapshot before checking that nothing was sent.
   - **A proven maintenance tick.** Sampling and held lookups start only in a tick. `pause.rs` makes the node ping a stranger who never answers, waits for the node to expire that ping (early in every tick, before sampling or lookups start), then takes a snapshot, so a whole paused tick has run before the "nothing sampled" checks. That covers at least a query timeout (1 s) of ticks, more than the 600 ms sleep did.
   - **The scheduler's order.** `settings/tests.rs` runs on tokio's current-thread runtime. One `yield_now` lets the woken follow task react in full before the node is asked for its intensity. `LineChart.test.ts` awaits the same imports as the chart, then one zero-delay macrotask turn, which runs only after every pending promise reaction.

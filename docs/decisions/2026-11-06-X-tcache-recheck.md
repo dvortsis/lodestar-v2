@@ -3,7 +3,6 @@
 Runner brief, 2026-11-05T23:55Z, from the runner's security pre-audit of `main` at 63a2c6df. Both changes tighten behaviour, so they're the runner's call, flagged to the owner under `docs/owner-decisions.md` §2.19. **This supersedes "applies at the next start" for turning a source off** in `2026-11-05-SRC-11c.md`, `2026-11-05-SRC-13b.md` and `2026-11-02-SRC-14a.md`: a source switched off, by its toggle or by losing a credential it needs, now stops at once. Turning one on, and changes to settings, schedules and egress, still apply at the next start.
 
 ## M1: a torrent-cache lookup is checked again right before it's sent
-
 - **One check, run three times** (`lodestar_pipeline::torrent_cache::Gate::check`): when the cursor offers a key (`Cursor::next`), when interest asks for one (`interest`), and right before each request is built (the plugin's new `Recheck` hook). A key waits up to hours in the plugin's lanes (256 each), so the check at queue time alone let a key that joined the floor, a dropping list or a tombstone in that time be sent to a third party. This is the pattern ENR-1's `adult_enrich::check` already follows.
 - **What it refuses**, strictest reason first (`Withheld`):
   - the cache plugin's own source isn't Enabled (`CacheOff`);
@@ -24,12 +23,10 @@ Runner brief, 2026-11-05T23:55Z, from the runner's security pre-audit of `main` 
 - **The cursor stays put while the cache is off**, so switching the cache back on resumes the round where it was. A key it passes over for any reason other than privacy counts in `Page::withheld`.
 
 ## Hybrid keys (brief, task 3)
-
 - **They can co-exist.** An unverified item under one swarm hash of a hybrid torrent and a torrent stored under its other hash: a source reports the v2 key first, then the store takes the torrent by its v1 hash through a path that doesn't promote items. `Store::insert` (imports, tests) never touches `unverified_items`, and `Store::promote` returns `Gone` and leaves the item when no live finder is left. The writer's own path promotes items under every swarm hash, so the crawl alone doesn't leave one.
 - **So the cursor now sees the stored torrent's flags.** Before, `Cursor::next` read only the item's own `private_source`, so a private (BEP 27) hybrid stored under its v1 hash didn't stop a lookup of its v2 hash. `Gate::check` finds the torrent by either hash and refuses the key as `Private`. `interest` already did this, and now does it through the same check. A test builds the case: the item under the truncated v2 hash, the private hybrid inserted by its v1 hash.
 
 ## M2: switching a source off stops its plugin now
-
 - **The stop is spawned right after the write commits,** from the blocking task that writes it, and the API call then waits for it. So a request dropped mid-change (a client that disconnects) can't leave a Disabled source running.
 - **Every runtime path to Disabled stops the plugin** the way `begin_purge` does, without the purge (`Control::stop_disabled`, via `Monitor::stop_source`): its stop signal, up to the plugin stop timeout (15 s), then an abort, and its keys dropped from the fetch pool. The two paths are the toggle (`update_source` with `enabled: false`) and an enabled Account source losing a credential it needs (`update_credentials`). "Consent no longer met" otherwise switches a source off only at a start, before it runs, so nothing is running to stop.
 - **What a stop means for a plain disable,** as for a purge: the change can take up to the plugin stop timeout (15 s) to return, and the source's keys waiting in the fetch pool are dropped (a key another source found too keeps them). For the DHT source that stops the crawl at once and drops its pending fetches until it's enabled and started again.
@@ -40,7 +37,6 @@ Runner brief, 2026-11-05T23:55Z, from the runner's security pre-audit of `main` 
 - **Defence in depth in the egress.** `EgressCredentials` gains `source_enabled`, which the host's `SourceCredentials` answers from the store. A client the factory built reads it before each request, after the kill switch let the request through. While the store says the source is off, or can't say within `STATE_WAIT` (2 s), the request is refused with `HttpError::NoEgress` (never sent, counted as a policy refusal, and paced by `DOWN_DELAY_MIN` so a retry loop can't spin on the store). A client built directly (tests) has no states and skips the check. `NoCredentials` answers "on": it's for tests and tools with no store. The read takes the shared store's lock for one small query per request, which every HTTP plugin now pays; they poll at most once a minute per unit.
 
 ## Tests
-
 - `crates/pipeline/tests/torrent_cache.rs`: the check sees a key floored in the store and in the filter, the item's source switched off, an unknown key and the cache switched off; it reads a stored torrent's hidden, private, complete and blocked states; the cursor offers only keys that pass and doesn't move while the cache is off; the hybrid case above.
 - `crates/sources-plugins/tests/torrent_cache.rs`: a key refused at send time never reaches a cache (asserted at the fake transport) and no other cache is asked for it; with no check installed nothing is sent; the check runs after the poll interval, right before the request.
 - `crates/lodestar/src/torrent_cache.rs`: the runner's end-to-end check. Keys queued while they could be sent, then floored in the store or only in the filter, are never sent. Asserted at the transport, with the host's `StoreRecheck` on a real store.

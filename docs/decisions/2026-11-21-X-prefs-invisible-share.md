@@ -13,11 +13,11 @@ Slice session, 2026-11-21. A remapped single-key shortcut (§10.16) must be one 
 
 A key is refused when it is anything but exactly one character, or when that character is:
 
-| Refused                                      | Why                                                                             | Table                                            |
-| -------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------ |
-| a control or whitespace                      | not a key that shows                                                            | `char::is_control`, `char::is_whitespace`        |
-| default-ignorable                            | renders as nothing, in any font                                                 | `crate::text::default_ignorable`                 |
-| a format character (Cf)                      | invisible, or reorders the text around it                                       | `lodestar_metainfo::format_char`                 |
+| Refused | Why | Table |
+|---|---|---|
+| a control or whitespace | not a key that shows | `char::is_control`, `char::is_whitespace` |
+| default-ignorable | renders as nothing, in any font | `crate::text::default_ignorable` |
+| a format character (Cf) | invisible, or reorders the text around it | `lodestar_metainfo::format_char` |
 | a combining mark (Mn, Mc, Me), in any script | draws only on the character before it, so alone it's a dotted circle or nothing | `unicode_normalization::char::is_combining_mark` |
 
 - **Newly refused:** U+1BCA0–1BCA3, U+1D173–1D17A, U+E0080–E0FFF, the Cf characters outside the old blocks (U+0600–0605, U+06DD, U+070F, U+0890–0891, U+08E2, U+110BD, U+110CD, U+13430–1343F), and every combining mark outside the old few blocks. For example, the Devanagari vowel signs U+093E (Mc) and U+0941 (Mn) passed before.

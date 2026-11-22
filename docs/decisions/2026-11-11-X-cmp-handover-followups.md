@@ -3,7 +3,6 @@
 The findings from #679's review (`reviews/rv-679-243429d1.md` on runner-state), for a natively installed qBittorrent's hand-over to Integrations (`2026-11-11-X-cmp-native-handover.md`). These are the slice's decisions under §2.33. None loosens an owner decision or a security decision. The runner flags them to the owner (§2.19).
 
 ## A native install and the guided steps exclude each other (Important 1)
-
 - **One lock.** The guided steps' lock (target, paste, plan, confirm, forget) is now the `Service`'s (`Service::changes`), and a native install of qBittorrent takes it too. Another companion's install doesn't: only qBittorrent is handed over here (self-review I1).
 - **Held by the install's own task,** which a dropped request (a closed tab) doesn't stop. So the lock is never let go while the install, its hand-over or its undo still runs (self-review B1). Tested with the install parked once it holds the lock: the request is dropped, and a guided step is still `busy` until the install ends.
   - The install holds it through `already_added`, the manager's `can_hand_over`, the install, its hand-over and any undo.
@@ -14,11 +13,9 @@ The findings from #679's review (`reviews/rv-679-243429d1.md` on runner-state), 
 - **Tested** over the real `Service` and `Guided`: with the guided lock held, an install is `busy`; with the install's held, every guided step is `busy` and nothing is written or handed over. No native install can run in the binary's tests (no catalogue pin), so the interleave is the lock itself, held by the test, not sleeps.
 
 ## The removal's busy guard (Important 3)
-
 A removal over a journal that still holds an install or update is refused (`busy`) before anything is released. The test now asserts that nothing was released and the folder is still there, so removing the guard fails it. #679's decisions file is corrected.
 
 ## The crash residual is closed (#679's I2)
-
 - **A marker:** a first install writes `<data>/companions/.handed-over-<id>`, durably (the file and its folder synced), before it tries the hand-over, and removes it once `configured` is saved.
   - `ApiConfigure::hands_over` can turn it off for a companion whose hand-over saves nothing. It's yes by default, which fails safe: a marker it didn't need only makes the next start release nothing. The binary doesn't override it, so every first install is marked, Prowlarr's included, and a hand-over added later can't forget to mark (#692's review, B1).
   - It sits beside the lock, outside the companion's own folder, which a rollback deletes only if it holds nothing else.
@@ -34,7 +31,6 @@ A removal over a journal that still holds an install or update is refused (`busy
 - **Tested:** a crash between the hand-over and `configured` is undone by recovery and released once the sink is there, once. A failed release keeps the marker until a later start. An install that finishes leaves none.
 
 ## Hardening
-
 - **The runtime config is opened with `O_NOFOLLOW | O_NONBLOCK`** on Unix. A link at the file itself is refused, and a FIFO is never waited on (it isn't a regular file, so it's refused). On Windows, it's opened with `FILE_FLAG_OPEN_REPARSE_POINT` and refused if it's a reparse point (a link or junction), as on Unix (#692's review). The Windows branch isn't separately tested: creating a link there needs privileges CI doesn't have. A linked folder above it isn't refused: the install folder is Lodestar's own, staged and checked by CMP-2 (self-review P7). Tested with both, in `manager.rs`' unit tests.
 - **The marker is written with `O_NOFOLLOW`** on Unix, so a link planted at its path is never followed and truncated (P4).
 - **`save_clients` reads the list and its revision together,** from one `Registry::section` read, which the registry makes under the section's lock. Before, the list came from the section's watch and the revision from a separate read. The read has no passwords, and the save sends none for your clients either way.
@@ -49,9 +45,7 @@ A removal over a journal that still holds an install or update is refused (`busy
 - **Self-review P1 is closed** for the confirmation, whose hand-over is the only guided save a native install's check reads (above). The other guided steps write only their own rows, which a native install doesn't read.
 
 ## API messages (Important 2)
-
 `crates/api/src/companions.rs` gives each new code its own sentence:
-
 - `managed_client_in_use`: the download client Lodestar manages is already set up in Integrations; remove it there first, then install again. It names the entry by its role, since you may have renamed it (self-review P5), and not where it came from, which may be a crashed install as well as a qBittorrent you added (#692's review). The API's messages are English only; there's no zh string to change;
 - `already_added`: you added it yourself; forget it first;
 - `sink_refused`: Lodestar couldn't update its download client in Integrations; check Integrations, then try again. It's worded for a removal's release too;
@@ -60,11 +54,9 @@ A removal over a journal that still holds an install or update is refused (`busy
 The OpenAPI document doesn't change (descriptions and shapes are as they were). No web file is edited; CMP-9a and CMP-9c show these sentences from the envelope.
 
 ## For the user docs (from #679's review)
-
 A restart hands a natively installed qBittorrent over again, so a `lodestar-qbittorrent` entry you deleted in Integrations comes back. The guide should say so. That's for the docs slice, not this one.
 
 ## Tests
-
 - `crates/companions/tests/manager.rs`:
   - the busy removal releases nothing;
   - the crash-and-release cases above;

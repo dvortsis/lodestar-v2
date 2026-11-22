@@ -3,7 +3,6 @@
 This supersedes three points of `2026-11-22-X-search-chunk-retry.md` (#1057): "a Retry pressed within that window reloads at the previous query", "the first load to settle uses it up", and the drawer's missing failure path. The runner's calls are under §2.26; their step-0 answers are recorded below.
 
 ## Retry sends the query just typed (§10.3, §10.4)
-
 - **W5 gains `flush()`, and the debounce calls the same write (runner, step 0).** `setText`'s 200 ms timer used to run `parse(t)` then `commit(canonical ?? t, false)` inline. That body is now `write()`, and the timer calls it. `flush()` calls the same function, so the text reaches the URL exactly as the bar writes it:
   - the server's `/parse` and its canonical form;
   - the raw text on a parse error;
@@ -20,14 +19,12 @@ This supersedes three points of `2026-11-22-X-search-chunk-retry.md` (#1057): "a
   - `web/src/lib/features/search/query/{QueryBar.svelte,Live.svelte,types.ts}`.
 
 ## The Retry marker is honoured only by the reload's own load
-
 - **The window is the mount itself (runner, step 0).** When the `window.name` marker is set, the page starts `loadResults()` at mount. That load is always the one that uses the marker, and it clears it whether it succeeds or fails.
 - **A later load never sees the marker.** A load started by the 30 s fallback timer or a browse-mode keydown finds `retried` already false. This holds even when the mount's load failed and cleared the cached promise.
 - **Why the mount and not a time window:** the mount has no time constant to tune, and it costs about 20 B against a `performance.now()` check's 35 B.
 - **The effect on bare `/search`:** Retry loads the empty state at once, and focus goes to the results only while the body has focus, as in the `?q=` case. That's right, because the user asked for results (runner).
 
 ## A failed detail drawer says so (§10.5)
-
 - **The drawer's `import()` has a rejection handler.** A failed `DetailHost` chunk no longer raises an uncaught rejection.
 - **What shows, while `page.state` holds `detail`:** a `role="alert"` panel with "Details couldn't load." and Retry. The string is one route-only key, `search_page_detail_failed`, with `search_page_retry` reused (en and zh).
 - **The `hostFailed` flag resets before each `import()`** (runner review), so on a browser that refetches, an attempt in flight never shows an earlier failure.
@@ -53,7 +50,6 @@ This supersedes three points of `2026-11-22-X-search-chunk-retry.md` (#1057): "a
 - **No Escape either:** it cost 27 B, and with focus left on the row, Escape on the panel would rarely be reachable.
 
 ## Size (§10.1; the 45 kB cap stays, runner)
-
 - **Search route JS, measured with `npm run size:ci`:**
   - 44,847 B before;
   - 45,142 B for the first draft (+142 over the cap);
@@ -76,7 +72,6 @@ This supersedes three points of `2026-11-22-X-search-chunk-retry.md` (#1057): "a
     - The skip link's handler is inline (−5 B).
 
 ## Tests
-
 - **W5 (`search.test.ts`):**
   - no-op when nothing is due;
   - writes now, as the debounce would, with `replace`;

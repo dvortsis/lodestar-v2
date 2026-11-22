@@ -3,18 +3,15 @@
 Found by WK-20's harness (#712, `docs/decisions/2026-11-11-WK-20.md`, finding (a)). Brief: runner, 2026-11-12.
 
 ## The bug
-
 A worker claims every key its DHT sees, including keys it already holds. The coordinator answers a claim from the key's holder with the holder's own lease, under the same token (`crates/cluster/src/server.rs`, `Claimed::Held` by the holder).
-
 - The runtime passed that grant to its pool as a new sighting. By then the pool had usually fetched the key: `PrepareStage` had moved the token out of `WorkerLeases` into the `Results` record, which carries it to the commit.
 - So the pool turned the sighting away as recently fetched. The worker's `Funnel::duplicate` override then took the token just inserted again and reported the lease lost.
 - The coordinator ended the lease, the result arrived stale, and another worker harvested and fetched the key again. With three workers that showed as harvested 6, stored 3, lost 3, with two workers fetching each key.
 
 ## The fix: the worker knows its own lease wherever it is (option A, the runner's call)
-
 - **`WorkerLeases` tracks both places a lease can be,** under one mutex (`crates/pipeline/src/worker.rs`, a shared edit the runner approved):
-  - _held_: granted and not yet through the prepare stage;
-  - _out_: its result is on its way out under that token.
+  - *held*: granted and not yet through the prepare stage;
+  - *out*: its result is on its way out under that token.
 - **`PrepareStage` moves a token from held to out in one step** (`send_out`), where it used to `take` it. A loss in the prepare stage still `take`s it.
 - **`insert` gives a three-way answer under the same lock:** `New` (held now), `Held` (already held under this token) or `Out` (its result is out under this token). On `Out` the key isn't held again.
 - **The runtime** (`worker/runtime.rs`, `granted`) treats `Held` and `Out` as the holder's own lease coming back:
@@ -27,13 +24,11 @@ A worker claims every key its DHT sees, including keys it already holds. The coo
   - **The session client's held set** (`crates/cluster`): it's per session, rebuilt on every reconnect, while a spooled result can come back under a later session. It's also next to WK-11b's work.
 
 ## Only a remote worker tracks `out`
-
 - **The coordinator's built-in pipeline** also uses `WorkerLeases` and `PrepareStage`, but its intake never asks `insert` about its own leases: a held key's sighting is answered as a reply there.
 - So **tracking is opt-in.** The remote worker's runtime builds its leases with `WorkerLeases::tracking_out(horizon)`, and `Default` tracks nothing. With tracking off, `send_out` is the old `take` and `insert` answers as before.
 - The coordinator's memory and behaviour don't change (#712-style self-review, I2).
 
 ## Keeping `out` bounded, and its order race
-
 - **An out entry is finished, not removed** (`done(key, token)`, for its own token only). That happens when:
   - its batch is committed: each of an accepted batch's `(key, token)` pairs;
   - its result is released (`release`);
@@ -49,7 +44,6 @@ A worker claims every key its DHT sees, including keys it already holds. The coo
 **Superseded in part by X-wk-out-set-polish** (`docs/decisions/2026-11-12-X-wk-out-set-polish.md`): committed entries now go after a 180 s grace (released or lost ones are still kept to the horizon), at most 50,000 entries are kept, and the memory cost is stated there.
 
 ## Tests
-
 - **`WorkerLeases` unit tests:**
   - the three answers;
   - untracked leases behaving as before;
@@ -66,6 +60,5 @@ A worker claims every key its DHT sees, including keys it already holds. The coo
   3. The link heals, so the answers land after the fetch and before the commit reaches the worker.
 
   It asserts no loss on the worker or in the funnel, one fetcher, no `fetch_violations`, and `out` back to 0. It fails 5 out of 5 runs on main.
-
 - **With the old behaviour restored** (prepare `take`s, every grant counts as new), both the runtime test and the scenario fail.
 - **rv-712 nit 2:** a hand-back recorded after both fetches excuses neither of them (`a_recorded_hand_back_excuses_only_later_fetches`).

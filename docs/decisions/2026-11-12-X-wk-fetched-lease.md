@@ -3,7 +3,6 @@
 Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer lagging past the worker's 180 s grace could still end the holder's own lease as lost. Brief: runner, 2026-11-12, option a′ from rv-737.
 
 ## The problem
-
 - **`Accepted` doesn't end a lease.** It means the batch is in the coordinator's intake queue. The lease ends when the writer commits, behind up to 16 batches in intake and 64 in the writer's queue.
 - **Heartbeats renew all of a worker's leases** (`LeaseTable::heartbeat`), so until then the lease lives, and the coordinator answers the holder's own claim for the key with it.
 - **The worker can't tell** when the writer commits. Its out set remembers a committed entry for 180 s only (`FINISHED_GRACE`).
@@ -13,7 +12,6 @@ Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer la
   3. the lease ends as lost while its result still waits in the writer's queue.
 
 ## What changes
-
 - **The worker reports `Fetched` on `Accepted`** (`crates/lodestar/src/worker/runtime.rs`).
   - For every lease in the accepted batch, it reports `Outcome::Fetched` before telling its session the leases are committed. One task does both, so they're in that order.
   - The protocol already had `Fetched`, but the runtime never sent it.
@@ -47,7 +45,6 @@ Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer la
   - A `Fetched` under another token, for a key that still has a lease, still counts in `cluster_stale_reports_total`, as before (`fetched_keeps_the_lease_and_results_need_a_sink`).
 
 ## Compatibility
-
 - **An older worker never sends `Fetched`.** Its leases are never marked, and its own claims get its lease back as today (`a_holder_that_never_reports_fetched_gets_its_lease_back`).
 - **A newer worker with an older coordinator:** the older coordinator checks a `Fetched` and keeps the lease, as it always did, and still answers the holder's claims with the lease. The worker's 180 s grace still covers it there.
   - Each `Fetched` arriving after the commit counts in that coordinator's `cluster_stale_reports_total`, which is harmless noise.
@@ -55,18 +52,15 @@ Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer la
 - **No wire change:** `Outcome::Fetched` and `DenyReason::Stored` already exist.
 
 ## The worker's grace stays at 180 s
-
 - **The window it still covers:** a claim the worker sent before its `Fetched` report reached the coordinator is answered with the lease. That's milliseconds to seconds.
 - **Older coordinators:** the grace is the only cover against a coordinator that doesn't mark.
 - **Shrinking it** is for once every coordinator in the field marks leases. Not now.
 
 ## The built-in worker
-
 - **It never sends `Fetched`:** its results go straight to the writer, not through `Accepted`. So its leases are never marked.
 - **No extra check for it:** neither the mark nor the claim check special-cases `WorkerId::LOCAL`. The server test's session connects under that id, which lets the test exercise the real path. A LOCAL lease that were somehow marked would expire like any marked lease.
 
 ## Tests
-
 - `a_fetched_lease_answers_its_holders_claims_as_committed` (`crates/cluster/src/leases.rs`), on the authority's injected time:
   - the writer is stalled 500 s, past the 180 s grace;
   - the holder's claim is `Committed`;
@@ -88,5 +82,4 @@ Closes the window that X-wk-out-set-polish (#737) named: a coordinator writer la
   - a `Fetched` arriving after the commit isn't counted as stale.
 
   The worker's own forgetting isn't simulated: a denied key never reaches the out set or the pool, so what the out set remembers doesn't matter.
-
 - **`cluster_stale_reports_total`** (`docs/metrics.md`, outside this slice's files): its row could say that a `Fetched` for a key with no lease isn't counted. That's left to the metrics doc's owner.

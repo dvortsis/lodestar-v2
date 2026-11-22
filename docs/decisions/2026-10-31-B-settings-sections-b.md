@@ -11,7 +11,6 @@
   - the SMTP host, port and security mode, for the password (so a test can't send it over a downgraded connection).
 
   It's the same rule `SECRET_ENDPOINTS` applies at save, so neither a test nor a save can carry a saved password to another server. `DownloadClientDraft` gains an optional `id` to name the saved client.
-
 - **Usage data:**
   - `GET /usage` gives the count of logged searches, for the dialog.
   - `POST /usage/clear` deletes the whole query log and needs `{"confirm": true}`; without it the answer is `428 confirmation_required`.
@@ -27,6 +26,5 @@
 - **The new endpoints live under the `settings` module** (`settings/{checks,usage}.rs`), with their routes and OpenAPI paths in `settings::routes` and `settings::ApiDoc`, so no shared file changed. A test holds that each of the module's schemas reaches `/openapi.json` exactly as defined, so a same-named schema in another module can't silently replace it (#255's class). The new types have distinct names: `Usage*`, `*Draft`, `EmailSecurity`.
 
 ## What S-settings-2b binds to
-
 - **Test connection / Send test:** `POST /settings/test` with `kind` and the card's values. Leave a secret out to use the saved one; send it to test a new one. Show `error.message` inline and `version` on success.
 - **Clear usage data:** `GET /usage` for the dialog's count, then `POST /usage/clear` `{confirm: true}` from the Danger zone.

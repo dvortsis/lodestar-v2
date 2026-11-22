@@ -12,7 +12,6 @@
 - **Copy:** all strings are `settings_screen_*` (not server keys) except the server's own labels, help, keywords and `settings_group_*`, which the generator turns into the four new per-section maps. zh is filled for all of them.
 
 ## Size (runner decisions §2.26, 2026-10-31) and how it was held
-
 - **Lazy parts.** The client cards, the channel checkboxes, the per-group test button, the Clear usage panel and the Privacy dialog load after the screen paints (`screens2/Lazy.svelte`, `LazyWidget.svelte`, `widgets.ts`, `privacy.ts`). The four navigation icons load as one module (`screens2/icons.ts`) through a new optional `Screen.iconLoad`, with `shell/NavIcon.svelte` showing the gear until it arrives. This is the scoped exception to the registry, approved by the runner (§2.26, 2026-10-31, in reply to the size report): the one new field, one small component in the shell, and the four entries for these screens. Nav titles stay eager.
 - **A hand-built screen's purpose is its body's line**, so the three hand-built entries carry no eager `purpose` (Trackers, which is generated, keeps its).
 - **Gates.** `.size-limit.mjs`: the first-view gates now count the group map plus the screen's own map (`bodyMaps`), and for a generated screen the largest generated section's map by gzip size, instead of the largest of any section (the optional #264 polish item). The four new maps have their own entry ("Settings connection messages", limit 4.3 KB) and the lazy parts another ("Settings connection screens", 14.2 KB, after the Advanced and load-failed parts joined it), each at measured + 10%; the existing "Settings messages" limit is unchanged. No limit was raised.
@@ -24,7 +23,6 @@
 - **The first-view gate's worst case is derived:** every section's map that no hand-built body names (`bodyMaps` in `.size-limit.mjs`), so a later generated section joins it as soon as its map exists.
 
 ## Review round (runner, 2026-10-31)
-
 - **Save password waits for the client.** If a client's staged address or kind differs from the saved one, Save password and Remove password are disabled with "Save your changes first, then save the password.", so a password is never stored against the old server (the server resets a secret whose endpoint moves).
 - **Removed-but-saved ids aren't reused** for a new client (`blankClient([...list, ...saved])`), so a new card never inherits the old client's "Set" state.
 - **Reordering keeps focus** on a move button of the client that moved (the other one when this one is now disabled).

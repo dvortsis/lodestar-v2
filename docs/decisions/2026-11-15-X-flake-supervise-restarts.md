@@ -21,18 +21,16 @@ A test-only fix for `supervise::crashes_outside_the_window_never_need_attention`
 Windows wasn't reproduced locally: no Windows host is available here, and Linux spawns don't cost what Windows ones do. The fix doesn't depend on the platform: whatever one restart costs, each gets its own 60 s. In the tester's failing runs each restart took under 10 s (6 or 7 in 60 s), so the new wait covers that load with room to spare.
 
 On Linux, the failure was reproduced at a smaller scale:
-
 - The test ran pinned to one CPU (`taskset -c 0`), shared with 300 busy loops at the same priority.
 - Both the old and the new test were built with `DEADLINE` set to 5 s. That build was local only and isn't committed: the committed deadline stays 60 s.
 - Unloaded, the 8 restarts take 0.27 s. Under that load they take about 10 s, more than one 5 s deadline, while each restart takes about 1.5 s, well inside it. That's the tester's Windows case at a twelfth of the scale.
 
-| Test                                 | Runs | Passed | Failed | Failure seen                                                                                             |
-| ------------------------------------ | ---- | ------ | ------ | -------------------------------------------------------------------------------------------------------- |
-| Before (one deadline for 8 restarts) | 10   | 0      | 10     | "waited for eight restarts; last saw Status { … restarts: 3 }" (4 in one run), as in the tester's report |
-| After (one deadline per restart)     | 10   | 10     | 0      | none; 11 to 14 s each                                                                                    |
+| Test | Runs | Passed | Failed | Failure seen |
+|---|---|---|---|---|
+| Before (one deadline for 8 restarts) | 10 | 0 | 10 | "waited for eight restarts; last saw Status { … restarts: 3 }" (4 in one run), as in the tester's report |
+| After (one deadline per restart) | 10 | 10 | 0 | none; 11 to 14 s each |
 
 Loads that couldn't be calibrated weren't counted as results:
-
 - busy loops at nice 19;
 - 2,000 busy loops;
 - cgroup CPU quotas.

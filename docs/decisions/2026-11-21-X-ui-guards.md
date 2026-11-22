@@ -3,7 +3,6 @@
 Track U's first slice (runner brief, 2026-11-21Z). Architecture §10.2 (icons, breakpoints) and §10.17 (accessibility gates). No product behaviour changes: icon weight is the only visual change.
 
 ## Weighted icons
-
 - **All 124 unweighted Phosphor imports (62 files) now import the Bold glyph** (`~icons/ph/<name>-bold`). §10 is Phosphor Bold, with Fill only for selected or on states (favourite, active filter).
   - **One of the 124 marks an on state:** the Search facets' exclude toggle (`search/facets/TermGroup.svelte`, `aria-pressed={v.excluded}`), an active-filter state. It's left Bold here, because swapping glyphs on press is a behaviour change. The runner has queued X-facet-exclude-fill to use `-fill` while it's pressed.
   - The other candidates checked are plain glyphs: a checkbox's check, the wizard's "later" dot, a half circle used as a warning, and the pause states.
@@ -15,7 +14,6 @@ Track U's first slice (runner brief, 2026-11-21Z). Architecture §10.2 (icons, b
   - **The rule lives in `scripts/bans.mjs`,** beside its patterns, so the test can run it; `eslint.config.js` imports it from there.
 
 ## Dead breakpoint classes
-
 - **The theme resets `--breakpoint-*` to the §7 ranges** (`medium:` 480 px, `large:` 640, `x-large:` 1024, `xx-large:` 1366, `xxx-large:` 1920), so Tailwind's default `sm:`, `md:`, `lg:`, `xl:` and `2xl:` compile to nothing.
 - **The four on main are removed**, which changes nothing visually:
   - `sm:grid-cols-2` in the companions install dialog, in the companions templates and in the logging levels;
@@ -28,7 +26,6 @@ Track U's first slice (runner brief, 2026-11-21Z). Architecture §10.2 (icons, b
 - **Left alone (runner's call):** the breakpoint ban also flags prose that happens to read like a class (`sm:ss`), and the icon ban doesn't cover `virtual:icons/ph/…` or uppercase names. Neither appears in the code.
 
 ## Axe on fixture data
-
 - **`e2e/axe.fixture.test.ts`** runs axe (WCAG 2.2 AA tags, as `e2e/a11y.ts` does) against a real `lodestar serve --fixture` server, over two surfaces:
   - **/insights** at 7 days, once its KPIs, funnel and annotations render, and again with the trend's table open;
   - **every first-run wizard step**, from Network check to Done.
@@ -40,15 +37,12 @@ Track U's first slice (runner brief, 2026-11-21Z). Architecture §10.2 (icons, b
   - no error banner is showing.
 
   So a slow runner can't scan "Loading…" or a load error and pass.
-
 - **Waits are conditions**, each with a deadline of at least 10 s (15 s), and there are no fixed sleeps.
 - **In CI** it runs in `e2e.yml`'s `fixture` job, nightly and on dispatch, because that job's project matches `*.fixture.test.ts`. There's no workflow change (runner's call): moving fixture specs onto pull requests is a separate decision, outside this slice.
 - **Locally,** against `serve --fixture`: 2 of 2 pass.
 
 ## Sizes
-
 Glyph weights change the icon modules, and Rolldown regroups the shared ones.
-
 - **Most entries move by a few bytes.**
 - **The largest drops:** Discover −612 B, Search live banner −362 B, Search cards −338 B, Alert route −221 B.
 - **The largest rises:** Detail sections +263 B, Compare +225 B, Sources dialogs +174 B, Settings SourcesScreen +162 B, Search results (lazy) +153 B.
@@ -57,16 +51,14 @@ Glyph weights change the icon modules, and Rolldown regroups the shared ones.
   - The other two fall to their measured sizes, rounded up at 0.01 kB, so the freed bytes can't be quietly spent.
   - No other limit moves, the tight ones included.
 
-| Entry                     | Before   | After    | Limit before | Limit after |
-| ------------------------- | -------- | -------- | ------------ | ----------- |
-| Search results (lazy)     | 40,600 B | 40,753 B | 40.62 kB     | 40.76 kB    |
-| Search cards (lazy)       | 8,303 B  | 7,965 B  | 8,364 B      | 7.97 kB     |
-| Search live banner (lazy) | 2,938 B  | 2,576 B  | 3.02 kB      | 2.58 kB     |
+| Entry | Before | After | Limit before | Limit after |
+|---|---|---|---|---|
+| Search results (lazy) | 40,600 B | 40,753 B | 40.62 kB | 40.76 kB |
+| Search cards (lazy) | 8,303 B | 7,965 B | 8,364 B | 7.97 kB |
+| Search live banner (lazy) | 2,938 B | 2,576 B | 3.02 kB | 2.58 kB |
 
 ## Snapshots
-
 CI regenerated the baselines through the `web/e2e/.update-snapshots` marker (e2e/README.md "Updating snapshots"). Only one moved past the 0.001 tolerance: `smoke.test.ts-snapshots/settings-bp2560-riverstone-dark-comfortable-linux.png`. Its diff is the Bold glyphs plus one finding:
-
 - **The old baseline predated Outputs in the Settings nav.** The new shot has the Outputs item under Connections, which `shell/screens.ts` always lists (an eager glob of every `screen.ts`, since OUT-2), so every row below it moves down by one.
 - **The regenerated baseline is kept,** because it matches current main (runner's call).
 - **Other baselines may be stale the same way.** The light 2560 baseline, which wasn't rewritten, also lacks Outputs. Why it still passes, whether it isn't compared in pull-request runs or the tolerance hides a nav row, is the runner's follow-up slice X-snapshot-stale-outputs. This slice touches no other baseline.

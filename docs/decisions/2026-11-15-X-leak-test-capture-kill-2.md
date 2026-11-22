@@ -3,7 +3,6 @@
 Parts 2 and 3 of the runner's X-leak-test-capture-kill slice: the gluetun leak test's failures should always mean a leak, never a busy or confined host. Part 1, the CI flake in the capture stub, is #946 and its own decisions file. Calls not marked as the runner's are this PR's, and the runner flags them to the owner (`docs/owner-decisions.md` §2.19).
 
 ## 2. A capture that won't stop fails its own line
-
 - **The problem (from the test VM):** the leak test stopped each capture with TERM, then waited without a deadline. A shell that may not signal `tcpdump`, such as an AppArmor-confined one (Ubuntu 24.04 through a snap-installed SSM agent, or a snap terminal), left the wait hanging until the run's 900 s timeout.
 - **Now `stop_capture` stops every capture:**
   1. It sends TERM, then waits up to `CAPTURE_STOP_WAIT` seconds (default 15, at least 10) for the capture to exit.
@@ -17,7 +16,6 @@ Parts 2 and 3 of the runner's X-leak-test-capture-kill slice: the gluetun leak t
 - **Behaviour on a host where signals work is unchanged:** TERM stops `tcpdump` at once, and it flushes before it exits.
 
 ## 3. Phase B probes run only with the interface down (runner's call)
-
 - **The problem (from the test VM, 2 of 2 loaded runs):** gluetun's own VPN restart brought `wg0` back during phase B before the probes ran, and `vpn_interface_stayed_down` failed. Phase B saw no egress and no ICMP to the endpoint, so it wasn't a leak.
 - **The brief's wording is replaced (runner's call).** The brief said "phase B holds the endpoint block until the probe has run", but the endpoint block already holds through all of phase B. What phase B has to prove is that every leak probe ran while the VPN interface was down. A restart after the last probe is no leak evidence either way.
 - **Each phase B probe is bracketed:**
@@ -36,14 +34,11 @@ Parts 2 and 3 of the runner's X-leak-test-capture-kill slice: the gluetun leak t
 - **Not chosen (runner's call): pausing gluetun's own VPN restart** during phase B. It would change the system under test.
 
 ## Docs
-
 - `docs/operations/cloud-fleet-runbook.md` §3.2 lists `capture_stopped_<name>` and `vpn_interface_held_down` as the harness's own failures, with what to do.
   - **For `capture_stopped_<name>`:** through `/fleet run` (SSH as root) it shouldn't happen, so the reader tells the runner. Run by hand from a snap terminal or an SSM session, it's run again from an SSH root shell. The stuck `tcpdump` keeps running until it's killed from an unconfined shell or the VM reboots (from the review).
 
 ## Tests
-
 Each new test fails with its change reverted.
-
 - **`test_a_capture_a_term_leaves_running_is_killed`:** a capture that ignores TERM gets KILL after its deadline, and the run passes.
 - **`test_a_capture_that_cant_be_signalled_fails_its_own_line`:** a capture neither signal can stop (the `kill` stub refuses them, for the host capture and for a phase's) fails `capture_stopped_<name>` and nothing else. The exit then makes one more KILL attempt at it. Before this change, the same run hung until the test's 120 s timeout.
 - **`test_a_capture_that_already_died_is_never_signalled`:** the phase and host captures exit early; no signal goes to either PID. It fails without the parent check.

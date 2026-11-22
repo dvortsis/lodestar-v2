@@ -1,15 +1,12 @@
 # X-log-url-redact-5 decisions (#492)
 
 A security fix in `crates/log/src/url.rs` (architecture §12.1, B12, B-log1).
-
 - **Who decided:** the runner made this slice from its review of #488 (X-log-url-redact-4), and set its rules: monotone through `only_more`, fuzz against `main`, a linear sweep and a security review.
 - **The base:** it builds on `main` at ad9e59a, which holds #483 and #488. Every comparison is with that `main`.
 - **What it supersedes:** the "Other look-alikes still hide nothing" bullet in `docs/decisions/2026-11-05-X-log-url-redact-4.md`'s gap list. Those look-alikes are covered here.
 
 ## What leaked on `main`
-
 None of these hid the value in either stage:
-
 - **A non-ASCII space right after a separator,** before a quoted or space-separated value. The first pass took that space as the whole value, so its output no longer shows the real one, and #488's second reading found nothing:
   - `{"password":\u{a0}"<s>"}`
   - `token=\u{a0}'<s>'`
@@ -24,14 +21,12 @@ None of these hid the value in either stage:
   - the zero-width spaces (U+200B, U+2060, U+FEFF), including one before a `:`.
 
 ## The rule
-
 - **One table.** `look_alike(c, all)` maps:
   - every colon look-alike to `:`;
   - both equals look-alikes to `=`;
   - every non-ASCII Unicode space (`char::is_whitespace`), the vertical tab (U+000B, whitespace to Rust but not ASCII whitespace to the credential rules) and the three zero-width spaces to a space.
 
   With `all` false, it maps only #488's three (`：`, `＝`, U+00A0).
-
 - **Two new readings,** each through an `only_more` of its own, after #488's:
   - the wide output, with every look-alike in ASCII, run only when it holds one that #488's reading doesn't map;
   - the original text, with every look-alike in ASCII, run only when it holds any. This covers a look-alike space after a separator: the first pass's output has lost the value by then.
@@ -46,7 +41,6 @@ None of these hid the value in either stage:
 - **`꞊` (U+A78A),** the equals counterpart of `꞉`, is in, from the self-review.
 
 ## A `//` URL's password after a space, in a credential's value (runner's addition)
-
 - **How it was found:** `planted_secrets_never_get_through` failed on #489's Windows CI.
   - The template: `{before} //u:{syntax}{secret}@host.example/x`.
   - The seed: `before = "PW:"`, `syntax = " "`.
@@ -70,7 +64,6 @@ None of these hid the value in either stage:
 - **Over-redaction accepted (runner's review):** where a credential's value meets `//`, the reading takes the userinfo to the last `@` on the line, within its window. So text between the two can go too. It only ever hides more.
 
 ## The fast path stays exact
-
 - **What `plain_line` refuses:** any line holding a character that `look_alike(c, true)` maps to `:` or `=`. It uses the same table as the readings. The 0xC2 and 0xEF byte arms #488 added are gone.
 - **What it accepts:** look-alike spaces, the vertical tab and U+00A0 (runner's review of 8589d4d7).
   - **Why:** refusing every look-alike sent such lines down the slow path. 16 MiB of `x\u{200b}` took 5.5 s against `main`'s 0.16 s, and CJK text with U+3000 took 4.6 s against 0.25 s.
@@ -82,8 +75,8 @@ None of these hid the value in either stage:
   - `ascii_separators` maps only spaces on it, and a space makes no cut without one of those. So every look-alike reading finds no cut, and both stages are `hide_runs` of the text, as the trigger table in `docs/decisions/2026-11-05-X-log-url-redact-3.md` says.
   - **The row this file adds to that table:**
 
-| Rule                                                 | What it needs to fire                                                                                                               | Excluded by                                                                         |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Rule | What it needs to fire | Excluded by |
+|---|---|---|
 | The extra credential readings, with every look-alike | a credential name and a look-alike `:` or `=`, or a separator or `bearer` that's already refused, with a look-alike space beside it | the colon and equals look-alikes, refused by `plain_line`; the rest refused already |
 
 - **The test:** `the_fast_path_matches_both_stages`.
@@ -93,7 +86,6 @@ None of these hid the value in either stage:
 - **What the test found:** the original text's reading hid a word glued to a hash-like run (`<hash>日本`). That reading didn't hide runs as the stages do, so `日本` wasn't a word of its own there. It hides them now (`hide_runs`). The fast path is exact again, and that word no longer goes.
 
 ## Tests
-
 - **`a_look_alike_space_or_separator_keeps_its_value_hidden`:** 33 inputs, each refused by `plain_line`.
   - **31 showed the secret on `main`:**
     - the shapes above;
@@ -106,20 +98,19 @@ None of these hid the value in either stage:
 - **Every other test passes unchanged.**
 
 ## Differential fuzz against `main` (ad9e59a)
-
 - **The harness:** #483's harness, kept out of the commit, with its `main` side moved to ad9e59a.
   - **New slots (16):** the 7 shapes in "What leaked", plus `password﹕S`, `token﹦S`, `Bearer\u{202f}S`, `Bearer\u{200b}S` and `password\u{200b}:S`, plus four `//` forms: `PW: //u: S@host.example/x`, `token=//u:\tS@h`, `x-api-key: //u:  S@h/` and ` //u: S@host.example`.
   - **New token entries (11):** U+3000, U+202F, U+200B, U+FEFF, U+FE55, U+2236, U+FE66, U+A78A and U+000B, and `ː` twice (now a near miss).
 - **The run:** 2 seeds × 1,200,000 token soups, about 2,400,000 secrets per seed.
 
-| Seed | Entry point      | PR shows, `main` hides | `main` shows, PR hides | Shown by PR / `main` | Panics |
-| ---- | ---------------- | ---------------------- | ---------------------- | -------------------- | ------ |
-| 1    | `scrub_text`     | **0**                  | 379,510                | 633,662 / 1,013,172  | 0      |
-| 1    | `scrub` absolute | 0                      | 0                      | 615,116 / 615,116    | 0      |
-| 1    | `scrub` request  | 0                      | 0                      | 415,433 / 415,433    | 0      |
-| 2    | `scrub_text`     | **0**                  | 381,023                | 633,739 / 1,014,762  | 0      |
-| 2    | `scrub` absolute | 0                      | 0                      | 613,581 / 613,581    | 0      |
-| 2    | `scrub` request  | 0                      | 0                      | 414,634 / 414,634    | 0      |
+| Seed | Entry point | PR shows, `main` hides | `main` shows, PR hides | Shown by PR / `main` | Panics |
+|---|---|---|---|---|---|
+| 1 | `scrub_text` | **0** | 379,510 | 633,662 / 1,013,172 | 0 |
+| 1 | `scrub` absolute | 0 | 0 | 615,116 / 615,116 | 0 |
+| 1 | `scrub` request | 0 | 0 | 415,433 / 415,433 | 0 |
+| 2 | `scrub_text` | **0** | 381,023 | 633,739 / 1,014,762 | 0 |
+| 2 | `scrub` absolute | 0 | 0 | 613,581 / 613,581 | 0 |
+| 2 | `scrub` request | 0 | 0 | 414,634 / 414,634 | 0 |
 
 - **At 8589d4d7,** before the vertical tab and the fast-path change, the same seeds hid 377,925 and 379,590 more, with 0 regressions.
 
@@ -128,7 +119,6 @@ None of these hid the value in either stage:
 - **With `ː` in the table** and 12 new slots, the same seeds hid 337,045 and 337,560 more, with 0 regressions. The difference is the words holding `ː`, which now show as `main` shows them.
 
 ## Cost
-
 - **ASCII lines cost the same as on `main`, within noise.** The look-alike readings run only on text holding a look-alike, non-ASCII or the vertical tab. The `//` reading runs only on text holding a URL form without `://`.
 - **A line with only look-alike spaces** takes the fast path, as on `main` (0.32 s for 16 MiB of CJK text with U+3000).
 - **A line with a look-alike `:` or `=`** gets one or two more credential readings. `下载完成：12 个文件` takes 4.6 µs, against `main`'s 3.4.
@@ -136,18 +126,17 @@ None of these hid the value in either stage:
   - The worst time ratio, normalised to 1 for linear, is 3.92 (`x://&?`, at 91 ms). The ratios are dominated by noise.
   - The worst units, the `//` form the new reading handles, and the runner's two look-alike-space cases take about 4 times as long at each 4 times in size:
 
-| Unit                | 1 MiB   | 4 MiB   | 16 MiB  |
-| ------------------- | ------- | ------- | ------- |
-| `x://&?`            | 0.111 s | 0.452 s | 1.872 s |
+| Unit | 1 MiB | 4 MiB | 16 MiB |
+|---|---|---|---|
+| `x://&?` | 0.111 s | 0.452 s | 1.872 s |
 | `éNameapikey=ok＝;` | 0.174 s | 0.639 s | 2.920 s |
-| ` //a@`             | 0.197 s | 0.945 s | 5.240 s |
-| `x\u{200b}`         | 0.014 s | 0.057 s | 0.177 s |
-| `共 12\u{3000}个`   | 0.016 s | 0.067 s | 0.315 s |
+| ` //a@` | 0.197 s | 0.945 s | 5.240 s |
+| `x\u{200b}` | 0.014 s | 0.057 s | 0.177 s |
+| `共 12\u{3000}个` | 0.016 s | 0.067 s | 0.315 s |
 
-- `scrub_text_is_linear` passes.
+  - `scrub_text_is_linear` passes.
 
 ## Gaps left
-
 - **Look-alikes outside the table,** on `main` too. Each would be one more arm in `look_alike`, if logs ever show it:
   - the length mark `ː` (U+02D0), left out above;
   - the equals signs `⁼` (U+207C) and `⩴` (U+2A74);

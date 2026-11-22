@@ -29,12 +29,12 @@ Runner brief X-importer-schema-limit, 2026-11-21, from #1018's review. SQLite 3.
 
 Each count below is the smallest `SQLITE_LIMIT_SCHEMA` the fixture opens under, so it includes the internal objects above. The fixtures replay magneticod's own DDL history (`pkg/persistence/sqlite3.go`), so each is shaped like a real file.
 
-| Layout                        | Objects | Made up of                                                                                                                                                                                          |
-| ----------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| v0                            | 4       | `sqlite_schema`, `torrents`, its `UNIQUE` autoindex, `files`                                                                                                                                        |
-| v1                            | 5       | v0, plus `info_hash_index`                                                                                                                                                                          |
-| v2                            | 6       | v1, plus `readme_index`                                                                                                                                                                             |
-| v3 (also without `n_seeders`) | 18      | v2, plus the FTS5 table `torrents_idx`, its four shadow tables (`_data`, `_idx`, `_docsize`, `_config`) and the two `WITHOUT ROWID` primary-key indexes, plus four triggers and `modified_on_index` |
+| Layout | Objects | Made up of |
+| --- | --- | --- |
+| v0 | 4 | `sqlite_schema`, `torrents`, its `UNIQUE` autoindex, `files` |
+| v1 | 5 | v0, plus `info_hash_index` |
+| v2 | 6 | v1, plus `readme_index` |
+| v3 (also without `n_seeders`) | 18 | v2, plus the FTS5 table `torrents_idx`, its four shadow tables (`_data`, `_idx`, `_docsize`, `_config`) and the two `WITHOUT ROWID` primary-key indexes, plus four triggers and `modified_on_index` |
 
 - **The largest real schema is v3, at 18.** Magnetico's schema never shrinks between versions, and the importer accepts v1 to v3 (v0 is refused for its missing files index).
 - **256 is about 14 times that.** It leaves room for anything a user may have added by hand: their own indexes, `ANALYZE`'s `sqlite_stat1` and `sqlite_stat4`, or a second FTS table. That's far more than any of these needs.

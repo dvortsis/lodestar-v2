@@ -3,7 +3,6 @@
 #895 (`2026-11-14-X-filter-budget-fix.md`) made torrents with many distinct words cost the core about twice the time per file. On the reference EPYC 7763, its worst case at the budget reached 14.5 ms against the 15 ms bar, and on this build VM, `main` failed the bar. This change wins that time back. It changes no charge.
 
 ## Calls
-
 - **The overflow store for words (`WordSpill`) is flat** (runner: fix the measurement's cause, not its scaling).
   - **Before:** a word displaced past `kept` went into a hash map as a plan of its own: three buffers plus a cloned key, all freed when the next read started. A torrent with a distinct number in every file did that for nearly every file, so most of its time went to allocating and freeing.
   - **Now:** entries are fixed-size and sit in one array, copied in and out, and a freed entry is reused within the read. A word with more than six tokens keeps them in a buffer of the store's.
@@ -21,60 +20,54 @@
   - **The earlier reading's tokenizer (`read_split`):** it builds a new tokenizer for each read, so `kept` is allocated and freed per read: 2,048 × 88 B, about 180 KB, against 45 KB before. That only happens to a read that trades at all, which means a torrent with a mark character and more than 512 distinct words. Reusing the thread's splitting tokenizer there would avoid it; that's a follow-up, not part of this change.
 
 ## Numbers
-
 The five shapes are the ones that ran slow on #907's EPYC 9V45 job: long CJK folder, alternating folders, typical Latin, spelled out, and long folder with a mark. Times are the core's raw best of five passes, in milliseconds, at each build's largest torrent the budget allows. #895 lowered that size: long CJK folder fell from 17,152 files to 13,696, alternating folders from 25,600 to 18,432, and typical Latin from 12,672 to 8,576.
 
 ### CI before this change (`filter budget` jobs)
-
-| Runner, date                                              | Code        | long CJK folder | alternating folders | typical Latin | spelled out | long folder with a mark |
-| --------------------------------------------------------- | ----------- | --------------- | ------------------- | ------------- | ----------- | ----------------------- |
-| EPYC 7763, 2026-11-14 09:11Z–20:42Z, 11 jobs              | before #895 | 5.37–6.16       | 5.02–5.15           | 6.26–6.55     | 5.31–5.43   | 1.98–2.53               |
-| EPYC 7763, 2026-11-14 18:05Z to 2026-11-15 02:23Z, 5 jobs | #895        | 10.17–14.30     | 10.35–14.53         | 8.11–10.31    | 5.64–10.77  | 2.67–4.02               |
-| EPYC 9V45, 2026-11-14 10:54Z, 14:34Z, 17:57Z              | before #895 | 3.50–4.08       | 2.53–2.68           | 2.98–3.25     | 2.77–2.97   | 1.05–1.27               |
-| EPYC 9V45, 2026-11-14 23:24Z                              | #895        | 6.02            | 5.82                | 4.15          | 5.24        | 1.28                    |
-| EPYC 9V45, 2026-11-15 03:22Z (#907, failed)               | #895        | 15.40           | 16.33               | 11.30         | 7.22        | 3.35                    |
+| Runner, date | Code | long CJK folder | alternating folders | typical Latin | spelled out | long folder with a mark |
+|---|---|---|---|---|---|---|
+| EPYC 7763, 2026-11-14 09:11Z–20:42Z, 11 jobs | before #895 | 5.37–6.16 | 5.02–5.15 | 6.26–6.55 | 5.31–5.43 | 1.98–2.53 |
+| EPYC 7763, 2026-11-14 18:05Z to 2026-11-15 02:23Z, 5 jobs | #895 | 10.17–14.30 | 10.35–14.53 | 8.11–10.31 | 5.64–10.77 | 2.67–4.02 |
+| EPYC 9V45, 2026-11-14 10:54Z, 14:34Z, 17:57Z | before #895 | 3.50–4.08 | 2.53–2.68 | 2.98–3.25 | 2.77–2.97 | 1.05–1.27 |
+| EPYC 9V45, 2026-11-14 23:24Z | #895 | 6.02 | 5.82 | 4.15 | 5.24 | 1.28 |
+| EPYC 9V45, 2026-11-15 03:22Z (#907, failed) | #895 | 15.40 | 16.33 | 11.30 | 7.22 | 3.35 |
 
 On #907's 9V45 job, calibration read 0.62–0.70× the reference's time, so its raw times were scaled up: long CJK folder read 24.42 ms, alternating folders 25.90 ms and typical Latin 17.92 ms, all over the 15 ms bar.
 
 ### CI after this change
-
-| Runner, date                        | long CJK folder | alternating folders | typical Latin | spelled out | long folder with a mark |
-| ----------------------------------- | --------------- | ------------------- | ------------- | ----------- | ----------------------- |
-| EPYC 9V45, 2026-11-15 04:34Z (#910) | 4.04            | 3.00                | 2.79          | 3.20        | 1.05                    |
+| Runner, date | long CJK folder | alternating folders | typical Latin | spelled out | long folder with a mark |
+|---|---|---|---|---|---|
+| EPYC 9V45, 2026-11-15 04:34Z (#910) | 4.04 | 3.00 | 2.79 | 3.20 | 1.05 |
 
 On that job the worst case on the reference scale was 8.86 ms (ASCII words read anew), against 25.90 ms on #907's 9V45 job, and the 50 µs gate read the mixed set at 43.0 µs.
 
 ### This build VM, back to back
-
 An Intel Xeon at 2.10 GHz with 4 vCPUs and a noisy host, calibrating at 1.02–1.03× the reference.
 
-| Shape                                       | before #895 | `main` (#895)        | this change |
-| ------------------------------------------- | ----------- | -------------------- | ----------- |
-| long CJK folder                             | 7.05        | 12.11                | 6.34        |
-| alternating folders                         | 4.77        | 12.04                | 5.53        |
-| typical Latin                               | 6.23        | 8.47                 | 5.06        |
-| spelled out                                 | 5.05        | 5.36                 | 5.68        |
-| long folder with a mark                     | 2.36        | 2.96                 | 2.69        |
-| ASCII words read anew                       | 6.43        | 12.52                | 9.85        |
-| worst of all shapes, on the reference scale | 7.85        | 16.20 (over the bar) | 9.86        |
+| Shape | before #895 | `main` (#895) | this change |
+|---|---|---|---|
+| long CJK folder | 7.05 | 12.11 | 6.34 |
+| alternating folders | 4.77 | 12.04 | 5.53 |
+| typical Latin | 6.23 | 8.47 | 5.06 |
+| spelled out | 5.05 | 5.36 | 5.68 |
+| long folder with a mark | 2.36 | 2.96 | 2.69 |
+| ASCII words read anew | 6.43 | 12.52 | 9.85 |
+| worst of all shapes, on the reference scale | 7.85 | 16.20 (over the bar) | 9.86 |
 
 ### Instructions (callgrind)
-
 Instructions inside `Core::verdict`, three verdicts of the same torrent, at `main`'s sizes.
 
-| Input                                               | `main`  | this change |
-| --------------------------------------------------- | ------- | ----------- |
-| long CJK folder, 13,696 files                       | 195.0M  | 116.1M      |
-| alternating folders, 18,432 files                   | 307.8M  | 193.3M      |
-| typical Latin, 8,576 files                          | 255.4M  | 196.3M      |
-| ASCII words read anew, 75 files                     | 254.8M  | 200.6M      |
-| distinct Arabic, 81 files                           | 252.2M  | 199.8M      |
-| the 50 µs gate's 512 typical torrents, three passes | 166.77M | 167.13M     |
+| Input | `main` | this change |
+|---|---|---|
+| long CJK folder, 13,696 files | 195.0M | 116.1M |
+| alternating folders, 18,432 files | 307.8M | 193.3M |
+| typical Latin, 8,576 files | 255.4M | 196.3M |
+| ASCII words read anew, 75 files | 254.8M | 200.6M |
+| distinct Arabic, 81 files | 252.2M | 199.8M |
+| the 50 µs gate's 512 typical torrents, three passes | 166.77M | 167.13M |
 
 The typical set is 0.2% higher, from checking two places on its 6,048 trades. That's still under the 168.6M measured before #895. On this VM, the 50 µs gate reads the mixed set at 52.3 µs on `main` and 51.9–53.0 µs here, with the mixed time over the calibration at 5.0 on both. The VM's CPU isn't in `ENGINE_SPEED`, so both builds read over 50 µs here. CI holds the gate.
 
 ## Tests
-
 - `a_metered_read_reads_what_an_unmetered_one_does` (`crates/filter/src/normalize.rs`) gives the same text two reads:
   - **metered:** its words trade places through `kept` and the store;
   - **unmetered:** it never trades.

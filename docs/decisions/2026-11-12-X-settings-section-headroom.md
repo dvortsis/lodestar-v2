@@ -17,5 +17,4 @@
     - Sources config dialog 5081 → 5082 B.
 
     All stay under their limits.
-
   - No limit in `web/.size-limit.mjs` moved, and the gate's file sets are untouched.

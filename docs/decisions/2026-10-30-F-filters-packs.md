@@ -1,6 +1,6 @@
 # F-filters-packs decisions
 
-Pack rules now honour CSX-5 _Neutralize terms_, as architecture §20.5.5 says: a neutralized keyword "stops counting as evidence in every non-floor core rule and pack rule", while all other evidence still counts. This closes the gap that `2026-10-30-F-filters.md` left for this slice. No owner decision or number changes.
+Pack rules now honour CSX-5 *Neutralize terms*, as architecture §20.5.5 says: a neutralized keyword "stops counting as evidence in every non-floor core rule and pack rule", while all other evidence still counts. This closes the gap that `2026-10-30-F-filters.md` left for this slice. No owner decision or number changes.
 
 - **The five pack rules that read keyword lists:** MW-3 (lure names on an executable), LU-2 ("how to open" notes), LU-4 (unlock and survey notes), SC-1 (service and scam words) and FK-2 (the `trailer`/`sample` guard). The first four now leave the torrent's neutralized words out of their keyword evidence. FK-2's words are only a guard, so it doesn't change (below).
 - **The neutral set is the one the core and your rules get.** It holds the keys of the Neutralize entries that apply to the torrent (`Engine::released`, `rules::neutral_sets`): entries that haven't expired, aren't in shadow mode, and whose word the core reads in the name or a path. A torrent with an Override entry still skips the packs entirely, as before.

@@ -3,7 +3,6 @@
 Hardening of how Lodestar on Windows decides that a folder is the service's data folder (`%ProgramData%\Lodestar`), and of when the service checks that folder. These items were deferred from X-cli-win-data-dir's reviews (#926, S8-07). Every remaining precondition needs an administrator, so nothing here was held. Calls not marked as the runner's are this PR's, and the runner flags them to the owner (`docs/owner-decisions.md` §2.19).
 
 ## The service checks its folder before reading from it
-
 - **What changed:** the service the SCM starts now makes its own folder private (`acl::secure_dir` and its verdict) before it reads any config file from there, however the folder was named. Before this, a `config.toml` in a folder named by `LODESTAR_DATA_DIR`, or a `--config` file inside the folder, was read first.
 - **How:** the service loads its config through `windows::service::load_guarded`, which uses the CLI's guard (`cli::ServiceGuard`). So the service and the CLI follow one rule and can't drift apart:
   - **Before any config is read,** the folder is secured when:
@@ -16,21 +15,18 @@ Hardening of how Lodestar on Windows decides that a folder is the service's data
 - **Not changed here, a follow-up for the runner:** with no `config.toml` in the service's folder and nothing set, the service still falls back to `data\config.toml` in its working folder. Under the SCM that's the system folder. The behaviour predates this slice.
 
 ## The CLI's implicit config file is checked too (from the review)
-
 - **What the guard sees** is the config file that will actually be read (`cli::config_file`, or the MSI branch's file), implicit ones included, not only an explicit `--config`.
 - **So:** a working folder that is the service's folder or inside it is checked before its `data\config.toml` is read, whatever that file says.
 - **Relative paths** start from the working folder, as the config loader resolves them. Tests set that folder (`Install::working`) without changing the process's.
 - **The file the loader would look for counts whether it exists yet or not,** so a file created between the check and the load is still covered by the check.
 
 ## A data folder inside the service's folder
-
 - **The guard covers it,** in the CLI and the service: a data folder inside the service's folder is checked as the folder itself is.
 - **What's checked is the service folder's own verdict.** That verdict already refuses a link or junction anywhere beneath the folder, and an entry directly in it that another account owns.
 - **Not chosen: applying the strict folder rule to the nested folder too (runner's call).** A subfolder that inherits the private folder's permissions legitimately fails the rule that a data folder's permissions must not inherit.
 - **Whole path parts only.** A folder whose name merely starts the same, such as `Lodestar2` beside `Lodestar`, isn't inside it.
 
 ## Comparing paths by what they are
-
 - **`windows::service::same_dir` and `within` compare what the system says a folder is,** when both paths can be opened. The comparison is the volume serial number and file index, each path opened with `FILE_FLAG_BACKUP_SEMANTICS`, after links and junctions are followed.
   - **`within`** compares the outer folder with the inner path and with each folder above it, so a junction to the service's folder, and anything under one, counts.
   - **A match always counts.** Otherwise the comparison falls back to the path's text.
@@ -55,7 +51,6 @@ Hardening of how Lodestar on Windows decides that a folder is the service's data
 - **Off Windows** nothing is compared by file identity, and there's no service folder to compare with.
 
 ## Not taken: reading ProgramData from the system's known folder (runner's call)
-
 - **The service and the CLI keep reading `%ProgramData%` from the environment,** with the service's fallback, so they still agree on where the folder is.
 - **Why not the known folder:**
   - The direct call needs `unsafe`, which the workspace forbids.
@@ -64,12 +59,10 @@ Hardening of how Lodestar on Windows decides that a folder is the service's data
   - An administrator's environment is already trusted, so the case it guards is administrator-only.
 
 ## Behaviour an administrator sees
-
 - **None in normal use.** A service whose folder is private starts as before.
 - **A folder that isn't private is refused** whichever way it's named, and the refusal is the same. `docs/operations.md` is unchanged.
 
 ## Tests
-
 - **`windows::service::tests::the_service_secures_its_folder_before_reading_from_it`** (d and b) runs on every platform. Each case tells the two orders apart, and each fails with the check moved after the read (checked by reverting the change):
   - **`LODESTAR_DATA_DIR` naming the folder, or a folder inside it:** its `config.toml` is broken and the check repairs it, so the config loads only if the check ran first.
   - **`--config` inside the folder, moving the data elsewhere:** refused. Read first, the data would be elsewhere and the folder never checked.

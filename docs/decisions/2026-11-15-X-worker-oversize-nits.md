@@ -3,7 +3,6 @@
 The optional findings from the runner's delta security review of #939 (X-worker-oversize-handback, `2026-11-15-X-worker-oversize-handback.md`). The runner set the scope (§2.19): items 2 to 4 of its brief, and no change to the wall-clock window. This file says only what the code now does.
 
 ## Calls
-
 - **The hand-back allowance map stays small** (`crates/cluster/src/leases.rs`, `hand_backs`). The runner gave the choice of pruning or a comment saying it's bounded by enrolment; this takes pruning.
   - When a worker starts a new window, every entry whose window has lapsed is dropped. A lapsed window counts from zero anyway, so nothing changes for any worker.
   - The map then holds only workers that handed back within the last `HAND_BACK_WINDOW_SECS`, whether they were forgotten or not. It no longer keeps one entry for every worker that ever handed back.
@@ -17,6 +16,5 @@ The optional findings from the runner's delta security review of #939 (X-worker-
 - **No change** to the wall-clock window (runner).
 
 ## Tests
-
 - **`leases.rs`:** `hand_backs_keep_to_a_per_worker_allowance` now also checks that a worker whose window lapsed with no hand-back since is dropped from the map when another worker starts a new window.
 - **`tests/remote_intake.rs`:** `a_refusal_in_the_race_window_is_remembered_as_blocked`. The hold changes after the server's check, the intake answers `Refused`, the key is never fetched, and a remote claim whose store check ran before the refusal is answered `Committed`. With `lost(Blocked)` put back, it fails at that last assertion.

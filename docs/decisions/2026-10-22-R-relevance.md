@@ -37,12 +37,10 @@ Date: 2026-10-22. Slice: R-relevance. Spec: architecture §8 ("a relevance judgm
 ## How to update the baseline
 
 `cargo run --release -p lodestar-bench --bin relevance -- --write-baseline`, committed in the PR that causes the change. That PR states:
-
 - **why the baseline moves:** a ranking change, or new or corrected judgments;
 - **the before and after:** overall NDCG@10, MRR and recall@50, and the worst-10 list.
 
 The rules:
-
 - **A ranking improvement raises the baseline**, so later changes can't quietly give the gain back. The bin prints a WARN line when NDCG@10 beats the baseline by more than the tolerance.
 - **A deliberate drop** needs its reason and the per-query losses in the PR, and the reviewer accepts it explicitly.
 - **Judgments are written from the ideal,** each with its one-line rationale. Never edit a grade to match what the ranking returns.
@@ -50,10 +48,10 @@ The rules:
 
 ## Baseline at introduction (main's ranking)
 
-| Measure   | Value        |
-| --------- | ------------ |
-| NDCG@10   | 0.9186       |
-| MRR       | 0.9247       |
-| Recall@50 | 0.9278       |
-| Queries   | 189          |
-| Corpus    | 142 torrents |
+| Measure | Value |
+|---|---|
+| NDCG@10 | 0.9186 |
+| MRR | 0.9247 |
+| Recall@50 | 0.9278 |
+| Queries | 189 |
+| Corpus | 142 torrents |

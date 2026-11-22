@@ -3,12 +3,10 @@
 The flaky detection test seen on #839's Windows run. Brief: runner, 2026-11-13Z. Test-only; no architecture section changes.
 
 ## The race
-
 - **Two tests in `crates/companions/tests/detect.rs` used to bind `127.0.0.1:0`, drop the listener, then probe the port**: `nothing_listening_is_not_found_and_unreachable` and `nothing_on_a_loopback_port_is_not_found`.
 - **Between the drop and the probe, another test in the same binary could be handed the same ephemeral port.** On #839's Windows run the qBittorrent probe reached a real listener and got `Protocol("HTTP exchange")` instead of "not found".
 
 ## The fix: hold the port, don't re-check it
-
 - **Of the brief's two shapes, this takes the second:** a port held closed for the whole test (`ClosedPort` in `detect.rs`).
 - **Why not re-check and retry:** a check right before the assertion still leaves a window between the check and the probe, so it can only make the race rarer.
 - **How the port is held:** a socket bound to it and never put into listening.
@@ -22,7 +20,6 @@ The flaky detection test seen on #839's Windows run. Brief: runner, 2026-11-13Z.
 - **Remaining Windows gap, accepted as negligible:** the held sockets don't set `SO_EXCLUSIVEADDRUSE`. So a foreign process using `SO_REUSEADDR` could still bind the exact port, but only by naming it deliberately; a port-0 bind is never handed a held port.
 
 ## Elsewhere
-
 - **The other tests in `crates/companions/tests/` keep their listeners open while they probe.** None has the pattern.
 - **Follow-up outside this slice's paths:** `crates/tracker-scrape/tests/scrape.rs:158-160` (`unreachable_udp_tracker_fails_fast_or_times_out`) binds a UDP socket, drops it, then probes its port.
   - Another test's socket could take the port meanwhile.
@@ -30,7 +27,6 @@ The flaky detection test seen on #839's Windows run. Brief: runner, 2026-11-13Z.
   - The same holding approach would fit.
 
 ## Follow-up: X-companions-loopback-nits
-
 - **A port Windows won't hand out counts as taken.** A `::1` bind that fails with `PermissionDenied` is retried like `AddrInUse`, because Windows answers that way for a port in an excluded range (Hyper-V, WinNAT). The bounded retry and the loud panic stay.
 - **The held-port test checks why the second bind fails:** exactly `AddrInUse` (X-worker-839-followups: `PermissionDenied` can't arise there).
 - **`loopback_falls_back_to_ipv6` no longer passes without asserting.**

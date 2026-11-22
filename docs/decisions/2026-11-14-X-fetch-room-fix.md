@@ -3,7 +3,6 @@
 This builds on X-fetch-meta-reserve (`2026-11-06-X-fetch-meta-reserve.md`) and X-fetch-pool-bytes (`2026-11-06-X-fetch-pool-bytes.md`). Architecture §6 (hostile-peer limits) and §18.4 (the fetch pool). The fetch pool now keeps room for new metadata fetches whatever the fetches already running do. This file says only what the code now does. The numbers are the runner's calls under `docs/owner-decisions.md` §2.26. No owner-set number moves; the memory budgets (`max_held_bytes`, a worker's 4 MiB) are unchanged.
 
 ## Calls
-
 - **A floor for small dicts** (`Budget::floor`, a quarter of the budget). A whole claim of at most `SMALL_CLAIM` (80 KiB: one request window with its client name and PEX peers, and the key) is a small one.
   - Partial and grown claims, the ones for dicts larger than one window, together stay out of the floor, whatever room the budget has.
   - A large dict's first window is admitted only while the largest growth any partial claim still needs would fit beside the floor too, so once grown claims and finished results drain (the pace and the deadlines bound that), one of them can grow.
@@ -22,7 +21,6 @@ This builds on X-fetch-meta-reserve (`2026-11-06-X-fetch-meta-reserve.md`) and X
 - **The lookup count follows the requests map** when a key in a lookup gains peers: it is decremented only if the key's request was there, and a debug assertion checks the two agree.
 
 ## Tests
-
 - **Budget** (`pool.rs`, `mod budget`, paused clock): growths are served one at a time and all complete; small claims keep to the floor while a growth waits; finished results share the floor while a growth waits; grown claims stay within their cap, and one held back by it keeps its turn; a network has one grown claim at a time; large claims stay out of the floor; large claims are admitted only while one can grow; one network's partial claims keep to their share; a claim its network's share held back keeps its turn once the share frees; a lone growth passes the cap, and not the floor unless nothing else is held; beside a lone growth, small claims keep the floor and other growths wait.
 - **The largest dict** (`pool.rs`, real TCP): with a worker's budget, the real fetcher fetches a dict of exactly `largest_dict` bytes and refuses one byte more at the handshake.
 - **The size rule** (`tests/pool.rs`): one peer's word doesn't end a key; peers in three networks agreeing do; one network's peers count once; a key out of peers is lost for its last peer's reason. `silent_claimers_pin_one_small_window_and_small_dicts_still_flow` now puts each silent peer in a network of its own, as the network share would otherwise hold most of them back.

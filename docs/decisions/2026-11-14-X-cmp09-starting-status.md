@@ -3,7 +3,6 @@
 A follow-up to X-cmp09-fix (#887) and X-cmp09-fix-2 (#893). Until now, a request the loopback gate refused read as a plain "unreachable". It now has its own error, words and log event. This file says what the code now does (`docs/security/v1/README.md` §5). The calls marked "runner's call" were the runner's. The ones marked "this PR's call" came from this PR's review, and the runner flags them to the owner (`docs/owner-decisions.md` §2.19).
 
 ## Not ready has its own error
-
 - **One sentence everywhere** (`lodestar_integrations::net::NOT_READY`): "Lodestar's own copy of this companion isn't ready yet. If you stopped or removed it, restart Lodestar to use your own." `NetError::NotReady` displays it.
 - **Download clients:** `ClientError::NotReady`, in place of `Unreachable`.
   - A client test or a send that hits it answers the code `companion_not_ready` with that sentence.
@@ -29,19 +28,16 @@ A follow-up to X-cmp09-fix (#887) and X-cmp09-fix-2 (#893). Until now, a request
 - **The web app** words `companion_not_ready` apart from `companion_unreachable` (en and zh). The download-client test shows the server's sentence, as it does for every code.
 
 ## What the gate's refusals say (this PR's call)
-
 - **Every refusal stays a refusal.** Only the error it gives changed, so that "not ready" means a companion Lodestar runs that isn't ready:
   - **A name that doesn't resolve now,** on a port the gate refuses, fails as the failed lookup it is (`NetError::Resolve`), not as not ready. It's still refused, and isn't logged.
   - **A client whose policy never allows loopback** (notifications, for one) is refused as blocked (`NetError::Blocked`), not as not ready, and isn't logged. Its policy would refuse the connection anyway.
 - So `NotReady` can't reach a notification.
 
 ## A log event, once per port
-
 - **`integrations.companion_not_ready`** (Warn, field `port`; runner's call). It's logged the first time the gate refuses a port as not ready in a process, and not again for that port.
 - **Help text (en):** "Lodestar held back a request to one of its companions because the companion isn't ready yet. It clears once the companion starts; if you stopped or removed it, restart Lodestar." zh has a plain translation.
 
 ## A hand-over marker reserves the port too
-
 - **Serve reserves a companion's port** before recovery and any start if the companion has a folder here (as before) **or** a hand-over marker. Anything at the marker's path counts, and so does a path that can't be looked at.
 - **Runner's call:** a read-only `Manager::marked(id)` was approved. The reservation runs before any manager is opened, so it's a free function over the data folder instead (`lodestar_companions::manager::handed_over`).
   - It uses the manager's marker path.
@@ -49,11 +45,9 @@ A follow-up to X-cmp09-fix (#887) and X-cmp09-fix-2 (#893). Until now, a request
 - **The port stays refused after a restart** too, while that companion's folder (even an empty one) or its marker is left behind. It opens once that companion is started and found ready, or at the first restart after what was left is removed.
 
 ## No catalogue, no gate (runner's call: a comment, not a gate)
-
 - If the built-in catalogue can't be read, companions are off for the run and no gate is set. It can't happen: the catalogue is compiled in, and its tests load it. A comment at `companions::start` says so.
 
 ## Tests
-
 - **`crates/integrations/tests/loopback_gate.rs`:**
   - a refusal reads as the not-ready sentence, never as unreachable;
   - after many refusals of one port, the event is logged once, with `port=` and the port;

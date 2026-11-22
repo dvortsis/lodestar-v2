@@ -3,7 +3,6 @@
 Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/decisions/2026-11-06-X-fetch-pool-bytes.md`, "For X-fetch-meta-reserve"). Architecture §18.4 (the fetch pool), §6 (hostile-peer limits), §3 (budgets). Owner §1.6.5: a worker uses at most 256 MB.
 
 ## Reserve before the pieces
-
 - **Where it hooks in.** `fetch_on_stream` reads `metadata_size` from the peer's extended handshake and checks it against `max_metadata`, as before. Then it awaits `FetchOptions::reserve`, a new optional hook (`lodestar_peer_wire::Reserve`, a newtype like `Deny`, called with `(now, total)`). It sends no request the reservation doesn't cover until the hook returns. `None` keeps the old behaviour, so every other caller is unchanged.
 - **Two steps, so an unproven claim is cheap** (from the self-review, which found a one-step design let 4 lying peers stall ingest; the first window cut to 64 KiB by the runner, 2026-11-07, option (a)):
   - **At the handshake:** the first request window, the dict's first 4 pieces (64 KiB), or all of a smaller dict. The 10–60 KB dicts most torrents have (§3) are whole at this step.
@@ -18,7 +17,6 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
   - a full PEX list (`MAX_PEX` × `size_of::<SocketAddr>()`, 6,400 B).
 
   The pool adds `size_of::<FetchedKey>()`, so a reservation is in `pool::weigh`'s units.
-
 - **The result never outgrows its reservation:**
   - **The dict:** `Assembly` already refused a piece that wasn't requested or had the wrong length, so a peer can't write past the announced size. Its buffer now also grows only up to the pieces requested so far, which is what's reserved: the first window until growth, then the whole size. It doubles as `Vec` does, but clamped with `reserve_exact`. Before, out-of-order pieces could double the capacity past the window or the size (second review; `assembly_never_grows_past_what_was_requested` replays its case).
   - **The PEX list and client name** are returned at exact capacity (`into_boxed_slice`, `into_boxed_str`). `weigh(fetched)` is therefore at most the reservation, and finishing only ever gives bytes back.
@@ -26,7 +24,6 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
 - **A peer that sends more than it announced** is refused (`Protocol`), and its buffer never passed the announced size.
 
 ## The shared budget (`pool::Budget`)
-
 - **One budget for held and reserved bytes.** `max_held_bytes` (64 MiB by default) now limits the bytes reserved by fetches in flight plus the bytes of finished results the pool holds. Held bytes are counted the same way and over the same span as in X-fetch-pool-bytes: not yet joined, in the outbox, and in the channel not yet taken.
 - **A claim per fetch.** The pool gives every fetch a `Reservation` (`Fetcher::fetch_reserving`), and `PeerWireFetcher` wires it into the hook. Clones share one claim, and the last clone to drop releases it. Each path releases exactly once:
   - **Success:** the fetch task settles the claim as the fetch finishes. The reservation becomes the result's weight in held bytes, and any surplus is released. There's no double count: the claim reads 0 afterwards, so its drop releases nothing.
@@ -35,7 +32,6 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
 - **The trait change is one default method.** `fetch_reserving(peer, key, reservation)` calls `fetch` by default, and the pool always calls `fetch_reserving`. The test fetchers, the crawler simulator's and WK-7's stages compile unchanged. A fetcher that doesn't reserve has its result counted when it finishes, as before: its bytes still stop fetching once they're held, but a burst can pass the budget by what's in flight. Only `PeerWireFetcher` reserves. `FetchedKey` and the output channel are unchanged.
 
 ## A full budget: the fetch waits
-
 - **The choice: wait (backpressure), not fail.** A fetch that can't reserve keeps its connection and waits for room; its 8 s deadline still runs.
 - **Why not fail?**
   - **A new outcome:** failing needs a new `FailureKind` and funnel reason, in `peer-wire/src/lib.rs` and the funnel. Both are outside this slice and seen by Insights.
@@ -43,7 +39,7 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
   - **Most waits are short:** room usually frees within a dict's download time, since the consumer takes results continuously.
 - **What waiting costs:** a socket and a peer connection, held while it waits.
 - **Never over-allocates.** A reservation is granted only if held plus reserved bytes stay within the budget after it. There's one exception: if nothing else is reserved or held, it's always granted. That lets a dict larger than the whole budget through, alone, as X-fetch-pool-bytes allowed. Without it, such a dict would never arrive.
-- **Partial claims and growth.** A claim for a dict over the first window is _partial_ until it grows. Two rules keep the two steps from deadlocking, since a partial claim waits for its growth while holding its window:
+- **Partial claims and growth.** A claim for a dict over the first window is *partial* until it grows. Two rules keep the two steps from deadlocking, since a partial claim waits for its growth while holding its window:
   - **Growth goes first.** While a growth waits, no first reservation is granted, and the pool starts no fetch. The bytes it needs can only come free: claims that hold their whole bound never wait, so they finish, and the consumer takes held results.
   - **Partial claims leave room for any one of them to grow.** A partial claim is admitted only if every partial claim's bytes, plus the largest growth any of them still needs, fit the budget. Once the rest has drained, the oldest growth therefore always fits beside the other partial claims, which wait behind it holding only their windows. That invariant only tightens as claims grow or end.
   - **Partial claims wait in their own queue.** A partial claim held back by its own rule (perhaps a liar's) never blocks a whole claim that fits, and the pool keeps starting fetches while one waits (second review).
@@ -66,7 +62,6 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
 - **`held_full` keeps its meaning.** It counts the times the budget (now held plus reserved) or a waiting reservation stopped dispatch while keys were ready. Outbox backpressure still stops dispatch, but isn't counted.
 
 ## Growth stops dispatch: what it costs (runner's review, 2026-11-07)
-
 - **The mechanism:** a growth waits only when the budget lacks room for it, and while it waits the pool starts nothing. Once granted, the fetch holds its whole bound until it ends: at most the 8 s deadline.
 - **What a peer can do with it:** send a valid-length first window (64 KiB; the hash is checked only at the end), take its growth, then send nothing. It holds up to `max_metadata` of the budget for its deadline. Peers doing this in turn can keep the budget full, and once it's full whole claims wait and dispatch stops.
   - **Single machine (64 MiB budget, 16 MiB `max_metadata`):** 4 grown liars hold the whole budget: 4 × 64 KiB every 8 s, about 32 KiB/s from 2 addresses, stalls ingest for as long as it's kept up.
@@ -75,7 +70,6 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
 - **Not fixed in this slice; the runner decides a follow-up.** Options: grow in steps tied to the bytes received (reserve at most twice what's arrived), so holding `max_metadata` costs about half of it in bandwidth; a lower `max_metadata`; or a budget many times `max_metadata`, so a few grown liars hold only a fraction.
 
 ## The pool notes from #554's review
-
 - **A deadline on the shutdown drain: `pool::SHUTDOWN_DRAIN`, 5 s.**
   - **The problem:** at shutdown, the pool sends the outbox to a consumer that runs until the pool ends. A consumer that's alive but stalled kept `out.send` waiting for ever.
   - **The fix:** the drain now reserves each slot with `timeout_at`, all against one deadline. After it, the rest go back into the saved queue as `QueuedKey`s, exactly as when the receiver is gone.
@@ -85,29 +79,26 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
 - **`PoolIo::out` says the pool must be its only sender,** and what another sender would do (an overcount, which only slows fetching).
 
 ## Metrics (`docs/metrics.md`)
-
 - **`fetch_reserved_bytes`** (gauge): bytes reserved by fetches in flight. Added to `fetch_held_bytes`, it's what the budget limits. Both are read under one lock.
 - **`fetch_reserve_timeouts_total`** (counter): fetches whose deadline ran out while they waited. A steady rise means the budget is too small for the dicts being fetched.
 - **`fetch_held_full_total`'s help text** now matches the doc. It counts stops caused by the budget or a waiting reservation; outbox backpressure doesn't count.
 
 ## The numbers (the runner decides the defaults, §2.26)
-
 - **What the budget now bounds:** held plus reserved info-dict bytes, at most `max(max_held_bytes, max_metadata + 24 KiB)`. Each fetch's buffer never passes what's reserved for it, at either step. The second term is the one dict over the budget that passes alone. The 24 KiB is the most a client name and a PEX list add.
 - **What it doesn't bound: each socket's working memory before or outside its reservation.** In the worst case, against a hostile peer, that's:
 
-  | Item                                                                                          | Bytes                    |
-  | --------------------------------------------------------------------------------------------- | ------------------------ |
-  | The extended message being parsed (`MAX_EXTENDED`)                                            | 17,408                   |
-  | The client name (part of the reservation once it's made)                                      | ≤ 17,407                 |
-  | The PEX list before its final shrink                                                          | ≤ 8,192                  |
-  | The `BufReader`                                                                               | 8,192                    |
-  | The piece bitmap (1 B per 16 KiB piece)                                                       | ≤ 1,024                  |
-  | MSE and cipher state, the task and its futures                                                | a few KiB                |
-  | **Total over TCP**                                                                            | **under 64 KiB**         |
+  | Item | Bytes |
+  | --- | --- |
+  | The extended message being parsed (`MAX_EXTENDED`) | 17,408 |
+  | The client name (part of the reservation once it's made) | ≤ 17,407 |
+  | The PEX list before its final shrink | ≤ 8,192 |
+  | The `BufReader` | 8,192 |
+  | The piece bitmap (1 B per 16 KiB piece) | ≤ 1,024 |
+  | MSE and cipher state, the task and its futures | a few KiB |
+  | **Total over TCP** | **under 64 KiB** |
   | uTP only: the receive window, out-of-order data and the send buffer (`lodestar-utp` defaults) | up to about 192 KiB more |
 
   A normal peer uses a fraction of that. Kernel socket buffers aren't the process's RSS. While the dict's buffer grows, the old and new allocations live together for a moment, up to 1.5× the reserved bytes for that fetch; that's transient and not in the budget.
-
 - **Single machine, today's defaults** (`max_held_bytes` 64 MiB, `max_metadata` 16 MiB, 400 sockets):
   - **Dicts:** at most 64 MiB, since 16 MiB is under the budget, so no dict passes alone over it.
   - **Working memory over TCP (the default transport):** 400 × 64 KiB = 25 MiB. With uTP on, up to 400 × 256 KiB = 100 MiB.
@@ -123,7 +114,6 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
 - **Nothing here changes a default.** `max_held_bytes`, `max_metadata` and the presets are as before; only what the budget covers changed.
 
 ## For WK-10
-
 - **Use `PeerWireFetcher`** (or any fetcher that implements `fetch_reserving` and wires it into `FetchOptions::reserve`) so in-flight bytes are inside the budget. A fetcher that only implements `fetch` is counted after the fact, as before this slice.
 - **Size the worker from the table above:** `max_metadata` below the budget by at least 25 KiB, and `max_sockets` from the headroom left ÷ 64 KiB (TCP) or ÷ 256 KiB (uTP).
 - **Size the worker budget well above `max_metadata`, not at it.** At 4 MiB with 4 MiB dicts, one silent peer holds up every large dict for 8 s (the partial share), and one grown liar holds the whole budget (growth). Several times `max_metadata` (for example 16 MiB with 4 MiB dicts) keeps both to a fraction, at the cost of RSS. The runner decides the worker sizing in WK-10 (runner, 2026-11-07), with measured RSS.
@@ -131,17 +121,14 @@ Runner brief 2026-11-06T23:35Z. It follows `X-fetch-pool-bytes` (#554, `docs/dec
 - **The 5 s shutdown drain applies to a worker too:** at most 5 s of a stop goes to handing results to a stalled session task. The rest go back to the saved queue, or, on a worker, to the coordinator's re-grant once their leases expire.
 
 ## Files outside the slice's `owns`
-
 - `crates/peer-wire/src/lib.rs`: `Reserve` added to the existing `pub use fetch::{…}` line, so `lodestar-sources` can name the hook. Approved by the runner (2026-11-06T23:36Z message to this session, which adds the file to the slice's owns). The same message accepted waiting rather than failing, and asked for three things to be shown; they are below.
 
 ## What the runner asked to be shown (2026-11-06T23:36Z)
-
 - **No deadlock.** A waiting fetch holds a socket and a peer connection, but the bytes it waits for are released only by the consumer taking results, by joins and by fetches that end, never by another waiting fetch. A fetch waiting for its first step holds no bytes. One waiting to grow holds only its window, and the partial-claim rule (above) makes sure the oldest growth fits beside every other window once the rest has drained, so waiters can't wait on each other. `growths_go_first_and_always_complete` shows it for growth. `reservations_keep_held_and_reserved_bytes_within_the_budget` fills the budget with held results while every other socket waits on a reservation that has no deadline. Nothing moves for 120 s; then the consumer drains, and every key arrives once.
 - **The wait ends at the fetch's own deadline, and is counted.** Peer-wire's deadline covers the wait. A fetch that runs it out is counted in `PoolStats::reserve_timeouts`, exported as `fetch_reserve_timeouts_total`; it isn't a failure or a loss, and the peer isn't charged. `a_reservation_that_waits_out_its_deadline_is_freed_and_retried` checks the count, that no failure was counted, and that the key is retried with the same peer.
 - **The reservation is the heap bound, not the raw size:** `metadata_size + client name length + 200 × size_of::<SocketAddr>()` (6,400 B on 64-bit), plus `size_of::<FetchedKey>()` on the pool's side. `a_peer_announcing_max_metadata_reserves_exactly_its_bound` checks that a peer announcing exactly `max_metadata` reserves exactly that bound, and that one byte over the cap reserves nothing.
 
 ## Checks
-
 - **`crates/peer-wire/tests/fetch.rs`**, against the fake peer and a raw one over TCP, with a semaphore standing in for the budget:
   - **`fetches_wait_for_room_and_stay_within_their_reservations`:** 8 peers with 50 KB dicts (whole at the first step) against a budget that fits two. The budget starts full, so every fetch waits at its hook and none downloads. Once the budget is freed, all complete; the most reserved at once stays within the budget, and each result's heap fits its reservation.
   - **`no_piece_is_requested_before_the_reservation`:** over an in-memory stream, with no timing: while the hook holds its grant, nothing is buffered for the peer (a read that doesn't wait finds nothing); after the grant, the first metadata request arrives. A request sent before the hook makes it fail.

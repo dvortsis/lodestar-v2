@@ -3,7 +3,6 @@
 The owner's decision, from a planning session on 2026-11-15, about 17:45Z. Nothing is built yet. The runner records it in `docs/owner-decisions.md` §2, places the proposed slices below and writes their briefs.
 
 ## The owner's words
-
 - "We can't make people wait 6-hours before seeing progress. That's a terrible UX choice."
 - "I'm less concerned about politeness. If there are no repercussions for re-asks, I'm not worried about it."
 - "Yes, let's honor interval during runs. I think we can prefer a safer restart so we're being efficient, which means keeping that part in. Just removing the wait time if it wasn't safe. I'd still like to implement the UX improvements."
@@ -11,7 +10,6 @@ The owner's decision, from a planning session on 2026-11-15, about 17:45Z. Nothi
 - Asked whether to start the bitmagnet import (`B-import-server-2`) now: "I can't run tests on the unraid machine yet". The session reads this as: the import stays deferred for now, and no step in these slices may depend on a run on the owner's Unraid machine until the owner says it's available.
 
 ## What it supersedes
-
 - `2026-10-25-CR-0.md`, "Restart safety": suppress sampling for six hours plus the query timeout after every production start. Also `docs/architecture.md:111`, which repeats it.
 - `2026-10-30-master-plan.md`, CR-0d: "The first start is still suppressed for 6 h (owner: this is a first-run product choice)."
 - `2026-10-31-owner-delegation.md`: "The first start is suppressed for 6 h, as on every start … suppression is the polite choice."
@@ -24,7 +22,6 @@ The owner's decision, from a planning session on 2026-11-15, about 17:45Z. Nothi
 - **`docs/owner-decisions.md` §2.34 O1** says the 24 h gate window "excludes the 6 h first-start suppression and the 60 min warm-up". With no suppression there is nothing to exclude. The runner amends that entry when it records this decision; the warm-up is unchanged.
 
 ## Decisions
-
 - **No sampling wait after any start.** First installs, crashes, restored backups, unproven restarts and image updates all sample as soon as the DHT has bootstrapped. That includes the first clean restart after an unproven run: no gate carries over (below).
   - **Why:** the owner's call above. The wait existed only so that a start that couldn't prove its state never re-asked a node before the `interval` it had set. BEP 51 sets no penalty for that. As far as the session could tell, common clients rate-limit only an IP that sends many queries a second. One restart re-asks each node at most once, the same pattern as normal running. The cost is a few wasted queries that return samples already seen, during the first hours after a start.
   - **One case to check:** a crash loop under a restart policy (Docker's `unless-stopped`, Windows service recovery) re-asks the same nodes on every restart, which the six-hour wait used to prevent. The owner's condition was "if there are no repercussions for re-asks". CR-0w's Opus review decides whether that needs a guard, such as a short wait only after several unclean starts in a row.
@@ -38,12 +35,10 @@ The owner's decision, from a planning session on 2026-11-15, about 17:45Z. Nothi
 - **The UX work from the session goes ahead** (proposed slices 3 and 4 below).
 
 ## Refinements for the runner to confirm and flag (§2.19)
-
 - **A failed proof restores nothing,** rather than a best-effort restore from an intact but unproven snapshot. It's simpler and needs no new trust rule. A best-effort restore can come later as an optimisation.
 - **`invalidate_failed` and `locked` no longer hold sampling.** The run samples at once. It can't promise to leave no resumable marker: when invalidation fails, the previous clean marker stays on disk, so a crash after sampling lets the next start resume from that older snapshot. With no blanket gate, that only costs re-asks of nodes whose restrictions it misses. The exact rule is for CR-0w's Opus design review, since the marker protocol (`2026-10-30-CR-0d.md` §2 and §3) assumes those cases wait.
 
 ## Proposed slices
-
 1. **CR-0w: remove the start wait** (core, Opus, Opus review).
    - `Proof` (`crates/dht/src/node/proof.rs`) stops suppressing, and the blanket gate goes (Decisions, above). `Proof::new`'s `H` (`actor.rs:859`) stays as the cooling horizon for in-flight samples at shutdown.
    - **`sample_start_delay`'s coupling to safe restart goes.** Today `Mode::On` needs `sample_start_delay == None` (`proof.rs:153-157`, `crates/dht/src/node/mod.rs:163`). Setting the default to `Some(0)` would quietly turn safe restart off for every run. The slice removes the six-hour default (`mod.rs:143-146`) without that side effect.
@@ -69,6 +64,5 @@ The owner's decision, from a planning session on 2026-11-15, about 17:45Z. Nothi
    - the README.
 
 ## Notes
-
 - **Import up front.** The fastest way to a full index on day one is the bitmagnet import. Its wizard step is a hidden slot until `B-import-server-2` is built. Its owner condition is met (`runner/dashboard.yaml:959-960`, owner §2.37), but the slice is deferred by its notes (`runner/slices.yaml:738`). The owner's answer keeps it deferred for now (above). Meanwhile X-first-run's import guide link (`slices.yaml:876`) is the shortcut; no new slice.
 - **WK-10c's one-minute linger** (`2026-11-08-WK-10c.md`) was justified by the six-hour wait. It still works without it, but a simpler rule is now possible. Not required.

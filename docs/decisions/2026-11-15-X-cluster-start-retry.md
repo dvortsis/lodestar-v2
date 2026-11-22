@@ -3,20 +3,17 @@
 A cluster port that fails to open is now tried again while "Allow workers" stays on, instead of staying closed until "Allow workers" changes or a reseal comes (architecture §20, the cluster port). This is the runner's call, as UX: a user shouldn't have to toggle workers to recover. The runner flags it under `docs/owner-decisions.md` §2.19. It was found while root-causing the `off_binds` flake (`2026-11-15-X-store-migrate-race.md`).
 
 ## Not live yet
-
 - **Nothing in production reaches this path today.** `ClusterHandle::set_allowed` and `reseal` have no production callers yet, so users can't toggle workers. A failed start at boot, with `[cluster] enabled` on, is still fatal (`services.rs`).
 - **The retry goes live** once WK-14's workers API wires `set_allowed`, or secrets-key rotation wires `reseal`. The runner adds that dependency to WK-14's notes.
 - **Until then** it's exercised by this slice's tests, and `start_failure` and the Overview row stay empty in practice.
 
 ## The retry
-
 - **When:** a start that fails while workers are allowed, on the toggle or after a reseal. It's tried again after 2 s, then twice as long each time, up to 5 minutes. The bound keeps a port another program holds from being tried in a tight loop, and 5 minutes is the longest a fixed cause (a port freed, a disk remounted) waits to be noticed.
 - **Cancelled** when workers are turned off. **Cleared** when a start succeeds, so the next failure starts again at 2 s, and when the cluster shuts down.
 - **Only a change wakes it.** `set_allowed` uses `send_if_modified`, so a settings save that leaves "Allow workers" as it was neither tries a failing start at once nor resets its back-off, once WK-14 wires it.
 - **Unchanged at startup:** with `[cluster] enabled` on, `Cluster::start` still returns the error and serve doesn't start, so a broken config is caught at launch rather than retried in the background.
 
 ## What it says
-
 - **Status reaches the user, not only the operator (runner, 2026-11-15: options A and B together).** The owner asked for UX-led decisions, and a user won't read a metrics gauge. So the failure is in the workers API for Settings → Workers to show, as well as in a gauge.
   - **`GET /workers`** now always carries `start_failure`: null when nothing fails, else `{step, kind, next_retry_at}`. While it's set, `allowed` is false, since `allowed` means the port is serving. The field's doc says so, rather than `allowed` changing meaning (the runner's review left the choice open).
     - `step` and `kind` are fixed enum labels, the same ones the log line uses. They're never error text, an address, a path or key material.
@@ -37,11 +34,9 @@ A cluster port that fails to open is now tried again while "Allow workers" stays
 - **Metrics:** `cluster_start_failures_total` counts every try, retries included. `cluster_listening 0` with `cluster_allowed 1` is the failing state, as `docs/metrics.md` already said; its row now says the port is tried again.
 
 ## Typed labels
-
 - **`StartError` carries the API's enums** (`ClusterStartStep`, `ClusterStartKind`) instead of strings. So the log, the API and the error can't drift apart. A test checks that each enum's JSON label equals its `as_str()`.
 
 ## Tests
-
 - `a_taken_port_fails_the_start_and_creates_nothing` now holds the port through a second try, with nothing toggled, then frees it and waits for the port to open. Without the retry it fails at "a second try".
 - `a_failed_start_backs_off_and_logs_a_new_cause_only` checks the waits (2, 4, 8 … 256, then 300 s) and which failures are logged.
 - **`a_taken_port_fails_the_start_and_creates_nothing` also checks what's reported while failing:** the gauge, and `start_failure` with `bind` / `addr_in_use` and a retry time within 5 minutes. After recovery it checks that both clear.

@@ -5,7 +5,6 @@ The runner's follow-ups after #625: the cloud test plan's two needs, and the #62
 This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not verified" entry on `terraform fmt -check` and `terraform validate` is out of date: CI's `infra` job now runs `fmt`, `init` and `validate`, plus a PowerShell parse check, on every change to `infra/`. Only the scripts' runtime behaviour, and anything against a live account, remain unverified.
 
 ## Terraform
-
 - **Admin addresses are strict dotted IPv4 `/32`s.** Octets are 0–255 with no leading zeros, so `010.0.0.1/32` is refused. This applies to `ssh_admin_ipv4_cidr` and to the new list.
 - **Main's firewall takes a list of admin addresses.** `main_extra_admin_ipv4_cidrs` (default empty, at most 4) adds `/32`s to Main's SSH rule only. One use is the AWS Windows VM's public IPv4, so it can SSH-tunnel to Main's UI (the cloud test plan).
   - **Why a separate variable:** `ssh_admin_ipv4_cidr` stays the primary address, so workers, `Preflight.ps1`'s check and existing `terraform.tfvars` files are unchanged.
@@ -18,7 +17,6 @@ This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not v
   - **Action pin:** `hashicorp/setup-terraform` is pinned to the commit of `v3.1.2`.
 
 ## AWS expiration guard
-
 - **A stop/start can't reset the 48-hour clock.** The guard measured from `LaunchTime`, which a stop/start resets. It now measures from the earliest of `LaunchTime` and the root EBS volume's `Ebs.AttachTime`. The root volume stays attached through a stop/start, and `ExpiresAt` still caps the deadline. Tests cover a stop/start, a recent attach, a non-root volume and the `ExpiresAt` cap.
 - **Every `Project=Lodestar` instance is scanned.** The server-side filter no longer narrows to the guard's scope.
   - **Reporting:** an instance outside that scope (VPC, security group, type, tags) is logged at error level as `out_of_scope_instance`.
@@ -27,7 +25,6 @@ This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not v
 - **Heartbeat alarm.** `lodestar-expiration-guard-heartbeat` fires when `Invocations` is below 1 for an hour, with missing data counted as breaching. A disabled schedule is now noticed.
 
 ## Akamai watchdog
-
 - **Linodes outside its scope are reported.** A Linode tagged `lodestar` that fails the scope checks (region, type, label, tags) is logged at error level as `out_of_scope_linode`. So is one that passes them but was created before `MIN_CREATED_UTC` or dated more than 10 minutes ahead (`reason: created_outside_window`). Before, both were skipped in silence. A metric filter and `lodestar-akamai-expiration-guard-out-of-scope` alarm on it, plus a heartbeat alarm like the guard's.
 - **Deletions are confirmed against one shared deadline.**
   - **Before:** each deletion waited about 15 seconds for its own 404.
@@ -40,7 +37,6 @@ This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not v
 - **New tests:** the real zone-less `created` format, out-of-scope logging, and the confirmation deadline (with a fake clock, no sleeps). `test_token_value_parsing` no longer leaks `SECRET_ARN`.
 
 ## PowerShell
-
 - **Root volume size is a parameter.** `Deploy-AwsWindows.ps1 -RootVolumeGiB` takes 50–100 (default 50). The upper bound is the `LodestarRestrictedEC2` policy's 100 GiB cap, as the owner reported it.
 - **A piped confirmation phrase is refused.** `Interactive.ps1`'s `Assert-InteractiveConfirmation` throws when stdin is redirected, the session isn't interactive, or the host was started with `-NonInteractive`.
   - **Where it runs:** before every typed phrase, in `Deploy.ps1`, `Destroy.ps1`, `Deploy-AwsWindows.ps1` and `Destroy-AwsWindows.ps1`. `-DryRun` doesn't ask for a phrase, so it isn't affected.
@@ -50,7 +46,6 @@ This file **supersedes one bullet** of `2026-11-08-X-cloud-infra.md`. Its "Not v
 - **Log and plan file names use UTC,** with a trailing `Z` (§2.35).
 
 ## Docs
-
 - **The assets doc lists every way each template differs from its live stack,** with the owner's change-set steps.
 - **The live IAM roles are recorded as live-only,** not defined in the repository.
 - **The gluetun image is marked as an unpinned example.** I couldn't resolve a digest from this session, so it isn't pinned.

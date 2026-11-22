@@ -3,14 +3,12 @@
 Part 4 of B-search-recovery, built to the design in `2026-10-31-B-search-recovery.md` ("Live counts for a query"). Code: `crates/api/src/search_live.rs` (registry, matching entry point, `POST /search/live`, `DELETE /search/live/{id}`), `crates/api/src/events.rs` (per-session delivery), `crates/search/src/percolate.rs` (count-only entries), `crates/lodestar/src/percolator.rs` (the run). Spec: §8 (percolation), §9 (`/events`), §10.4 (Live row), §10.13 (throttle), §20 (visibility).
 
 ## As designed
-
 - **Registration** `POST /search/live {q | ast, hidden, tz}` → `{id, since}`; `DELETE /search/live/{id}` releases it. In memory only, no store rows, no index change. The stored query is `base_query(ast, visibility).query()` with visibility read at registration; `q`/`ast` and `tz` go through `/search`'s own `request_ast` and `tz_param`, so the same parser bounds (2,048 bytes, 64 clauses, depth 16) and errors apply. Auth required (`auth::protected`), and `same_origin_json` on both, as every state-changing route.
 - **Matching:** the percolator runs live queries as count-only `Due` entries of `percolate` over the new id range, with the run's budget and `max_range`, after its saved searches (see below).
 - **Delivery:** `event: search_live {id, matched, through}` on `/events`, throttled to §10.13's 5 s, counts in between combined.
 - **Bounds:** 4 per session (a fifth replaces the oldest), and released by `DELETE`.
 
 ## Decided here
-
 - **Live queries run after the saved searches, on what's left of the same budget.** A run percolates the saved searches, records and announces their alerts, then runs the live queries with the same `CancelToken`. So an alert never waits on a live query. After saved searches ran, even the first live query can be stopped inside its scan (`Due::stoppable`), so a nearly spent budget isn't overrun; once it's spent they're `more`, and the next run (straight away, now with no saved searches due) takes them with the whole budget, where the first always completes as before, so the task never spins.
 - **The throttle is per connection per registration.** The event names one registration, so "at most one per subscriber per 5 s" is read as one batch per connection per 5 s: each of the session's registrations (at most 4) whose count changed gets its event in it.
 - **Released 30 s after the session's last `/events` connection closes, not at once** (deviation from the design's "released when its connection closes"). `EventSource` reconnects after a network blip, a proxy cut or a restart of the stream; releasing at once would reset every banner's count to 0 and lose the matches that arrived in the gap. A reconnect within 30 s (`LiveConfig::grace`) keeps the registration, count and all; a closed tab's goes 30 s later. One registered while no connection is open goes after 60 s unless a connection opens (runner, #272: shortened from the design's 10 minutes, so connectionless registrations can't hold the 256 cap for long). A reconnect after the grace finds its registrations released; it doesn't revive them. Any `/events` connection of the session keeps them alive, whatever its `topics`, bounded by 4 per session.
@@ -29,7 +27,6 @@ Part 4 of B-search-recovery, built to the design in `2026-10-31-B-search-recover
 - **A count made before a connection opens** is delivered as soon as it opens, without waiting for the count to grow again.
 
 ## What S-search-6's banner should switch to (no UI in this slice)
-
 1. On each query change (and when a page with a query opens), `DELETE` the previous registration if there is one, then `POST /search/live` with the query shown (`ast`, `hidden`, `tz`) and keep its `id`.
 2. **Re-register after a `settings` event for `content`** (it released every registration) and after a `resync` with reason `restarted` (a server restart forgets them; a stream that never got an `id:` gets no `resync`, so also re-register on a reconnect before the first `id:`). A plain reconnect keeps it. A 404 on `DELETE` is fine to ignore.
 3. Listen for `search_live`; when `id` is yours, show "N new results" with N = `matched`. It counts on the same tier and visibility as the page, so the `total_approx` checks can go; a query with a swarm clause (`seeders:` and the like) may under-count, as alerts do.

@@ -3,7 +3,6 @@
 Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI review (`docs/review/2026-11-13-ui-ux/`), placed by `docs/decisions/2026-11-14-runner-ui-review-placement.md`. Labels and styling only. What a rule, a pack or a switch does is unchanged; every change still goes through the same flow; the child-safety core changes only through the weakening flow (owner §2.39, architecture §20.5.3, §20.11).
 
 ## Rule and pack names (I5)
-
 - **Every rule and pack shows a plain name, its code beside it as secondary mono text, and one line saying what it checks.** It applies to the core rows, the packs list, the pack panels' rules, and a pending version's rule. The code stays because the docs and logs name it.
 - **The words are en and zh messages keyed by code** (`filters_rule_<code>`, `filters_rule_<code>_text`). The API has no description field (`CoreRuleState`, `PackRuleState`, `PackState`).
   - The packs reuse the Filters screen's own descriptions (`filters_pack_info_*`).
@@ -30,7 +29,6 @@ Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI rev
   - The rule ids that the pack panels list stay there, under each pack's disclosure.
 
 ## Loading the texts
-
 - **The texts are one on-demand module, `filters/screens/rule-text.ts`,** and a small holder (`names.svelte.ts`) imports it once. Neither the screen's first view nor the change dialogs carry them (sizes below).
 - **The screen starts the import beside `GET /filters`, and shows once both are in,** so a row never changes from its code to its name under the reader.
 - **It waits at most 1.5 s for the texts** (runner, on this slice; the 1.5 s is a runner call, §2.26). After a failure, or 1.5 s without them, it shows with the codes, and a late chunk then names the rows.
@@ -42,7 +40,6 @@ Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI rev
     - `names.test.ts`: the holder.
 
 ## Danger style for loosening child safety
-
 - **The rule (runner, on this slice):** a change that loosens child safety uses the danger style; everything else uses the ordinary style, strengthening included. The changes that loosen child safety are:
   - turning a CS rule off, or weakening one;
   - removing a pending floor removal's entries from the floor;
@@ -61,28 +58,26 @@ Runner brief, 2026-11-21Z; findings I4, I5, U21 and U32 of the 2026-11-13 UI rev
 - **A UX call to flag (§2.26):** with several CS rules on, the list shows several solid danger buttons, one per rule. `Button` has no outline danger variant, and the brief asks for the danger style on the row button, so it's used as it is.
 
 ## Packs collapsed (U32)
-
 - **Each pack's panel (versions, changelog, corpus status, its rules) is collapsed by default.** It sits behind a real `<button aria-expanded aria-controls>`, "Rules and versions of <pack>", with the same caret as the Sources rows.
   - The body stays in the page (`hidden`), so an unsaved override edit survives closing it.
   - A closed pack with a version waiting shows "A newer version is waiting", so collapsing never hides that something needs a decision. The badge describes the closed disclosure button (`aria-describedby`), so a screen reader hears it on the button.
 - **The "Version" row, which lists the rule ids, reads "Rule versions"** ("规则版本").
 - **Page height at 390 px.** Measured with Playwright at 390 × 844, mock data with all 33 built-in rules in the 10-rule core and 6 packs, every pack on, nothing pending, and the empty queue:
 
-|                        | Height                     |
-| ---------------------- | -------------------------- |
-| Before (main ea6ff8c1) | 4,599 px                   |
-| After                  | 3,473 px (−1,126 px, −24%) |
+| | Height |
+|---|---|
+| Before (main ea6ff8c1) | 4,599 px |
+| After | 3,473 px (−1,126 px, −24%) |
 
-The descriptions add height to the core and pack rows; collapsing the six panels takes more away.
+  The descriptions add height to the core and pack rows; collapsing the six panels takes more away.
 
 ## Switches say what on means (I4, U21)
-
 `docs/ui-glossary.md` has no entry for either switch, so it's unchanged (runner).
 
-| Switch                | Before                         | After (en)                        | After (zh)                    | Checked when                      |
-| --------------------- | ------------------------------ | --------------------------------- | ----------------------------- | --------------------------------- |
-| Alert (`PauseToggle`) | "Paused", checked while paused | "Active", aria "Active: <name>"   | 启用中, aria "启用中：<name>" | the alert isn't paused            |
-| Source (`SourceRow`)  | "On", aria "<name>: on"        | "Enabled", aria "<name>: enabled" | 已启用, aria "<name>：已启用" | the source is enabled (unchanged) |
+| Switch | Before | After (en) | After (zh) | Checked when |
+|---|---|---|---|---|
+| Alert (`PauseToggle`) | "Paused", checked while paused | "Active", aria "Active: <name>" | 启用中, aria "启用中：<name>" | the alert isn't paused |
+| Source (`SourceRow`) | "On", aria "<name>: on" | "Enabled", aria "<name>: enabled" | 已启用, aria "<name>：已启用" | the source is enabled (unchanged) |
 
 - **The alert switch's polarity flips** (runner, on this slice), so on means it records new alerts.
   - It still sends the same `PATCH {paused}`: switching it off sends `{paused: true}`, on sends `{paused: false}`.
@@ -92,18 +87,17 @@ The descriptions add height to the core and pack rows; collapsing the six panels
 - **The source switch keeps its behaviour and its polarity;** only its text changes. "Enabled" also stops reading as a state ("On") shown unchecked next to the "Off" status.
 
 ## Sizes
-
 gzip, main ea6ff8c1 → this branch. The new limits are the runner's calls (§2.26), each the measured size rounded up to 0.01 kB, after everything that can load on demand does.
 
-| Entry                                 | Before   | After    | Limit before | Limit after |
-| ------------------------------------- | -------- | -------- | ------------ | ----------- |
-| Settings FiltersScreen (first view)   | 30,879 B | 31,414 B | 31.14 kB     | 31.42 kB    |
-| Filters rule names (on demand)        | —        | 4,013 B  | —            | 4.02 kB     |
-| Filters pack descriptions (on demand) | 1,427 B  | removed  | 1.6 kB       | removed     |
-| Filters packs list (on demand)        | 1,797 B  | 1,557 B  | 1.85 kB      | 1.56 kB     |
-| Filters pack panels (on demand)       | 8,765 B  | 7,907 B  | 9 kB         | 7.91 kB     |
-| Filters dialogs (on demand)           | 35,880 B | 35,898 B | 35.9 kB      | 35.9 kB     |
-| Detail drawer (own JS + CSS)          | 28,139 B | 28,141 B | 28.14 kB     | 28.15 kB    |
+| Entry | Before | After | Limit before | Limit after |
+|---|---|---|---|---|
+| Settings FiltersScreen (first view) | 30,879 B | 31,414 B | 31.14 kB | 31.42 kB |
+| Filters rule names (on demand) | — | 4,013 B | — | 4.02 kB |
+| Filters pack descriptions (on demand) | 1,427 B | removed | 1.6 kB | removed |
+| Filters packs list (on demand) | 1,797 B | 1,557 B | 1.85 kB | 1.56 kB |
+| Filters pack panels (on demand) | 8,765 B | 7,907 B | 9 kB | 7.91 kB |
+| Filters dialogs (on demand) | 35,880 B | 35,898 B | 35.9 kB | 35.9 kB |
+| Detail drawer (own JS + CSS) | 28,139 B | 28,141 B | 28.14 kB | 28.15 kB |
 
 - **The first view's +535 B** is the names holder, `RuleLabel` (which the core rows need on first render), the rows' markup and the 1.5 s wait.
 - **The review round** added 13 B to the first view (the holder keeps the two lookups), 14 B to the names (MW-6's and UC-2's own names) and 29 B to the pack panels (the waiting badge's `aria-describedby`), each limit again the measured size rounded up (runner).
@@ -114,9 +108,7 @@ gzip, main ea6ff8c1 → this branch. The new limits are the runner's calls (§2.
 - **The packs list and the pack panels fall to their measured sizes,** so the bytes they freed can't be quietly spent.
 
 ## Specs
-
 - **The e2e specs that reach into a pack panel open it first:** `filters-packs.keyboard` by keyboard, and `packs.routes` by click. No other spec uses the panels' test ids.
 
 ## Left alone
-
 - **The review queue and the exceptions list still show a rule's code** (`Badge {rule}`): the brief covers rule rows, packs and the dialogs that name a rule. Naming them there too is a follow-up for the runner.

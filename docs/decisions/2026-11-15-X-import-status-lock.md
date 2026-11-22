@@ -16,12 +16,12 @@ A UX fix from the import-host test run (runner, 2026-11-15): `lodestar import st
 
 ## Help claims checked
 
-| Command                              | Claim                                         | Verdict                                                                                                                                     |
-| ------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `import status`                      | safe while the server runs                    | True (read-only WAL connection); it now also says what to do while an import holds the store.                                               |
-| `import inspect`                     | only reads; safe while the server runs        | True; the same message added for a held store.                                                                                              |
+| Command | Claim | Verdict |
+|---|---|---|
+| `import status` | safe while the server runs | True (read-only WAL connection); it now also says what to do while an import holds the store. |
+| `import inspect` | only reads; safe while the server runs | True; the same message added for a held store. |
 | `backup` (`backup.rs`, `cli/mod.rs`) | a consistent copy, safe while the server runs | True: a read-only connection and `VACUUM INTO`. Covered by `backup_while_the_store_is_in_use` in `crates/lodestar/tests/cli.rs`. Unchanged. |
-| `stats` (`stats.rs`, `cli/mod.rs`)   | safe while the server runs                    | True: a read-only connection. Covered by `stats_read_while_running`. Unchanged.                                                             |
+| `stats` (`stats.rs`, `cli/mod.rs`) | safe while the server runs | True: a read-only connection. Covered by `stats_read_while_running`. Unchanged. |
 
 `backup` and `stats` make no claim about running beside an import, and their own busy timeout (30 s) bounds their wait, so they're unchanged.
 

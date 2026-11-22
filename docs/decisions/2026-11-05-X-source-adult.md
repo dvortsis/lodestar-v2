@@ -11,9 +11,8 @@ Slice X-source-adult (runner brief, 2026-11-05). It closes the OPEN item in `202
   - **claims** stored, and swept by the refile (`unverified::judge` with `adult`);
   - **a stored torrent an always-adult source finds** (claims on it, a bare sighting, or a merge): it's classified as adult at once, in its own transaction after the commit (`enrich::adult_by_source`). If the rules changed under it, it's marked for the backfill, which does the same. A torrent the DHT stored first with a clean name was already visible before Sukebei saw it, so the short gap isn't a regression;
   - **the background enrichment** (`enrich_stored_marking`, after a parser upgrade): `source_adult::correction` adds Is adult from `sources`.
-
+  
   An item seen by both an always-adult source and the DHT stays adult: any always-adult finder is enough.
-
 - **Your own Not adult correction wins; a Not adult classification rule doesn't** (§2.19, runner's call, flagged to the owner). A per-torrent correction is your explicit act on one item you've looked at, as the brief recommends. A rule matches many torrents by name, and the source is the stronger signal, so a rule never un-adults a source-adult item.
 - **Gaps the runner tracks. Each must be closed before Sukebei is registered.**
   - **`crates/api` corrections.** `/classify/correct` reclassifies with the correction you send and no source signal. So any correction that leaves Is adult / Not adult unset un-adults a source-adult torrent: clearing one, or setting only Not junk. It then stays at detection's type until an always-adult source finds it again, which can be never for an old item, or until a backfill reaches it after a parser upgrade. The fix is the same `source_adult::correction` in the API. That's an api-crate follow-up the runner has recorded, so it's not done here.
@@ -21,7 +20,7 @@ Slice X-source-adult (runner brief, 2026-11-05). It closes the OPEN item in `202
   - **Stopped and purged sources (SRC-14b).** `Store::promote` leaves a stopped source's bit out of `sources`, and a purge clears its bit from torrents the DHT also found. The commit still stores such a torrent adult, but the next backfill finds no always-adult bit and returns it to detection's type. This follows SRC-14b, where a purge undoes what the source contributed. The runner decides whether the adult label should outlive a purge.
   - **The plugin must be registered.** The signal comes from the registered manifests. A build or configuration that leaves the Sukebei plugin out of `Pipeline::start` builds no mask, so its torrents go back to detection's type at the next backfill.
 - **Errors fail strict.** If classifying a stored torrent as adult fails with a store error or a rules change, its row is marked for the backfill, which applies the same correction.
-- **Claims are judged from the claiming source.** At ingest, and in the sweep of claims on stored torrents, claims are judged as adult when the claiming source is always adult. The item sweep and promotion judge as adult when _any_ finder is, so nothing reaches search on a non-adult reading alone.
+- **Claims are judged from the claiming source.** At ingest, and in the sweep of claims on stored torrents, claims are judged as adult when the claiming source is always adult. The item sweep and promotion judge as adult when *any* finder is, so nothing reaches search on a non-adult reading alone.
 - **Sukebei's category claim has its own scheme**, `sukebei-category:<id>`, not `nyaa-category` (#461 review). Sukebei's ids name different categories from Nyaa's, so the two must never be read as one scheme.
 - **Tests.**
   - `crates/pipeline/tests/source_adult.rs`, end to end through the pipeline:

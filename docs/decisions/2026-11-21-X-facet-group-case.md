@@ -3,12 +3,10 @@
 Runner brief, 2026-11-21Z, from the "Release-group case" follow-up in `docs/decisions/2026-11-21-X-labels.md`. Architecture §8 (facets), §10.4; budgets §3 and §10.1.
 
 ## The problem
-
 - **The index keeps tag terms lower-cased** (`crates/search/src/doc.rs`, `DocEnrichment::new`), and the facets read those terms back. So the group facet listed `rarbg`, and no client formatter can recover "RARBG".
 - **Matching stays on the lower-cased term.** `group:rarbg` and `group:RARBG` find the same torrents, and a facet click still sends the value.
 
 ## The option chosen: the stored names, read when the facets are computed
-
 - **Where the spelling comes from.** The torrent index stores `name` (schema.rs), and the release parser takes `group` from the name's own tokens (`release-parser` `dash_group` and `bracket_group`). So the stored name nearly always holds the group as written.
 - **How (`facets::group_labels`).** For each `group` value the facet lists:
   - it takes up to 8 of the term's live documents in the snapshot, picked by **rank** along its posting lists (every segment's, in order), at the van der Corput points 1/2, 1/4, 3/4, 1/8, … of the term's documents (`sample_ranks`, `sample_docs`). A rank on a deleted document takes the next live one. The walk visits the postings up to the last rank; each torrent has one group, so all the listed values' walks together visit each group-tagged torrent at most once;
@@ -23,7 +21,6 @@ Runner brief, 2026-11-21Z, from the "Release-group case" follow-up in `docs/deci
   - A long list ("Show more", limit 100) reads 3 names per value where the default reads 8, so a spelling can differ between the two. The 3 are the first of the 8 (the van der Corput order), so it differs only when those 3 disagree with the rest. Values past the read cap show as sent.
 
 ## Resisting junk and hostile names
-
 - **One vote per torrent, spread by rank over the group's torrents.** No single record's latest write decides, and neither does where a record sits in the index. A spelling has to be on a large share of a group's torrents to win.
   - The first version spread samples over doc ids. It sampled only the record after a gap: 40 torrents of a group packed at low ids, 960 of another group, then one odd spelling, gave that spelling (self-review). Ranks fix it.
 - **Tests:**
@@ -41,18 +38,15 @@ Runner brief, 2026-11-21Z, from the "Release-group case" follow-up in `docs/deci
   - A name with no fit spelling gives no label, and the value shows as sent.
 
 ## The read cap (runner call, §2.26)
-
 - **At most 256 stored names per request, whatever the limit; at least 3 per value, at most 8.**
   - At the default limit of 8, each value reads up to 8 names (64 reads).
   - At limit 100, each value reads 3, and values are labelled in list order (the top counts first) until the reads run out: the top 85 get labels, the rest show as sent.
   - Tested at both limits (`a_long_list_reads_fewer_names_per_group`).
 
 ## The file-tree exception
-
 - **An ambiguous name resolved from the file tree** (`classify` `effective.rs`) can take its group from a file or folder name the torrent's name doesn't hold. Then no sampled name holds it, and the value shows as sent. No extra work: the fallback covers it (runner).
 
 ## API and web
-
 - **`FacetValue.label`** (`crates/api/src/dto/facets.rs`): optional, absent unless the server has a spelling that differs from `value`. A per-value field rather than a response-level map (runner). `openapi.json` and `schema.d.ts` are regenerated with the repo's tooling.
 - **The facet rail:**
   - `groupLabel(value, label)` shows `label` when it's present, else the value;
@@ -61,33 +55,32 @@ Runner brief, 2026-11-21Z, from the "Release-group case" follow-up in `docs/deci
   - a click still sends `value` (`TermGroup.test.ts`).
 
 ## Budgets
-
 - **Index size:** unchanged, 0 B per torrent.
 - **The Builder still shows groups lower-cased.** Its value list (`assist/BuilderRow.svelte`, outside this slice) calls `valueLabel` without a label. It's a follow-up for the runner.
 - **`/facets` latency (§3, gate p95 ≤ 100 ms):** accepted by the runner (§2.26), under its 5 ms line. Measured with search-bench at 200,000 synthetic torrents, `--queries 1500`, with the rank sampler. Three runs each of main (bdb189a3) and this branch, interleaved on one dataset. The median of the three runs' p95, in ms:
 
-| Class               | main, limit 8 | branch, limit 8 | main, group limit 100 | branch, group limit 100 |
-| ------------------- | ------------- | --------------- | --------------------- | ----------------------- |
-| broad word          | 6.57          | 6.28            | 6.44                  | 6.01                    |
-| word + selections   | 9.03          | 8.70            | 8.38                  | 8.53                    |
-| browse everything   | 35.03         | 33.28           | 31.96                 | 33.30                   |
-| browse + selections | 25.29         | 25.36           | —                     | —                       |
+| Class | main, limit 8 | branch, limit 8 | main, group limit 100 | branch, group limit 100 |
+|---|---|---|---|---|
+| broad word | 6.57 | 6.28 | 6.44 | 6.01 |
+| word + selections | 9.03 | 8.70 | 8.38 | 8.53 |
+| browse everything | 35.03 | 33.28 | 31.96 | 33.30 |
+| browse + selections | 25.29 | 25.36 | — | — |
 
-- The p50 of "broad word" is 2.17 ms on main and 2.02 ms on the branch.
-- The differences are within run-to-run noise: the same binary's p95 for "browse everything" ranged 30.9–35.5 ms on main. The largest rise, "browse" at group limit 100 (+1.3 ms), is under the runner's 5 ms line.
-- The first version, which sampled by doc id, measured the same within noise (largest rise +3.5 ms, the same class).
+  - The p50 of "broad word" is 2.17 ms on main and 2.02 ms on the branch.
+  - The differences are within run-to-run noise: the same binary's p95 for "browse everything" ranged 30.9–35.5 ms on main. The largest rise, "browse" at group limit 100 (+1.3 ms), is under the runner's 5 ms line.
+  - The first version, which sampled by doc id, measured the same within noise (largest rise +3.5 ms, the same class).
 - **At 1M torrents, skewed (the runner's review).** The rank walk visits a listed group's postings across the whole index, so its cost grows with the index, not the matches. Measured at 1,000,010 synthetic torrents with a local, uncommitted skew in the generator: RARBG 45%, NTb 20% and FLUX 10% of movie and TV releases, the rest uniform. Those three groups lead every query's top 8. `--queries 800`, three interleaved runs each of main (26b64174) and this branch (eaedc167). The median of the three runs' p95, in ms:
 
-| Class                           | main, limit 8 | branch, limit 8 | main, group limit 100 | branch, group limit 100 |
-| ------------------------------- | ------------- | --------------- | --------------------- | ----------------------- |
-| broad word (83,064 hits)        | 14.41         | 14.47           | 14.96                 | 14.83                   |
-| word + selections (29,592 hits) | 18.12         | 18.28           | 17.71                 | 18.22                   |
-| browse everything (sampled)     | 5.54          | 6.03            | 5.23                  | 5.95                    |
-| browse + selections             | 29.89         | 30.42           | —                     | —                       |
+| Class | main, limit 8 | branch, limit 8 | main, group limit 100 | branch, group limit 100 |
+|---|---|---|---|---|
+| broad word (83,064 hits) | 14.41 | 14.47 | 14.96 | 14.83 |
+| word + selections (29,592 hits) | 18.12 | 18.28 | 17.71 | 18.22 |
+| browse everything (sampled) | 5.54 | 6.03 | 5.23 | 5.95 |
+| browse + selections | 29.89 | 30.42 | — | — |
 
-- The largest rise is +0.72 ms ("browse" at group limit 100), well under the 5 ms line, so the walk stays uncapped and there's no cache.
-- The group-limit-100 rows came from a local, uncommitted copy of `facets_path` that also runs `limit.group=100`; the committed bench is unchanged.
-- The name reads land in the searcher's document-store block cache; a rank walk visits at most the group's own postings, cheap beside a facet pass.
+  - The largest rise is +0.72 ms ("browse" at group limit 100), well under the 5 ms line, so the walk stays uncapped and there's no cache.
+  - The group-limit-100 rows came from a local, uncommitted copy of `facets_path` that also runs `limit.group=100`; the committed bench is unchanged.
+  - The name reads land in the searcher's document-store block cache; a rank walk visits at most the group's own postings, cheap beside a facet pass.
 - **Web size (gzip; main 6d117c17 → branch):**
   - Facet rail (lazy): 18,825 → 18,848 B. The limit goes from 18.83 to 18.85 kB (runner, §2.26).
   - Builder (on demand): 8,430 → 8,441 B, from `valueLabel`'s optional `label` argument in `label-release`, which it shares with the rail. The limit goes from 8.43 to 8.45 kB (runner, §2.26).
