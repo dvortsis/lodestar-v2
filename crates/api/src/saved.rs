@@ -407,8 +407,10 @@ mod tests {
         let mut typed = "res:4k ".repeat(60);
         typed.push_str(&"x".repeat(max - typed.len()));
         assert_eq!(typed.len(), max);
+        assert!(lodestar_search::parse_with(&typed, lodestar_search::Units::Typed).is_ok());
         let e = query_of(None, Some(typed)).unwrap_err();
         assert_eq!(e.code(), "query_syntax");
+        assert!(e.to_string().contains("written out in full"), "{e}");
     }
 
     #[test]

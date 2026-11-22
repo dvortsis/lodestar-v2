@@ -1703,9 +1703,17 @@ impl Node {
     /// Never persist this: only the query bar, the URL, `/parse`'s and
     /// natural phrasing's `canonical` and display read it. Stored text
     /// read with [`Units::Stored`] would mean 7% more per GB.
+    ///
+    /// It can be a byte or two longer than [`to_query`](Self::to_query)
+    /// (`1.5KB` for `1500`); past [`MAX_QUERY_BYTES`] it falls back to that
+    /// text, which reads back the same, so an echo that fits as stored
+    /// text never fails to parse again.
     pub fn to_query_typed(&self) -> String {
         let mut s = String::new();
         self.render(&mut s, false, Units::Typed);
+        if s.len() > MAX_QUERY_BYTES {
+            return self.to_query();
+        }
         s
     }
 
@@ -2920,6 +2928,22 @@ mod tests {
         // The stored printer never writes a decimal unit.
         let ast = parse_with("size:>10GB", Units::Typed).unwrap();
         assert_eq!(ast.to_query(), "size:>9765625KiB");
+    }
+
+    /// The echo never outgrows the limit when the stored text fits: past
+    /// it, it's the stored text, which reads back the same as typed.
+    #[test]
+    fn typed_text_past_the_limit_falls_back_to_stored() {
+        let one = Node::Range {
+            field: NumField::Size,
+            lo: Some(1500),
+            hi: Some(1500),
+        };
+        assert_eq!(one.to_query_typed(), "size:1.5KB");
+        let many = Node::And { of: vec![one; 204] };
+        let stored = many.to_query();
+        assert!(stored.len() <= MAX_QUERY_BYTES, "{}", stored.len());
+        assert_eq!(many.to_query_typed(), stored);
     }
 
     #[test]

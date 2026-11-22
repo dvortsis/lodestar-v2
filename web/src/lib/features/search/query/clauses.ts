@@ -138,11 +138,12 @@ const NUM_KEY: Record<Of<'range'>['field'], () => string> = {
 	dht: m.dht_estimate
 };
 
-const DECIMAL: [string, number][] = [
-	['TB', 1e12],
-	['GB', 1e9],
-	['MB', 1e6],
-	['KB', 1e3]
+// Unit, bytes, and the digits of a fraction of one.
+const DECIMAL: [string, number, number][] = [
+	['TB', 1e12, 12],
+	['GB', 1e9, 9],
+	['MB', 1e6, 6],
+	['KB', 1e3, 3]
 ];
 const IEC = [1024 ** 4, 1024 ** 3, 1024 ** 2, 1024];
 
@@ -162,9 +163,9 @@ function decimalEcho(n: number): string | null {
 	if (!Number.isSafeInteger(n) || n < 1000 || n % 1000 !== 0) return null;
 	const iec = IEC.find((u) => n % u === 0);
 	if (iec !== undefined && significant(n / iec) <= significant(n)) return null;
-	const [unit, mult] = DECIMAL.find(([, m]) => n >= m)!;
+	const [unit, mult, width] = DECIMAL.find(([, m]) => n >= m)!;
 	const frac = String(n % mult)
-		.padStart(Math.log10(mult), '0')
+		.padStart(width, '0')
 		.replace(/0+$/, '');
 	return `${Math.floor(n / mult)}${frac ? `.${frac}` : ''}\u00a0${unit}`;
 }

@@ -66,6 +66,9 @@ describe('labels: every AST op', () => {
 		expect(text({ op: 'range', field: 'size', lo: 1.5 * GB, hi: 1.5 * GB })).toBe(
 			`Size: 1.5${nb}GB`
 		);
+		expect(text({ op: 'range', field: 'size', lo: 1_050_000_000, hi: 1_050_000_000 })).toBe(
+			`Size: 1.05${nb}GB`
+		);
 		// Both a decimal and an IEC size: IEC, as the server echoes it.
 		expect(text({ op: 'range', field: 'size', lo: 4_096_000, hi: 4_096_000 })).toBe(
 			`Size: 3.91${nb}MiB`

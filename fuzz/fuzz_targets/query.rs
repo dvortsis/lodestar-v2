@@ -42,6 +42,11 @@ fuzz_target!(|data: &[u8]| {
             }
         }
         let typed = ast.to_query_typed();
+        // The echo falls back to the stored text past the limit, so it
+        // fits whenever the stored text does.
+        if stored.len() <= max {
+            assert!(typed.len() <= max, "{text:?} → {typed:?}");
+        }
         if typed.len() <= max {
             assert_eq!(
                 parse_with(&typed, Units::Typed).as_ref().ok(),
