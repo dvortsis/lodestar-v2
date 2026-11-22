@@ -90,6 +90,9 @@ pub struct SampleAsk {
     /// lost, rate-limited, a dead or unknown address, or sent after the
     /// network stopped.
     pub reply: Option<(Instant, Option<u32>)>,
+    /// The reply is a KRPC 204 from a non-BEP 51 node, which the sampler
+    /// cools in full at once (CR-SAMPLE-BACKOFF-ESCALATE).
+    pub unknown: bool,
     /// The reply's place in the in-flight heap.
     seq: u64,
 }
@@ -100,6 +103,7 @@ impl SampleAsk {
             to,
             sent,
             reply,
+            unknown: false,
             seq: 0,
         }
     }
@@ -272,12 +276,7 @@ impl Net {
                 && let Body::Query(q) = &msg.body
                 && matches!(q.method, Method::SampleInfohashes { .. })
             {
-                self.asks.push(SampleAsk {
-                    to,
-                    sent: Instant::now(),
-                    reply: None,
-                    seq: 0,
-                });
+                self.asks.push(SampleAsk::new(to, Instant::now(), None));
             }
         }
     }
@@ -289,6 +288,7 @@ impl Net {
         for ask in &mut self.asks {
             if ask.reply.is_some() && flying.contains(&ask.seq) {
                 ask.reply = None;
+                ask.unknown = false;
             }
         }
     }
@@ -308,12 +308,7 @@ impl Net {
             Method::GetPeers { .. } => self.stats.get_peers += 1,
             Method::SampleInfohashes { .. } => {
                 self.stats.sample += 1;
-                self.asks.push(SampleAsk {
-                    to,
-                    sent: Instant::now(),
-                    reply: None,
-                    seq: 0,
-                });
+                self.asks.push(SampleAsk::new(to, Instant::now(), None));
             }
             _ => self.stats.other += 1,
         }
@@ -356,6 +351,7 @@ impl Net {
             self.answer(i, msg.transaction_id, &query.method)
         };
         let interval = (!errored && self.nodes[i].bep51).then_some(self.nodes[i].interval_s);
+        let unknown = !errored && !self.nodes[i].bep51;
         // The reply can be lost on the way back too.
         if roll(3) % 1000 < u64::from(self.cfg.loss_permille) {
             self.stats.lost += 1;
@@ -372,6 +368,7 @@ impl Net {
         let at = Instant::now() + Duration::from_millis(ms);
         if let Some(k) = ask {
             self.asks[k].reply = Some((at, interval));
+            self.asks[k].unknown = unknown;
             self.asks[k].seq = self.seq;
         }
         self.heap.push(Reverse((at, self.seq, reply, to)));

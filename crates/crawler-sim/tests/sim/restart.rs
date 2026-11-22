@@ -29,9 +29,13 @@ use crate::scenario::{Restart, Scenario};
 /// The sampler's cooldown floor and ceiling. A reply's interval is clamped
 /// to them; a timeout, an error or an unsupported reply cools for the
 /// ceiling, and so does a sample still in flight at a clean stop (sealed
-/// to the stop plus the ceiling plus the query timeout).
+/// to the stop plus the ceiling plus the query timeout). With
+/// `dht.sample_backoff_escalate` on, a node's first failure in a row cools
+/// for the first failure's backoff instead (a KRPC 204 still for the
+/// ceiling).
 const COOLDOWN_FLOOR: Duration = testing::SAMPLE_MIN_INTERVAL;
 const COOLDOWN_CEILING: Duration = testing::SAMPLE_MAX_INTERVAL;
+const FIRST_FAILURE: Duration = testing::SAMPLE_FIRST_FAILURE_BACKOFF;
 
 /// The simulated wall clock: a fixed base plus elapsed virtual time. Its
 /// `mono` is tokio's, the clock the sampler keeps; both carry across the
@@ -88,15 +92,71 @@ impl Drop for Dirs {
 /// before it is always a violation. A reply due at the stop instant may not
 /// have been read, but then the sample was sealed to the stop plus the
 /// ceiling, which is later than `at + wait` anyway.
-fn earliest_resample(ask: &SampleAsk, stop: Instant) -> Instant {
+///
+/// `escalate` is the query timeout with `dht.sample_backoff_escalate` on,
+/// `None` with it off (the model as it was). With it on, a failure (no
+/// reply, or an error other than a 204) cools for the ceiling only when
+/// `prev`, the node's sample before this one, failed too and this one was
+/// sent within a ceiling of it: the sampler then still held the streak,
+/// which lasts until the earlier failure plus the ceiling, and that
+/// failure came after `prev`'s send. Otherwise it cools for the first
+/// failure's backoff. That's a lower bound too, given that every reply
+/// arrives within the query timeout (the scenario's slowest is 1.5 s,
+/// against 4 s): a later one is read here as an answer, with its
+/// interval, though the sampler timed the sample out and cooled it for
+/// less. Nothing drops a streak early: a full
+/// table keeps it (split off) or moves it to the spill filter as a
+/// cooldown to its end (split on), and an abort keeps it. And an
+/// unanswered sample sent less than the query timeout before the stop
+/// can't have timed out, so it was sealed: the stop plus the ceiling.
+/// (With escalation off, the send plus the ceiling is close to that.)
+fn earliest_resample(
+    ask: &SampleAsk,
+    prev: Option<&SampleAsk>,
+    stop: Instant,
+    escalate: Option<Duration>,
+) -> Instant {
+    let failed = |a: &SampleAsk| match a.reply {
+        Some((at, interval)) if at <= stop => interval.is_none() && !a.unknown,
+        _ => true,
+    };
+    let backoff = if escalate.is_some()
+        && !prev.is_some_and(|p| failed(p) && ask.sent < p.sent + COOLDOWN_CEILING)
+    {
+        FIRST_FAILURE
+    } else {
+        COOLDOWN_CEILING
+    };
     match ask.reply {
         Some((at, interval)) if at <= stop => {
-            at + interval.map_or(COOLDOWN_CEILING, |s| {
-                Duration::from_secs(s.into()).clamp(COOLDOWN_FLOOR, COOLDOWN_CEILING)
-            })
+            at + interval.map_or(
+                if ask.unknown {
+                    COOLDOWN_CEILING
+                } else {
+                    backoff
+                },
+                |s| Duration::from_secs(s.into()).clamp(COOLDOWN_FLOOR, COOLDOWN_CEILING),
+            )
         }
-        _ => ask.sent + COOLDOWN_CEILING,
+        _ if escalate.is_some_and(|timeout| ask.sent + timeout > stop) => stop + COOLDOWN_CEILING,
+        _ => ask.sent + backoff,
     }
+}
+
+/// Every leg-1 node's earliest re-sample, from its last sample and, with
+/// escalation on, the one before it.
+fn earliest_by_node(
+    asks: &[SampleAsk],
+    stop: Instant,
+    escalate: Option<Duration>,
+) -> HashMap<SocketAddr, Instant> {
+    let mut earliest = HashMap::new();
+    let mut last: HashMap<SocketAddr, &SampleAsk> = HashMap::new();
+    for a in asks {
+        let prev = last.insert(a.to, a);
+        earliest.insert(a.to, earliest_resample(a, prev, stop, escalate));
+    }
+    earliest
 }
 
 /// Leg-2 samples sent before their node's earliest allowed re-sample.
@@ -188,6 +248,7 @@ pub async fn run(
         inline_io: true,
     });
     let suppression = COOLDOWN_CEILING + dht.query_timeout;
+    let escalate = dht.sample_backoff_escalate.then_some(dht.query_timeout);
     let hour = Duration::from_secs(3600);
 
     // Leg 1: a first start (full suppression), then sampling.
@@ -312,10 +373,7 @@ pub async fn run(
     );
 
     // What leg 2's samples show against what leg 1 left.
-    let mut earliest: HashMap<SocketAddr, Instant> = HashMap::new();
-    for a in &net.asks[..leg1] {
-        earliest.insert(a.to, earliest_resample(a, stop));
-    }
+    let earliest = earliest_by_node(&net.asks[..leg1], stop, escalate);
     let asks2 = &net.asks[leg1..];
     let stop2 = Instant::now();
     let c2 = count(asks2, stop2);
@@ -440,7 +498,10 @@ pub async fn run(
         }
     }
     drop(dirs);
-    run::finish(text, &log, d2, net.stats, stored_at_end, &minutes, pool_end)
+    Report {
+        asks: net.asks,
+        ..run::finish(text, &log, d2, net.stats, stored_at_end, &minutes, pool_end)
+    }
 }
 
 #[cfg(test)]
@@ -465,33 +526,99 @@ mod tests {
         let at = t + S(1);
         // An interval below the floor, in range, and above the ceiling.
         assert_eq!(
-            earliest_resample(&ask(1, t, Some((at, Some(10)))), stop),
+            earliest_resample(&ask(1, t, Some((at, Some(10)))), None, stop, None),
             at + S(60)
         );
         assert_eq!(
-            earliest_resample(&ask(1, t, Some((at, Some(900)))), stop),
+            earliest_resample(&ask(1, t, Some((at, Some(900)))), None, stop, None),
             at + S(900)
         );
         assert_eq!(
-            earliest_resample(&ask(1, t, Some((at, Some(30_000)))), stop),
+            earliest_resample(&ask(1, t, Some((at, Some(30_000)))), None, stop, None),
             at + S(6 * 3600)
         );
         // An error reply cools for the ceiling from its arrival.
         assert_eq!(
-            earliest_resample(&ask(1, t, Some((at, None))), stop),
+            earliest_resample(&ask(1, t, Some((at, None))), None, stop, None),
             at + S(6 * 3600)
         );
         // No reply: the ceiling from the send.
-        assert_eq!(earliest_resample(&ask(1, t, None), stop), t + S(6 * 3600));
+        assert_eq!(
+            earliest_resample(&ask(1, t, None), None, stop, None),
+            t + S(6 * 3600)
+        );
         // A reply due at the stop counts; one due after it doesn't arrive.
         assert_eq!(
-            earliest_resample(&ask(1, t, Some((stop, Some(900)))), stop),
+            earliest_resample(&ask(1, t, Some((stop, Some(900)))), None, stop, None),
             stop + S(900)
         );
         assert_eq!(
-            earliest_resample(&ask(1, t, Some((stop + S(1), Some(900)))), stop),
+            earliest_resample(&ask(1, t, Some((stop + S(1), Some(900)))), None, stop, None),
             t + S(6 * 3600)
         );
+    }
+
+    /// With escalation on, a failure cools for the first failure's backoff
+    /// unless the node's previous sample failed too, within a ceiling; a
+    /// 204 and an answer are as with it off.
+    #[test]
+    fn earliest_resample_follows_the_escalation() {
+        let t = Instant::now();
+        let stop = t + S(100_000);
+        let at = t + S(1);
+        let first = |a: &SampleAsk, prev| earliest_resample(a, prev, stop, Some(S(4)));
+        let silent = ask(1, t, None);
+        let busy = ask(1, t, Some((at, None)));
+        let mut unknown = busy;
+        unknown.unknown = true;
+        let answered = ask(1, t, Some((at, Some(900))));
+        // Alone: a first failure in a row.
+        assert_eq!(first(&silent, None), t + FIRST_FAILURE);
+        assert_eq!(first(&busy, None), at + FIRST_FAILURE);
+        // A 204 cools for the ceiling at once; an answer for its interval.
+        assert_eq!(first(&unknown, None), at + S(6 * 3600));
+        assert_eq!(first(&answered, None), at + S(900));
+        let later = |d: u64, reply: Option<(Instant, Option<u32>)>| ask(1, t + S(d), reply);
+        // After a failure within a ceiling: escalated.
+        for prev in [&silent, &busy] {
+            assert_eq!(first(&later(400, None), Some(prev)), t + S(400 + 6 * 3600));
+            let reply = Some((t + S(401), None));
+            assert_eq!(first(&later(400, reply), Some(prev)), t + S(401 + 6 * 3600));
+        }
+        // After an answer or a 204, or a ceiling or more after a failure:
+        // a first failure again.
+        for prev in [&answered, &unknown] {
+            assert_eq!(
+                first(&later(400, None), Some(prev)),
+                t + S(400) + FIRST_FAILURE
+            );
+        }
+        assert_eq!(
+            first(&later(6 * 3600, None), Some(&silent)),
+            t + S(6 * 3600) + FIRST_FAILURE
+        );
+        // Unanswered and sent within the query timeout of the stop: sealed.
+        assert_eq!(
+            first(&ask(1, stop - S(3), None), Some(&silent)),
+            stop + S(6 * 3600)
+        );
+        assert_eq!(
+            first(&ask(1, stop - S(4), None), None),
+            stop - S(4) + FIRST_FAILURE
+        );
+        // A reply after the stop didn't arrive: the earlier sample failed.
+        let lost = ask(1, t, Some((stop + S(1), Some(900))));
+        assert_eq!(first(&later(400, None), Some(&lost)), t + S(400 + 6 * 3600));
+        // Off, the previous sample doesn't matter.
+        assert_eq!(
+            earliest_resample(&later(400, None), Some(&silent), stop, None),
+            t + S(400 + 6 * 3600)
+        );
+        // By node: each node's last sample, after the one before it.
+        let asks = [silent, ask(2, t, None), later(400, None)];
+        let by = earliest_by_node(&asks, stop, Some(S(4)));
+        assert_eq!(by[&addr(1)], t + S(400 + 6 * 3600));
+        assert_eq!(by[&addr(2)], t + FIRST_FAILURE);
     }
 
     /// The check catches a sample before the bound and passes one at it,
@@ -503,7 +630,7 @@ mod tests {
         let leg1 = [ask(1, t, Some((t + S(1), Some(900)))), ask(2, t, None)];
         let earliest: HashMap<SocketAddr, Instant> = leg1
             .iter()
-            .map(|a| (a.to, earliest_resample(a, stop)))
+            .map(|a| (a.to, earliest_resample(a, None, stop, None)))
             .collect();
         let leg2 = [
             ask(1, t + S(900), None),

@@ -279,6 +279,46 @@ fn restart_without_safe_restart_suppresses_in_full() {
     assert_eq!(r.dht.restart_obligations_restored, 0, "{}", r.text);
 }
 
+/// CR-SAMPLE-BACKOFF-ESCALATE: the same restart with
+/// `dht.sample_backoff_escalate` on. The run asserts its checks against the
+/// escalating model (`restart::earliest_resample`): no node sampled before
+/// its lower bound, and sampling resuming at once. This checks the switch
+/// was exercised: some node was sampled again after a failure, before the
+/// 6 h it would have waited with the switch off.
+#[test]
+fn restart_with_escalation_honours_the_bound() {
+    let mut s = scenario::restart_honoured();
+    s.switches.sample_backoff_escalate = true;
+    let r = simulate(&s);
+    assert_eq!(
+        r.dht.sample_suppression_reason,
+        lodestar_dht::restart::Reason::Resumed,
+        "{}",
+        r.text
+    );
+    // The escalating model assumes every reply arrives within the query
+    // timeout (`restart::earliest_resample`).
+    let timeout = lodestar_dht::node::Config::default().query_timeout;
+    for a in &r.asks {
+        if let Some((at, _)) = a.reply {
+            assert!(at - a.sent < timeout, "a reply after the query timeout");
+        }
+    }
+    let ceiling = lodestar_dht::node::testing::SAMPLE_MAX_INTERVAL;
+    let mut last: std::collections::HashMap<_, &net::SampleAsk> = Default::default();
+    let mut early = 0;
+    for a in &r.asks {
+        if let Some(p) = last.insert(a.to, a)
+            && !matches!(p.reply, Some((_, Some(_))))
+            && !p.unknown
+            && a.sent < p.sent + ceiling
+        {
+            early += 1;
+        }
+    }
+    assert!(early > 0, "no node was sampled again after a first failure");
+}
+
 /// Two runs of one seed in one process are byte-identical, and a different
 /// seed changes the outcome (so the seed really drives the run).
 #[test]
@@ -1193,24 +1233,31 @@ fn print_screen(off: &Scenario, on: &Scenario) {
 
 /// X-sampler-frontier-starve's reproduction: why the sampler's rate falls
 /// once every known node is cooling. `base` at 20,000 nodes, Balanced, 90
-/// simulated minutes, seed 1, in three arms:
+/// simulated minutes, seed 1, in four arms:
 /// - **A**, `dht.sampler_cooldown_split` on, with `base`'s loss (2 % each
 ///   way), error replies (0.5 %) and remote rate limit (20 a second per
 ///   remote node, which our sampling never reaches);
 /// - **B**, the same with the split off;
-/// - **C**, the split on, without loss, error replies or the rate limit.
+/// - **C**, the split on, without loss, error replies or the rate limit;
+/// - **D** (CR-SAMPLE-BACKOFF-ESCALATE), A with
+///   `dht.sample_backoff_escalate` on: a node's first failed sample in a
+///   row cools for `FIRST_FAILURE_BACKOFF`, a second for 6 h, and a KRPC
+///   204 for 6 h at once.
 ///
 /// It prints samples a minute and the frontier's and cooldowns' means,
-/// per 10 minutes, and each arm's samples, failed samples and timeouts.
-/// Expect the frontier near 0 in every arm after the first pass; A's
-/// samples a minute falling steadily (about 1,540 to 860), B equal to A
-/// (the 200,000-entry table never fills at this size, so the split is
-/// inert), and C flat (about 1,730). The difference is the 6 h cooldown
-/// after one failed sample: `docs/decisions/2026-11-21-X-sampler-frontier-starve.md`.
-/// About 21 s of wall time per arm, about 65 s in all.
+/// per 10 minutes, and each arm's samples, failed samples, timeouts and
+/// repeat samples to nodes that never answered (by whether any reply came
+/// back: none, or only errors). Expect the frontier near 0 in every arm
+/// after the first pass; A's samples a minute falling steadily (about
+/// 1,540 to 860), B equal to A (the 200,000-entry table never fills at
+/// this size, so the split is inert), C flat (about 1,730), and D close to
+/// C. The difference is the 6 h cooldown after one failed sample:
+/// `docs/decisions/2026-11-21-X-sampler-frontier-starve.md` and
+/// `docs/decisions/2026-11-21-CR-SAMPLE-BACKOFF-ESCALATE.md`.
+/// About 21 s of wall time per arm, about 90 s in all.
 /// `cargo test -p lodestar-crawler-sim --test sim sampler_starve -- --ignored --nocapture`
 #[test]
-#[ignore = "measurement: about a minute of wall time"]
+#[ignore = "measurement: about a minute and a half of wall time"]
 fn sampler_starve() {
     let mut a = scenario::base("sampler-starve");
     a.minutes = 90;
@@ -1222,8 +1269,14 @@ fn sampler_starve() {
     c.net.loss_permille = 0;
     c.net.error_permille = 0;
     c.net.rate_limit_qps = None;
+    let mut d = a.clone();
+    d.switches.sample_backoff_escalate = true;
+    println!(
+        "first failure backoff {} s",
+        lodestar_dht::node::testing::SAMPLE_FIRST_FAILURE_BACKOFF.as_secs()
+    );
     println!("arm | minutes | samples/min | frontier mean | cooling mean");
-    for (arm, s) in [("A", &a), ("B", &b), ("C", &c)] {
+    for (arm, s) in [("A", &a), ("B", &b), ("C", &c), ("D", &d)] {
         let r = simulate(s);
         for (k, block) in r.sampling.chunks(10).enumerate() {
             let n = block.len() as f64;
@@ -1236,9 +1289,83 @@ fn sampler_starve() {
                 block.iter().map(|m| m.cooling).sum::<f64>() / n,
             );
         }
+        let rep = repeats(&r.asks);
         println!(
-            "{arm} | total | samples {} | failed samples {} | timeouts {}",
-            r.dht.samples_sent, r.dht.sample_failures, r.dht.timeouts
+            "{arm} | total | samples {} | failed samples {} | timeouts {} | \
+             never answered: nodes {} repeats {} (silent {}, errors only {})",
+            r.dht.samples_sent,
+            r.dht.sample_failures,
+            r.dht.timeouts,
+            rep.nodes,
+            rep.silent + rep.errors_only,
+            rep.silent,
+            rep.errors_only
         );
     }
+}
+
+/// Samples to nodes that never answered a sample with a BEP 51 interval.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Repeats {
+    /// Nodes sampled, none of whose samples got an interval back.
+    nodes: u64,
+    /// Samples after the first to those of them no reply ever came from...
+    silent: u64,
+    /// ...and to those that sent only KRPC errors.
+    errors_only: u64,
+}
+
+fn repeats(asks: &[net::SampleAsk]) -> Repeats {
+    // Per node: samples, and whether any reply or any interval came back.
+    let mut by: std::collections::HashMap<std::net::SocketAddr, (u64, bool, bool)> =
+        std::collections::HashMap::new();
+    for a in asks {
+        let e = by.entry(a.to).or_default();
+        e.0 += 1;
+        e.1 |= a.reply.is_some();
+        e.2 |= matches!(a.reply, Some((_, Some(_))));
+    }
+    let mut r = Repeats::default();
+    for (n, replied, answered) in by.into_values() {
+        if answered {
+            continue;
+        }
+        r.nodes += 1;
+        if replied {
+            r.errors_only += n - 1;
+        } else {
+            r.silent += n - 1;
+        }
+    }
+    r
+}
+
+#[test]
+fn repeats_count_only_nodes_that_never_answered() {
+    let t = tokio::time::Instant::now();
+    let at = |n: u8| std::net::SocketAddr::from(([24, 0, 0, n], 6881));
+    let ask = |n, reply| net::SampleAsk::new(at(n), t, reply);
+    let asks = [
+        // Answered once: never counted.
+        ask(1, None),
+        ask(1, Some((t, Some(300)))),
+        ask(1, None),
+        // Silent three times: two repeats.
+        ask(2, None),
+        ask(2, None),
+        ask(2, None),
+        // Errors only: one repeat.
+        ask(3, Some((t, None))),
+        ask(3, None),
+        // Sampled once: a node, no repeat.
+        ask(4, None),
+    ];
+    assert_eq!(
+        repeats(&asks),
+        Repeats {
+            nodes: 3,
+            silent: 2,
+            errors_only: 1
+        }
+    );
 }

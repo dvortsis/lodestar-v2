@@ -140,6 +140,8 @@ pub struct Switches {
     pub preset_slots: bool,
     /// X-sampler-cooldown-split: `dht.sampler_cooldown_split`.
     pub sampler_cooldown_split: bool,
+    /// CR-SAMPLE-BACKOFF-ESCALATE: `dht.sample_backoff_escalate`.
+    pub sample_backoff_escalate: bool,
 }
 
 impl Switches {
@@ -147,6 +149,7 @@ impl Switches {
     pub fn apply(&self, dht: &mut Config, pool: &mut PoolConfig) {
         dht.preset_slots = self.preset_slots;
         dht.sampler_cooldown_split = self.sampler_cooldown_split;
+        dht.sample_backoff_escalate = self.sample_backoff_escalate;
         if self.coordinated_admission {
             // As the pipeline wires it (`crates/pipeline/src/lib.rs`): one
             // permit per DHT slot (32, or the preset's with CR-1c).
@@ -176,6 +179,7 @@ impl Switches {
             (self.lookup_end, "lookup_end=true"),
             (self.preset_slots, "preset_slots=true"),
             (self.sampler_cooldown_split, "sampler_cooldown_split=true"),
+            (self.sample_backoff_escalate, "sample_backoff_escalate=true"),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))

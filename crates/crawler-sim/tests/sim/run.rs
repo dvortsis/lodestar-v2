@@ -56,6 +56,9 @@ pub struct Report {
     /// Per minute: samples sent, and the frontier's and cooldowns' means
     /// (X-sampler-frontier-starve). Not in the report text.
     pub sampling: Vec<SamplingMinute>,
+    /// Every `sample_infohashes` the node sent, both legs' in a restart
+    /// (CR-SAMPLE-BACKOFF-ESCALATE). Not in the report text.
+    pub asks: Vec<crate::net::SampleAsk>,
 }
 
 /// One minute of the sampler, from [`Minute`].
@@ -582,15 +585,18 @@ pub async fn run(s: &Scenario) -> Report {
     let end = leg.stop().await;
     conservation(&dht_final, end.fetched, end.funnel_fetched, end.stored);
     write_net(&mut text, &end.net.stats, end.dropped, end.queued.len());
-    finish(
-        text,
-        &log,
-        dht_final,
-        end.net.stats,
-        stored_at_end,
-        &minutes,
-        pool_end,
-    )
+    Report {
+        asks: end.net.asks,
+        ..finish(
+            text,
+            &log,
+            dht_final,
+            end.net.stats,
+            stored_at_end,
+            &minutes,
+            pool_end,
+        )
+    }
 }
 
 /// The outcome log's digest, the fingerprint, and the report.
@@ -627,6 +633,7 @@ pub fn finish(
                 cooling: m.sample_cooling.mean(),
             })
             .collect(),
+        asks: Vec::new(),
     }
 }
 
