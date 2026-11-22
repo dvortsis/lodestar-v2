@@ -117,6 +117,8 @@ After an intended visual change, a new key route or a new theme:
 
    On a PR from a fork, the job doesn't run. Download the artifact instead, unzip it into `web/e2e/` (paths inside match the repo), delete the marker file, review the PNG diffs and push.
 
+**Fixture baselines.** The same marker file also regenerates the five real-server screenshots in `e2e/ui-checks/fixture-screens.fixture.test.ts`. On a same-repo PR with the marker, CI builds the fixture binary (about 10 minutes), runs `--project=fixture --update-snapshots`, and the same commit job adds those PNGs to the branch. Without the marker the fixture job is unchanged: nightly and manual only, and a skipped job passes `e2e-ok`. Never commit PNGs made on a laptop.
+
 The same regeneration is available by hand from the Actions tab (E2E → Run workflow → `update_snapshots`) once `e2e.yml` is on `main`; the marker file works on any PR branch, which is why it exists.
 
 When a snapshot fails in CI, the `playwright-report` artifact holds the HTML report and the expected/actual/diff images (`test-results/`); an `*-actual.png` there can also be used as the new baseline.
