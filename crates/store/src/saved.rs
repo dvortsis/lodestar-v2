@@ -24,7 +24,10 @@ use crate::{Error, Result, Store, flags};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SavedSearchInput<'a> {
     pub name: &'a str,
-    /// The query as typed, at most 2,048 bytes (the parser's limit).
+    /// The query's canonical text (`Node::to_query`: sizes in bytes or IEC
+    /// units only, which every release reads the same way), at most 2,048
+    /// bytes (the parser's limit). Saved searches before typed units
+    /// (X-units-typed) hold the text as typed; nothing re-parses it.
     pub query: &'a str,
     /// The parsed AST as JSON, at most 64 KiB.
     pub ast: &'a str,

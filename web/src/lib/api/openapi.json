@@ -6161,7 +6161,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "The query text; empty matches everything.",
+            "description": "The query text; empty matches everything. Sizes read as typed:\n`GB` is 10^9 bytes, `GiB` 2^30 (on `size:` and `largest:`; stored\nfilter rules keep the 1,024 reading).",
             "required": false,
             "schema": {
               "type": "string"
@@ -15797,7 +15797,7 @@
               "string",
               "null"
             ],
-            "description": "The query text, as `/search` takes it.",
+            "description": "The query text, as `/search` takes it (sizes read as typed:\n`GB` is 10^9 bytes).",
             "default": null
           },
           "sort": {
@@ -15933,7 +15933,7 @@
               "string",
               "null"
             ],
-            "description": "The query text, as `/search` takes it. Send `q` or `ast`, not\nboth.",
+            "description": "The query text, as `/search` takes it (sizes read as typed:\n`GB` is 10^9 bytes). Send `q` or `ast`, not both.",
             "default": null
           },
           "sort": {
@@ -19547,7 +19547,7 @@
           },
           "canonical": {
             "type": "string",
-            "description": "The proposed query; it always parses back to `ast`."
+            "description": "The proposed query; it parses back to the same AST under the\ntyped reading (`10GB` is 10^9 bytes), as `q` does."
           },
           "chips": {
             "type": "array",
@@ -19569,7 +19569,7 @@
             "of": [],
             "op": "and"
           },
-          "canonical": "res:2160p type:movie year:2020 size:>=10GiB",
+          "canonical": "res:2160p type:movie year:2020 size:>=10GB",
           "chips": [
             {
               "from": {
@@ -22064,7 +22064,7 @@
               "string",
               "null"
             ],
-            "description": "The query text. Send `q` or `ast`, not both; with neither it\nmatches everything."
+            "description": "The query text. Send `q` or `ast`, not both; with neither it\nmatches everything. Sizes read as typed: `GB` is 10^9 bytes, `GiB`\n2^30. It's stored as the AST's canonical text, not as sent."
           },
           "rss": {
             "type": "boolean",
@@ -22121,7 +22121,7 @@
               "string",
               "null"
             ],
-            "description": "Send `q` or `ast`, not both.",
+            "description": "Send `q` or `ast`, not both. Read as `SavedSearchCreate.q` is.",
             "default": null
           },
           "rss": {
@@ -22198,7 +22198,7 @@
           },
           "q": {
             "type": "string",
-            "description": "The query text."
+            "description": "The query as the user would type it, printed from the stored AST\nevery time (sizes in a decimal unit where one fits, `size:>10GB`).\n`/search?q=` reads it back as the same AST. What's stored is\ncanonical text in bytes or IEC units."
           },
           "rss": {
             "type": "boolean",
@@ -22781,7 +22781,7 @@
               "string",
               "null"
             ],
-            "description": "The query text. Send `q` or `ast`, not both."
+            "description": "The query text, as `/search` takes it (sizes read as typed: `GB`\nis 10^9 bytes). Send `q` or `ast`, not both."
           },
           "tz": {
             "type": [
@@ -22886,7 +22886,7 @@
               "string",
               "null"
             ],
-            "description": "The query text. Send `q` or `ast`, not both.",
+            "description": "The query text. Send `q` or `ast`, not both. Sizes read as typed:\n`GB` is 10^9 bytes, `GiB` 2^30 (on `size:` and `largest:`; stored\nfilter rules keep the 1,024 reading).",
             "default": null
           },
           "sort": {
@@ -22927,7 +22927,7 @@
         "properties": {
           "canonical": {
             "type": "string",
-            "description": "The query as the server understood it."
+            "description": "The query as the server understood it, as the user would type it\n(sizes in the unit typed, `size:>10GB`): it reads back the same\nas `q`."
           },
           "collapse_unavailable": {
             "$ref": "#/components/schemas/CollapseUnavailable",

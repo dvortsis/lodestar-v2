@@ -1130,7 +1130,7 @@ proptest! {
         prop_assert_eq!(&parsed, &n.ast);
         prop_assert_eq!(parsed.to_query_typed(), n.canonical.clone());
         // What would be stored reads the same under the typed reading.
-        prop_assert_eq!(typed(&parsed.to_query()).ok().as_ref(), Some(&parsed));
+        prop_assert_eq!(typed(&parsed.to_query()).ok(), Some(parsed.clone()));
         for c in &n.chips {
             prop_assert!(typed(&c.text).is_ok(), "{}", c.text);
             prop_assert!(c.from.0 < c.from.1 && c.from.1 <= phrase.chars().count());
