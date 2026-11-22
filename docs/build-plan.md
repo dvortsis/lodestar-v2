@@ -557,7 +557,7 @@ A non-Claude agent picking up the work maps this to "use your strongest model fo
 - **Cap:** from 2026-11-13T00:00Z, four build slices and four cloud-testing slices at a time (§0.2; owner §2.64), and filling them all isn't required. `runner/slices.yaml` `limits` (16 core + 16 helpers, §2.15) are the ceiling once the owner lifts it. Review bandwidth is the bottleneck, not how many agents can be spawned.
 - **Review gate** (for every result):
   - read the whole diff;
-  - run `npm run check`, `npx vitest run`, `npx size-limit` and the affected Playwright specs;
+  - run `npm run check`, `npx vitest run`, `npm run size:ci` and the affected Playwright specs;
   - run `cargo fmt --check`, `clippy -D warnings` and `test` wherever Rust is touched;
   - run `/code-review high` on diffs over 400 lines;
   - run `/security-review` on anything touching auth, credentials, filters, the cluster, companions or source plugins;
@@ -684,7 +684,7 @@ The current risks are in §0.8. These standing mitigations still apply:
 ## 6. Verification
 - **Every PR:**
   - Rust: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`;
-  - web: `npm run check`, `npx vitest run`, `npm run build`, `npx size-limit`, and `npx playwright test` for anything with an e2e spec;
+  - web: `npm run check`, `npx vitest run`, `npm run build`, `npm run size:ci`, and `npx playwright test` for anything with an e2e spec;
   - `git fetch origin main` before pushing (clones are shallow).
 - **Milestone exits:** as listed in each phase and in §0.6, mirroring architecture §14 and §17.
 
