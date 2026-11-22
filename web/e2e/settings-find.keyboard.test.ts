@@ -131,20 +131,6 @@ test.describe('keyboard: Settings search', () => {
 		await expect(rows.nth(4).getByRole('link', { name: 'Change' })).toBeVisible();
 	});
 
-	test('on a phone, typing in the box puts the results above what needs attention', async ({
-		page,
-		go,
-		kbd
-	}) => {
-		await page.setViewportSize({ width: 390, height: 844 });
-		await go('/settings');
-		await focusBoxWithSlash(page, kbd);
-		await page.keyboard.type('pause');
-		const option = await page.getByRole('option').first().boundingBox();
-		const attention = await page.getByRole('heading', { name: 'Needs attention' }).boundingBox();
-		expect(option!.y).toBeLessThan(attention!.y);
-	});
-
 	test('the current item is shaded, not only bold', async ({ page, go }) => {
 		await go('/settings/crawler');
 		const current = page.getByRole('link', { name: 'Crawler', exact: true });
@@ -154,19 +140,13 @@ test.describe('keyboard: Settings search', () => {
 
 	test.describe('on a phone', () => {
 		test.use({ viewport: { width: 390, height: 844 } });
-		test('the Overview reads search, what needs attention, Start here, then the screens', async ({
-			page,
-			go
-		}) => {
+		test('the Overview and its results pass axe at 390 px', async ({ page, go, kbd }) => {
 			await go('/settings');
-			const box = await page.getByRole('searchbox').boundingBox();
-			const attention = await page.getByRole('heading', { name: 'Needs attention' }).boundingBox();
-			const start = await page.getByRole('heading', { name: 'Start here' }).boundingBox();
-			const list = await page.getByRole('navigation', { name: 'Settings sections' }).boundingBox();
-			expect(box!.y).toBeLessThan(attention!.y);
-			expect(attention!.y).toBeLessThan(start!.y);
-			expect(start!.y).toBeLessThan(list!.y);
 			await expect(page.getByTestId('start-row').first()).toBeVisible();
+			await expectNoA11yViolations(page);
+			await focusBoxWithSlash(page, kbd);
+			await page.keyboard.type('pause');
+			await expect(page.getByRole('option').first()).toBeVisible();
 			await expectNoA11yViolations(page);
 		});
 	});

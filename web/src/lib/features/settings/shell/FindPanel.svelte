@@ -138,7 +138,7 @@
 </p>
 
 {#if query.trim()}
-	<div class="find-list">
+	<div>
 		{#if failed}
 			<p role="status" class="text-small">{m.settings_find_failed()}</p>
 		{:else if !index}
@@ -185,10 +185,3 @@
 		{/if}
 	</div>
 {/if}
-
-<style>
-	/* Below 1024 px the results sit right under the box, before what needs attention (SettingsShell). */
-	.find-list {
-		order: 1;
-	}
-</style>

@@ -48,7 +48,7 @@
 					href={href('/settings')}
 					aria-current={overview ? 'page' : undefined}>{m.settings_shell_title()}</a
 				>
-				<label class="settings-find flex flex-col gap-2 text-small">
+				<label class="flex flex-col gap-2 text-small">
 					{m.settings_shell_filter_sections()}
 					<input
 						class="input ls-focus w-full"
@@ -62,7 +62,7 @@
 					<Panel {input} bind:query clear={() => (query = '')} />
 				{/if}
 				{#if !finding}
-					<nav class="settings-list flex flex-col gap-6" aria-label={m.settings_shell_navigation()}>
+					<nav class="flex flex-col gap-6" aria-label={m.settings_shell_navigation()}>
 						{#each groups as group (group.id)}
 							{@const members = screens.filter((screen) => screen.group === group.id)}
 							{#if members.length}
@@ -102,19 +102,10 @@
 	.settings-navigation {
 		display: none;
 	}
-	/* Below 1024 px the Overview reads: the search box, what needs attention and what to set, then
-	   the list of screens (§10.10.3), so the aside's parts are ordered around the content. */
 	.settings-overview .settings-navigation {
-		display: contents;
-	}
-	.settings-find {
-		order: 1;
-	}
-	.settings-list {
-		order: 3;
+		display: flex;
 	}
 	.settings-content {
-		order: 2;
 		width: 100%;
 		max-width: var(--manuscript-width);
 	}
@@ -127,7 +118,6 @@
 			grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
 			align-items: start;
 		}
-		.settings-overview .settings-navigation,
 		.settings-navigation {
 			display: flex;
 			position: sticky;
