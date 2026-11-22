@@ -350,17 +350,23 @@ placement:
   - X-outputs-e2e-race
   - X-safety-undo-danger
   - X-undo-danger-tests
+  - X-web-build-determinism
   - X-filters-dialog-test-timeout
   - X-ui-plan-r5
   - X-page-frame
   - X-ctl-geometry
   - X-labels
   - X-facet-group-case
+  - X-builder-group-case
   - X-insights-source-names
   - X-shell-home
   - X-narrow-states
   - X-help
   - X-ui-checks
+  - X-ui-checks-1
+  - X-ui-checks-2
+  - X-ui-checks-3
+  - X-ui-checks-4
   - X-offline-retry
   - X-offline-retry-nits
   - W*

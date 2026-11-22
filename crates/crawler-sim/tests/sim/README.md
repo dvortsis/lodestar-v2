@@ -75,6 +75,20 @@ The run asserts, and the report's last sections show:
   timeout cools from later than that, a sealed sample from the stop).
   That's a lower bound on the real deadline, so any earlier leg-2 sample
   is a violation.
+  - With `dht.sample_backoff_escalate` on (CR-SAMPLE-BACKOFF-ESCALATE), a
+    failure (no reply, or an error other than a KRPC 204) cools for the
+    first failure's backoff (300 s) unless the node's previous leg-1
+    sample failed too and was sent within 6 h of it; then it cools for
+    6 h. A 204 still cools for 6 h. An unanswered sample sent less than a
+    query timeout before the stop can't have timed out, so it was sealed:
+    the stop plus 6 h. That's still a lower bound, given that every reply
+    arrives within the query timeout (the scenario's slowest is 1.5 s,
+    against a 4 s timeout). A later reply would be read as an answer, with
+    its interval, though the sampler timed the sample out and cooled it
+    for less, so the model's bound could be too late.
+    `restart_with_escalation_honours_the_bound` runs
+    the restart with the switch on, and it has no golden. With the switch
+    off, the model is unchanged.
 - **Sampling resumes at once** for everything else: the first leg-2 sample
   comes within a minute, every node already free at the restart is
   sampled again, and so is every node whose obligation expires during

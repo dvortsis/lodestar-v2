@@ -5347,6 +5347,13 @@ export interface components {
             count: number;
             /** @description The query excludes it (`-res:480p`). */
             excluded: boolean;
+            /**
+             * @description How to show it, when that differs from `value`: only `group`, the
+             *     most common spelling of the release group in its torrents' names
+             *     (`rarbg` → "RARBG"). Absent otherwise. `value` stays what a query
+             *     matches and a click sends.
+             */
+            label?: string;
             /** @description The query selects it. */
             selected: boolean;
             value: string;

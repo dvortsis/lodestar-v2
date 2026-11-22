@@ -237,6 +237,11 @@ pub struct Config {
     /// filter instead of stopping admission. Off keeps today's table and
     /// allocates no filter.
     pub sampler_cooldown_split: bool,
+    /// CR-SAMPLE-BACKOFF-ESCALATE (`dht.sample_backoff_escalate`): a
+    /// node's first failed sample in a row cools for
+    /// `sampler::FIRST_FAILURE_BACKOFF`, and a second in a row for the
+    /// full six hours. Off keeps one failure's six hours.
+    pub sample_backoff_escalate: bool,
 }
 
 /// The restart proof's settings (docs/decisions/2026-10-30-CR-0d.md).
@@ -326,6 +331,7 @@ impl Default for Config {
             shard: None,
             sample_interval_scale: 1,
             sampler_cooldown_split: false,
+            sample_backoff_escalate: false,
         }
     }
 }

@@ -2,6 +2,7 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import Icons from 'unplugin-icons/vite';
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
+import { createHash } from 'node:crypto';
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 import { mergeMessages } from './scripts/messages.ts';
@@ -36,6 +37,47 @@ const previewApi: Plugin = {
 	}
 };
 
+// The size step's measurement build (CI sets LODESTAR_STABLE_NAMES=1 there, and never for the
+// shipped build): client chunks are named after the modules they hold, not their bytes. SvelteKit
+// enforces content-hash names (`[hash].js`), so any change renamed every chunk that imports the
+// changed one, and gzip packed the new name a few bytes differently: untouched routes drifted by
+// up to ±10 B and limits at their measured size flaked (X-web-build-determinism). A name from
+// the module set changes only when the chunk's make-up does. The shipped build keeps content
+// hashes, which cache-busting needs: a name must change when the bytes do.
+const stableNames: Plugin = {
+	name: 'lodestar:stable-names',
+	apply: 'build',
+	enforce: 'post',
+	outputOptions(opts) {
+		if (!process.env.LODESTAR_STABLE_NAMES) return null;
+		const pre = '_app/immutable';
+		const entries = opts.entryFileNames;
+		// The server build (`[name].js`) and workers keep their names.
+		if (typeof entries !== 'string' || !entries.startsWith(`${pre}/`)) return null;
+		if (entries.startsWith(`${pre}/workers/`)) return null;
+		if (entries !== `${pre}/[name].[hash].js`) {
+			throw new Error(`stable names: SvelteKit's entry pattern changed (${entries})`);
+		}
+		// 8 base64url characters, the first like rolldown's (mostly B, C or D), so each name costs
+		// gzip about what a real one does and the measured size stays close to the shipped one.
+		const name = (c: { moduleIds: readonly string[]; name: string }) => {
+			const ids = c.moduleIds.map((m) => m.replace(import.meta.dirname, '')).sort();
+			const d = createHash('sha256')
+				.update(ids.join('\n') || c.name)
+				.digest();
+			const b = d.readUInt8(0);
+			const first =
+				b < 200 ? 'BCD'.charAt(b % 3) : d.subarray(9, 10).toString('base64url').charAt(0);
+			return first + d.subarray(1).toString('base64url').slice(0, 7);
+		};
+		return {
+			...opts,
+			entryFileNames: (c) => `${pre}/${c.name}.${name(c)}.js`,
+			chunkFileNames: (c) => `${pre}/chunks/${name(c)}.js`
+		};
+	}
+};
+
 export default defineConfig({
 	// The search route's first load carries only what it uses (scripts/first-load.mjs, §10.1),
 	// and no route's preload list rides along in the route table.
@@ -64,7 +106,8 @@ export default defineConfig({
 		firstLoadGraph(),
 		stripPreloadsOf(/\/src\/routes\/(search\/\+page|\+layout|\+error)\.svelte$/),
 		Icons({ compiler: 'svelte' }),
-		previewApi
+		previewApi,
+		stableNames
 	],
 	resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
 	test: {

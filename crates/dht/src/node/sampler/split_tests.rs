@@ -194,6 +194,7 @@ fn a_full_filter_leaves_the_table_full() {
         State::Cooling {
             until: now + past,
             token: 1,
+            struck: false,
         },
     );
     s.expiry.insert((now + past, 1, wide(1)));
@@ -429,6 +430,8 @@ enum Op {
     /// Try a node directly, as a spoofed or duplicate contact would.
     Reserve(u16),
     Complete(u8, u8, u8),
+    /// A timeout or error reply (CR-SAMPLE-BACKOFF-ESCALATE's `fail`).
+    Fail(u8),
     Abort(u8),
     Advance(u16),
     Prune,
@@ -441,6 +444,7 @@ fn arb_op() -> impl Strategy<Value = Op> {
         4 => Just(Op::Next),
         2 => (0..400u16).prop_map(Op::Reserve),
         3 => (any::<u8>(), 0..5u8, 0..10u8).prop_map(|(i, w, s)| Op::Complete(i, w, s)),
+        2 => any::<u8>().prop_map(Op::Fail),
         1 => any::<u8>().prop_map(Op::Abort),
         2 => (0..10_800u16).prop_map(Op::Advance),
         2 => Just(Op::Prune),
@@ -459,10 +463,16 @@ fn few(i: u16) -> SocketAddr {
 /// What the restart proof does with the sampler at shutdown and start
 /// (proof.rs): seal what's in flight, list the table, gate on the filter,
 /// restore into a fresh sampler.
-fn restart(s: &Sampler, now: Instant, h: Duration, cap: usize) -> (Sampler, Option<Instant>) {
+fn restart(
+    s: &Sampler,
+    now: Instant,
+    h: Duration,
+    cap: usize,
+    escalate: bool,
+) -> (Sampler, Option<Instant>) {
     let gate = s.spill_end(now).map(|e| e.min(now + h));
     let listed: Vec<_> = s.restrictions(now).collect();
-    let mut next = Sampler::split_with_capacity(cap);
+    let mut next = Sampler::split_with_capacity(cap).with_escalation(escalate);
     for (a, until) in listed {
         next.restore(a, until);
     }
@@ -474,10 +484,11 @@ proptest! {
     #[test]
     fn no_node_is_sampled_in_cooldown(
         cap in 1..6usize,
+        escalate in any::<bool>(),
         ops in proptest::collection::vec(arb_op(), 1..300),
     ) {
         let h = MAX_INTERVAL + Duration::from_secs(4);
-        let mut s = Sampler::split_with_capacity(cap);
+        let mut s = Sampler::split_with_capacity(cap).with_escalation(escalate);
         let mut now = Instant::now();
         let mut token = 0u64;
         let mut flying: Vec<(SocketAddr, u64)> = vec![];
@@ -522,6 +533,14 @@ proptest! {
                             .saturating_mul(u32::from(scale.clamp(1, MAX_SCALE)));
                     truth.insert(a, (end, true));
                 }
+                Op::Fail(i) if !flying.is_empty() => {
+                    let (a, t) = flying.remove(usize::from(i) % flying.len());
+                    prop_assert!(s.fail(a, t, MAX_INTERVAL, now));
+                    // With escalation on, at least the first failure's
+                    // backoff (exactly so in escalate_tests); off, in full.
+                    let end = now + if escalate { FIRST_FAILURE_BACKOFF } else { MAX_INTERVAL };
+                    truth.insert(a, (end, true));
+                }
                 Op::Abort(i) if !flying.is_empty() => {
                     let (a, t) = flying.remove(usize::from(i) % flying.len());
                     prop_assert!(s.abort(a, t));
@@ -541,7 +560,7 @@ proptest! {
                         }
                         *wire = false;
                     }
-                    let (next, spilled) = restart(&s, now, h, cap);
+                    let (next, spilled) = restart(&s, now, h, cap, escalate);
                     s = next;
                     gate = match (gate, spilled) {
                         (Some(g), Some(x)) => Some(g.max(x)),
