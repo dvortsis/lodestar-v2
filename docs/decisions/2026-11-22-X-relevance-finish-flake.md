@@ -1,4 +1,4 @@
-# X-relevance-finish-flake decisions (#PRNUM)
+# X-relevance-finish-flake decisions (#1042)
 
 `bench/tests/relevance_sets.rs`, `refused_while_a_server_holds_it`, failed once in #1029's CI (`test (ubuntu-latest)`, head 2f0f3237). It passed on a re-run.
 
@@ -7,7 +7,7 @@
 - **Both success checks are exposed** to the same mechanism.
 - **Reproduced on `main` (73bb8b68):** the test binary run 300 times with `--test-threads 16` failed 14 times. With its output printed, the tool said "in use: a running Lodestar holds …/index/.lock" right after the test dropped that lock. The same test alone (`--exact`) failed 0 of 300 times.
 
-## The mechanism (Linux and macOS, not Windows)
+## The mechanism (Linux; macOS by the same reasoning)
 - **Both locks are `flock` locks:**
   - the tool's check (`File::try_lock_shared`, `bench/src/bin/relevance/data_dir.rs` `hold_locks`);
   - the lock tantivy takes (`MmapDirectory::acquire_lock`, fs4 `try_lock_exclusive`).
@@ -16,7 +16,12 @@
 - **A spawn copies that whole table into the child:** glibc's `posix_spawn` (`clone` with `CLONE_VFORK`), or fork then exec. The copy includes other tests' lock-file descriptors, until exec closes them as close-on-exec.
 - **So a lock a test drops while another test's child is between clone and that close stays held a moment longer.** The tool the test runs next is refused.
 - **tantivy's own release is synchronous.** The writer lock lives in the `IndexWriter`, which `wait_merging_threads` consumes. A `DirectoryLock` closes its file on drop.
-- **Windows is unaffected:** Rust opens handles non-inheritable, and `CreateProcess` copies only inheritable ones.
+- **Reproduced on Linux.** macOS follows from the same fork and exec reasoning, but it wasn't observed there.
+- **On Windows this mechanism doesn't apply:** Rust opens handles non-inheritable, and `CreateProcess` copies only inheritable ones.
+- **A different, unobserved risk remains on Windows** (the self-review).
+  - The locks there are `LockFileEx`, released by closing the handle or by the process exiting, not by `UnlockFileEx`. Microsoft's documentation says the time that release takes "depends upon available system resources".
+  - So on a loaded runner, a drop or a tool's exit could leave a lock held briefly: a success check would see "in use", or `index.writer` would get `LockBusy`.
+  - It hasn't been seen in CI. If it is, the fix is a condition wait of at least 10 s on the real state (re-run only while the output says "in use"), as the brief allows, not a sleep.
 
 ## Why `spawn` returning isn't enough
 - **The first fix held a mutex around `Command::spawn` only, and dropped the locks under it.** The reasoning: std's `spawn` waits for the exec, through `posix_spawn`'s vfork semantics or its close-on-exec error pipe.

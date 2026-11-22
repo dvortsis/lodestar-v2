@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::{OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::SystemTime;
 
@@ -193,7 +193,6 @@ fn relevance(args: &[&std::ffi::OsStr]) -> Output {
     let _running = running();
     Command::new(env!("CARGO_BIN_EXE_relevance"))
         .args(args)
-        .stdin(Stdio::null())
         .output()
         .unwrap()
 }
@@ -360,7 +359,7 @@ fn copy_of(f: &Fixture) -> tempfile::TempDir {
 fn refused(o: &Output, needle: &str) {
     let (out, err) = text(o);
     assert!(!o.status.success(), "{out}\n{err}");
-    assert!(err.contains(needle), "{needle:?} not in {err}");
+    assert!(err.contains(needle), "{needle:?} not in {out}\n{err}");
 }
 
 #[test]
