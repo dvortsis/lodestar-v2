@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-22T21:38:35Z",
+  "updated_at": "2026-11-22T22:01:44Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11556,7 +11556,57 @@
       }
     ]
   },
-  "reserved_for_api_lane": [],
+  "reserved_for_api_lane": {
+    "updated": "2026-11-22T22:01:44Z",
+    "by": "runner",
+    "credit": "owner $200 Claude API credit, 2026-11-22",
+    "max_open_prs": 2,
+    "order": [
+      "RX-1",
+      "X-setup-token-boot",
+      "X-unverified-cap-index",
+      "IRC-0",
+      "NOS-1",
+      "ENR-debrid",
+      "X-watch-env",
+      "UP-2",
+      "M8-PERF-1",
+      "M8-REL-2",
+      "ENR-terms-api",
+      "ENR-13b",
+      "ADH-0",
+      "ENR-G",
+      "X-settings-leave-guard-split",
+      "X-client-handoff",
+      "X-gluetun-hostfile-ui",
+      "X-cmp-egress-ui",
+      "X-facet-exclude-fill",
+      "LEM-1",
+      "GS-5",
+      "X-zero-rescue",
+      "X-alert-noun",
+      "GS-4",
+      "X-insights-reconcile-test",
+      "X-sampler-streak-metrics",
+      "X-capacity-rejection-source",
+      "X-hidden-count",
+      "X-detail-attributes",
+      "X-size-own-modules"
+    ],
+    "after": {
+      "ENR-terms-api": "#X-hit-resolution merged (torrents.rs)",
+      "ENR-13b": "ENR-terms-api merged",
+      "X-alert-noun": "X-hit-resolution merged (search messages)",
+      "GS-4": "X-detail-depth PR 1 and its Compare PR 2 merged",
+      "X-cmp-egress-ui": "X-gluetun-hostfile-ui merged",
+      "X-insights-reconcile-test": "runner records r14 merged",
+      "X-sampler-streak-metrics": "r14",
+      "X-capacity-rejection-source": "r14",
+      "X-hidden-count": "r14",
+      "X-detail-attributes": "r14 and X-hit-resolution and X-detail-depth merged",
+      "X-size-own-modules": "r14 and .size-limit.mjs handed to it"
+    }
+  },
   "pause_history": [
     {
       "since": "2026-11-16T05:50Z",
