@@ -23,6 +23,16 @@ Runner brief, 2026-11-21Z, from X-labels (#1023): "Insights by-source rows carry
 - **If plugins ever take their names from outside the binary,** that's a new slice with its own security review.
 - **The CSV export defuses a name like any other text** (formula and control characters; `text_is_defused_and_numbers_are_not` now covers the `name` column).
 
+## The `fuzz (tpdb)` finding (runner)
+- **What CI found:** the catalogue test made CI fuzz `sources-plugins`, and `fuzz (tpdb)` crashed on `{"data":{"$serde_json::private::RawValue":0,"id":316}}`.
+- **The plugin's parse is correct.** `parse_answer` reads that key as an ordinary one and returns the match, id 316.
+- **The harness's second reader was wrong.** The fuzz crate builds `serde_json` with its `raw_value` feature (`fuzz/Cargo.toml`), and `$serde_json::private::RawValue` is that feature's private marker key. `serde_json` then reads the object as a raw value and refuses the document, so the harness's "accepted what serde_json refuses" check fired.
+- **The fix:**
+  - `tpdb` and `stashdb` (the one other harness that compares a plugin through `serde_json::Value`) skip only that comparison when a key written without escapes starts `$serde_json::private::`. Every other check still runs. The check is in `fuzz/fuzz_targets/common/private_key.rs`.
+  - An escaped key (`\u0024serde_json…`) isn't the token to `serde_json`, so it's still compared.
+  - Two seeds keep both cases: `seeds/tpdb/private_raw_value_key.json` (the crash) and `…_escaped.json`. Run as inputs, the first crashes the old harness and passes the new one.
+- **`fuzz/fuzz_targets/json.rs` has the same blind spot** (it fuzzes `sources-feeds`' shared reader). `{"$serde_json::private::RawValue":"[1]"}` makes its `serde_json` side read `[1]`. It's outside this slice; named to the runner.
+
 ## Who sees the names
 - The Insights routes are `auth::protected`, and they already list every source's id. A name says nothing a viewer couldn't already see there, so §18.7's private-source rule is unchanged.
 

@@ -4,6 +4,9 @@
 //! stashdb.rs` runs the same checks over a mutated corpus.
 #![no_main]
 
+#[path = "common/private_key.rs"]
+mod private_key;
+
 use libfuzzer_sys::fuzz_target;
 use lodestar_metainfo::hidden_char;
 use lodestar_sources::enrich::Lookup;
@@ -30,6 +33,11 @@ fn name(s: &str) -> bool {
 /// and a number out of `f64` range; `None` then.
 fn second_reader(body: &[u8]) -> Option<serde_json::Value> {
     let root = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
+    // `serde_json`'s private marker keys make `Value` misread the document
+    // (`common/private_key.rs`): no comparison through it then.
+    if private_key::has_private_key(root) {
+        return None;
+    }
     match serde_json::from_slice(root) {
         Ok(v) => Some(v),
         Err(e) => {
