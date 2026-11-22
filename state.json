@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-22T17:19:17Z",
+  "updated_at": "2026-11-22T18:01:33Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10653,16 +10653,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T17:19:17Z",
+    "updated": "2026-11-22T18:01:33Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-units-typed",
-        "role": "slice",
-        "agent": "session_01MMjhnBpaU4uMckWHth6C5f",
-        "model": "opus",
-        "since": "2026-11-22T15:33Z",
-        "doing": "#1076 in fresh review"
+        "slice": "X-detail-depth",
+        "role": "build",
+        "agent": "session_01MMjhn9gdfgFDtyqmPYioHq",
+        "model": "sonnet",
+        "since": "2026-11-22T18:01:33Z",
+        "doing": "step 0"
       },
       {
         "slot": 2,
