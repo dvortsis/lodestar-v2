@@ -97,14 +97,25 @@ describe('the screen registry', () => {
 
 describe('the implemented Settings destinations', () => {
 	it('combines crawler and transport in one screen, without exposing other sections', () => {
-		const fields = [spec('crawler.paused'), spec('transport.utp'), spec('logging.kinds')];
+		const fields = [spec('crawler.paused'), spec('transport.retry'), spec('logging.kinds')];
 		const view = {
 			...indexView({ sections: [] }),
 			fieldsOf: (names: string[]) => fields.filter((field) => names.includes(field.section))
 		};
 		expect(screenFields(byId('crawler'), view).map((field) => field.key)).toEqual([
 			'crawler.paused',
-			'transport.utp'
+			'transport.retry'
+		]);
+	});
+	it('leaves out the fields nothing reads yet (UI review I18)', () => {
+		const fields = [
+			spec('crawler.paused'),
+			spec('transport.utp'),
+			spec('transport.fallback_to_tcp')
+		];
+		const view = { ...indexView({ sections: [] }), fieldsOf: () => fields };
+		expect(screenFields(byId('crawler'), view).map((field) => field.key)).toEqual([
+			'crawler.paused'
 		]);
 	});
 	it('keeps unsafe changes locked without mutating the shared schema', () => {

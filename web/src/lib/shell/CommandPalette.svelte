@@ -3,11 +3,15 @@
 	// filters, ↑/↓ move, Enter runs, Esc closes. Commands come from the keyboard registry, so
 	// features add theirs by registering them.
 	import { tick } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { filterCommands, formatCombo, keys } from '$lib/keys';
 	import { m } from '$lib/paraglide/messages.js';
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
 	import Kbd from '$lib/ui/labels/Kbd.svelte';
+	import type { FindEntry } from '$lib/features/settings/shell/find';
+	import type { Route } from './nav';
 
 	let { open = $bindable(false) }: { open?: boolean } = $props();
 
@@ -16,7 +20,45 @@
 	let wrap: HTMLDivElement | undefined = $state();
 
 	const available = $derived(keys.list().filter((c) => c.palette && c.active));
-	const results = $derived(filterCommands(available, query));
+	const commands = $derived(filterCommands(available, query));
+	// "Settings: …" entries: the Settings search index (X-settings-find) loads on the first search,
+	// so a palette that is never searched, or a signed-out one, costs nothing and shows no error.
+	let found = $state.raw<FindEntry[]>([]);
+	$effect(() => {
+		const q = query;
+		if (!open || !q.trim()) {
+			found = [];
+			return;
+		}
+		let live = true;
+		void import('$lib/features/settings/shell/find').then(
+			async (f) => {
+				const entries = f.search(await f.loadFindIndex(), q, 8);
+				if (live) found = entries;
+			},
+			() => {}
+		);
+		return () => {
+			live = false;
+		};
+	});
+	// Commands first, then settings; both are options of the one list.
+	const results = $derived([
+		...commands.map((c) => ({
+			id: c.id,
+			title: c.title,
+			section: c.section,
+			keys: c.keys,
+			entry: undefined as FindEntry | undefined
+		})),
+		...found.map((e) => ({
+			id: `settings:${e.href}`,
+			title: m.settings_find_palette_title({ label: e.label }),
+			section: e.trail,
+			keys: [] as string[],
+			entry: e as FindEntry | undefined
+		}))
+	]);
 	const active = $derived(Math.min(selected, results.length - 1));
 
 	$effect(() => {
@@ -34,10 +76,14 @@
 		return () => cancelAnimationFrame(frame);
 	});
 
-	async function run(id: string) {
+	async function run(row: (typeof results)[number]) {
 		open = false;
 		await tick(); // let the dialog restore focus first, so a command may move it
-		keys.run(id);
+		const entry = row.entry;
+		if (!entry) return keys.run(row.id);
+		await goto(resolve(entry.href as Route));
+		if (entry.spec)
+			void import('$lib/features/settings/shell/find').then((f) => f.highlight(entry.spec!.key));
 	}
 
 	function onkeydown(e: KeyboardEvent) {
@@ -51,7 +97,7 @@
 			);
 		} else if (e.key === 'Enter' && results[active]) {
 			e.preventDefault();
-			void run(results[active].id);
+			void run(results[active]);
 		}
 	}
 </script>
@@ -91,7 +137,7 @@
 						active
 							? 'bg-selected'
 							: 'hover:bg-hover'}"
-						onclick={() => run(command.id)}
+						onclick={() => run(command)}
 						onpointermove={() => (selected = i)}
 					>
 						<span class="min-w-0 truncate">{command.title}</span>

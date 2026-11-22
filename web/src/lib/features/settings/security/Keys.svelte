@@ -324,7 +324,7 @@
 		<div>
 			<Button
 				type="submit"
-				variant="primary"
+				variant={name.trim() ? 'primary' : 'secondary'}
 				loading={busy === 'create'}
 				data-testid="security-key-create">{m.settings_security_keys_create()}</Button
 			>

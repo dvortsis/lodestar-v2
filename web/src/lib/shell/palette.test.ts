@@ -5,6 +5,31 @@ import CommandPalette from './CommandPalette.svelte';
 
 configure({ defaultHidden: true });
 
+const nav = vi.hoisted(() => ({
+	goto: vi.fn(() => Promise.resolve()),
+	highlight: vi.fn(() => () => {})
+}));
+vi.mock('$app/navigation', () => ({ goto: nav.goto }));
+vi.mock('$app/paths', () => ({ resolve: (path: string) => path }));
+// The Settings search index (X-settings-find) loads on the first search; a fake one here.
+vi.mock('$lib/features/settings/shell/find', () => {
+	const entry = {
+		screen: 'crawler',
+		screenTitle: 'Crawler',
+		label: 'Pause crawling',
+		trail: 'Crawling › Crawler',
+		href: '/settings/crawler#crawler.paused',
+		hay: 'pause crawling',
+		head: 'pause crawling',
+		spec: { key: 'crawler.paused' }
+	};
+	return {
+		loadFindIndex: () => Promise.resolve([entry]),
+		search: (all: (typeof entry)[], q: string) => all.filter((e) => e.hay.includes(q.trim())),
+		highlight: nav.highlight
+	};
+});
+
 const offs: (() => void)[] = [];
 const add = (id: string, title: string, run = () => {}, extra: Record<string, unknown> = {}) =>
 	offs.push(keys.register({ id, title, run, ...extra }));
@@ -86,5 +111,19 @@ describe('CommandPalette', () => {
 		await fireEvent.keyDown(dialog, { key: 'Escape' });
 		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 		expect(run).not.toHaveBeenCalled();
+	});
+
+	it('adds "Settings: …" entries after the commands, and opens the field', async () => {
+		add('t.a', 'Pause everything');
+		render(CommandPalette, { open: true });
+		const input = await screen.findByRole('combobox');
+		await fireEvent.input(input, { target: { value: 'pause' } });
+		await waitFor(() =>
+			expect(options()).toEqual(['Pause everything', 'Settings: Pause crawling Crawling › Crawler'])
+		);
+		await fireEvent.keyDown(input, { key: 'ArrowDown' });
+		await fireEvent.keyDown(input, { key: 'Enter' });
+		await waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/settings/crawler#crawler.paused'));
+		await waitFor(() => expect(nav.highlight).toHaveBeenCalledWith('crawler.paused'));
 	});
 });

@@ -17,21 +17,25 @@
 	import { getSection } from '../form/requests';
 	import type { SectionValues } from '../form/types';
 	import { screens } from '../shell/screens';
+	import { readProgress, STEPS } from '$lib/features/wizard/steps';
 	import {
 		changedFromDefault,
 		needsAttention,
 		retryIn,
+		startHere,
 		startReason,
 		type Attention,
 		type ChangedGroup,
 		type ChangedRow,
 		type StartFailure,
+		type StartRow,
 		type StartReason
 	} from './logic';
 
 	interface Group extends ChangedGroup {
 		title: string;
 	}
+	let start = $state<StartRow[]>();
 	let attention = $state<Attention[]>();
 	let groups = $state<Group[]>();
 	let attentionFailed = $state(false);
@@ -52,6 +56,7 @@
 		const ctl = new AbortController();
 		attention = undefined;
 		groups = undefined;
+		start = undefined;
 		attentionFailed = changedFailed = false;
 		// Health: best-effort, and shown as soon as it is in, whatever the settings reads do.
 		void Promise.all([
@@ -72,6 +77,12 @@
 				Promise.all(names.map((s) => getSection(s, ctl.signal))),
 				loadMessages(names)
 			]);
+			// The skipped first-run steps are the wizard's own progress, kept in this tab.
+			const skipped = readProgress().skipped.map((step) => ({
+				step,
+				screen: STEPS.find((s) => s.id === step)?.settings ?? 'general'
+			}));
+			start = startHere(values as SectionValues[], skipped);
 			groups = changedFromDefault((key) => index.spec(key), values as SectionValues[], screenOf)
 				.map((g) => ({ ...g, title: titleOf(g.id) }))
 				.sort((a, b) => order(a.id) - order(b.id));
@@ -93,6 +104,58 @@
 	}
 
 	const href = (path: string) => resolve(path as Route);
+
+	const startTitle = (r: StartRow) => {
+		switch (r.id) {
+			case 'client':
+				return m.settings_find_start_client();
+			case 'notifications':
+				return m.settings_find_start_notifications();
+			case 'updates':
+				return m.settings_find_start_updates();
+			case 'backups':
+				return m.settings_find_start_backups();
+			case 'password':
+				return m.settings_find_start_password();
+			default:
+				return titleOf(r.screen);
+		}
+	};
+	const startState = (r: StartRow) => {
+		switch (r.state) {
+			case 'none':
+				return r.id === 'client'
+					? m.settings_find_start_client_none()
+					: m.settings_find_start_notifications_none();
+			case 'set':
+				return r.id === 'client'
+					? m.settings_find_start_client_set({ count: formatCount(r.count ?? 0) })
+					: r.id === 'notifications'
+						? m.settings_find_start_notifications_set()
+						: titleOf('updates');
+			case 'off':
+				return m.settings_find_start_updates_off();
+			case 'skipped':
+				return m.settings_find_start_skipped_state();
+			default:
+				return undefined;
+		}
+	};
+	const startAction = (r: StartRow) => {
+		if (r.configured) return m.settings_find_start_open();
+		switch (r.id) {
+			case 'client':
+				return m.settings_find_start_client_action_none();
+			case 'notifications':
+				return m.settings_find_start_notifications_action_none();
+			case 'updates':
+				return m.settings_find_start_updates_action_off();
+			case 'backups':
+				return m.settings_find_start_backups_action();
+			default:
+				return m.settings_find_start_open();
+		}
+	};
 
 	// The retry time reads "in 2 minutes", as of when the rows were built.
 	const locale = $derived(currentLocale());
@@ -177,6 +240,33 @@
 				</li>
 			{/each}
 		</ul>
+	{/if}
+</section>
+
+<section aria-labelledby="overview-start" class="mt-6 flex flex-col gap-3">
+	<h2 id="overview-start" class="text-body-lg font-semibold">
+		{m.settings_find_start_title()}
+	</h2>
+	{#if start}
+		<ul class="flex flex-col divide-y divide-field-border" data-testid="start-list">
+			{#each start as r (r.id)}
+				{@const state = startState(r)}
+				<li
+					class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2"
+					data-testid="start-row"
+				>
+					<span class="font-medium">{startTitle(r)}</span>
+					<span class="min-w-0 break-words">
+						{#if state}<span class="text-muted-text">{state} · </span>{/if}<a
+							class="ls-focus text-primary underline"
+							href={href(`/settings/${r.screen}`)}>{startAction(r)}</a
+						>
+					</span>
+				</li>
+			{/each}
+		</ul>
+	{:else if !changedFailed}
+		<p role="status" class="text-muted-text">{m.settings_overview_loading()}</p>
 	{/if}
 </section>
 
