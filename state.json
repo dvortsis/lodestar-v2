@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-23T21:39:30Z",
+  "updated_at": "2026-11-23T22:29:52Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10684,7 +10684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T21:39:30Z",
+    "updated": "2026-11-23T22:29:52Z",
     "items": [
       {
         "slot": 1,
@@ -10694,12 +10694,9 @@
       },
       {
         "slot": 2,
-        "model": "sonnet",
-        "slice": "X-collector-ntp",
-        "role": "build",
-        "agent": "session_01MMjhn8SXL3Yusq6VdzQ8tt (opus)",
-        "doing": "ready 31f97aca, green; merge waits on X-test-vm probe (source: kernel in collector image)",
-        "since": "2026-11-23T10:37:54Z"
+        "status": "idle",
+        "doing": "freed: X-collector-ntp merged as #1098; stays empty (owner 2026-11-23T06:09Z)",
+        "since": "2026-11-23T22:29:52Z"
       },
       {
         "slot": 3,
