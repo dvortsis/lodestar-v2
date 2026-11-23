@@ -10692,7 +10692,7 @@
         "slice": "RX-1",
         "role": "build",
         "agent": "session_01MMjhn911SUimiUBvzWMwkb (opus)",
-        "doing": "RX-1-fixes: round 5 local (export/torznab fail when regex stopped, polish), held for the final review of 5fda54fc; merged-tree test passes",
+        "doing": "RX-1-fixes: one push due: query-parser fuzz-crash fix (bare quote ends regex scan) + round-5 review test fixes; then ready",
         "since": "2026-11-23T08:31:45Z"
       },
       {
@@ -10701,7 +10701,7 @@
         "slice": "X-collector-ntp",
         "role": "build",
         "agent": "session_01MMjhn8SXL3Yusq6VdzQ8tt (opus)",
-        "doing": "ready 737b04b5, green; merge waits on X-test-vm probe (source: kernel in collector image)",
+        "doing": "ready 31f97aca, green; merge waits on X-test-vm probe (source: kernel in collector image)",
         "since": "2026-11-23T10:37:54Z"
       },
       {
