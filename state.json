@@ -10653,7 +10653,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-22T23:21:00Z",
+    "updated": "2026-11-23T00:12:00Z",
     "items": [
       {
         "slot": 1,
@@ -10662,7 +10662,7 @@
         "agent": "session_01MMjhn9gdfgFDtyqmPYioHq",
         "model": "sonnet",
         "since": "2026-11-22T18:01:33Z",
-        "doing": "size calls settled (text-only actions menu; Detail sections 47.44); opening PR 1"
+        "doing": "#1081 rv CHANGES fixed locally; size go (sections 47.49, menu 0.79, /t back to 22.04); pushing"
       },
       {
         "slot": 2,
@@ -10675,12 +10675,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-narrow-states",
+        "slice": "X-narrow-states-2",
         "role": "build",
         "agent": "session_01MMjhnBkkHF4KZqpjuV2Dmn",
         "model": "sonnet",
-        "since": "2026-11-22T21:22:54Z",
-        "doing": "#1080 CHANGES fixed; border-bottom regression + decisions restore; awaiting final head"
+        "since": "2026-11-23T00:12:00Z",
+        "doing": "#1080 merged 0b736fd6; step 0 (P9/P12 follow-ups + Discover latent cases)"
       },
       {
         "slot": 4,
