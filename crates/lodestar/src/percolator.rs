@@ -159,9 +159,36 @@ pub struct Seen {
     /// already ran). Lost on a restart, when every search reruns. At most
     /// [`HELD_CAP`] rows.
     held: HashMap<i64, Vec<i64>>,
+    /// When each saved search was last logged as stopped by its regex
+    /// budget ([`REGEX_WARN_EVERY`]).
+    regex_warned: HashMap<i64, Instant>,
 }
 
+/// A saved search whose `/…/` verify keeps stopping is logged at most
+/// this often (RX-1, S8-12): each run retries it, and a line per run
+/// would flood the log.
+const REGEX_WARN_EVERY: Duration = Duration::from_secs(3600);
+
 impl Seen {
+    /// Logs saved search `id` as stopped by its regex budget, unless it
+    /// was logged less than [`REGEX_WARN_EVERY`] before `now`. Whether
+    /// it logged.
+    fn regex_stopped(&mut self, id: i64, now: Instant) -> bool {
+        // Entries past the window go first, so the map holds at most the
+        // searches logged in the last hour.
+        self.regex_warned
+            .retain(|_, at| now.saturating_duration_since(*at) < REGEX_WARN_EVERY);
+        if self.regex_warned.contains_key(&id) {
+            return false;
+        }
+        self.regex_warned.insert(id, now);
+        lodestar_log::log_event!(
+            lodestar_search::log_events::PERCOLATE_REGEX_STOPPED,
+            saved_search = lodestar_log::Count(id.unsigned_abs())
+        );
+        true
+    }
+
     /// Remembers `held` rows' held searches, while there's room (see
     /// [`HELD_CAP`]). A row already remembered is always updated: its
     /// held set only shrinks.
@@ -221,6 +248,11 @@ pub fn run_once(
         max_range: config.max_range,
     };
     let p = percolate(index, &due, through, limits, now, &cancel)?;
+    // Left where they were, and retried next run (S8-12).
+    let clock = Instant::now();
+    for id in &p.regex_stopped {
+        seen.regex_stopped(*id, clock);
+    }
     run.searches = p.matched.len();
     run.more = p.more();
     // One transaction per range end: a search capped short of `through`
@@ -369,7 +401,23 @@ fn run_promoted(
         }
         let token = if i == 0 { &first } else { cancel };
         let only = seen.held.get(&row.seq).map(Vec::as_slice);
-        match matched_promoted(index, &parsed, row, only, limits, now, token, &mut hits)? {
+        let mut regex_stopped = Vec::new();
+        let matched = matched_promoted(
+            index,
+            &parsed,
+            row,
+            only,
+            limits,
+            now,
+            token,
+            &mut hits,
+            &mut regex_stopped,
+        )?;
+        let clock = Instant::now();
+        for id in regex_stopped {
+            seen.regex_stopped(id, clock);
+        }
+        match matched {
             None => {
                 stopped = true;
                 whole = false;
@@ -445,6 +493,9 @@ fn run_promoted(
 /// during the `payload_sig` backfill). One left out that reads a
 /// population-tracked field ([`Node::population_fields`]) is held: it
 /// matched nothing because it didn't run, and its row stays queued.
+/// So is one whose `/…/` verify stopped at its regex budget (S8-12,
+/// [`lodestar_search::Percolation::regex_stopped`], added to
+/// `regex_stopped` for the caller to log): what it matched isn't known.
 #[allow(clippy::too_many_arguments)]
 fn matched_promoted(
     index: &SearchIndex,
@@ -455,6 +506,7 @@ fn matched_promoted(
     now: i64,
     cancel: &CancelToken,
     hits: &mut BTreeMap<i64, Vec<i64>>,
+    regex_stopped: &mut Vec<i64>,
 ) -> Result<Option<Vec<i64>>, BoxError> {
     let due: Vec<Due<'_>> = searches
         .iter()
@@ -481,9 +533,13 @@ fn matched_promoted(
         .map(|m| m.id)
         .chain(p.failed.iter().copied())
         .collect();
+    regex_stopped.extend_from_slice(&p.regex_stopped);
     let held = due
         .iter()
-        .filter(|d| !ran.contains(&d.id) && !d.query.population_fields().is_empty())
+        .filter(|d| {
+            !ran.contains(&d.id)
+                && (!d.query.population_fields().is_empty() || p.regex_stopped.contains(&d.id))
+        })
         .map(|d| d.id)
         .collect();
     for m in p.matched {
@@ -1567,6 +1623,26 @@ mod tests {
         assert_eq!(alert_ids(&s.store, promo), items);
     }
 
+    /// A saved search whose regex keeps running out of time is logged
+    /// once an hour, not every run (RX-1, S8-12).
+    #[test]
+    fn a_regex_stop_is_logged_at_most_hourly_per_search() {
+        let mut seen = Seen::default();
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let hour = REGEX_WARN_EVERY.as_secs();
+        assert!(seen.regex_stopped(1, t0));
+        assert!(!seen.regex_stopped(1, at(60)));
+        assert!(seen.regex_stopped(2, at(60)));
+        assert!(!seen.regex_stopped(1, at(hour - 1)));
+        assert!(seen.regex_stopped(1, at(hour)));
+        assert!(!seen.regex_stopped(2, at(hour)));
+        // Only the last hour's are remembered.
+        assert!(!seen.regex_stopped(1, at(2 * hour - 1)));
+        assert_eq!(seen.regex_warned.len(), 1);
+        assert!(seen.regex_stopped(2, at(2 * hour)));
+    }
+
     /// `Seen::held` stops growing at `HELD_CAP`; a row it already holds
     /// is still updated, and a row it can't take just reruns every
     /// search on its retry.
@@ -1760,6 +1836,7 @@ mod tests {
                 NOW,
                 &CancelToken::new(),
                 &mut hits,
+                &mut Vec::new(),
             )
             .unwrap()
         };

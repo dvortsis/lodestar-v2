@@ -615,6 +615,8 @@
 	"settings_logging_ev_search_suggest_titles_failed_h": "Search title suggestions couldn't be rebuilt.",
 	"settings_logging_ev_search_percolate_search_failed_n": "Alert matching failed",
 	"settings_logging_ev_search_percolate_search_failed_h": "Matching new torrents against alerts failed.",
+	"settings_logging_ev_search_percolate_regex_stopped_n": "Alert pattern ran out of time",
+	"settings_logging_ev_search_percolate_regex_stopped_h": "A saved search's regex ran out of time; its alerts wait for the next check.",
 	"settings_logging_ev_search_rename_retry_n": "Index rename retry",
 	"settings_logging_ev_search_rename_retry_h": "Renaming an index file is being retried.",
 	"settings_logging_ev_search_rebuild_started_n": "Search rebuild started",

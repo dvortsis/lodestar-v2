@@ -552,9 +552,11 @@ pub struct TermCounts {
     pub distinct: u64,
     /// Computed on a sample.
     pub approx: bool,
-    /// The facet's field is still being backfilled (the population
-    /// contract): documents it hasn't reached count under no value, so
-    /// the counts are low. Only `source` can be partial.
+    /// The counts are incomplete: the facet's field is still being
+    /// backfilled (the population contract; only `source`), so documents
+    /// it hasn't reached count under no value, or a `/…/` clause of the
+    /// query its pass ran stopped at the search's regex budget (RX-1),
+    /// so they're what was verified in time.
     pub partial: bool,
 }
 
@@ -670,6 +672,9 @@ pub fn facets(
             cancel,
             Some(lease.searcher().generation().generation_id()),
         )?;
+        // Its `/…/` clauses verify under this request's regex budget,
+        // the one the lease's search started when it's this request's.
+        crate::regex_verify::seal(rebuilt.query.as_ref(), searcher, cancel)?;
         let estimate =
             count::estimate_with(searcher, &rebuilt, cancel, policy.segment_sample_above)?;
         (&rebuilt, policy.samples(estimate.value, largest))
@@ -680,6 +685,8 @@ pub fn facets(
         sample_rate = Some(shared_tally.rate);
     }
     let mut tallies: Vec<(Vec<Facet>, Tally)> = vec![(base.facets.clone(), shared_tally)];
+    // Per tally: a `/…/` clause of its query stopped (RX-1).
+    let mut stopped = vec![crate::regex_verify::stopped(shared_query)];
     for f in own {
         let mut variant = without_facet(node, f).unwrap_or_else(|| node.clone());
         // `verified:yes` and nothing else on the facet: the clause every
@@ -709,6 +716,9 @@ pub fn facets(
             cancel,
             Some(lease.searcher().generation().generation_id()),
         )?;
+        // Variants (the adult pass among them) spend the same regex
+        // budget as the search, never a fresh one (S8-11).
+        crate::regex_verify::seal(compiled.query.as_ref(), searcher, cancel)?;
         let estimate =
             count::estimate_with(searcher, &compiled, cancel, policy.segment_sample_above)?;
         let want = Want {
@@ -740,14 +750,16 @@ pub fn facets(
         } else {
             t
         };
+        stopped.push(crate::regex_verify::stopped(&compiled) || (only_yes && stopped[0]));
         tallies.push((vec![f], t));
     }
 
     let mut terms = Vec::new();
     for f in Facet::ALL {
-        let Some((_, t)) = tallies.iter().find(|(fs, _)| fs.contains(&f)) else {
+        let Some(at) = tallies.iter().position(|(fs, _)| fs.contains(&f)) else {
             continue;
         };
+        let t = &tallies[at].1;
         let limit = params
             .limits
             .get(&f)
@@ -771,6 +783,7 @@ pub fn facets(
         {
             counts.partial = !index.availability_in(field, lease).complete();
         }
+        counts.partial |= stopped[at];
         terms.push((f, counts));
     }
     let shared_tally = &tallies[0].1;

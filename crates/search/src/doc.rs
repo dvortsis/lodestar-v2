@@ -394,11 +394,17 @@ pub fn trigram_tokens(name: &str) -> Option<PreTokenizedString> {
     }
     let prefix = &name[..cut];
     let mut tokens: Vec<Token> = Vec::new();
-    let mut analyzer = crate::schema::trigram_analyzer();
-    let mut stream = analyzer.token_stream(prefix);
-    while stream.advance() {
-        tokens.push(stream.token().clone());
+    // Built once per thread, not per document.
+    thread_local! {
+        static ANALYZER: std::cell::RefCell<tantivy::tokenizer::TextAnalyzer> =
+            std::cell::RefCell::new(crate::schema::trigram_analyzer());
     }
+    ANALYZER.with_borrow_mut(|analyzer| {
+        let mut stream = analyzer.token_stream(prefix);
+        while stream.advance() {
+            tokens.push(stream.token().clone());
+        }
+    });
     if cut < name.len() {
         tokens.push(Token {
             offset_from: cut,

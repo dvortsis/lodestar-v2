@@ -1114,6 +1114,36 @@ fn natural_refuses_valid_query_past_the_cap() {
     assert!(refused_rightly(phrase, NaturalError::Syntax).is_err());
 }
 
+/// The char ranges of `phrase`'s `/…/` literals, as the query lexer
+/// finds them: a `/` that starts a word and isn't followed by
+/// whitespace, up to the next `/` followed by whitespace, `)` or the end.
+/// (The phrases here have no backslashes, so nothing is escaped.)
+fn regex_spans(phrase: &str) -> Vec<(usize, usize)> {
+    let cs: Vec<char> = phrase.chars().collect();
+    let space = |c: Option<&char>| c.is_some_and(|c| c.is_ascii_whitespace());
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < cs.len() {
+        let starts_word = i == 0 || space(cs.get(i - 1));
+        if cs[i] == '/' && starts_word && cs.get(i + 1).is_some_and(|c| !c.is_ascii_whitespace()) {
+            if let Some(close) = (i + 1..cs.len()).find(|&j| cs[j] == '/') {
+                let after = cs.get(close + 1);
+                if after.is_none() || space(after) || after == Some(&')') {
+                    out.push((i, close + 1));
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        // To the end of this word.
+        while i < cs.len() && !cs[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2000))]
 
@@ -1217,9 +1247,10 @@ proptest! {
             let in_chip = n.read.iter().any(|r| r.0 < end && start < r.1);
             let trimmed = w.trim_matches(|c: char| "[]{},.;:!?'".contains(c));
             let kept = n.text.iter().any(|t| t == w || t == trimmed);
-            // Slashes can join words into a `/…/` regex (`/ b flac/`),
-            // kept in the query as written (RX-1).
-            let in_regex = phrase.contains('/')
+            // Slashes can join words into a `/…/` regex (`/b flac/`),
+            // kept in the query as written (RX-1): only a word inside
+            // one is excused.
+            let in_regex = regex_spans(&phrase).iter().any(|&(s, e)| s <= start && end <= e)
                 && lodestar_search::parse(&n.canonical).is_ok_and(|q| q.has_regex());
             prop_assert!(
                 kept || in_chip || in_regex || lodestar_search::natural::is_filler(trimmed),

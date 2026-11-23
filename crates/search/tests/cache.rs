@@ -412,3 +412,62 @@ fn cached_hits_are_within_two_milliseconds() {
     );
     assert!(p95 <= Duration::from_millis(2), "{p95:?}");
 }
+
+/// A regex search its budget stopped is partial, and neither it nor its
+/// facets come from a cache later as if complete (RX-1, "a partial
+/// answer is never served later as complete"): the result cache, the
+/// facet cache and a sorted search's per-segment tops all compute it
+/// again.
+#[test]
+fn a_stopped_regex_search_and_its_facets_are_never_served_from_a_cache() {
+    let (_store, index, _w) = fixture(30);
+    let cache = ResultCache::default();
+    let node = parse("/night/").unwrap();
+    // The search's regex budget is spent before it starts: nothing is
+    // verified.
+    let spent = || {
+        let t = CancelToken::new();
+        t.regex_deadline(Duration::ZERO);
+        t
+    };
+    for sort in [Sort::Relevance, Sort::Discovered { desc: true }] {
+        let s = SearchSpec {
+            sort,
+            ..spec(&node, "")
+        };
+        let (cut, o) = cache.search(&index, &s, &spent()).unwrap();
+        assert_eq!((cut.page.hits.len(), o), (0, Outcome::Miss), "{sort:?}");
+        assert!(cut.lease.regex_stopped());
+        let (whole, o) = cache.search(&index, &s, &CancelToken::new()).unwrap();
+        assert_eq!((whole.page.hits.len(), o), (10, Outcome::Miss), "{sort:?}");
+        assert!(!whole.lease.regex_stopped());
+    }
+    let params = FacetParams::default();
+    let fs = FacetSpec {
+        query: &node,
+        node: &node,
+        filters: &[],
+        params: &params,
+        scope: "",
+        sort: Sort::Relevance,
+        now: NOW,
+        utc_offset: 0,
+    };
+    let (cut, o) = cache.facets(&index, &fs, &spent()).unwrap();
+    assert_eq!((cut.facets.matches, o), (0, Outcome::Miss));
+    assert!(cut.facets.terms.iter().all(|(_, t)| t.partial));
+    let (whole, o) = cache.facets(&index, &fs, &CancelToken::new()).unwrap();
+    assert_eq!((whole.facets.matches, o), (10, Outcome::Miss));
+    assert!(whole.facets.terms.iter().all(|(_, t)| !t.partial));
+    // On a search's lease, too.
+    let search = cache
+        .search(&index, &spec(&node, ""), &CancelToken::new())
+        .unwrap()
+        .0;
+    for _ in 0..2 {
+        let (_, o) = cache
+            .facets_on(&index, &search.lease, &fs, &CancelToken::new())
+            .unwrap();
+        assert_eq!(o, Outcome::Miss);
+    }
+}

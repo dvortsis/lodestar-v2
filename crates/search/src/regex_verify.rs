@@ -12,17 +12,29 @@
 //!   on, `regex`'s size and lazy-DFA limits spelled out
 //!   ([`SIZE_LIMIT`], [`DFA_SIZE_LIMIT`]), so it matches exactly what was
 //!   planned. A pattern `regex` still refuses matches nothing.
-//! - **The budget.** One clause verifies for at most [`VERIFY_BUDGET`]
-//!   from its first candidate, across every pass the search makes over
-//!   it (count, page, facets, a lease's later pages), and stops early
-//!   when the search's cancel token does. Each segment's matches are
-//!   kept, so every pass sees the same answer. A stop leaves the clause
-//!   **partial** ([`stopped`]): what was verified, never a silent
-//!   truncation, for the UI's "Stopped after 2 s" with a ≈ count.
+//! - **The budget** (S8-11). Every clause of one search verifies against
+//!   one deadline, [`VERIFY_BUDGET`] from the search's first regex
+//!   compile ([`crate::CancelToken::regex_deadline`]), so planning and
+//!   compiling count too, and so do the search's facet variants and
+//!   recovery passes. A query holds at most
+//!   [`crate::query::MAX_REGEX_CLAUSES`] clauses, so one search plans and
+//!   compiles at most that many patterns, each bounded by RX-0's limits.
+//! - **Verifying.** [`seal`] verifies every segment of a searcher under
+//!   the *pass's* cancel token, before the pass runs; a pass that didn't
+//!   seal verifies a segment when it first reaches it, under the deadline
+//!   only (never under the token of the request that compiled the query,
+//!   which may be long gone). Each segment's matches are kept (a sorted
+//!   id list, or a bitset when that's smaller), so every pass over one
+//!   compiled query sees one answer. A stop leaves the clause **partial**
+//!   ([`stopped`]): what was verified, never a silent truncation, for the
+//!   UI's "Stopped after 2 s" with a ≈ count.
+//! - **A lease** seals its snapshot and then [`release`]s the verifiers
+//!   and prefilters: it keeps only the verified matches, whose size
+//!   [`retained_bytes`] reports for the lease limits (S8-10).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use ::regex::{Regex, RegexBuilder};
@@ -32,14 +44,35 @@ use tantivy::query::{
     Scorer, TermQuery, Weight,
 };
 use tantivy::schema::{Field, IndexRecordOption, Value};
-use tantivy::{BitSet, DocId, DocSet, Score, SegmentReader, TantivyDocument, Term};
+use tantivy::{
+    BitSet, DocId, DocSet, Score, Searcher, SegmentReader, TERMINATED, TantivyDocument, Term,
+};
 
 use crate::CancelToken;
 use crate::regex::{Pattern, Plan};
 
-/// How long one regex clause may verify (§3: p95 < 500 ms; the UI says
-/// "Stopped after 2 s"). Past it the clause is partial.
+/// How long one search's regex clauses may plan, compile and verify,
+/// together (§3: p95 < 500 ms; the UI says "Stopped after 2 s"). Past it
+/// the clauses not done are partial.
 pub const VERIFY_BUDGET: Duration = Duration::from_secs(2);
+/// The budget a search's first regex compile starts
+/// ([`VERIFY_BUDGET`]; unit tests may set a shorter one on their thread,
+/// [`BUDGET`]).
+pub(crate) fn budget() -> Duration {
+    #[cfg(test)]
+    if let Some(b) = BUDGET.with(std::cell::Cell::get) {
+        return b;
+    }
+    VERIFY_BUDGET
+}
+
+#[cfg(test)]
+thread_local! {
+    /// [`budget`] on this thread, when set.
+    pub(crate) static BUDGET: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// `regex`'s compiled-program limit, its default spelled out: the planner's
 /// estimate ([`crate::regex::MAX_COMPILED_WEIGHT`]) refuses most patterns
 /// over it first; this is the backstop.
@@ -53,6 +86,10 @@ const CHECK_EVERY: u32 = 64;
 /// read in document order, so one is enough to read a block once; a few
 /// more cost little.
 const STORE_BLOCKS: usize = 4;
+/// What [`retained_bytes`] charges a clause, and each segment it holds
+/// matches for, beyond the matches themselves.
+const CLAUSE_OVERHEAD: usize = 256;
+const SEGMENT_OVERHEAD: usize = 64;
 
 type Q = Box<dyn Query>;
 
@@ -124,16 +161,66 @@ struct Prepared {
     prefilter: Option<Q>,
 }
 
+enum Prep {
+    Unbuilt,
+    Ready(Arc<Prepared>),
+    /// Dropped by [`release`]: every segment the clause will see is
+    /// verified.
+    Released,
+}
+
+/// One segment's verified matches, in the smaller of two forms.
+enum Matches {
+    /// Ascending ids: 4 bytes a match.
+    Sparse(Vec<DocId>),
+    /// A bit per document: `max_doc / 8` bytes.
+    Dense(BitSet),
+}
+
+impl Matches {
+    fn of(ids: Vec<DocId>, max_doc: DocId) -> Matches {
+        let dense = (max_doc as usize).div_ceil(64) * 8;
+        if ids.len() * 4 > dense {
+            let mut set = BitSet::with_max_value(max_doc);
+            for id in ids {
+                set.insert(id);
+            }
+            Matches::Dense(set)
+        } else {
+            let mut ids = ids;
+            ids.shrink_to_fit();
+            Matches::Sparse(ids)
+        }
+    }
+
+    fn bytes(&self) -> usize {
+        SEGMENT_OVERHEAD
+            + match self {
+                Matches::Sparse(ids) => ids.capacity() * 4,
+                Matches::Dense(set) => (set.max_value() as usize).div_ceil(64) * 8,
+            }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Matches::Sparse(ids) => ids.is_empty(),
+            Matches::Dense(set) => set.len() == 0,
+        }
+    }
+}
+
 /// What every pass over one clause shares.
 struct State {
-    budget: Duration,
-    prepared: OnceLock<Prepared>,
-    /// Set by the first candidate verified.
-    deadline: OnceLock<Instant>,
+    /// The search's regex deadline ([`crate::CancelToken::regex_deadline`]).
+    deadline: Instant,
+    prepared: Mutex<Prep>,
     partial: AtomicBool,
-    cancel: Option<CancelToken>,
     /// Each segment's verified matches.
-    done: Mutex<HashMap<SegmentId, Arc<BitSet>>>,
+    done: Mutex<HashMap<SegmentId, Arc<Matches>>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl std::fmt::Debug for RegexQuery {
@@ -146,126 +233,161 @@ impl std::fmt::Debug for RegexQuery {
 }
 
 impl RegexQuery {
-    /// The clause for `pattern` on the stored `name` field. `trigram` is
-    /// `name_trigram` when it's complete in the snapshot searched (a
-    /// prefilter on a field still being filled would drop names it
-    /// hasn't reached), else `None`: every name is then verified.
+    /// The clause for `pattern` on the stored `name` field, verifying
+    /// until `deadline`. `trigram` is `name_trigram` when it's complete
+    /// in the snapshot searched (a prefilter on a field still being
+    /// filled would drop names it hasn't reached), else `None`: every
+    /// name is then verified.
     pub(crate) fn new(
         pattern: &str,
         name: Field,
         trigram: Option<Field>,
-        budget: Duration,
-        cancel: Option<CancelToken>,
+        deadline: Instant,
     ) -> RegexQuery {
         RegexQuery {
             source: pattern.to_owned(),
             name,
             trigram,
             state: Arc::new(State {
-                budget,
-                prepared: OnceLock::new(),
-                deadline: OnceLock::new(),
+                deadline,
+                prepared: Mutex::new(Prep::Unbuilt),
                 partial: AtomicBool::new(false),
-                cancel,
                 done: Mutex::default(),
             }),
         }
     }
 
-    fn prepared(&self) -> &Prepared {
-        self.state.prepared.get_or_init(|| {
-            // Checked again here: the node may not come from the parser.
-            let Ok(pattern) = crate::regex::parse(&self.source) else {
-                return Prepared {
-                    verifier: None,
-                    prefilter: None,
-                };
-            };
-            let prefilter = match (pattern.plan(), self.trigram) {
-                // Nothing can match: no candidate at all.
-                (Plan::Nothing, _) => Some(Box::new(tantivy::query::EmptyQuery) as Q),
-                (plan, Some(field)) => plan_query(plan, field).map(|q| {
-                    let marker: Q = Box::new(TermQuery::new(
-                        Term::from_field_text(field, crate::doc::TRIGRAM_MARKER),
-                        IndexRecordOption::Basic,
-                    ));
-                    Box::new(BooleanQuery::new(vec![
-                        (Occur::Should, marker),
-                        (Occur::Should, q),
-                    ])) as Q
-                }),
-                (_, None) => None,
-            };
-            Prepared {
-                verifier: verifier(&pattern),
-                prefilter,
-            }
-        })
+    fn out_of_time(&self, cancel: Option<&CancelToken>) -> bool {
+        Instant::now() >= self.state.deadline || cancel.is_some_and(CancelToken::is_stopped)
     }
 
-    /// Whether the budget or the cancel token stopped this clause before
-    /// it had verified every candidate.
+    fn stop(&self) {
+        self.state.partial.store(true, Ordering::Relaxed);
+    }
+
+    /// The verifier and prefilter; `None` once [`release`]d.
+    fn prepared(&self) -> Option<Arc<Prepared>> {
+        let mut prep = lock(&self.state.prepared);
+        match &*prep {
+            Prep::Ready(p) => return Some(p.clone()),
+            Prep::Released => return None,
+            Prep::Unbuilt => {}
+        }
+        let built = Arc::new(self.build());
+        *prep = Prep::Ready(built.clone());
+        Some(built)
+    }
+
+    fn build(&self) -> Prepared {
+        let nothing = || Prepared {
+            verifier: None,
+            prefilter: Some(Box::new(tantivy::query::EmptyQuery) as Q),
+        };
+        // Out of time before planning: nothing is planned or compiled,
+        // and the clause is partial.
+        if self.out_of_time(None) {
+            self.stop();
+            return nothing();
+        }
+        // Checked again here: the node may not come from the parser.
+        let Ok(pattern) = crate::regex::parse(&self.source) else {
+            return nothing();
+        };
+        let prefilter = match (pattern.plan(), self.trigram) {
+            // Nothing can match: no candidate at all.
+            (Plan::Nothing, _) => Some(Box::new(tantivy::query::EmptyQuery) as Q),
+            (plan, Some(field)) => plan_query(plan, field).map(|q| {
+                let marker: Q = Box::new(TermQuery::new(
+                    Term::from_field_text(field, crate::doc::TRIGRAM_MARKER),
+                    IndexRecordOption::Basic,
+                ));
+                Box::new(BooleanQuery::new(vec![
+                    (Occur::Should, marker),
+                    (Occur::Should, q),
+                ])) as Q
+            }),
+            (_, None) => None,
+        };
+        Prepared {
+            verifier: verifier(&pattern),
+            prefilter,
+        }
+    }
+
+    /// Whether the budget or a pass's cancel token stopped this clause
+    /// before it had verified every candidate.
     pub(crate) fn stopped(&self) -> bool {
         self.state.partial.load(Ordering::Relaxed)
     }
 
-    /// This segment's matches, verified now or by an earlier pass.
+    fn prefilter_weight(
+        &self,
+        prepared: Option<&Prepared>,
+        scoring: EnableScoring<'_>,
+    ) -> tantivy::Result<Option<Box<dyn Weight>>> {
+        // The prefilter only selects: no scores.
+        let unscored = match scoring.searcher() {
+            Some(s) => EnableScoring::disabled_from_searcher(s),
+            None => EnableScoring::disabled_from_schema(scoring.schema()),
+        };
+        prepared
+            .and_then(|p| p.prefilter.as_ref())
+            .map(|q| q.weight(unscored))
+            .transpose()
+    }
+
+    /// This segment's matches, verified now (under `cancel`, when the
+    /// pass gives one) or by an earlier pass.
     fn matches(
         &self,
+        prepared: Option<&Prepared>,
         prefilter: Option<&dyn Weight>,
         reader: &SegmentReader,
-    ) -> tantivy::Result<Arc<BitSet>> {
+        cancel: Option<&CancelToken>,
+    ) -> tantivy::Result<Arc<Matches>> {
         let id = reader.segment_id();
-        let done = |s: &State| {
-            s.done
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(&id)
-                .cloned()
-        };
-        if let Some(set) = done(&self.state) {
+        if let Some(set) = lock(&self.state.done).get(&id).cloned() {
             return Ok(set);
         }
-        let set = Arc::new(self.verify(prefilter, reader)?);
-        let mut map = self
-            .state
-            .done
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let set = Arc::new(match prepared {
+            Some(p) => self.verify(p, prefilter, reader, cancel)?,
+            // Released, yet a segment wasn't sealed: never, since a lease
+            // seals its whole snapshot. Reported as a stop, not answered
+            // as "nothing".
+            None => {
+                debug_assert!(false, "a released regex clause met a new segment");
+                self.stop();
+                Matches::Sparse(Vec::new())
+            }
+        });
         // Two passes may race on one segment; the first kept wins, so
         // every pass sees one answer.
-        Ok(map.entry(id).or_insert(set).clone())
+        Ok(lock(&self.state.done).entry(id).or_insert(set).clone())
     }
 
     fn verify(
         &self,
+        prepared: &Prepared,
         prefilter: Option<&dyn Weight>,
         reader: &SegmentReader,
-    ) -> tantivy::Result<BitSet> {
+        cancel: Option<&CancelToken>,
+    ) -> tantivy::Result<Matches> {
         let max = reader.max_doc();
-        let mut set = BitSet::with_max_value(max);
-        let Some(re) = &self.prepared().verifier else {
-            return Ok(set);
+        let mut ids: Vec<DocId> = Vec::new();
+        let Some(re) = &prepared.verifier else {
+            return Ok(Matches::Sparse(ids));
         };
-        let state = &self.state;
-        let deadline = *state.deadline.get_or_init(|| {
-            Instant::now()
-                .checked_add(state.budget)
-                .unwrap_or_else(Instant::now)
-        });
-        let out_of_time = || {
-            Instant::now() >= deadline || state.cancel.as_ref().is_some_and(CancelToken::is_stopped)
-        };
-        if out_of_time() {
-            state.partial.store(true, Ordering::Relaxed);
-            return Ok(set);
+        if self.out_of_time(cancel) {
+            self.stop();
+            return Ok(Matches::Sparse(ids));
         }
         let store = reader.get_store_reader(STORE_BLOCKS)?;
         let alive = reader.alive_bitset();
-        let mut check = |doc: DocId, n: &mut u32| -> tantivy::Result<bool> {
-            *n += 1;
-            if (*n).is_multiple_of(CHECK_EVERY) && out_of_time() {
-                state.partial.store(true, Ordering::Relaxed);
+        let mut n = 0u32;
+        let mut check = |doc: DocId| -> tantivy::Result<bool> {
+            n += 1;
+            if n.is_multiple_of(CHECK_EVERY) && self.out_of_time(cancel) {
+                self.stop();
                 return Ok(false);
             }
             if alive.is_some_and(|a| !a.is_alive(doc)) {
@@ -276,17 +398,16 @@ impl RegexQuery {
                 .and_then(|v| v.as_str())
                 .is_some_and(|name| re.is_match(name))
             {
-                set.insert(doc);
+                ids.push(doc);
             }
             Ok(true)
         };
-        let mut n = 0u32;
         match prefilter {
             Some(w) => {
                 let mut candidates = w.scorer(reader, 1.0)?;
                 let mut doc = candidates.doc();
-                while doc != tantivy::TERMINATED {
-                    if !check(doc, &mut n)? {
+                while doc != TERMINATED {
+                    if !check(doc)? {
                         break;
                     }
                     doc = candidates.advance();
@@ -294,31 +415,59 @@ impl RegexQuery {
             }
             None => {
                 for doc in 0..max {
-                    if !check(doc, &mut n)? {
+                    if !check(doc)? {
                         break;
                     }
                 }
             }
         }
-        Ok(set)
+        Ok(Matches::of(ids, max))
+    }
+
+    /// Verifies every segment of `searcher` not done yet, under `cancel`.
+    fn seal(
+        &self,
+        searcher: &Searcher,
+        cancel: &CancelToken,
+        only: &dyn Fn(&SegmentReader) -> bool,
+    ) -> tantivy::Result<()> {
+        let prepared = self.prepared();
+        let prefilter = self.prefilter_weight(
+            prepared.as_deref(),
+            EnableScoring::disabled_from_searcher(searcher),
+        )?;
+        for reader in searcher.segment_readers().iter().filter(|r| only(r)) {
+            self.matches(
+                prepared.as_deref(),
+                prefilter.as_deref(),
+                reader,
+                Some(cancel),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn release(&self) {
+        *lock(&self.state.prepared) = Prep::Released;
+    }
+
+    fn retained_bytes(&self) -> usize {
+        CLAUSE_OVERHEAD
+            + self.source.len()
+            + lock(&self.state.done)
+                .values()
+                .map(|m| m.bytes())
+                .sum::<usize>()
     }
 }
 
 impl Query for RegexQuery {
     fn weight(&self, scoring: EnableScoring<'_>) -> tantivy::Result<Box<dyn Weight>> {
-        // The prefilter only selects: no scores.
-        let unscored = match scoring.searcher() {
-            Some(s) => EnableScoring::disabled_from_searcher(s),
-            None => EnableScoring::disabled_from_schema(scoring.schema()),
-        };
-        let prefilter = self
-            .prepared()
-            .prefilter
-            .as_ref()
-            .map(|q| q.weight(unscored))
-            .transpose()?;
+        let prepared = self.prepared();
+        let prefilter = self.prefilter_weight(prepared.as_deref(), scoring)?;
         Ok(Box::new(RegexWeight {
             query: self.clone(),
+            prepared,
             prefilter,
         }))
     }
@@ -326,19 +475,72 @@ impl Query for RegexQuery {
 
 struct RegexWeight {
     query: RegexQuery,
+    prepared: Option<Arc<Prepared>>,
     prefilter: Option<Box<dyn Weight>>,
+}
+
+/// A segment's sparse matches as a doc set.
+struct IdsDocSet {
+    matches: Arc<Matches>,
+    at: usize,
+}
+
+impl IdsDocSet {
+    fn ids(&self) -> &[DocId] {
+        match &*self.matches {
+            Matches::Sparse(ids) => ids,
+            Matches::Dense(_) => &[],
+        }
+    }
+}
+
+impl DocSet for IdsDocSet {
+    fn advance(&mut self) -> DocId {
+        self.at += 1;
+        self.doc()
+    }
+
+    fn seek(&mut self, target: DocId) -> DocId {
+        let ids = self.ids();
+        let rest = &ids[self.at.min(ids.len())..];
+        self.at += rest.partition_point(|&d| d < target);
+        self.doc()
+    }
+
+    fn doc(&self) -> DocId {
+        self.ids().get(self.at).copied().unwrap_or(TERMINATED)
+    }
+
+    fn size_hint(&self) -> u32 {
+        u32::try_from(self.ids().len().saturating_sub(self.at)).unwrap_or(u32::MAX)
+    }
 }
 
 impl Weight for RegexWeight {
     fn scorer(&self, reader: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
-        let set = self.query.matches(self.prefilter.as_deref(), reader)?;
-        if set.len() == 0 {
+        // A pass that didn't seal: verified now, under the deadline only.
+        let set = self.query.matches(
+            self.prepared.as_deref(),
+            self.prefilter.as_deref(),
+            reader,
+            None,
+        )?;
+        if set.is_empty() {
             return Ok(Box::new(EmptyScorer));
         }
-        Ok(Box::new(ConstScorer::new(
-            BitSetDocSet::from(BitSet::clone(&set)),
-            boost,
-        )))
+        Ok(match &*set {
+            Matches::Dense(bits) => Box::new(ConstScorer::new(
+                BitSetDocSet::from(BitSet::clone(bits)),
+                boost,
+            )),
+            Matches::Sparse(_) => Box::new(ConstScorer::new(
+                IdsDocSet {
+                    matches: set.clone(),
+                    at: 0,
+                },
+                boost,
+            )),
+        })
     }
 
     fn explain(&self, reader: &SegmentReader, doc: DocId) -> tantivy::Result<Explanation> {
@@ -352,25 +554,78 @@ impl Weight for RegexWeight {
     }
 }
 
-/// Whether any `/…/` clause of `query` stopped before verifying every
-/// candidate ([`RegexQuery::stopped`]): the results are then partial,
-/// and the count a lower bound. Looks through the boolean queries
+/// Every `/…/` clause of `query`, looking through the boolean queries
 /// [`crate::compile`] builds, which are the only ones a regex clause
 /// sits in.
-pub(crate) fn query_stopped(query: &dyn Query) -> bool {
+fn each_clause(query: &dyn Query, f: &mut dyn FnMut(&RegexQuery)) {
     if let Some(r) = query.downcast_ref::<RegexQuery>() {
-        return r.stopped();
+        f(r);
+    } else if let Some(b) = query.downcast_ref::<BooleanQuery>() {
+        for (_, q) in b.clauses() {
+            each_clause(q.as_ref(), f);
+        }
     }
-    query
-        .downcast_ref::<BooleanQuery>()
-        .is_some_and(|b| b.clauses().iter().any(|(_, q)| query_stopped(q.as_ref())))
 }
 
-/// Whether the search `compiled` describes was cut short by a regex
-/// clause's time budget (or its cancel token) on any pass so far: its
-/// hits are what was verified in time, and its total a lower bound
-/// (UI review 02 §5.2: "Stopped after 2 s", the count marked ≈). A
-/// partial result must not be cached as a complete one.
+/// Whether any `/…/` clause of `query` stopped before verifying every
+/// candidate ([`RegexQuery::stopped`]): the results are then partial.
+/// The count is a lower bound, or an upper one for a negated clause.
+pub(crate) fn query_stopped(query: &dyn Query) -> bool {
+    let mut any = false;
+    each_clause(query, &mut |r| any |= r.stopped());
+    any
+}
+
+/// Verifies every segment of `searcher` for each `/…/` clause of
+/// `query`, under the pass's `cancel` (S8-10 item 6: never the token of
+/// the request that compiled it). Passes over `searcher` then read the
+/// kept matches. A stop leaves the clause partial, not an error.
+pub(crate) fn seal(
+    query: &dyn Query,
+    searcher: &Searcher,
+    cancel: &CancelToken,
+) -> crate::index::Result<()> {
+    seal_where(query, searcher, cancel, &|_| true)
+}
+
+/// [`seal`] for the segments `only` picks: a percolation run's, which
+/// reads only the segments that can hold its range.
+pub(crate) fn seal_where(
+    query: &dyn Query,
+    searcher: &Searcher,
+    cancel: &CancelToken,
+    only: &dyn Fn(&SegmentReader) -> bool,
+) -> crate::index::Result<()> {
+    let mut out = Ok(());
+    each_clause(query, &mut |r| {
+        if out.is_ok() {
+            out = r.seal(searcher, cancel, only);
+        }
+    });
+    Ok(out?)
+}
+
+/// Drops each `/…/` clause's verifier and prefilter, keeping only its
+/// verified matches: for a lease, once [`seal`] has verified its
+/// snapshot.
+pub(crate) fn release(query: &dyn Query) {
+    each_clause(query, &mut |r| r.release());
+}
+
+/// What `query`'s `/…/` clauses keep alive: their verified matches and
+/// a fixed overhead each. Zero for a query without one.
+pub(crate) fn retained_bytes(query: &dyn Query) -> usize {
+    let mut bytes = 0;
+    each_clause(query, &mut |r| bytes += r.retained_bytes());
+    bytes
+}
+
+/// Whether the search `compiled` describes was cut short by its regex
+/// budget (or a pass's cancel token) on any pass so far: its hits are
+/// what was verified in time, and its total a lower bound (an upper one
+/// when the stopped clause is negated) (UI review 02 §5.2: "Stopped
+/// after 2 s", the count marked ≈). A partial result must not be cached
+/// as a complete one.
 pub fn stopped(compiled: &crate::Compiled) -> bool {
     query_stopped(compiled.query.as_ref())
 }
@@ -414,7 +669,12 @@ mod tests {
     }
 
     fn query(pattern: &str, f: &Fields, budget: Duration) -> RegexQuery {
-        RegexQuery::new(pattern, f.name, Some(f.name_trigram), budget, None)
+        RegexQuery::new(
+            pattern,
+            f.name,
+            Some(f.name_trigram),
+            Instant::now() + budget,
+        )
     }
 
     const NONE: [DocId; 0] = [];
@@ -424,15 +684,21 @@ mod tests {
         let long = format!("{}needle", "x".repeat(crate::doc::TRIGRAM_PREFIX_BYTES));
         let (s, f) = index(&["needle in front", "nothing here", &long, "needl"]);
         let q = query("needle", &f, VERIFY_BUDGET);
-        let pre = q.prepared().prefilter.as_ref().unwrap().box_clone();
+        let pre = q
+            .prepared()
+            .unwrap()
+            .prefilter
+            .as_ref()
+            .unwrap()
+            .box_clone();
         // The short names without the grams never reach the verifier;
         // the long one does, through the marker.
         assert_eq!(docs(&s, pre.as_ref()), [0, 2]);
         assert_eq!(docs(&s, &q), [0, 2]);
         assert!(!q.stopped());
         // Without the field complete, every name is verified: same answer.
-        let all = RegexQuery::new("needle", f.name, None, VERIFY_BUDGET, None);
-        assert!(all.prepared().prefilter.is_none());
+        let all = RegexQuery::new("needle", f.name, None, Instant::now() + VERIFY_BUDGET);
+        assert!(all.prepared().unwrap().prefilter.is_none());
         assert_eq!(docs(&s, &all), [0, 2]);
     }
 

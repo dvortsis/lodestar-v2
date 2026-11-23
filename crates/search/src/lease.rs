@@ -5,10 +5,15 @@
 //! cause a duplicate or a gap while someone scrolls.
 //!
 //! A lease holds the index it was taken from (an `Arc`), the searcher,
-//! the compiled query and the count: nothing per hit. [`Leases`] keeps
-//! them under random ids for [`LeaseConfig::ttl`] from their last use,
-//! bounded in number overall and per client, the least recently used
-//! going first. A retired index stays open (and on disk) until its last
+//! the compiled query and the count: nothing per hit. A query with
+//! `/…/` clauses also holds each clause's verified matches, and nothing
+//! else of them: the lease verifies its whole snapshot when it's taken
+//! and drops the verifiers, so every page reads the same matches and
+//! none verifies again (RX-1, S8-10). [`Leases`] keeps them under random
+//! ids for [`LeaseConfig::ttl`] from their last use, bounded in number
+//! overall and per client, and in the regex matches they hold
+//! ([`LeaseConfig::max_regex_bytes`]), the least recently used going
+//! first. A retired index stays open (and on disk) until its last
 //! lease is gone.
 
 use std::cmp::{Ordering as Cmp, Reverse};
@@ -56,6 +61,8 @@ pub struct Lease {
     now: i64,
     /// The offset `time:` clauses were resolved in (seconds east of UTC).
     utc_offset: i32,
+    /// What its `/…/` clauses keep ([`crate::regex_verify::retained_bytes`]).
+    regex_bytes: usize,
 }
 
 impl std::fmt::Debug for Lease {
@@ -136,16 +143,26 @@ impl Lease {
         // Compiled for this snapshot: a field completed after it isn't
         // read from it (X-search-files-5).
         let at = Some(searcher.generation().generation_id());
-        let exact = index.compile_at(node, now, utc_offset, false, cancel, at)?;
+        // A `/…/` clause verifies the whole snapshot now, under this
+        // request's token, so every later page reads the same matches.
+        let compile = |stems| -> Result<Compiled> {
+            let c = index.compile_at(node, now, utc_offset, stems, cancel, at)?;
+            crate::regex_verify::seal(c.query.as_ref(), &searcher, cancel)?;
+            Ok(c)
+        };
+        let exact = compile(false)?;
         let mut total = count::total(&searcher, &exact, cancel)?;
         let (mut compiled, mut stemmed) = (exact, false);
         if total.value < STEM_FALLBACK_BELOW && crate::compile::has_stem_alternative(node) {
-            let wide = index.compile_at(node, now, utc_offset, true, cancel, at)?;
+            let wide = compile(true)?;
             let wider = count::total(&searcher, &wide, cancel)?;
             if wider.value > total.value {
                 (compiled, stemmed, total) = (wide, true, wider);
             }
         }
+        // Only the verified matches stay (S8-10).
+        crate::regex_verify::release(compiled.query.as_ref());
+        let regex_bytes = crate::regex_verify::retained_bytes(compiled.query.as_ref());
         let sort = if index.sort_available(sort) {
             sort
         } else {
@@ -162,6 +179,7 @@ impl Lease {
             groups: Mutex::new(None),
             now,
             utc_offset,
+            regex_bytes,
         })
     }
 
@@ -180,6 +198,7 @@ impl Lease {
             groups: Mutex::new(None),
             now: 0,
             utc_offset: 0,
+            regex_bytes: 0,
         }
     }
 
@@ -190,6 +209,21 @@ impl Lease {
 
     pub(crate) fn compiled(&self) -> &Compiled {
         &self.compiled
+    }
+
+    /// What the lease's `/…/` clauses keep alive: their verified matches
+    /// (a sorted id list or a bitset per segment, whichever is smaller)
+    /// and a fixed overhead each. Zero without one. [`Leases`] charges
+    /// it against [`LeaseConfig::max_regex_bytes`].
+    pub fn regex_bytes(&self) -> usize {
+        self.regex_bytes
+    }
+
+    /// Whether a `/…/` clause stopped before verifying the snapshot: every
+    /// page is then what was verified in time, the same set the count
+    /// counted ([`crate::regex_verify::stopped`]).
+    pub fn regex_stopped(&self) -> bool {
+        crate::regex_verify::stopped(&self.compiled)
     }
 
     /// The query this lease was taken for.
@@ -1143,6 +1177,10 @@ pub struct LeaseConfig {
     /// Leases kept per client (session); past it, that client's least
     /// recently used goes.
     pub per_client: usize,
+    /// The regex matches all leases may hold ([`Lease::regex_bytes`]);
+    /// past it the least recently used go (S8-10). A lease is kept even
+    /// when it alone is over it, until the next one comes.
+    pub max_regex_bytes: usize,
 }
 
 impl Default for LeaseConfig {
@@ -1152,6 +1190,10 @@ impl Default for LeaseConfig {
             max_age: Duration::from_secs(3600),
             max_leases: 1024,
             per_client: 64,
+            // 4 clauses × 10M documents / 8 is 5 MB a lease at the
+            // worst: a dozen such leases, or many of the usual sparse
+            // ones.
+            max_regex_bytes: 64 << 20,
         }
     }
 }
@@ -1246,6 +1288,23 @@ impl Leases {
             && let Some(id) = lru(&map, None)
         {
             gone.extend(map.remove(&id));
+        }
+        let held =
+            |map: &HashMap<LeaseId, Slot>| map.values().map(|s| s.lease.regex_bytes).sum::<usize>();
+        // Only regex leases free regex bytes: the least recently used of
+        // them goes.
+        let lru_regex = |map: &HashMap<LeaseId, Slot>| {
+            map.iter()
+                .filter(|(_, s)| s.lease.regex_bytes > 0)
+                .min_by_key(|(_, s)| s.used)
+                .map(|(id, _)| *id)
+        };
+        if lease.regex_bytes > 0 {
+            while held(&map).saturating_add(lease.regex_bytes) > self.config.max_regex_bytes
+                && let Some(id) = lru_regex(&map)
+            {
+                gone.extend(map.remove(&id));
+            }
         }
         let id = loop {
             let id = self.new_id();

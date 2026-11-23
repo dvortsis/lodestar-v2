@@ -128,11 +128,22 @@ fn total(lease: &Lease, node: &Node, deadline: &CancelToken, policy: Policy) -> 
     let index = lease.index();
     let searcher = lease.searcher();
     let at = Some(searcher.generation().generation_id());
-    let compile =
-        |stems| index.compile_at(node, lease.now(), lease.utc_offset(), stems, deadline, at);
-    let mut best = count::total_with(searcher, &compile(false)?, deadline, policy)?;
+    // A `/…/` clause verifies under the search's own regex budget, which
+    // `deadline` shares, never a fresh one (S8-11). A count it cut short
+    // isn't offered: it's out of time like the rest.
+    let count = |stems| -> Result<Total> {
+        let compiled =
+            index.compile_at(node, lease.now(), lease.utc_offset(), stems, deadline, at)?;
+        crate::regex_verify::seal(compiled.query.as_ref(), searcher, deadline)?;
+        let total = count::total_with(searcher, &compiled, deadline, policy)?;
+        if crate::regex_verify::stopped(&compiled) {
+            return Err(Error::OutOfTime);
+        }
+        Ok(total)
+    };
+    let mut best = count(false)?;
     if best.value < STEM_FALLBACK_BELOW && has_stem_alternative(node) {
-        let wider = count::total_with(searcher, &compile(true)?, deadline, policy)?;
+        let wider = count(true)?;
         if wider.value > best.value {
             best = wider;
         }

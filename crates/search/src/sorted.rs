@@ -167,9 +167,15 @@ pub(crate) fn search_cancellable(
             )
         })
         .collect();
-    let mut tops: Vec<Option<Top>> = {
+    // A regex query's tops aren't kept: a clause stopped by its budget
+    // makes them partial, and a later search must not read them as
+    // complete (RX-1).
+    let keep = !query.regex;
+    let mut tops: Vec<Option<Top>> = if keep {
         let map = cache.map.lock().expect("cache lock");
         keys.iter().map(|key| map.get(key).cloned()).collect()
+    } else {
+        vec![None; keys.len()]
     };
     // The segments not cached, in pieces the threads share.
     let pieces: Vec<(usize, std::ops::Range<DocId>)> = tops
@@ -215,7 +221,7 @@ pub(crate) fn search_cancellable(
         part.sort_unstable_by_key(|a| Reverse((a.0, a.1, Reverse(a.2))));
         part.truncate(k);
         let top = Arc::new((part, count));
-        if k <= CACHE_MAX_K {
+        if keep && k <= CACHE_MAX_K {
             let mut map = cache.map.lock().expect("cache lock");
             if map.len() >= CACHE_ENTRIES {
                 map.clear();

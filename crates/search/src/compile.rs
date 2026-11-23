@@ -58,8 +58,11 @@ pub(crate) struct Cx<'a> {
     /// `/…/` clause may prefilter on it (RX-1); otherwise it verifies
     /// every name.
     pub trigrams: bool,
-    /// The search's token: a `/…/` clause's verifier stops with it.
-    pub cancel: Option<&'a crate::CancelToken>,
+    /// The search's regex deadline ([`crate::CancelToken::regex_deadline`]):
+    /// every `/…/` clause verifies against it. `None` (callers outside a
+    /// search) gives each clause [`crate::regex_verify::VERIFY_BUDGET`]
+    /// from its compile.
+    pub regex_deadline: Option<std::time::Instant>,
 }
 
 impl std::ops::Deref for Cx<'_> {
@@ -1073,12 +1076,13 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
         // time budget (`regex_verify`).
         Node::Regex { pattern } => {
             let trigram = (f.trigrams && f.name_trigram != ABSENT).then_some(f.name_trigram);
+            let deadline = f.regex_deadline.unwrap_or_else(|| {
+                let now = std::time::Instant::now();
+                now.checked_add(crate::regex_verify::budget())
+                    .unwrap_or(now)
+            });
             Box::new(crate::regex_verify::RegexQuery::new(
-                pattern,
-                f.name,
-                trigram,
-                crate::regex_verify::VERIFY_BUDGET,
-                f.cancel.cloned(),
+                pattern, f.name, trigram, deadline,
             ))
         }
         Node::Hash { hash } => match hex20(hash) {

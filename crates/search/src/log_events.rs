@@ -31,6 +31,19 @@ lodestar_log::catalogue! {
         message: "A saved search failed in the index while matching new torrents",
         fields: { saved_search: Label },
     }
+    /// A saved search's `/…/` verify ran out of its time budget while
+    /// matching new torrents (RX-1, S8-12): the range isn't recorded and
+    /// runs again next time. Only its id is logged, never the pattern,
+    /// and at most once an hour per search (the percolator). Repeated,
+    /// its alerts are held back until the pattern is narrowed (RX-2
+    /// shows it in the UI).
+    PERCOLATE_REGEX_STOPPED {
+        id: "search.percolate_regex_stopped",
+        component: Search,
+        level: Warn,
+        message: "A saved search's regex ran out of time; its alerts wait for the next check",
+        fields: { saved_search: Label },
+    }
     /// Renaming an index folder failed; trying again (`attempt`).
     RENAME_RETRY {
         id: "search.rename_retry",

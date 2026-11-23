@@ -464,15 +464,18 @@ show /s\d\de\d\d/
 
 - **Case doesn't matter**, as in the rest of search: `/S01E02/` finds `s01e02`. Start with `(?-i)` to match case exactly.
 - **The syntax** is the usual one (character classes, `|`, `*`, `+`, `{2,4}`, `\d`, `\w`, `\b`), without look-around or back-references. Write a `/` inside the pattern as `\/`.
-- **Limits** keep one pattern from slowing every search: at most 512 bytes, nested at most 16 deep, repeat counts up to 100, and classes small enough to match quickly. A pattern over a limit is refused with the reason.
-- **Lodestar first narrows by the pattern's three-letter pieces**, then checks each remaining name. Patterns with no such piece (`/.+/`, `/\d/`) check every name, so they're slower: add a word beside them.
-- **A pattern that takes too long stops after 2 seconds** and shows what it found by then. The count is then a lower bound.
+- **Where a pattern starts and ends.** A `/` starts a pattern only when text follows it straight away, and the closing `/` must come before a space, a `)` or the end of the search. Otherwise the slashes are plain text: `tv / movies / 1080p` and `/usr/bin` are words.
+- **Limits** keep patterns from slowing every search: at most 4 patterns in one search, each at most 512 bytes, nested at most 16 deep, with repeat counts up to 100 and classes small enough to match quickly. A pattern over a limit is refused with the reason.
+- **Lodestar first narrows by the pattern's three-letter pieces**, then checks each remaining name. Patterns with no such piece (`/.+/`, `/\d/`) check every name, so they're slower. A word next to the pattern doesn't make it faster yet: Lodestar still checks every name the pattern's own pieces let through. Give the pattern a longer piece of plain text instead.
+- **All the patterns in one search share 2 seconds**, planning included, and so do the facet counts worked out with them. When the 2 seconds run out, the search stops and shows what it had found by then. For now, nothing on the results page says it stopped, so the count looks exact when it isn't. It can be too low, or too high when the pattern excludes (`-/x/`).
+- **Saved searches with a pattern** don't skip torrents when the pattern runs out of time: the alert check tries the same torrents again next time, so their alerts arrive late. If it keeps running out of time, the log says so once an hour (the `search.percolate_regex_stopped` event). Narrow the pattern to fix it.
 - Filter rules can't use patterns: a rule with `/…/` is refused when you save it.
 
 ```query-fail
 /S0[1-9/ => regex_syntax
 /(?s)a/ => regex_flag_not_allowed
 /abc => closing
+/a1/ /a2/ /a3/ /a4/ /a5/ => regex_too_many
 ```
 
 ## How results are ranked

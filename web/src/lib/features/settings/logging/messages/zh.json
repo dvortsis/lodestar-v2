@@ -615,6 +615,8 @@
 	"settings_logging_ev_search_suggest_titles_failed_h": "无法重建搜索标题建议。",
 	"settings_logging_ev_search_percolate_search_failed_n": "提醒匹配失败",
 	"settings_logging_ev_search_percolate_search_failed_h": "将新种子与提醒匹配时失败。",
+	"settings_logging_ev_search_percolate_regex_stopped_n": "提醒正则超时",
+	"settings_logging_ev_search_percolate_regex_stopped_h": "某个已保存搜索的正则表达式超时；它的提醒会等到下一次检查。",
 	"settings_logging_ev_search_rename_retry_n": "索引重命名重试",
 	"settings_logging_ev_search_rename_retry_h": "正在重试重命名索引文件。",
 	"settings_logging_ev_search_rebuild_started_n": "搜索重建开始",

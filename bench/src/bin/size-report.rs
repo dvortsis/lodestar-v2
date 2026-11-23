@@ -453,6 +453,14 @@ fn measure(
         }
     }
 
+    // Names past the trigram prefix: every regex verifies them (RX-1).
+    let long = index.long_names()?;
+    println!(
+        "    long names (>{} B, always verified)  {} ({:.1}%)",
+        lodestar_search::TRIGRAM_PREFIX_BYTES,
+        group(long),
+        100.0 * long as f64 / n
+    );
     println!("\n  file index by part (bytes per torrent)");
     for (part, bytes) in index.files_space_by_field()? {
         if bytes as f64 / n >= 0.5 {

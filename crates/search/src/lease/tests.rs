@@ -192,6 +192,7 @@ fn slow_lease(index: &Arc<SearchIndex>, sort: Sort, delay: Duration) -> Lease {
         groups: Mutex::new(None),
         now: 0,
         utc_offset: 0,
+        regex_bytes: 0,
     }
 }
 
@@ -286,6 +287,7 @@ fn tiny(ttl_ms: u64, max_leases: usize, per_client: usize) -> Leases {
         max_age: Duration::from_secs(3600),
         max_leases,
         per_client,
+        ..LeaseConfig::default()
     })
 }
 

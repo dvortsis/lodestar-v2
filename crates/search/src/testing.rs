@@ -122,6 +122,7 @@ pub(crate) fn slow(index: &SearchIndex, delay: Duration) -> Compiled {
         now: 0,
         reads_hot: false,
         hot: None,
+        regex: false,
     }
 }
 
@@ -146,6 +147,7 @@ pub(crate) fn tripwire(at: usize, token: &CancelToken) -> (Compiled, Arc<AtomicU
         now: 0,
         reads_hot: false,
         hot: None,
+        regex: false,
     };
     (compiled, visits)
 }

@@ -5,7 +5,13 @@
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
-use lodestar_search::{CancelToken, Node, SearchIndex, parse, regex_verify};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use lodestar_search::{
+    CancelToken, Lease, LeaseConfig, Leases, MAX_REGEX_CLAUSES, Node, REGEX_TOO_MANY, SearchIndex,
+    Sort, Start, parse, regex_verify,
+};
 use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 use proptest::prelude::*;
 
@@ -170,6 +176,13 @@ fn regex_search_finds_what_the_pattern_matches() {
     assert_eq!(find(&ix, "-/web/"), not_web);
 }
 
+/// A token whose search's regex budget is already spent.
+fn spent() -> CancelToken {
+    let t = CancelToken::new();
+    t.regex_deadline(Duration::ZERO);
+    t
+}
+
 #[test]
 fn a_stopped_verify_is_reported_and_answers_consistently() {
     let (ix, _) = corpus();
@@ -177,16 +190,180 @@ fn a_stopped_verify_is_reported_and_answers_consistently() {
     let full = ix.query(&ast, NOW);
     assert_eq!(ix.search(&full, 50).unwrap().total, 3);
     assert!(!regex_verify::stopped(&full));
-    // The token stops before the first candidate: nothing verified, and
-    // the result says it's partial, on every pass.
-    let token = CancelToken::new();
-    let cut = ix.query_cancelled(&ast, NOW, 0, &token).unwrap();
-    token.cancel();
+    // The budget runs out before the first candidate: nothing verified,
+    // and the result says it's partial, on every pass.
+    let cut = ix.query_cancelled(&ast, NOW, 0, &spent()).unwrap();
     for _ in 0..2 {
         let r = ix.search(&cut, 50).unwrap();
         assert_eq!((r.hits.len(), r.total), (0, 0));
         assert!(regex_verify::stopped(&cut));
     }
+}
+
+/// S8-10 item 6: a pass verifies under its own token, never under the
+/// token of the request that compiled the query, which may be gone.
+#[test]
+fn a_later_pass_verifies_under_its_own_token_not_the_compiles() {
+    let (ix, _) = corpus();
+    let compiling = CancelToken::new();
+    let q = ix
+        .query_cancelled(&parse("/show/").unwrap(), NOW, 0, &compiling)
+        .unwrap();
+    compiling.cancel();
+    let r = ix.search(&q, 50).unwrap();
+    assert_eq!(r.total, 3);
+    assert!(!regex_verify::stopped(&q));
+}
+
+#[test]
+fn a_query_holds_at_most_four_regexes() {
+    let four = "/a1/ /b2/ (/c3/ | x) -/d4/";
+    assert_eq!(parse(four).unwrap().regex_clauses(), MAX_REGEX_CLAUSES);
+    let five = format!("{four} name:/e5/");
+    let e = parse(&five).unwrap_err();
+    assert_eq!(e.reason, Some(REGEX_TOO_MANY));
+    assert!(e.message.contains("at most 4 /regex/"), "{e}");
+    // At the fifth.
+    assert_eq!(&five[e.start..e.end], "name:/e5/");
+    // Refused patterns carry their code as the reason too.
+    assert_eq!(parse("/a(b/").unwrap_err().reason, Some("regex_syntax"));
+    assert_eq!(parse("/abc").unwrap_err().reason, None);
+}
+
+#[test]
+fn a_stored_query_over_the_cap_matches_nothing_and_verifies_nothing() {
+    let (ix, _) = corpus();
+    let every = |n: usize| Node::And {
+        of: (0..n)
+            .map(|_| Node::Regex {
+                pattern: ".".into(),
+            })
+            .collect(),
+    };
+    assert_eq!(found(&ix, &every(MAX_REGEX_CLAUSES)).len(), 8);
+    let over = ix.query(&every(MAX_REGEX_CLAUSES + 1), NOW);
+    assert_eq!(ix.search(&over, 50).unwrap().total, 0);
+    assert!(!regex_verify::stopped(&over));
+}
+
+#[test]
+fn slashes_delimit_a_regex_only_where_a_pattern_can_start_and_end() {
+    let words = |q: &str| !parse(q).unwrap().has_regex();
+    // An opening `/` before a space, or a closing one inside a word, is
+    // plain text.
+    assert!(words("tv / movies / 1080p"));
+    assert!(words("/usr/bin"));
+    assert!(words("/a/b"));
+    assert!(words("x / y/"));
+    // Before whitespace, `)` or the end, it closes one.
+    for q in ["/a/", "/a/ b", "(/a/)", "x (y | /a b/)", "name:/a/"] {
+        assert!(parse(q).unwrap().has_regex(), "{q}");
+    }
+    // Still an error when it would delimit one but is unclosed or empty.
+    assert!(parse("/abc").is_err());
+    assert!(parse("// x").unwrap_err().message.contains("empty"));
+    // `file:(…)` is looked inside, though the parser refuses one there.
+    let stored = Node::File {
+        of: Box::new(Node::Regex {
+            pattern: "a".into(),
+        }),
+    };
+    assert!(stored.has_regex());
+}
+
+/// S8-11: the clauses of one search share one deadline. Spent before
+/// the search, all four at the cap stop at once, not after a budget
+/// each; facets and recovery under the same token share it too
+/// (`cache.rs`, `recovery.rs`).
+#[test]
+fn every_clause_of_a_search_shares_one_regex_budget() {
+    let (ix, _) = corpus();
+    let ast = parse("/s/ /o/ /w/ /h/").unwrap();
+    assert_eq!(found(&ix, &ast).len(), 3);
+    let started = Instant::now();
+    let q = ix.query_cancelled(&ast, NOW, 0, &spent()).unwrap();
+    assert_eq!(ix.search(&q, 50).unwrap().total, 0);
+    assert!(regex_verify::stopped(&q));
+    assert!(started.elapsed() < regex_verify::VERIFY_BUDGET);
+    // A child with a budget of its own shares its parent's regex budget;
+    // a regex scope has its own.
+    let token = spent();
+    let child = token.with_budget(Duration::from_secs(60));
+    let q = ix.query_cancelled(&ast, NOW, 0, &child).unwrap();
+    assert_eq!(ix.search(&q, 50).unwrap().total, 0);
+    let scoped = token.regex_scope();
+    let q = ix.query_cancelled(&ast, NOW, 0, &scoped).unwrap();
+    assert_eq!(ix.search(&q, 50).unwrap().total, 3);
+}
+
+/// S8-10: a lease keeps only the verified matches, charged at their
+/// size, and its pages agree with its count.
+#[test]
+fn a_lease_keeps_only_its_verified_matches_and_charges_them() {
+    let names: Vec<String> = (0..200).map(|i| format!("Show {i} s01e{i:02}")).collect();
+    let ix = Arc::new(index_of(&names));
+    let segments = ix.segments();
+    let lease = |q: &str, token: &CancelToken| {
+        Lease::new(ix.clone(), &parse(q).unwrap(), NOW, Sort::Relevance, token).unwrap()
+    };
+    // At the cap, every clause matching every name: the worst case is a
+    // bitset per clause per segment, plus a fixed overhead.
+    let all = lease(r"/show/ /s01/ /e/ /\d/", &CancelToken::new());
+    assert_eq!(all.total().value, 200);
+    let bound = MAX_REGEX_CLAUSES * (1024 + segments * (64 + 200 / 8 + 8));
+    assert!(
+        all.regex_bytes() > 0 && all.regex_bytes() <= bound,
+        "{}",
+        all.regex_bytes()
+    );
+    // Pages read the kept matches (the verifiers are gone), and agree
+    // with the count.
+    let mut seen = 0;
+    let mut start = Start::Offset(0);
+    loop {
+        let page = all.page(start, 50, &CancelToken::new()).unwrap();
+        seen += page.hits.len();
+        match page.next {
+            Some(p) => start = Start::After(p),
+            None => break,
+        }
+    }
+    assert_eq!(seen, 200);
+    // A sparse match keeps a short id list.
+    let one = lease("/show 7 /", &CancelToken::new());
+    assert_eq!(one.total().value, 1);
+    assert!(one.regex_bytes() < all.regex_bytes() / MAX_REGEX_CLAUSES);
+    // Stopped: no matches kept, and every page says so.
+    let cut = lease("/show/", &spent());
+    assert!(cut.regex_stopped());
+    assert_eq!(cut.total().value, 0);
+    assert!(
+        cut.page(Start::Offset(0), 50, &CancelToken::new())
+            .unwrap()
+            .hits
+            .is_empty()
+    );
+    // Without a regex: nothing charged.
+    assert_eq!(lease("show", &CancelToken::new()).regex_bytes(), 0);
+    // Leases charge it: past `max_regex_bytes` the least recently used
+    // regex lease goes.
+    let leases = Leases::new(LeaseConfig {
+        max_regex_bytes: all.regex_bytes() + 1,
+        ..LeaseConfig::default()
+    });
+    let plain = leases.insert(Arc::new(lease("show", &CancelToken::new())), 1);
+    let first = leases.insert(
+        Arc::new(lease(r"/show/ /s01/ /e/ /\d/", &CancelToken::new())),
+        1,
+    );
+    let second = leases.insert(
+        Arc::new(lease(r"/show/ /s01/ /e/ /\d/", &CancelToken::new())),
+        1,
+    );
+    assert!(leases.get(&first, 1).is_err());
+    assert!(leases.get(&second, 1).is_ok());
+    // A lease without regex matches frees nothing, so it stays.
+    assert!(leases.get(&plain, 1).is_ok());
 }
 
 fn arb_name() -> impl Strategy<Value = String> {
