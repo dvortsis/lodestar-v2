@@ -1717,28 +1717,26 @@ mod tests {
         let slow = save(&mut s.store, "slow", r"/even/", 0);
         let even = save(&mut s.store, "even", "Even", 0);
         let mut seen = Seen::default();
-        // The run's budget is spent by the time the second search would
-        // start, as a slow pattern's would leave it.
-        let spent = PercolatorConfig {
-            budget: Duration::ZERO,
-            ..quick()
+        let run = |s: &mut Setup, now: i64, seen: &mut Seen| {
+            run_once(&s.index, &mut s.store, None, 30, &quick(), now, seen).unwrap()
         };
-        let mut run = |s: &mut Setup, config: &PercolatorConfig, now: i64, seen: &mut Seen| {
-            run_once(&s.index, &mut s.store, None, 30, config, now, seen).unwrap()
-        };
-        let r = regex_out_of_time(|| run(&mut s, &spent, NOW, &mut seen));
-        assert_eq!(r.searches, 0);
-        assert_eq!(s.store.saved_search(slow).unwrap().unwrap().watermark, 0);
-        assert!(seen.regex_waiting(slow, NOW));
-        // The next run, with time to verify: `slow` sits it out (its
-        // watermark stays), so it can't take the budget again, and `even`
-        // runs and alerts, where before it never started.
-        let r = run(&mut s, &quick(), NOW + 1, &mut seen);
+        // `slow`'s verify stops: not recorded, and it waits. `even`, after
+        // it in the run, still runs.
+        let r = regex_out_of_time(|| run(&mut s, NOW, &mut seen));
         assert_eq!((r.searches, r.more), (1, false));
         assert_eq!(alert_ids(&s.store, even), evens(1, 30));
         assert_eq!(s.store.saved_search(slow).unwrap().unwrap().watermark, 0);
+        assert!(alert_ids(&s.store, slow).is_empty());
+        assert!(seen.regex_waiting(slow, NOW));
+        // While it waits it sits the runs out, even with time to verify
+        // (its watermark stays): a pattern that always takes the whole
+        // budget can't spend every run's, first in each, and starve the
+        // searches after it.
+        let r = run(&mut s, NOW + 1, &mut seen);
+        assert_eq!((r.searches, r.more), (0, false));
+        assert_eq!(s.store.saved_search(slow).unwrap().unwrap().watermark, 0);
         // Its wait over, with time to verify: the same range, alerted.
-        let r = run(&mut s, &quick(), NOW + REGEX_BACKOFF.0, &mut seen);
+        let r = run(&mut s, NOW + REGEX_BACKOFF.0, &mut seen);
         assert_eq!((r.searches, r.more), (1, false));
         assert_eq!(alert_ids(&s.store, slow), evens(1, 30));
         assert_eq!(s.store.saved_search(slow).unwrap().unwrap().watermark, 30);
@@ -1756,7 +1754,7 @@ mod tests {
         promote(&mut s.store, item, "Promo.Even", 0);
         index_all(&s.index, &mut s.store);
         let mut seen = Seen::default();
-        let mut run = |s: &mut Setup, now: i64, seen: &mut Seen| {
+        let run = |s: &mut Setup, now: i64, seen: &mut Seen| {
             run_once(&s.index, &mut s.store, None, w, &quick(), now, seen).unwrap()
         };
         let r = regex_out_of_time(|| run(&mut s, NOW, &mut seen));

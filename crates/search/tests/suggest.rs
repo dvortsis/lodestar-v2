@@ -1125,14 +1125,16 @@ fn regex_spans(phrase: &str) -> Vec<(usize, usize)> {
     let mut i = 0;
     while i < cs.len() {
         let starts_word = i == 0 || space(cs.get(i - 1));
-        if cs[i] == '/' && starts_word && cs.get(i + 1).is_some_and(|c| !c.is_ascii_whitespace()) {
-            if let Some(close) = (i + 1..cs.len()).find(|&j| cs[j] == '/') {
-                let after = cs.get(close + 1);
-                if after.is_none() || space(after) || after == Some(&')') {
-                    out.push((i, close + 1));
-                    i = close + 1;
-                    continue;
-                }
+        if cs[i] == '/'
+            && starts_word
+            && cs.get(i + 1).is_some_and(|c| !c.is_ascii_whitespace())
+            && let Some(close) = (i + 1..cs.len()).find(|&j| cs[j] == '/')
+        {
+            let after = cs.get(close + 1);
+            if after.is_none() || space(after) || after == Some(&')') {
+                out.push((i, close + 1));
+                i = close + 1;
+                continue;
             }
         }
         // To the end of this word.
