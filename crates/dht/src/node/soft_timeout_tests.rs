@@ -1,10 +1,11 @@
 //! CR-SOFT-TIMEOUT (`dht.soft_timeout`) against the real actor, on tokio's
 //! paused clock: an owned peer lookup's query left unanswered past the
-//! soft timeout keeps its lane, so the leg asks exactly whom it would with
-//! the switch off, but stops holding the leg's end once K others have
-//! answered. It stays out, against the outstanding cap, until it's
-//! answered (once) or times out. With the switch on a leg never ends later
-//! than with it off. Cases run with `dht.lookup_end` off and on.
+//! soft timeout keeps its lane, so a leg never has more than `ALPHA` out,
+//! but gives its place among the K closest up: the next candidate is asked
+//! once a lane frees, and the leg can end once K others have answered. It
+//! stays out, against the outstanding cap, until it's answered (once) or
+//! times out; no query's timer is extended. Cases run with
+//! `dht.lookup_end` off and on.
 
 use super::*;
 use crate::node::lookup::ALPHA;
@@ -145,7 +146,10 @@ fn reply_as(
         read_only: false,
         body: Body::Response(response.clone()),
     };
-    a.on_response(s, 0, &msg, Some(&response), from);
+    // On the family the query went out on (a second family in two-family
+    // tests), or the first for a tid nobody asked.
+    let family = a.pending.get(&tid).map_or(0, |p| p.family);
+    a.on_response(s, family, &msg, Some(&response), from);
 }
 
 /// `from` answers `tid` as `id` with `values`.
@@ -752,6 +756,10 @@ async fn off_allocates_nothing() {
             tick(&mut a, &s, 1).await;
         }
         assert!(a.soft_tids.is_empty());
+        // Never allocated. (Under the simulator's `testing` feature the set
+        // is a B-tree, which has no capacity to read.)
+        #[cfg(not(feature = "testing"))]
+        assert_eq!(a.soft_tids.capacity(), 0);
         assert_eq!(detached(&a), 0);
         assert_eq!(a.stats.snapshot().soft_timeouts, 0);
     }
@@ -815,12 +823,24 @@ struct Played {
 
 /// Runs `script` with the switches given, in 100 ms steps with a
 /// maintenance tick every second, until the request answers, checking the
-/// bookkeeping at every step.
+/// bookkeeping at every step. The request runs two family legs (the second
+/// on a second IPv4 socket, starting from the same nodes), so the lanes
+/// they share outlive the first leg to end.
 async fn play(script: &Script, soft: bool, lookup_end: bool) -> Played {
-    let (mut a, s) = actor(soft, lookup_end);
+    let (mut a, mut s) = actor(soft, lookup_end);
+    let second = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    second.set_nonblocking(true).unwrap();
+    s.push(SendSocket::Udp(second));
+    a.families.push(Family {
+        table: RoutingTable::new(a.ids[0], false),
+        ipv6: false,
+    });
     let sem = Arc::new(Semaphore::new(1));
     let start: Vec<_> = script.start.iter().map(|i| node(*i)).collect();
     table(&mut a, &start);
+    for n in &start {
+        a.families[1].table.insert(*n, Contact::Response, 0);
+    }
     let mut rx = request(&mut a, &s, &sem);
     let mut sends = Vec::new();
     // tid -> the step it's due, for every query seen.
@@ -887,6 +907,7 @@ async fn play(script: &Script, soft: bool, lookup_end: bool) -> Played {
             assert_eq!(ended.iter().sum::<u64>(), 1);
             assert_eq!(returns(&a), 1);
             let (answered, slow) = *a.legs_ended.last().expect("a leg ended");
+            assert!(a.legs_ended.len() >= 2, "both legs ended");
             return Played {
                 step,
                 why,
@@ -903,11 +924,13 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
     /// The bounds, on a scripted network of fast, late and silent nodes,
-    /// with `dht.lookup_end` off and on: a leg never has more than `ALPHA`
-    /// queries out and a request never sends more than its 64, both at
-    /// every step ([`check`]); no query's timer is extended (checked after
-    /// every tick in [`play`]); and a leg that ends with slow queries out
-    /// has its K answers. The switch-off run holds the same bounds.
+    /// with `dht.lookup_end` off and on, for a two-family request: a leg
+    /// never has more than `ALPHA` queries out, a request never sends more
+    /// than its 64, and its in-flight count is exactly its legs' queries
+    /// out, also after one leg ends with soft queries out, all at every
+    /// step ([`check`]); no query's timer is extended (checked after every
+    /// tick in [`play`]); and a leg that ends with slow queries out has its
+    /// K answers. The switch-off run holds the same bounds.
     #[test]
     fn soft_expiry_keeps_every_bound(script in script(), lookup_end in any::<bool>()) {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -916,7 +939,11 @@ proptest! {
             .build()
             .unwrap();
         let on = rt.block_on(play(&script, true, lookup_end));
-        prop_assert!(on.slow == 0 || on.answered >= K, "ended with {} slow and {} answers", on.slow, on.answered);
+        // A leg that ended by its own end test (the request's last leg
+        // converging) had K answers if slow queries were out; a deadline,
+        // the cap, enough values or a cancel cuts legs whatever they hold.
+        let own_end = matches!(on.why, LedgerEnd::Values | LedgerEnd::NoValues);
+        prop_assert!(!own_end || on.slow == 0 || on.answered >= K, "ended with {} slow and {} answers ({:?})", on.slow, on.answered, on.why);
         prop_assert!(on.sends.len() <= MAX_PEER_QUERIES, "{} sent", on.sends.len());
         let off = rt.block_on(play(&script, false, lookup_end));
         prop_assert!(off.sends.len() <= MAX_PEER_QUERIES);

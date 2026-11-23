@@ -117,11 +117,14 @@ Build-plan §0.5's standing rule: keep only if stored per slot-second and stored
   - in a two-family request, a leg that ends with a soft query out gives that query's lane back, so the other leg has all three;
   - off allocates nothing.
 - **Property tests:**
-  - **The bounds,** on a scripted network of 80 fast, late and silent nodes, with `dht.lookup_end` off and on, switch on and off:
+  - **The bounds,** on a scripted network of 80 fast, late and silent nodes, for a two-family request (a second IPv4 socket), with `dht.lookup_end` off and on, switch on and off:
     - a leg never has more than `ALPHA` queries out and a request never sends more than 64, at every step;
+    - the request's in-flight count is exactly its legs' queries out at every step, also after one leg ends with soft queries out;
     - no query's timer is extended: after every tick, nothing is still out past the query timeout, soft and detached queries included;
-    - a leg that ends with slow queries out has its K answers.
-  - **The mutation run:** freeing the lane (C) fails this test on "a leg has 4 out".
+    - a leg that ends by its own end test with slow queries out has its K answers.
+  - **The mutation runs:**
+    - freeing the lane (C) fails this test on "a leg has 4 out";
+    - dropping or doubling the in-flight decrement for a detached soft query fails it on "request in flight = queries out".
   - **The dominance test was dropped, not kept behind a cfg.** It only holds for A-strict, which has no code path of its own any more. A-window can't satisfy it, by design.
   - Hostile replies to soft queries (spoofed, repeated, to detached queries, with ticks between) settle nothing twice, end nothing more than once and stay bounded.
   - In `lookup.rs`, any sequence of adds, sends, soft expiries, answers, failures and retries keeps the counters equal to the states and at most `ALPHA` out.
@@ -135,6 +138,7 @@ Build-plan §0.5's standing rule: keep only if stored per slot-second and stored
 - **Ratified into this slice's owns:**
   - `crates/dht/src/node/soft_timeout_tests.rs`, registered in `actor.rs` beside the other `*_tests.rs` modules (they need the actor's private fields);
   - `crates/dht/proptest-regressions/node/soft_timeout_tests.txt`.
+- **In the brief's `crates/dht/tests/**`:** `crates/dht/tests/{harvest,network,scrape}.rs`, which build `Config` field by field and so name the two new fields (`soft_timeout: false`, `soft_timeout_after: SOFT_TIMEOUT`); nothing else in them changes.
 - **The fleet and collector, one line each:**
   - **`docs/soak/tools/linux/collect.py`:** `soft_timeout` → `LODESTAR_DHT_SOFT_TIMEOUT` in `SWITCH_ENV`, recorded and off unless set, with no treatment yet (as CR-SAMPLE-BACKOFF-ESCALATE was in #1029).
   - **`infra/fleet/steps/vm/compose.yaml`:** the switch passed through by bare name, so a cloud screen or an A/B block can set it, and one that doesn't leaves it at its default.
