@@ -48,6 +48,15 @@ pub struct SetupRequest {
     pub notice_version: Option<u32>,
 }
 
+/// `POST /setup/token`: checks the setup token before the password is
+/// asked for. `Debug` redacts the token.
+#[derive(Clone, Serialize, Deserialize, ToSchema)]
+pub struct SetupTokenRequest {
+    /// The one-time token printed to the logs (`XXXX-XXXX-XXXX-XXXX`, any
+    /// case).
+    pub token: String,
+}
+
 /// `GET /legal/notice`: the Legal Notice this build shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
@@ -172,6 +181,14 @@ impl fmt::Debug for SetupRequest {
     }
 }
 
+impl fmt::Debug for SetupTokenRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SetupTokenRequest")
+            .field("token", &REDACTED)
+            .finish()
+    }
+}
+
 impl fmt::Debug for LoginRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoginRequest")
@@ -203,6 +220,12 @@ mod tests {
                     token: secret.into(),
                     password: secret.into(),
                     notice_version: Some(2),
+                }
+            ),
+            format!(
+                "{:?}",
+                SetupTokenRequest {
+                    token: secret.into(),
                 }
             ),
             format!(

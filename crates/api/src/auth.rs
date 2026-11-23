@@ -404,14 +404,7 @@ impl Auth {
         notice: Option<u32>,
     ) -> Result<String, AuthError> {
         let result = (|| -> Result<String, AuthError> {
-            self.allow(ip)?;
-            let Some(expected) = self.setup_token() else {
-                return Err(AuthError::SetupDone);
-            };
-            let normalized = token.trim().to_uppercase();
-            if !constant_time_eq(normalized.as_bytes(), expected.as_bytes()) {
-                return Err(AuthError::BadToken);
-            }
+            let expected = self.match_setup_token(ip, token)?;
             if notice != Some(self.notice_current) {
                 return Err(AuthError::NoticeRequired);
             }
@@ -456,6 +449,38 @@ impl Auth {
         })();
         log_events::checked(ip, log_events::Check::Setup, &result);
         result
+    }
+
+    /// Checks the setup token alone, so the first-run form can say a
+    /// token is wrong before it asks for a password (X-setup-token-boot).
+    /// It is the same check [`Auth::setup_with_notice`] starts with: the
+    /// same attempt limit (each check spends a login attempt, so it adds
+    /// no guesses), the same constant-time compare, and the same answers
+    /// (`BadToken`, `SetupDone`, `RateLimited`). Nothing is spent or
+    /// saved, and a token that passes still has to be sent with the
+    /// password. A failure is logged as a failed setup check; a pass is
+    /// not logged, since nothing changed.
+    pub fn check_setup_token(&self, ip: IpAddr, token: &str) -> Result<(), AuthError> {
+        let result = self.match_setup_token(ip, token).map(drop);
+        if result.is_err() {
+            log_events::checked(ip, log_events::Check::Setup, &result);
+        }
+        result
+    }
+
+    /// The token check setup and [`Auth::check_setup_token`] share: takes
+    /// an attempt from `ip`, then compares `token` (trimmed, upper-cased)
+    /// with the pending one in constant time. Returns the pending token.
+    fn match_setup_token(&self, ip: IpAddr, token: &str) -> Result<String, AuthError> {
+        self.allow(ip)?;
+        let Some(expected) = self.setup_token() else {
+            return Err(AuthError::SetupDone);
+        };
+        let normalized = token.trim().to_uppercase();
+        if !constant_time_eq(normalized.as_bytes(), expected.as_bytes()) {
+            return Err(AuthError::BadToken);
+        }
+        Ok(expected)
     }
 
     /// Checks the password; returns a session cookie header value.
@@ -1181,6 +1206,69 @@ mod tests {
         );
         let other: IpAddr = "10.0.0.9".parse().unwrap();
         assert!(auth.login(other, "correct horse battery").is_ok());
+    }
+
+    /// The Continue check answers as setup's own token check does and
+    /// shares its attempts: checks and setups draw on one bucket, so the
+    /// check adds no guesses. It spends nothing and saves nothing.
+    #[test]
+    fn the_token_check_shares_setups_attempts_and_answers() {
+        let (dir, mut auth) = fresh();
+        auth.login.refill = 0.0;
+        let file = dir.path().join("auth.json");
+        let before = std::fs::read(&file).ok();
+        let token = auth.setup_token().unwrap();
+        assert_eq!(
+            auth.check_setup_token(IP, "0000-0000-0000-0000"),
+            Err(AuthError::BadToken)
+        );
+        // Trimmed and any case, as setup takes it.
+        let pasted = format!("  {}\n", token.to_lowercase());
+        assert_eq!(auth.check_setup_token(IP, &pasted), Ok(()));
+        // A pass claims nothing: the token is still pending, nothing saved.
+        assert!(auth.needs_setup());
+        assert_eq!(auth.setup_token().as_deref(), Some(token.as_str()));
+        assert_eq!(std::fs::read(&file).ok(), before);
+        // Two checks and two setups spend the burst of five...
+        let wrong = "0000-0000-0000-0000";
+        assert_eq!(
+            auth.setup(IP, wrong, "correct horse battery"),
+            Err(AuthError::BadToken)
+        );
+        assert_eq!(auth.check_setup_token(IP, &token), Ok(()));
+        assert_eq!(
+            auth.setup(IP, wrong, "correct horse battery"),
+            Err(AuthError::BadToken)
+        );
+        // ...so neither the check nor setup gets another, even with the
+        // right token.
+        assert_eq!(
+            auth.check_setup_token(IP, &token),
+            Err(AuthError::RateLimited)
+        );
+        assert_eq!(
+            auth.setup(IP, &token, "correct horse battery"),
+            Err(AuthError::RateLimited)
+        );
+        // And the other way round: setups spend what the check would use.
+        let other: IpAddr = "10.0.0.9".parse().unwrap();
+        for _ in 0..5 {
+            assert_eq!(
+                auth.setup(other, wrong, "correct horse battery"),
+                Err(AuthError::BadToken)
+            );
+        }
+        assert_eq!(
+            auth.check_setup_token(other, &token),
+            Err(AuthError::RateLimited)
+        );
+        // Once claimed, the check says so, as setup does.
+        let third: IpAddr = "10.0.0.10".parse().unwrap();
+        auth.setup(third, &token, "correct horse battery").unwrap();
+        assert_eq!(
+            auth.check_setup_token(third, &token),
+            Err(AuthError::SetupDone)
+        );
     }
 
     #[test]

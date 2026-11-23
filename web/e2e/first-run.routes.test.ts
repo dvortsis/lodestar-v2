@@ -1,6 +1,6 @@
 // X-first-run-search-gate: the search page, whose bare first load makes no request, still sends a
 // fresh instance to setup, a signed-out visitor to sign-in and a pending Legal Notice to the notice,
-// as /settings and /insights do. Then the two saves a tester reported lost: Language applies at
+// as /settings and /insights do (since X-setup-token-boot, by the root layout's boot check). Then the two saves a tester reported lost: Language applies at
 // once, and a Notifications route is kept by Save changes.
 import { expectNoA11yViolations } from './a11y';
 import { mockSettings } from './support/settings-fixture';

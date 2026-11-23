@@ -217,8 +217,10 @@ describe('SetupForm', () => {
 		expect(current()).toContain('3. Admin password');
 		await fill('correct horse battery');
 		await waitFor(() => expect(nav.toWelcome).toHaveBeenCalledOnce());
-		expect(calls()[0]![0]).toBe('/api/v1/setup');
-		expect(sentBody()).toEqual({
+		// Continue asked about the token alone; the submit sends all three.
+		expect(calls().map((c) => c[0])).toEqual(['/api/v1/setup/token', '/api/v1/setup']);
+		expect(sentBody(0)).toEqual({ token: 'AB12-CD34-EF56-7890' });
+		expect(sentBody(1)).toEqual({
 			token: 'AB12-CD34-EF56-7890',
 			password: 'correct horse battery',
 			notice_version: 2
@@ -268,7 +270,7 @@ describe('SetupForm', () => {
 	});
 
 	it('returns to the notice, fetched again and unticked, when it changed meanwhile', async () => {
-		replies = [fail(409, 'notice_required')];
+		replies = [ok, fail(409, 'notice_required')];
 		notices = [
 			{ status: 200, body: NOTICE },
 			{ status: 200, body: { version: 3, text: 'Version three.' } }
@@ -289,7 +291,13 @@ describe('SetupForm', () => {
 		await waitFor(() => expect(document.activeElement).toBe(newPw()));
 		await fill('correct horse battery');
 		await waitFor(() => expect(nav.toWelcome).toHaveBeenCalledOnce());
-		expect(sentBody(1).notice_version).toBe(3);
+		// The token was found right once; Continue didn't ask again.
+		expect(calls().map((c) => c[0])).toEqual([
+			'/api/v1/setup/token',
+			'/api/v1/setup',
+			'/api/v1/setup'
+		]);
+		expect(sentBody(2).notice_version).toBe(3);
 	});
 
 	it("offers a retry when the notice can't be loaded", async () => {
@@ -316,7 +324,7 @@ describe('SetupForm', () => {
 	});
 
 	it('returns to the token step on a wrong or spent token, without echoing it', async () => {
-		replies = [fail(401, 'bad_token')];
+		replies = [ok, fail(401, 'bad_token')];
 		await toPasswordStep('AB12CD34EF567890');
 		await fill('correct horse battery');
 		expect(await screen.findByText(/That setup token doesn't match/)).toBeTruthy();
@@ -336,7 +344,8 @@ describe('SetupForm', () => {
 		await fill('correct horse battery', 'correct horse batterz');
 		expect(await screen.findByText(/The passwords don't match/)).toBeTruthy();
 		expect(confirmPw().getAttribute('aria-invalid')).toBe('true');
-		expect(calls()).toHaveLength(0);
+		// Only Continue's token check was sent.
+		expect(calls().map((c) => c[0])).toEqual(['/api/v1/setup/token']);
 	});
 
 	it('hints at strength without blocking', async () => {
@@ -351,19 +360,97 @@ describe('SetupForm', () => {
 	});
 
 	it('goes to sign in when setup is already done', async () => {
-		replies = [fail(409, 'setup_done')];
+		replies = [ok, fail(409, 'setup_done')];
 		await toPasswordStep();
 		await fill('correct horse battery');
 		await waitFor(() => expect(nav.toLogin).toHaveBeenCalledOnce());
 	});
 
 	it('locks on 429 with a countdown', async () => {
-		vi.useFakeTimers({ now: 0, toFake: ['setInterval', 'clearInterval', 'Date'] });
-		replies = [fail(429, 'rate_limited', { 'Retry-After': '5' })];
+		replies = [ok, fail(429, 'rate_limited', { 'Retry-After': '5' })];
 		await toPasswordStep();
+		vi.useFakeTimers({ now: 0, toFake: ['setInterval', 'clearInterval', 'Date'] });
 		await fill('correct horse battery');
 		expect((await screen.findByTestId('auth-countdown')).textContent).toBe('Try again in 5 s.');
 		expect(create().getAttribute('aria-disabled')).toBe('true');
+	});
+
+	describe('the token checked on Continue (X-setup-token-boot)', () => {
+		const typeToken = async (token = 'AB12-CD34-EF56-7890') => {
+			await toTokenStep();
+			await fireEvent.input(tokenInput(), { target: { value: token } });
+			await fireEvent.click(cont());
+		};
+
+		it('says a wrong token is wrong on the token step, before any password', async () => {
+			replies = [fail(401, 'bad_token')];
+			await typeToken();
+			expect(await screen.findByText(/That setup token doesn't match/)).toBeTruthy();
+			expect(tokenInput().getAttribute('aria-invalid')).toBe('true');
+			await waitFor(() => expect(document.activeElement).toBe(tokenInput()));
+			expect(current()).toContain('Setup token');
+			expect(screen.queryByLabelText(/^New admin password/)).toBeNull();
+			expect(calls().map((c) => c[0])).toEqual(['/api/v1/setup/token']);
+			expect(sentBody()).toEqual({ token: 'AB12-CD34-EF56-7890' });
+			// Nothing the server said, and never the token, in the message.
+			expect(document.body.textContent).not.toContain('server says');
+			expect(screen.getByText(/That setup token doesn't match/).textContent).not.toContain('AB12');
+			// Corrected, it goes on.
+			await fireEvent.input(tokenInput(), { target: { value: 'AB12-CD34-EF56-7891' } });
+			expect(screen.queryByText(/That setup token doesn't match/)).toBeNull();
+			await fireEvent.click(cont());
+			await waitFor(() => expect(document.activeElement).toBe(newPw()));
+			expect(sentBody(1)).toEqual({ token: 'AB12-CD34-EF56-7891' });
+		});
+
+		it('locks Continue with the countdown when the attempts are used up', async () => {
+			vi.useFakeTimers({ now: 0, toFake: ['setInterval', 'clearInterval', 'Date'] });
+			replies = [fail(429, 'rate_limited', { 'Retry-After': '5' })];
+			await typeToken();
+			expect((await screen.findByTestId('auth-countdown')).textContent).toBe('Try again in 5 s.');
+			expect(cont().getAttribute('aria-disabled')).toBe('true');
+			await fireEvent.click(cont());
+			expect(calls()).toHaveLength(1);
+			expect(screen.queryByLabelText(/^New admin password/)).toBeNull();
+		});
+
+		it('goes to sign in when the instance was claimed meanwhile', async () => {
+			replies = [fail(409, 'setup_done')];
+			await typeToken();
+			await waitFor(() => expect(nav.toLogin).toHaveBeenCalledOnce());
+		});
+
+		it("says so when the server can't be reached, and stays", async () => {
+			await toTokenStep();
+			fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError('offline')));
+			await fireEvent.input(tokenInput(), { target: { value: 'AB12-CD34-EF56-7890' } });
+			await fireEvent.click(cont());
+			expect(await screen.findByText(/Lodestar isn't responding/)).toBeTruthy();
+			expect(current()).toContain('Setup token');
+			expect(screen.queryByLabelText(/^New admin password/)).toBeNull();
+		});
+
+		it('sends once while checking, and never twice for a token found right', async () => {
+			let release!: () => void;
+			await toTokenStep();
+			fetchMock.mockImplementationOnce(
+				() =>
+					new Promise<Response>((r) => {
+						release = () => r(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+					})
+			);
+			await fireEvent.input(tokenInput(), { target: { value: 'AB12-CD34-EF56-7890' } });
+			await fireEvent.click(cont());
+			await waitFor(() => expect(cont().getAttribute('aria-disabled')).toBe('true'));
+			await fireEvent.click(cont());
+			release();
+			await waitFor(() => expect(document.activeElement).toBe(newPw()));
+			await fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+			await waitFor(() => expect(document.activeElement).toBe(tokenInput()));
+			await fireEvent.click(cont());
+			await waitFor(() => expect(document.activeElement).toBe(newPw()));
+			expect(calls().map((c) => c[0])).toEqual(['/api/v1/setup/token']);
+		});
 	});
 
 	it('goes back a step at a time with Back, keeping the token and the tick', async () => {

@@ -11,7 +11,6 @@
 	import QueryBar from '$lib/features/search/query/QueryBar.svelte';
 	import { registerSearchCommands } from '$lib/features/search/query/commands';
 	import { onFirstInteraction } from '$lib/features/search/query/engaged';
-	import { checkFirstRun } from '$lib/features/auth/first-check';
 	import { PAGE_FRAME, PAGE_BODY_FULL, PAGE_H1 } from '$lib/ui/layout/classes';
 
 	let bar = $state<ReturnType<typeof QueryBar>>();
@@ -19,11 +18,9 @@
 	// `/` and the page's scope. `$lib/keys` arrives with the shell's first interaction; this page's
 	// listener is added first, so the command exists when the shell replays that first key. With no
 	// interaction, the shell attaches its keys after 30 s: register at the same moment, so the first
-	// `/` after that finds the command too.
-	// Then the first-run check: a fresh instance, a signed-out visitor or a pending Legal Notice
-	// can't search yet, so one check after mount sends the browser to setup or sign-in
-	// (X-first-run-search-gate). It has no imports, so the bare first load gains one small
-	// response; navigation loads only to leave. (One mount for both: the first load's bytes.)
+	// `/` after that finds the command too. A fresh instance, a signed-out visitor or a pending
+	// Legal Notice never gets here on a first load: the root layout's boot check sends them to
+	// setup or sign-in first (X-setup-token-boot, which replaced X-first-run-search-gate's check).
 	const KEYS_AFTER_MS = 30_000;
 	onMount(() => {
 		let off: (() => void) | undefined;
@@ -36,7 +33,6 @@
 				() => {}
 			); // Shortcuts only: search works without them.
 		}, KEYS_AFTER_MS);
-		void checkFirstRun(() => !gone && location.pathname === '/search');
 		return () => {
 			gone = true;
 			stop();
