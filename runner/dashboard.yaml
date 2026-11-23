@@ -647,6 +647,7 @@ placement:
   - X-pool-past-cap-room
   - CR-SOFT-TIMEOUT
   - X-soft-lane-free
+  - X-soft-key
   - X-sampler-streak-metrics
   - X-capacity-rejection-source
 - ws: ws-cr-live

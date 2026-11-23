@@ -180,7 +180,9 @@ A later stage tests one treatment **on top of the winners kept so far**: both ar
   | `lc` | `lookup_end`, `preset_slots` |
   | `hint` | `hint_first` |
   | `split` | `sampler_cooldown_split` |
+  | `soft` | `soft_timeout` |
 
+- **`soft`** (CR-SOFT-TIMEOUT's switch) runs alone against the shipped defaults or on top of winners, such as `"treatment": "soft", "winners": ["adm"]`. Its `segment` and `effect` reports add the soft-timeout pair per arm over sampling minutes, for reading only; it never changes a verdict.
 - **For the analysis,** write the winners file from that table: `winners: ["adm", "utp"]` becomes `{"winners": ["coordinated_admission", "utp"]}`, and pass it to every `segment` and to `effect` (`docs/soak/tools/linux/README.md`, stage 2).
 
 ### 3.3.2 An on-only block (a screen that needs no control)

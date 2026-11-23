@@ -360,11 +360,11 @@ CRAWLER_SWITCHES=(
 # earlier stages' winning keys, joined by '-' (the step arguments' shape has no
 # comma), on in both arms. Every switch here is a boolean (crates/lodestar's
 # config.rs), so an arm sets each to true or false.
-TREATMENT_KEYS='adm|utp|route|lc|hint|split'
+TREATMENT_KEYS='adm|utp|route|lc|hint|split|soft'
 # The stacked treatments (the collector's STACKED): only they take winners. A
 # stage-1 treatment runs against the shipped defaults (r5.1 A2), so its
 # segments would be void with any switch but its own on.
-STACKED_KEYS='lc|hint|split'
+STACKED_KEYS='lc|hint|split|soft'
 switches_of() {
   case $1 in
     adm) echo LODESTAR_DHT_COORDINATED_ADMISSION ;;
@@ -373,6 +373,7 @@ switches_of() {
     lc) echo LODESTAR_DHT_LOOKUP_END LODESTAR_DHT_PRESET_SLOTS ;;
     hint) echo LODESTAR_DHT_HINT_FIRST ;;
     split) echo LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT ;;
+    soft) echo LODESTAR_DHT_SOFT_TIMEOUT ;;
     *) return 1 ;;
   esac
 }

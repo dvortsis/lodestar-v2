@@ -67,7 +67,7 @@ VERIFY_SHARE = 0.05
 RATE_SLACK_SECONDS = 2.0
 A1_SLOTS = 32
 LEDGER = collect.LEDGER
-HINT, SPLIT = collect.HINT, collect.SPLIT
+HINT, SPLIT, SOFT = collect.HINT, collect.SPLIT, collect.SOFT
 # CR-COL-6: the hint-first tier's series every scrape of a hint segment carries, in both arms.
 HINT_SERIES = tuple(HINT.values())
 CR_ADM = "coordinated_admission"
@@ -688,6 +688,8 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treat
     # reported in every segment, their series listed absent where the binary lacks them.
     out["hint_first"] = hint_first(checks, window, switches, treatment == "hint")
     out["sampler_split"] = sampler_split(checks, window, switches, hourly, treatment == "split")
+    if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair over sampling minutes; reported, never decided on
+        out["soft_timeout"] = soft_timeout(window, switches)
     # CR-LEDGER's W, q and y; absent series are reported absent (older binaries).
     out["ledger"] = {"window": ledger(t_s, end),
                      "hourly": [ledger(a, b) for a, b in zip(bounds, bounds[1:])]}
@@ -845,6 +847,47 @@ def sampler_split(checks, window, switches, hourly, judged):
                        None if spilled else {"table_filled_after_seconds": out["table_filled_after_seconds"],
                                              "max_table_entries": out["max_table_entries"]})
     return out
+
+
+def soft_timeout(window, switches):
+    """X-soft-key: CR-SOFT-TIMEOUT's pair (docs/metrics.md) in a soft segment, over sampling
+    minutes only. A scrape interval samples when the start suppression reads 0 at both ends
+    and sampler-full time (rule 6.4's) didn't grow in it; the rest are stalled minutes. Soft
+    queries and late replies per hour, late ÷ soft and soft ÷ peer-lookup queries come from
+    the sampling intervals alone. Reported, never decided on; an absent series reads absent."""
+    def at(r, name, **labels):
+        return get(r["snap"], name, **labels)
+
+    names = {"soft": (SOFT["soft"], {}), "late": (SOFT["late"], {}),
+             "peer_lookup_queries": (LEDGER["queries"], {"purpose": collect.LEDGER_PEER_PURPOSE})}
+    sums, absent = {k: 0 for k in names}, set()
+    sampling = stalled = 0.0
+    for a, b in zip(window, window[1:]):
+        minutes = (b["e"] - a["e"]) / 60
+        held = any((at(r, "dht_sample_suppression_seconds") or 0) > 0 for r in (a, b))
+        full = optional_delta(a, b, SPLIT["full_seconds"])
+        if full is None:
+            absent.add("sampler_full_seconds")  # can't tell stalled from sampling: counted as sampling
+        if held or (full or 0) > 0:
+            stalled += minutes
+            continue
+        sampling += minutes
+        for k, (name, labels) in names.items():
+            d = optional_delta(a, b, name, **labels)
+            if d is None:
+                absent.add(k)
+            else:
+                sums[k] += d
+    parts = {k: (None if k in absent else v) for k, v in sums.items()}
+    soft, late, queries = parts["soft"], parts["late"], parts["peer_lookup_queries"]
+    hours = sampling / 60
+    return {"on": bool(switches.get("soft_timeout")), "sampling_minutes": round(sampling, 3),
+            "stalled_minutes": round(stalled, 3), **parts,
+            "soft_per_hour": soft / hours if soft is not None and hours else None,
+            "late_per_hour": late / hours if late is not None and hours else None,
+            "late_per_soft": late / soft if late is not None and soft else None,
+            "soft_per_peer_query": soft / queries if soft is not None and queries else None,
+            "absent": sorted(absent)}
 
 
 def mechanism_deltas(a, b):
@@ -1040,6 +1083,13 @@ def markdown(report):
                   + (f"; {split['spill_check'].replace('_', ' ')}" if "spill_check" in split else "")
                   + f"; sampler-full {f(split['sampler_full_seconds'])} s; peak spill slots {f(split['max_spill_slots'])}"
                   + (f"; absent: {', '.join(split['absent'])}" if split["absent"] else "") + ".", ""]
+    soft = report.get("soft_timeout")
+    if report.get("treatment") == "soft" and soft:
+        lines += ["## Soft timeout", "", f"On: {str(soft['on']).lower()}; over {f(soft['sampling_minutes'])} sampling "
+                  f"min ({f(soft['stalled_minutes'])} stalled): soft {f(soft['soft_per_hour'])}/h, late "
+                  f"{f(soft['late_per_hour'])}/h, late ÷ soft {f(soft['late_per_soft'], 4)}, soft ÷ peer-lookup "
+                  f"queries {f(soft['soft_per_peer_query'], 4)}"
+                  + (f"; absent: {', '.join(soft['absent'])}" if soft["absent"] else "") + ".", ""]
     num = report.get("numerator")
     if num:
         w = num["window"]
@@ -1156,7 +1206,9 @@ def segment_view(report):
             "clean_stop": report.get("clean_stop"), "guardrails": report.get("guardrails") or {},
             "minutes": w.get("minutes"), "winners": report.get("winners"),
             "ledger": (report.get("ledger") or {}).get("window"),
-            "hint_first": report.get("hint_first"), "sampler_split": report.get("sampler_split")}
+            "hint_first": report.get("hint_first"), "sampler_split": report.get("sampler_split"),
+            # X-soft-key: a soft segment's only, so every other view stays byte-identical.
+            **({"soft_timeout": report["soft_timeout"]} if "soft_timeout" in report else {})}
 
 
 # A block's recorded order (block.env's MODE, X-fleet-baab) as the arm letters; infra/fleet's
@@ -1322,6 +1374,11 @@ def analyze_effect(treatment, block_reports, winners=None, designs=None, aa=Fals
         out["split_not_exercised_b_segments"] = len(idle)
         if out["sampler_split_by_arm"]["B"] and len(idle) == len(out["sampler_split_by_arm"]["B"]):
             out["warnings"] = [SPLIT_NOT_EXERCISED]
+    if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair per arm, over sampling minutes; never decided on
+        out["soft_timeout_by_arm"] = stage3_by_arm(valid, "soft_timeout",
+                                                   ("sampling_minutes", "stalled_minutes", "soft_per_hour",
+                                                    "late_per_hour", "late_per_soft", "soft_per_peer_query",
+                                                    "absent"))
     if len(controls) > 1:
         out.update(outcome="invalid", decided=False,
                    reason="the control's switch set differs between blocks of this treatment (r5.1 A2)")
@@ -1399,7 +1456,7 @@ def ledger_by_arm(blocks):
 
 def stage3_by_arm(blocks, key, fields):
     """Stage 3's per-segment report fields for each valid segment, by arm. Reported, not fitted."""
-    return {arm: [{k: (s[key] or {}).get(k) for k in fields}
+    return {arm: [{k: (s.get(key) or {}).get(k) for k in fields}
                   for b in blocks for s, a in zip(b["segments"], b["order"]) if a == arm and s["verdict"] == "valid"]
             for arm in "AB"}
 

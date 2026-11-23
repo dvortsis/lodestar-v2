@@ -353,9 +353,21 @@ class Rules(unittest.TestCase):
                 remote.payload({}, a)
         got = rules.parse(json.dumps(RULES).encode())  # absent: as before
         self.assertNotIn("WINNERS", rules.args(got, RC, "main", "42-1"))
-        for t in ("adm", "utp", "route", "lc", "hint", "split"):
+        for t in ("adm", "utp", "route", "lc", "hint", "split", "soft"):
             with self.subTest(treatment=t):
                 rules.parse(json.dumps({**RULES, "treatment": t}).encode())
+
+    def test_soft_is_stacked_and_never_its_own_winner(self):
+        """X-soft-key: `soft` runs alone or on top of winners (TREATMENT=soft WINNERS=adm),
+        and never with itself as a winner."""
+        for winners, want in (([], None), (["adm"], "adm"), (["adm", "lc"], "adm-lc")):
+            with self.subTest(winners=winners):
+                got = rules.parse(json.dumps({**RULES, "treatment": "soft", "winners": winners}).encode())
+                a = rules.args(got, RC, "main", "42-1")
+                self.assertEqual((a["TREATMENT"], a.get("WINNERS")), ("soft", want))
+        for winners in (["soft"], ["adm", "soft"]):
+            with self.subTest(winners=winners), self.assertRaises(remote.StepRefused):
+                rules.parse(json.dumps({**RULES, "treatment": "soft", "winners": winners}).encode())
 
     def test_bad_winners_refuse(self):
         for name, winners in {"an unknown key": ["turbo"], "a switch name": ["coordinated_admission"],
@@ -1720,10 +1732,10 @@ class Scrubber(unittest.TestCase):
                 "segments": [{"segment": 1, "arm": "control", "result": raw_result(), "report": raw_report(),
                               "log": "raw soak log " + PRIVATE[2]}]}
 
-    def test_treatment_and_winners_are_exactly_the_six_keys(self):
-        """X-fleet-stacked-arms: `treatment` and each of `winners` is one of the six keys;
+    def test_treatment_and_winners_are_exactly_the_seven_keys(self):
+        """X-fleet-stacked-arms: `treatment` and each of `winners` is one of the seven keys;
         anything else is dropped, and a winners list with any bad entry goes whole."""
-        for t in ("adm", "utp", "route", "lc", "hint", "split"):
+        for t in ("adm", "utp", "route", "lc", "hint", "split", "soft"):
             with self.subTest(treatment=t):
                 self.assertEqual(scrub.scrub({**self.doc(), "treatment": t})["treatment"], t)
         for t in ("turbo", "adm; reboot", "ADM", "", 1, None):
@@ -1732,7 +1744,7 @@ class Scrubber(unittest.TestCase):
         self.assertEqual(scrub.scrub({**self.doc(), "winners": ["adm", "utp"]})["winners"], ["adm", "utp"])
         self.assertEqual(scrub.scrub({**self.doc(), "winners": []})["winners"], [])
         for w in (["adm", "turbo"], ["utp", "utp"], "adm", ["free text " + PRIVATE[0]], [1], [["adm"]],
-                  ["adm"] * 7):
+                  ["adm"] * 8):
             with self.subTest(winners=w):
                 out = scrub.scrub({**self.doc(), "winners": w})
                 self.assertNotIn("winners", out)
@@ -2349,7 +2361,8 @@ class StackedArms(Base):
                     if ln.startswith("LODESTAR_DHT_"))
 
     def test_the_arms_differ_only_in_the_treatment(self):
-        for treatment, winners in (("lc", "adm-utp"), ("hint", "adm-lc"), ("adm", ""), ("split", None)):
+        for treatment, winners in (("lc", "adm-utp"), ("hint", "adm-lc"), ("adm", ""), ("split", None),
+                                   ("soft", "adm"), ("soft", "")):
             with self.subTest(treatment=treatment, winners=winners):
                 env = {"TREATMENT": treatment, **({} if winners is None else {"WINNERS": winners})}
                 b = self.arm(1, **env)  # segment 2, treatment
@@ -2370,6 +2383,7 @@ class StackedArms(Base):
                           ({"TREATMENT": "lc", "WINNERS": "utp-utp"}, "stacking_repeated_winner"),
                           ({"TREATMENT": "hint", "WINNERS": "utp-hint"}, "stacking_winner_is_treatment"),
                           ({"TREATMENT": "lc", "WINNERS": "lc"}, "stacking_winner_is_treatment"),
+                          ({"TREATMENT": "soft", "WINNERS": "adm-soft"}, "stacking_winner_is_treatment"),
                           # A stage-1 treatment takes no winners (r5.1 A2).
                           ({"WINNERS": "utp"}, "stacking_winners_need_stacked_treatment"),
                           ({"TREATMENT": "route", "WINNERS": "adm-utp"}, "stacking_winners_need_stacked_treatment"),

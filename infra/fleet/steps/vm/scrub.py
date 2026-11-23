@@ -83,20 +83,20 @@ SWITCHES = {k: opt(boolean) for k in ("safe_restart", "coordinated_admission", "
                                        "streaming_peers", "target_prefixes", "utp", "route_backoff",
                                        # Stages 2 and 3, recorded since CR-COL-5/6 (a stacked block's winners).
                                        "lookup_end", "preset_slots", "hint_first", "sampler_cooldown_split",
-                                       "sample_backoff_escalate")}
+                                       "sample_backoff_escalate", "soft_timeout")}
 # The treatment keys (block-lib.sh's TREATMENT_KEYS), exactly; anything else is dropped.
-TREATMENT_KEYS = ("adm", "utp", "route", "lc", "hint", "split")
+TREATMENT_KEYS = ("adm", "utp", "route", "lc", "hint", "split", "soft")
 treatment_key = one_of(*TREATMENT_KEYS)
 
 
 # The stacked treatments (the collector's STACKED; block-lib.sh's STACKED_KEYS): a
 # segment of theirs is analysed against the earlier winners (r5.1 A2).
-STACKED_KEYS = ("lc", "hint", "split")
+STACKED_KEYS = ("lc", "hint", "split", "soft")
 # Each key's switches as analyze_cr.py's --winners names them (the collector's
 # TREATMENT_SWITCHES; a test pins this to block-lib.sh's switches_of).
 WINNER_NAMES = {"adm": ("coordinated_admission",), "utp": ("utp",), "route": ("route_backoff",),
                 "lc": ("lookup_end", "preset_slots"), "hint": ("hint_first",),
-                "split": ("sampler_cooldown_split",)}
+                "split": ("sampler_cooldown_split",), "soft": ("soft_timeout",)}
 _NAMES = frozenset(n for names in WINNER_NAMES.values() for n in names)
 
 
