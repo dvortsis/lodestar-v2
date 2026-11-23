@@ -67,6 +67,7 @@ export const hit = (over: Partial<Hit> = {}): Hit => ({
 	metadata_at: 1_700_000_100,
 	name: 'Show.S01.1080p.WEB-DL-GRP',
 	piece_len: 4_194_304,
+	resolution: null,
 	resolved_via: null,
 	score: 1,
 	seeders: 120,

@@ -125,6 +125,7 @@
 	"search_table_col_name": "名称",
 	"search_table_col_raw": "原始名称",
 	"search_table_col_type": "类型",
+	"search_table_col_res": "分辨率",
 	"search_table_col_size": "大小",
 	"search_table_col_files": "文件数",
 	"search_table_columns": "列",

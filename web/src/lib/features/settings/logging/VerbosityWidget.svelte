@@ -19,7 +19,7 @@
 	};
 </script>
 
-<div id={controlProps.id} aria-describedby={controlProps['aria-describedby']}>
+<div class="verb" id={controlProps.id} aria-describedby={controlProps['aria-describedby']}>
 	<SegmentedControl
 		label={fieldLabel(f.spec)}
 		options={VERBOSITY.map((value) => ({ value, label: LABELS[value]!(), disabled: f.locked }))}
@@ -28,3 +28,12 @@
 		class="flex-wrap"
 	/>
 </div>
+
+<style>
+	/* Below 640 px the five long labels are a list, one per row, not a ragged wrap. */
+	@media (width < 40rem) {
+		.verb :global(div) {
+			display: grid;
+		}
+	}
+</style>

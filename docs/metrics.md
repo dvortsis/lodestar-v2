@@ -256,6 +256,7 @@ omitted). Times are Unix seconds. Status: **main** = served on `main` today;
 | `name` | string | no | Raw name (decoded) | main |
 | `title` | string | yes | Resolved title; null = not resolved | main on search hits (B5a); planned on detail |
 | `resolved_via` | string | yes: null = the name was informative (no resolution) | "resolved via …": `files`, `folder`, `structure` (`classify::ResolvedVia::as_str`); `plugin` arrives with §18 | main on search hits (B5a); planned on detail |
+| `resolution` | string | yes: null = none in the name, or not classified | Resolution: the release parser's value, exactly as `res:` takes it (`480p`, `576p`, `720p`, `1080i`, `1080p`, `1440p`, `2160p`, `4320p`; aliases such as `4k`, `8k` or a bare `1080` arrive in this form) | main on search hits (X-hit-resolution); not on detail |
 | `size` | integer (bytes) | no | Size | main |
 | `files` | integer | no | Files | main |
 | `piece_len` | integer (bytes) | no | Piece size | main |

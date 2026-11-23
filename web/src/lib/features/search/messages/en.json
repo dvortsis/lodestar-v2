@@ -125,6 +125,7 @@
 	"search_table_col_name": "Name",
 	"search_table_col_raw": "Raw name",
 	"search_table_col_type": "Type",
+	"search_table_col_res": "Resolution",
 	"search_table_col_size": "Size",
 	"search_table_col_files": "Files",
 	"search_table_columns": "Columns",

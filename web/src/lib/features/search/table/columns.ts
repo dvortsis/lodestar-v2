@@ -5,6 +5,7 @@ export const COLUMN_IDS = [
 	'name',
 	'raw',
 	'type',
+	'res',
 	'size',
 	'files',
 	'seeders',
@@ -37,6 +38,9 @@ export const NUMERIC: ReadonlySet<ColumnId> = new Set([
 /** The name is the row's header: it can't be hidden. */
 export const REQUIRED: ColumnId = 'name';
 
+/** Columns added after the first release of table mode: hidden for a choice saved before them. */
+const ADDED: readonly ColumnId[] = ['raw', 'res'];
+
 export const STORAGE_KEY = 'lodestar.search.columns';
 
 export const defaultPrefs = (): ColumnPrefs => ({ order: [...COLUMN_IDS], hidden: ['leechers'] });
@@ -50,13 +54,14 @@ export function normalize(raw: unknown): ColumnPrefs {
 	if (typeof raw !== 'object' || raw === null) return base;
 	const o = raw as Record<string, unknown>;
 	const order = ids(o.order);
-	// Saved choices win: a store from before the Raw name column keeps its columns as they were.
-	const before = order.length > 0 && !order.includes('raw');
+	// Saved choices win: a store from before a column (Raw name, Resolution) keeps its columns as
+	// they were, so that column arrives hidden. Without a store, or with one that knows it, it shows.
+	const added = order.length > 0 ? ADDED.filter((id) => !order.includes(id)) : [];
 	for (const id of COLUMN_IDS) if (!order.includes(id)) order.push(id);
 	const hidden = Array.isArray(o.hidden)
 		? ids(o.hidden).filter((id) => id !== REQUIRED)
 		: base.hidden;
-	if (before && !hidden.includes('raw')) hidden.push('raw');
+	for (const id of added) if (!hidden.includes(id)) hidden.push(id);
 	return { order, hidden };
 }
 

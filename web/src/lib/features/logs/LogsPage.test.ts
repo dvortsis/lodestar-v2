@@ -86,4 +86,28 @@ describe('LogsPage', () => {
 		await fireEvent.keyDown(document.body, { key: '/' });
 		expect(document.activeElement).toBe(screen.getByLabelText('Filter text'));
 	});
+
+	it('shows the level and filter labels, and a check on the components that are on', async () => {
+		const { container } = render(LogsPage);
+		await waitFor(() => expect(screen.getByText(/window\.__pwned/)).toBeTruthy());
+		expect(container.querySelector('span.text-caption')?.textContent).toBe('Minimum level');
+		const chip = screen.getByRole('button', { name: 'dht' });
+		expect(chip.querySelector('svg')).toBeNull();
+		await fireEvent.click(chip);
+		expect(chip.getAttribute('aria-pressed')).toBe('true');
+		expect(chip.querySelector('svg')).toBeTruthy();
+	});
+
+	it('leaves wrapping to CSS until the toggle is pressed, then forces it', async () => {
+		const { container } = render(LogsPage);
+		await waitFor(() => expect(screen.getByText(/window\.__pwned/)).toBeTruthy());
+		const line = () => container.querySelector('.logs-line')!;
+		expect(line().classList.contains('logs-wrap')).toBe(false);
+		expect(line().classList.contains('logs-one')).toBe(false);
+		const toggle = screen.getByRole('button', { name: 'Wrap lines' });
+		await fireEvent.click(toggle);
+		await waitFor(() =>
+			expect(container.querySelector('.logs-line')!.className).toMatch(/logs-(wrap|one)/)
+		);
+	});
 });

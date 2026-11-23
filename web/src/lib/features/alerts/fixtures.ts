@@ -42,6 +42,7 @@ export const hit = (n: number, over: Partial<Hit> = {}): Hit => ({
 	metadata_at: T0,
 	name: `Lantern.Keeper.${n}`,
 	piece_len: 16384,
+	resolution: null,
 	resolved_via: null,
 	score: 0,
 	seeders: 40,
