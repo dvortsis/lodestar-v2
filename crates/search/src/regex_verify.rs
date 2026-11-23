@@ -66,6 +66,18 @@ thread_local! {
     static BUDGET: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
 }
 
+thread_local! {
+    static CANCEL_AT_SEAL: std::cell::RefCell<Option<CancelToken>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// For tests: cancel `token` when the next [`seal`] on this thread starts,
+/// as a run's budget running out mid-verify would (`api`'s live queries).
+#[doc(hidden)]
+pub fn cancel_at_next_seal_on_this_thread(token: CancelToken) {
+    CANCEL_AT_SEAL.with(|t| *t.borrow_mut() = Some(token));
+}
+
 /// For tests, here and in the crates that percolate (`lodestar`): the
 /// budget searches compiled on this thread start, `None` for
 /// [`VERIFY_BUDGET`]. A `Duration::ZERO` makes every verify stop.
@@ -589,9 +601,16 @@ pub(crate) struct Shared(HashMap<(String, Option<Field>), RegexQuery>);
 impl Shared {
     pub(crate) fn of(query: &dyn Query) -> Shared {
         let mut map = HashMap::new();
+        // A pattern in the query twice keeps a stopped clause over a
+        // whole one, so nothing reusing it reports whole while the lease
+        // reports stopped.
         each_clause(query, &mut |r| {
-            map.entry((r.source.clone(), r.trigram))
+            let kept = map
+                .entry((r.source.clone(), r.trigram))
                 .or_insert_with(|| r.clone());
+            if r.stopped() && !kept.stopped() {
+                *kept = r.clone();
+            }
         });
         Shared(map)
     }
@@ -632,6 +651,9 @@ pub(crate) fn seal_where(
     cancel: &CancelToken,
     only: &dyn Fn(&SegmentReader) -> bool,
 ) -> crate::index::Result<()> {
+    if let Some(token) = CANCEL_AT_SEAL.with(|t| t.borrow_mut().take()) {
+        token.cancel();
+    }
     let mut out = Ok(());
     each_clause(query, &mut |r| {
         if out.is_ok() {
@@ -736,6 +758,28 @@ mod tests {
         let all = RegexQuery::new("needle", f.name, None, Instant::now() + VERIFY_BUDGET);
         assert!(all.prepared().unwrap().prefilter.is_none());
         assert_eq!(docs(&s, &all), [0, 2]);
+    }
+
+    /// A pattern twice in one query: what reuses it shares the stopped
+    /// clause, not the whole one.
+    #[test]
+    fn shared_clauses_prefer_a_stopped_one() {
+        let (s, f) = index(&["needle"]);
+        let whole = query("needle", &f, VERIFY_BUDGET);
+        let cut = query("needle", &f, Duration::ZERO);
+        let q = BooleanQuery::new(vec![
+            (Occur::Should, Box::new(whole.clone()) as Q),
+            (Occur::Should, Box::new(cut.clone()) as Q),
+        ]);
+        let _ = docs(&s, &q);
+        assert!(!whole.stopped() && cut.stopped());
+        let shared = Shared::of(&q);
+        assert!(
+            shared
+                .get("needle", Some(f.name_trigram))
+                .unwrap()
+                .stopped()
+        );
     }
 
     #[test]

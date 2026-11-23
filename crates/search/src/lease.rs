@@ -12,8 +12,8 @@
 //! none verifies again (RX-1, S8-10). [`Leases`] keeps them under random
 //! ids for [`LeaseConfig::ttl`] from their last use, bounded in number
 //! overall and per client, and in the regex matches they hold
-//! ([`LeaseConfig::max_regex_bytes`]), the least recently used going
-//! first. A retired index stays open (and on disk) until its last
+//! ([`LeaseConfig::max_regex_bytes`], each client at most a quarter of
+//! it), the least recently used going first. A retired index stays open (and on disk) until its last
 //! lease is gone.
 
 use std::cmp::{Ordering as Cmp, Reverse};
@@ -1340,7 +1340,9 @@ impl Leases {
     /// the limit), so no client can push out another's while under its
     /// share. Only with more than four clients near their shares can the
     /// total still be over; then the least recently used lease of the
-    /// client holding the most goes. Returns what it removed.
+    /// client that will hold the most goes (the incoming lease counted
+    /// for its own; on a tie the inserter's, then the client whose least
+    /// recently used is oldest). Returns what it removed.
     fn make_regex_room(
         &self,
         map: &mut HashMap<LeaseId, Slot>,
@@ -1369,16 +1371,24 @@ impl Leases {
             gone.extend(map.remove(&id));
         }
         while held(map, None).saturating_add(bytes) > max {
+            // Each client by what it will hold, the incoming lease
+            // counted for its own: the most first, the inserter first of
+            // equals, then whose least recently used is oldest.
             let mut by_client: HashMap<u64, usize> = HashMap::new();
             for s in map.values() {
                 *by_client.entry(s.client).or_default() += s.lease.regex_bytes;
             }
-            let Some(id) = by_client
-                .into_iter()
-                .filter(|(_, b)| *b > 0)
-                .max_by_key(|(c, b)| (*b, *c == client))
-                .and_then(|(c, _)| lru_regex(map, c))
-            else {
+            *by_client.entry(client).or_default() += bytes;
+            let oldest = |c: u64| {
+                map.values()
+                    .filter(|s| s.client == c && s.lease.regex_bytes > 0)
+                    .map(|s| s.used)
+                    .min()
+            };
+            let mut order: Vec<(u64, usize)> =
+                by_client.into_iter().filter(|(_, b)| *b > 0).collect();
+            order.sort_by_key(|&(c, b)| (Reverse(b), c != client, oldest(c)));
+            let Some(id) = order.iter().find_map(|&(c, _)| lru_regex(map, c)) else {
                 break;
             };
             gone.extend(map.remove(&id));

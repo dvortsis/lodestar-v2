@@ -125,6 +125,12 @@ pub struct Percolation {
     /// Searches whose `/…/` verify stopped at its regex budget, by id
     /// (S8-12). They keep their watermark and run again next time.
     pub regex_stopped: Vec<i64>,
+    /// The search the run's token stopped while its `/…/` verify was
+    /// partial, by id: the run stopped there (`stopped`), and its regex
+    /// was part of why. A caller whose entries take only what's left of
+    /// a run's budget (live queries) treats it as [`Self::regex_stopped`],
+    /// so a heavy pattern can't be first in every run.
+    pub regex_cut: Vec<i64>,
 }
 
 impl Percolation {
@@ -280,6 +286,9 @@ pub fn percolate(
         };
         match collect(&searcher, &q, &collector, (d.watermark, end), cancel) {
             Ok(_) if stopped.load(Ordering::Relaxed) => {
+                if crate::regex_verify::query_stopped(&q) {
+                    out.regex_cut.push(d.id);
+                }
                 out.stopped = true;
                 break;
             }

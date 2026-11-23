@@ -205,8 +205,10 @@ impl Seen {
     }
 
     /// Forgets the regex waits and warnings of saved searches not in
-    /// `regex` (deleted, or saved again without a `/…/` term), so the
-    /// maps hold only searches that can still stop.
+    /// `regex` (deleted, saved again without a `/…/` term, or paused), so
+    /// the maps hold only searches that can still stop. A paused search's
+    /// wait starts over when it's resumed, which is accepted: it runs at
+    /// once, and waits again only if it stops again.
     fn prune_regex(&mut self, regex: &HashSet<i64>) {
         self.regex_backoff.retain(|id, _| regex.contains(id));
         self.regex_warned.retain(|id, _| regex.contains(id));

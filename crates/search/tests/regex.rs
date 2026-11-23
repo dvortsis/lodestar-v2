@@ -272,6 +272,10 @@ fn slashes_delimit_a_regex_only_where_a_pattern_can_start_and_end() {
     assert!(words("x /"));
     assert!(words("/ "));
     assert!(words("(x /)"));
+    // A `/` before `)` never opens one, even with a `/` further on.
+    assert!(words("(x /) y/"));
+    let n = parse("(x /) y/").unwrap();
+    assert_eq!(parse(&n.to_query()).unwrap(), n);
     // Unclosed, it's plain words too, and the word renders back as itself.
     for q in ["/abc", "x /abc", "/usr", "movies /2023", "/a/b/c"] {
         let n = parse(q).unwrap();
@@ -391,6 +395,62 @@ fn a_lease_keeps_only_its_verified_matches_and_charges_them() {
     for (id, client) in [(a, 1), (c, 1), (other, 2), (other2, 2)] {
         assert!(leases.get(&id, client).is_ok());
     }
+
+    // Past the total with five clients each within its share: the least
+    // recently used lease of the client that will hold the most goes. A
+    // share of one lease: clients 1 to 4 hold one each, client 1 is used
+    // again, and client 5's makes five against room for four. All hold
+    // one (client 5 its incoming one, but it has none to give), so the
+    // oldest of the others' goes: client 2's.
+    let total = |leases: &Leases, ids: &[(lodestar_search::LeaseId, u64)]| {
+        ids.iter()
+            .filter_map(|(id, c)| leases.get(id, *c).ok())
+            .map(|l| l.regex_bytes())
+            .sum::<usize>()
+    };
+    let max = 4 * bytes + 3;
+    let leases = Leases::new(LeaseConfig {
+        max_regex_bytes: max,
+        ..LeaseConfig::default()
+    });
+    let mut held: Vec<(lodestar_search::LeaseId, u64)> =
+        (1..=4).map(|c| (leases.insert(at_cap(), c), c)).collect();
+    leases.get(&held[0].0, 1).unwrap();
+    held.push((leases.insert(at_cap(), 5), 5));
+    let alive: Vec<u64> = held
+        .iter()
+        .filter(|(id, c)| leases.get(id, *c).is_ok())
+        .map(|(_, c)| *c)
+        .collect();
+    assert_eq!(alive, [1, 3, 4, 5]);
+    assert!(total(&leases, &held) <= max);
+    // The incoming lease counts for its inserter: with a share of two,
+    // clients 1 to 4 hold two each, and client 5's second insert leaves
+    // it at two too, so on the tie its own first lease goes, not
+    // another client's.
+    let max = 8 * bytes + 3;
+    let leases = Leases::new(LeaseConfig {
+        max_regex_bytes: max,
+        ..LeaseConfig::default()
+    });
+    let mut held: Vec<(lodestar_search::LeaseId, u64)> = Vec::new();
+    for c in 1..=4 {
+        for _ in 0..2 {
+            held.push((leases.insert(at_cap(), c), c));
+        }
+    }
+    let first5 = leases.insert(at_cap(), 5);
+    // That one pushed out the oldest of a client with two: client 1's
+    // first.
+    assert!(leases.get(&held[0].0, 1).is_err());
+    let second5 = leases.insert(at_cap(), 5);
+    assert!(leases.get(&first5, 5).is_err(), "the inserter's own went");
+    assert!(leases.get(&second5, 5).is_ok());
+    for (id, c) in &held[1..] {
+        assert!(leases.get(id, *c).is_ok(), "client {c} kept its leases");
+    }
+    held.push((second5, 5));
+    assert!(total(&leases, &held) <= max);
 }
 
 fn arb_name() -> impl Strategy<Value = String> {

@@ -495,7 +495,16 @@ pub fn percolate_live(
         .collect();
     let p = percolate(index, &entries, through, limits, now, cancel)?;
     let ran_keys: Vec<i64> = p.matched.iter().map(|m| m.id).collect();
-    live.regex_ran(&p.regex_stopped, &ran_keys);
+    // A pattern the run's budget cut waits as one that ran out of its own
+    // time does: live entries get only what saved searches left of the
+    // budget, so it would otherwise be first, and cut, every pass.
+    let waits: Vec<i64> = p
+        .regex_stopped
+        .iter()
+        .chain(&p.regex_cut)
+        .copied()
+        .collect();
+    live.regex_ran(&waits, &ran_keys);
     let from: HashMap<i64, i64> = due.iter().map(|d| (d.key, d.watermark)).collect();
     let ran: Vec<(i64, i64, i64, u64)> = p
         .matched
@@ -506,7 +515,9 @@ pub fn percolate_live(
     Ok(LiveRun {
         ran: ran.len(),
         matched: ran.iter().map(|r| r.3).sum(),
-        more: p.more(),
+        // A stop that cut a pattern isn't more to do at once: that entry
+        // waits now, and the others run on the next commit or poll.
+        more: p.capped > 0 || (p.stopped && p.regex_cut.is_empty()),
     })
 }
 
@@ -1127,6 +1138,32 @@ mod tests {
         assert_eq!((run.ran, run.more), (1, false));
         assert_eq!(matched(&l, &slow), 2);
         assert!(l.lock().regs.iter().all(|r| r.regex_wait.is_none()));
+    }
+
+    /// After saved searches ran, a live pattern gets only what's left of
+    /// the run's budget. Cut by that budget mid-verify, it waits too, and
+    /// the pass doesn't report `more`.
+    #[test]
+    fn a_live_regex_cut_by_the_runs_budget_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = corpus(dir.path());
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+        let (_, l) = live(LiveConfig::default());
+        let slow = l.register(1, &q("/movie/"), false, 0, 0).unwrap().id;
+        // The run's token stops as the pattern starts verifying.
+        let run_token = CancelToken::new();
+        lodestar_search::regex_verify::cancel_at_next_seal_on_this_thread(run_token.clone());
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true).unwrap();
+        assert_eq!((run.ran, run.more), (0, false));
+        assert_eq!(matched(&l, &slow), 0);
+        let key = l.lock().regs.iter().find(|r| r.id == slow).unwrap().key;
+        assert!(
+            l.due().iter().all(|d| d.key != key),
+            "not due before its wait"
+        );
     }
 
     // The endpoints.
