@@ -1452,13 +1452,7 @@ mod tests {
             (err["start"].as_u64(), err["end"].as_u64()),
             (Some(16), Some(19))
         );
-        assert!(
-            err["message"]
-                .as_str()
-                .unwrap()
-                .starts_with("Use at most 4 /regex/ terms in one search"),
-            "{body}"
-        );
+        assert_eq!(err["message"], "Use at most 4 /regex/ terms in one search.");
         // A refused pattern gives its own.
         let e = request_ast(None, Some("/a(b/".to_owned())).unwrap_err();
         assert_eq!(e.body()["error"]["reason"], "regex_syntax");

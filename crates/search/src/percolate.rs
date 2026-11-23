@@ -568,6 +568,31 @@ mod tests {
         assert_eq!(p.matched[2].torrent_ids, rare);
     }
 
+    /// Each search's regex clauses get a budget of their own: one the
+    /// run's token already spent leaves the second regex search whole.
+    #[test]
+    fn each_search_keeps_its_own_regex_budget() {
+        let (index, _) = index_with(300, 4);
+        let regex = parse(r"/\brare\b/").unwrap();
+        let due = |id| Due {
+            id,
+            watermark: 0,
+            query: &regex,
+            utc_offset: 0,
+            count_only: false,
+            stems: false,
+            stoppable: false,
+            hold_unresolved: true,
+        };
+        let run = CancelToken::new();
+        run.regex_deadline(Duration::ZERO);
+        let p = percolate(&index, &[due(1), due(2)], 300, ALL, 0, &run).unwrap();
+        assert!(p.regex_stopped.is_empty(), "{:?}", p.regex_stopped);
+        let rare = expected("rare", 300, 0, 300);
+        assert_eq!(p.matched.len(), 2);
+        assert!(p.matched.iter().all(|m| m.torrent_ids == rare));
+    }
+
     #[test]
     fn only_the_range_matches_highest_first() {
         let (index, _) = index_with(300, 4);

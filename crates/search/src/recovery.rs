@@ -135,10 +135,10 @@ fn total(
 ) -> Result<Option<Total>> {
     let index = lease.index();
     let searcher = lease.searcher();
-    let at = Some(searcher.generation().generation_id());
     let count = |stems| -> Result<Option<Total>> {
-        let compiled =
-            index.compile_at(node, lease.now(), lease.utc_offset(), stems, deadline, at)?;
+        // The lease's own `/…/` clauses where the pattern is the same:
+        // already verified, no budget spent again (RX-1).
+        let compiled = index.compile_on_lease(lease, node, stems, deadline)?;
         crate::regex_verify::seal(compiled.query.as_ref(), searcher, deadline)?;
         let total = count::total_with(searcher, &compiled, deadline, policy)?;
         Ok((!crate::regex_verify::stopped(&compiled)).then_some(total))

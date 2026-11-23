@@ -1401,6 +1401,44 @@ impl SearchIndex {
         cancel: &crate::CancelToken,
         snapshot: Option<u64>,
     ) -> Result<Compiled> {
+        self.compile_shared(node, now, utc_offset, stems, cancel, snapshot, None)
+    }
+
+    /// `node` compiled for `lease`'s snapshot, its `/…/` clauses reusing
+    /// the lease's where the pattern is the same: their verified matches
+    /// and their stop, with nothing verified again and no budget spent
+    /// (facet variants and recovery counts, RX-1). Counts on the lease
+    /// then agree with its own, however long after it was taken.
+    pub(crate) fn compile_on_lease(
+        &self,
+        lease: &crate::Lease,
+        node: &Node,
+        stems: bool,
+        cancel: &crate::CancelToken,
+    ) -> Result<Compiled> {
+        let shared = crate::regex_verify::Shared::of(lease.compiled().query.as_ref());
+        self.compile_shared(
+            node,
+            lease.now(),
+            lease.utc_offset(),
+            stems,
+            cancel,
+            Some(lease.searcher().generation().generation_id()),
+            Some(&shared),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_shared(
+        &self,
+        node: &Node,
+        now: i64,
+        utc_offset: i32,
+        stems: bool,
+        cancel: &crate::CancelToken,
+        snapshot: Option<u64>,
+        regex_shared: Option<&crate::regex_verify::Shared>,
+    ) -> Result<Compiled> {
         cancel.check()?;
         // The search's regex budget starts before anything is planned,
         // so planning and compiling its patterns count (S8-11).
@@ -1490,6 +1528,7 @@ impl SearchIndex {
             trigrams: regexes > 0
                 && self.availability_at("name_trigram", snapshot) == Availability::Ready,
             regex_deadline,
+            regex_shared,
         };
         // The parser refuses more than `MAX_REGEX_CLAUSES`; a stored node
         // over it isn't trusted, and matches nothing, verifying nothing

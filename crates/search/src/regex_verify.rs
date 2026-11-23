@@ -581,6 +581,28 @@ fn each_clause(query: &dyn Query, f: &mut dyn FnMut(&RegexQuery)) {
     }
 }
 
+/// A query's `/…/` clauses by pattern and prefilter field, for a query
+/// compiled later on the same snapshot to reuse ([`crate::compile::Cx::regex_shared`]).
+#[derive(Default)]
+pub(crate) struct Shared(HashMap<(String, Option<Field>), RegexQuery>);
+
+impl Shared {
+    pub(crate) fn of(query: &dyn Query) -> Shared {
+        let mut map = HashMap::new();
+        each_clause(query, &mut |r| {
+            map.entry((r.source.clone(), r.trigram))
+                .or_insert_with(|| r.clone());
+        });
+        Shared(map)
+    }
+
+    /// The kept clause for `pattern` with prefilter `trigram`: a clone
+    /// that shares its state.
+    pub(crate) fn get(&self, pattern: &str, trigram: Option<Field>) -> Option<RegexQuery> {
+        self.0.get(&(pattern.to_owned(), trigram)).cloned()
+    }
+}
+
 /// Whether any `/…/` clause of `query` stopped before verifying every
 /// candidate ([`RegexQuery::stopped`]): the results are then partial.
 /// The count is a lower bound, or an upper one for a negated clause.

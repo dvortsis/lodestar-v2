@@ -523,9 +523,9 @@ pub struct Facets {
     pub matches: u64,
     /// A `/…/` clause of the shared pass stopped at the search's regex
     /// budget (RX-1): `matches` and the histograms are what was verified
-    /// in time (the histograms say `approx` too). Each facet says so for
-    /// its own pass ([`TermCounts::partial`]).
-    pub partial: bool,
+    /// in time. Each facet says so for its own pass
+    /// ([`TermCounts::stopped`]).
+    pub stopped: bool,
 }
 
 impl Facets {
@@ -557,12 +557,14 @@ pub struct TermCounts {
     pub distinct: u64,
     /// Computed on a sample.
     pub approx: bool,
-    /// The counts are incomplete: the facet's field is still being
-    /// backfilled (the population contract; only `source`), so documents
-    /// it hasn't reached count under no value, or a `/…/` clause of the
-    /// query its pass ran stopped at the search's regex budget (RX-1),
-    /// so they're what was verified in time.
+    /// The facet's field is still being backfilled (the population
+    /// contract): documents it hasn't reached count under no value, so
+    /// the counts are low. Only `source` can be partial.
     pub partial: bool,
+    /// A `/…/` clause of the query its pass ran stopped at the search's
+    /// regex budget (RX-1): the counts are what was verified in time. Not
+    /// `partial`, which means a backfill.
+    pub stopped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -672,16 +674,7 @@ pub fn facets(
             policy.samples(lease.total().value, largest),
         )
     } else {
-        rebuilt = index.compile_at(
-            &full,
-            lease.now(),
-            lease.utc_offset(),
-            lease.stemmed(),
-            cancel,
-            Some(lease.searcher().generation().generation_id()),
-        )?;
-        // Its `/…/` clauses verify under this request's regex budget,
-        // the one the lease's search started when it's this request's.
+        rebuilt = index.compile_on_lease(lease, &full, lease.stemmed(), cancel)?;
         crate::regex_verify::seal(rebuilt.query.as_ref(), searcher, cancel)?;
         let estimate =
             count::estimate_with(searcher, &rebuilt, cancel, policy.segment_sample_above)?;
@@ -716,16 +709,12 @@ pub fn facets(
             variant = with_filters(variant, &[adult_class()]);
         }
         let variant = with_filters(variant, filters);
-        let compiled = index.compile_at(
-            &variant,
-            lease.now(),
-            lease.utc_offset(),
-            lease.stemmed(),
-            cancel,
-            Some(lease.searcher().generation().generation_id()),
-        )?;
-        // Variants (the adult pass among them) spend the same regex
-        // budget as the search, never a fresh one (S8-11).
+        // Its `/…/` clauses are the lease's own, already verified: no
+        // verify and no budget again, and counts that agree with the
+        // search's (RX-1).
+        let compiled = index.compile_on_lease(lease, &variant, lease.stemmed(), cancel)?;
+        // A clause the lease doesn't have (none, today: variants only drop
+        // facet clauses) verifies under what's left of its budget.
         crate::regex_verify::seal(compiled.query.as_ref(), searcher, cancel)?;
         let estimate =
             count::estimate_with(searcher, &compiled, cancel, policy.segment_sample_above)?;
@@ -791,18 +780,14 @@ pub fn facets(
         {
             counts.partial = !index.availability_in(field, lease).complete();
         }
-        counts.partial |= stopped[at];
+        counts.stopped = stopped[at];
         terms.push((f, counts));
     }
     let shared_tally = &tallies[0].1;
     let histograms = base
         .histos
         .iter()
-        .map(|h| {
-            let mut g = histogram(*h, shared_tally, params.first_run);
-            g.approx |= stopped[0];
-            (*h, g)
-        })
+        .map(|h| (*h, histogram(*h, shared_tally, params.first_run)))
         .collect();
     Ok(Facets {
         terms,
@@ -810,7 +795,7 @@ pub fn facets(
         sample_rate,
         unavailable,
         matches: shared_tally.docs.round() as u64,
-        partial: stopped[0],
+        stopped: stopped[0],
     })
 }
 
@@ -1353,6 +1338,7 @@ fn top(f: Facet, t: &Tally, selection: &[(String, bool)], limit: usize) -> TermC
         distinct,
         approx: t.sampled,
         partial: false,
+        stopped: false,
     }
 }
 

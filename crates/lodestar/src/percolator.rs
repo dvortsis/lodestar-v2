@@ -204,6 +204,14 @@ impl Seen {
         true
     }
 
+    /// Forgets the regex waits and warnings of saved searches not in
+    /// `regex` (deleted, or saved again without a `/…/` term), so the
+    /// maps hold only searches that can still stop.
+    fn prune_regex(&mut self, regex: &HashSet<i64>) {
+        self.regex_backoff.retain(|id, _| regex.contains(id));
+        self.regex_warned.retain(|id, _| regex.contains(id));
+    }
+
     /// Whether saved search `id` is waiting after a regex stop at `now`.
     fn regex_waiting(&self, id: i64, now: i64) -> bool {
         self.regex_backoff
@@ -239,6 +247,15 @@ pub fn run_once(
     now: i64,
     seen: &mut Seen,
 ) -> Result<Run, BoxError> {
+    if !seen.regex_backoff.is_empty() || !seen.regex_warned.is_empty() {
+        let regex: HashSet<i64> = store
+            .percolation_due(i64::MAX)?
+            .iter()
+            .filter(|s| serde_json::from_str::<Node>(&s.ast).is_ok_and(|n| n.has_regex()))
+            .map(|s| s.id)
+            .collect();
+        seen.prune_regex(&regex);
+    }
     let mut due = store.percolation_due(through)?;
     due.sort_by_key(|s| (s.watermark, s.id));
     let mut run = Run::default();
@@ -1695,6 +1712,48 @@ mod tests {
         assert_eq!(seen.regex_backoff[&3].1, REGEX_BACKOFF.1);
         seen.regex_ran(3);
         assert!(!seen.regex_waiting(3, 0));
+    }
+
+    /// A saved search deleted, or saved again without a `/…/` term, is
+    /// forgotten by the regex waits and warnings on the next run.
+    #[test]
+    fn regex_waits_are_forgotten_for_searches_gone_or_without_a_regex() {
+        let mut s = setup(4);
+        let gone = save(&mut s.store, "gone", "/show/", 0);
+        let plain = save(&mut s.store, "plain", "/show/", 0);
+        let kept = save(&mut s.store, "kept", "/show/", 0);
+        let mut seen = Seen::default();
+        for id in [gone, plain, kept] {
+            seen.regex_stopped(id, NOW);
+        }
+        s.store.delete_saved_search(gone).unwrap();
+        let p = s.store.saved_search(plain).unwrap().unwrap();
+        let ast = serde_json::to_string(&parse("show").unwrap()).unwrap();
+        s.store
+            .update_saved_search(
+                plain,
+                &SavedSearchInput {
+                    name: &p.name,
+                    query: "show",
+                    ast: &ast,
+                    sort: None,
+                    alert: p.alert,
+                    rss: p.rss,
+                    channels: 0,
+                    paused: false,
+                },
+                0,
+                0,
+            )
+            .unwrap();
+        run_once(&s.index, &mut s.store, None, 4, &quick(), NOW, &mut seen).unwrap();
+        let mut left: Vec<i64> = seen.regex_backoff.keys().copied().collect();
+        left.sort_unstable();
+        assert_eq!(left, [kept]);
+        assert_eq!(
+            seen.regex_warned.keys().copied().collect::<Vec<_>>(),
+            [kept]
+        );
     }
 
     /// Runs `f` with every regex verify on this thread out of time at

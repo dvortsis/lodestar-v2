@@ -1198,8 +1198,9 @@ pub struct LeaseConfig {
     /// Leases kept per client (session); past it, that client's least
     /// recently used goes.
     pub per_client: usize,
-    /// The regex matches all leases may hold ([`Lease::regex_bytes`]);
-    /// past it the least recently used go (S8-10). A lease is kept even
+    /// The regex matches all leases may hold ([`Lease::regex_bytes`]),
+    /// each client at most a quarter of it: past its share a client's own
+    /// least recently used regex leases go (S8-10). A lease is kept even
     /// when it alone is over it, until the next one comes.
     pub max_regex_bytes: usize,
 }
@@ -1310,22 +1311,8 @@ impl Leases {
         {
             gone.extend(map.remove(&id));
         }
-        let held =
-            |map: &HashMap<LeaseId, Slot>| map.values().map(|s| s.lease.regex_bytes).sum::<usize>();
-        // Only regex leases free regex bytes: the least recently used of
-        // them goes.
-        let lru_regex = |map: &HashMap<LeaseId, Slot>| {
-            map.iter()
-                .filter(|(_, s)| s.lease.regex_bytes > 0)
-                .min_by_key(|(_, s)| s.used)
-                .map(|(id, _)| *id)
-        };
         if lease.regex_bytes > 0 {
-            while held(&map).saturating_add(lease.regex_bytes) > self.config.max_regex_bytes
-                && let Some(id) = lru_regex(&map)
-            {
-                gone.extend(map.remove(&id));
-            }
+            gone.extend(self.make_regex_room(&mut map, client, lease.regex_bytes));
         }
         let id = loop {
             let id = self.new_id();
@@ -1345,6 +1332,58 @@ impl Leases {
         drop(map);
         drop(gone);
         id
+    }
+
+    /// Makes room for `bytes` more regex matches from `client`
+    /// ([`LeaseConfig::max_regex_bytes`]): its own least recently used
+    /// regex leases go first, until it's within its share (a quarter of
+    /// the limit), so no client can push out another's while under its
+    /// share. Only with more than four clients near their shares can the
+    /// total still be over; then the least recently used lease of the
+    /// client holding the most goes. Returns what it removed.
+    fn make_regex_room(
+        &self,
+        map: &mut HashMap<LeaseId, Slot>,
+        client: u64,
+        bytes: usize,
+    ) -> Vec<Slot> {
+        let max = self.config.max_regex_bytes;
+        let share = max / 4;
+        let held = |map: &HashMap<LeaseId, Slot>, of: Option<u64>| {
+            map.values()
+                .filter(|s| of.is_none_or(|c| s.client == c))
+                .map(|s| s.lease.regex_bytes)
+                .sum::<usize>()
+        };
+        // Only regex leases free regex bytes.
+        let lru_regex = |map: &HashMap<LeaseId, Slot>, of: u64| {
+            map.iter()
+                .filter(|(_, s)| s.client == of && s.lease.regex_bytes > 0)
+                .min_by_key(|(_, s)| s.used)
+                .map(|(id, _)| *id)
+        };
+        let mut gone = Vec::new();
+        while held(map, Some(client)).saturating_add(bytes) > share
+            && let Some(id) = lru_regex(map, client)
+        {
+            gone.extend(map.remove(&id));
+        }
+        while held(map, None).saturating_add(bytes) > max {
+            let mut by_client: HashMap<u64, usize> = HashMap::new();
+            for s in map.values() {
+                *by_client.entry(s.client).or_default() += s.lease.regex_bytes;
+            }
+            let Some(id) = by_client
+                .into_iter()
+                .filter(|(_, b)| *b > 0)
+                .max_by_key(|(c, b)| (*b, *c == client))
+                .and_then(|(c, _)| lru_regex(map, c))
+            else {
+                break;
+            };
+            gone.extend(map.remove(&id));
+        }
+        gone
     }
 
     /// `client`'s lease `id`, refreshed. An expired, evicted, unknown or

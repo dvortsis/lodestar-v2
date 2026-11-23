@@ -132,9 +132,6 @@ fn regex_literals_parse_and_render_back() {
 
 #[test]
 fn bad_regexes_are_refused_with_their_code_and_place() {
-    let e = parse("x /abc").unwrap_err();
-    assert_eq!((e.start, e.end), (2, 6));
-    assert!(e.message.contains("closing"), "{e}");
     assert!(parse("//").unwrap_err().message.contains("empty"));
     let e = parse("x /a(b/").unwrap_err();
     assert!(e.message.contains("regex_syntax"), "{e}");
@@ -222,12 +219,12 @@ fn a_query_holds_at_most_four_regexes() {
     let five = format!("{four} name:/e5/");
     let e = parse(&five).unwrap_err();
     assert_eq!(e.reason, Some(REGEX_TOO_MANY));
-    assert!(e.message.contains("at most 4 /regex/"), "{e}");
+    assert_eq!(e.message, "Use at most 4 /regex/ terms in one search.");
     // At the fifth.
     assert_eq!(&five[e.start..e.end], "name:/e5/");
     // Refused patterns carry their code as the reason too.
     assert_eq!(parse("/a(b/").unwrap_err().reason, Some("regex_syntax"));
-    assert_eq!(parse("/abc").unwrap_err().reason, None);
+    assert_eq!(parse("//").unwrap_err().reason, None);
 }
 
 #[test]
@@ -275,8 +272,13 @@ fn slashes_delimit_a_regex_only_where_a_pattern_can_start_and_end() {
     assert!(words("x /"));
     assert!(words("/ "));
     assert!(words("(x /)"));
-    // Still an error when it would delimit one but is unclosed or empty.
-    assert!(parse("/abc").is_err());
+    // Unclosed, it's plain words too, and the word renders back as itself.
+    for q in ["/abc", "x /abc", "/usr", "movies /2023", "/a/b/c"] {
+        let n = parse(q).unwrap();
+        assert!(!n.has_regex(), "{q}");
+        assert_eq!(parse(&n.to_query()).unwrap(), n, "{q}");
+    }
+    // Still an error when it delimits one but is empty.
     assert!(parse("// x").unwrap_err().message.contains("empty"));
     // `file:(…)` is looked inside, though the parser refuses one there.
     let stored = Node::File {
@@ -361,25 +363,34 @@ fn a_lease_keeps_only_its_verified_matches_and_charges_them() {
     );
     // Without a regex: nothing charged.
     assert_eq!(lease("show", &CancelToken::new()).regex_bytes(), 0);
-    // Leases charge it: past `max_regex_bytes` the least recently used
-    // regex lease goes.
+    // Leases charge it. Each client may hold a quarter of
+    // `max_regex_bytes`, here two leases' worth: a third pushes out its
+    // own least recently used, never another client's or a plain lease.
+    let at_cap = || Arc::new(lease(r"/show/ /s01/ /e/ /\d/", &CancelToken::new()));
+    let bytes = all.regex_bytes();
     let leases = Leases::new(LeaseConfig {
-        max_regex_bytes: all.regex_bytes() + 1,
+        max_regex_bytes: 4 * 2 * bytes + 3,
         ..LeaseConfig::default()
     });
     let plain = leases.insert(Arc::new(lease("show", &CancelToken::new())), 1);
-    let first = leases.insert(
-        Arc::new(lease(r"/show/ /s01/ /e/ /\d/", &CancelToken::new())),
-        1,
+    let other = leases.insert(at_cap(), 2);
+    let a = leases.insert(at_cap(), 1);
+    let b = leases.insert(at_cap(), 1);
+    // `a` is used again, so `b` is now the least recently used.
+    leases.get(&a, 1).unwrap();
+    let c = leases.insert(at_cap(), 1);
+    assert!(
+        leases.get(&b, 1).is_err(),
+        "its own least recently used went"
     );
-    let second = leases.insert(
-        Arc::new(lease(r"/show/ /s01/ /e/ /\d/", &CancelToken::new())),
-        1,
-    );
-    assert!(leases.get(&first, 1).is_err());
-    assert!(leases.get(&second, 1).is_ok());
-    // A lease without regex matches frees nothing, so it stays.
-    assert!(leases.get(&plain, 1).is_ok());
+    for (id, client) in [(a, 1), (c, 1), (other, 2), (plain, 1)] {
+        assert!(leases.get(&id, client).is_ok());
+    }
+    // Client 2, under its share, adds one without touching client 1's.
+    let other2 = leases.insert(at_cap(), 2);
+    for (id, client) in [(a, 1), (c, 1), (other, 2), (other2, 2)] {
+        assert!(leases.get(&id, client).is_ok());
+    }
 }
 
 fn arb_name() -> impl Strategy<Value = String> {
@@ -438,7 +449,8 @@ proptest! {
     fn slashy_text_round_trips(
         text in prop::collection::vec(
             prop::sample::select(vec![
-                "/", "a", "or", "(", ")", " ", "\"", "|", "\\", "name:", "x:", "-", "\0",
+                "/", "a", "or", "(", ")", " ", "\"", "|", "\\", "name:", "x:", "-", "\0", "2023",
+                "/2023", "/usr",
             ]),
             0..16,
         )

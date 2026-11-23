@@ -706,13 +706,13 @@ const REGEX_FIELD: &str = "name:/";
 /// regex parser). Returns the pattern and the byte after the closing `/`.
 ///
 /// `None` when the slashes don't delimit a pattern, and the text is plain
-/// words instead (`tv / movies / 1080p`, `/usr/bin`, a lone `/`): the
-/// opening `/` is followed by whitespace or the end, or the closing one
-/// by anything that doesn't end a word (whitespace, a parenthesis, a
-/// quote, `|`, the end). Ending exactly where a word would keeps a plain
-/// word from rendering as a pattern (`/or/` before `(` would otherwise
-/// come back as one, and a lone `/` at the end as an unclosed one). A literal that would
-/// delimit but is empty or never closed is an error.
+/// words instead (`tv / movies / 1080p`, `/usr/bin`, `/usr`, a lone `/`):
+/// the opening `/` is followed by whitespace, `)` or the end; the closing
+/// one by anything that doesn't end a word (whitespace, a parenthesis, a
+/// quote, `|`, the end); or there's no closing one. The rule: a plain word
+/// never renders as a pattern, so a pattern starts and ends exactly where
+/// a word could (`/or/` before `(` would otherwise come back as one). A
+/// literal that delimits but is empty (`//`) is an error.
 fn regex_literal(q: &str, open: usize) -> Result<Option<(String, usize)>, ParseError> {
     // What ends a word, as the lexer splits them (whitespace is ASCII
     // only): a pattern starts and ends exactly where a word could.
@@ -753,7 +753,9 @@ fn regex_literal(q: &str, open: usize) -> Result<Option<(String, usize)>, ParseE
             c => pattern.push(c),
         }
     }
-    err("regex without its closing '/'", open, q.len())
+    // Unclosed: plain words (`/usr`, `movies /2023`), as an unclosed
+    // pattern never is one.
+    Ok(None)
 }
 
 /// A regex leaf: the pattern checked under [`crate::regex`]'s limits,
@@ -983,8 +985,7 @@ impl Parser<'_> {
                     return Err(ParseError {
                         reason: Some(REGEX_TOO_MANY),
                         message: format!(
-                            "Use at most {MAX_REGEX_CLAUSES} /regex/ terms in one search \
-                             ({REGEX_TOO_MANY})."
+                            "Use at most {MAX_REGEX_CLAUSES} /regex/ terms in one search."
                         ),
                         start,
                         end,

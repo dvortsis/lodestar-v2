@@ -455,10 +455,17 @@ fn a_stopped_regex_search_and_its_facets_are_never_served_from_a_cache() {
     };
     let (cut, o) = cache.facets(&index, &fs, &spent()).unwrap();
     assert_eq!((cut.facets.matches, o), (0, Outcome::Miss));
-    assert!(cut.facets.terms.iter().all(|(_, t)| t.partial));
+    assert!(cut.facets.stopped);
+    assert!(
+        cut.facets
+            .terms
+            .iter()
+            .all(|(_, t)| t.stopped && !t.partial)
+    );
     let (whole, o) = cache.facets(&index, &fs, &CancelToken::new()).unwrap();
     assert_eq!((whole.facets.matches, o), (10, Outcome::Miss));
-    assert!(whole.facets.terms.iter().all(|(_, t)| !t.partial));
+    assert!(!whole.facets.stopped);
+    assert!(whole.facets.terms.iter().all(|(_, t)| !t.stopped));
     // On a search's lease, too.
     let search = cache
         .search(&index, &spec(&node, ""), &CancelToken::new())
@@ -470,4 +477,59 @@ fn a_stopped_regex_search_and_its_facets_are_never_served_from_a_cache() {
             .unwrap();
         assert_eq!(o, Outcome::Miss);
     }
+}
+
+/// RX-1: facets and recovery counts on a lease reuse its verified regex
+/// matches, so a "Show more" or a recovery count after the search's
+/// budget has run out still counts what the search found, unstopped.
+#[test]
+fn a_leases_facets_and_recovery_reuse_its_regex_matches_after_its_budget() {
+    let (_store, index, _w) = fixture(30);
+    let cache = ResultCache::default();
+    let node = parse("/night/ ext:mkv").unwrap();
+    // A short budget for the search, then wait it out.
+    let budget = Duration::from_millis(200);
+    lodestar_search::regex_verify::set_budget_on_this_thread(Some(budget));
+    let started = Instant::now();
+    let search = cache
+        .search(&index, &spec(&node, ""), &CancelToken::new())
+        .unwrap()
+        .0;
+    lodestar_search::regex_verify::set_budget_on_this_thread(None);
+    assert!(!search.lease.regex_stopped());
+    assert_eq!(search.lease.total().value, 10);
+    let waited = Instant::now() + Duration::from_secs(10);
+    while started.elapsed() <= budget {
+        assert!(Instant::now() < waited, "the budget never passed");
+        std::thread::yield_now();
+    }
+    let params = FacetParams::default();
+    let fs = FacetSpec {
+        query: &node,
+        node: &node,
+        filters: &[],
+        params: &params,
+        scope: "",
+        sort: Sort::Relevance,
+        now: NOW,
+        utc_offset: 0,
+    };
+    let (got, _) = cache
+        .facets_on(&index, &search.lease, &fs, &CancelToken::new())
+        .unwrap();
+    let ext = got.facets.term(lodestar_search::Facet::Ext).unwrap();
+    assert!(!got.facets.stopped && !ext.stopped);
+    let mkv = ext.values.iter().find(|v| v.value == "mkv").unwrap();
+    assert_eq!(mkv.count, 10);
+    // Recovery: each removal still holds the regex, counted in full.
+    let removals = [parse("/night/").unwrap(), parse("ext:mkv").unwrap()];
+    let totals = lodestar_search::recovery::totals_on(
+        &search.lease,
+        &removals,
+        &CancelToken::new(),
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    let values: Vec<Option<usize>> = totals.iter().map(|t| t.map(|t| t.value)).collect();
+    assert_eq!(values, [Some(10), Some(30)]);
 }

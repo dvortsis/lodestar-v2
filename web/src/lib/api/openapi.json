@@ -15968,6 +15968,7 @@
           "sample_rate",
           "sampled",
           "source_names",
+          "stopped",
           "took_ms",
           "total",
           "total_approx",
@@ -16034,6 +16035,10 @@
             "example": {
               "dht": "Mainline DHT"
             }
+          },
+          "stopped": {
+            "type": "boolean",
+            "description": "A `/…/` term of the query ran out of its time budget: `total`'s\nmatches as counted here and the histograms are what was checked\nin time. Each facet has its own `stopped`. Not shown yet (RX-2)."
           },
           "took_ms": {
             "type": "number",
@@ -25847,6 +25852,7 @@
           "distinct",
           "other",
           "partial",
+          "stopped",
           "values"
         ],
         "properties": {
@@ -25869,6 +25875,10 @@
           "partial": {
             "type": "boolean",
             "description": "The field is still being backfilled after an index upgrade, so the\ncounts are low (only `source`): show them as partial."
+          },
+          "stopped": {
+            "type": "boolean",
+            "description": "A `/…/` term of the query ran out of its time budget while this\nfacet was counted: the counts are what was checked in time. Not\nshown yet (RX-2); never the same as `partial`."
           },
           "values": {
             "type": "array",

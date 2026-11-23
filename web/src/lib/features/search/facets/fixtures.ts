@@ -12,6 +12,7 @@ export const term = (
 	distinct: values.length,
 	other: 0,
 	partial: false,
+	stopped: false,
 	values: values.map(([value, count, state]) => ({
 		value,
 		count,
@@ -76,6 +77,7 @@ export const response = (over: Partial<FacetsResponse> = {}): FacetsResponse => 
 	sample_rate: null,
 	sampled: false,
 	source_names: {},
+	stopped: false,
 	took_ms: 3,
 	total: 1284,
 	total_approx: false,

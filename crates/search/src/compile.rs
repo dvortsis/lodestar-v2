@@ -63,6 +63,11 @@ pub(crate) struct Cx<'a> {
     /// search) gives each clause [`crate::regex_verify::VERIFY_BUDGET`]
     /// from its compile.
     pub regex_deadline: Option<std::time::Instant>,
+    /// A lease's `/…/` clauses by pattern, already verified on the
+    /// snapshot this compiles for: a clause with the same pattern reuses
+    /// one, its matches and its stop, instead of verifying again (facet
+    /// variants and recovery counts on a lease, RX-1).
+    pub regex_shared: Option<&'a crate::regex_verify::Shared>,
 }
 
 impl std::ops::Deref for Cx<'_> {
@@ -1081,9 +1086,15 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
                 now.checked_add(crate::regex_verify::budget())
                     .unwrap_or(now)
             });
-            Box::new(crate::regex_verify::RegexQuery::new(
-                pattern, f.name, trigram, deadline,
-            ))
+            match f
+                .regex_shared
+                .and_then(|shared| shared.get(pattern, trigram))
+            {
+                Some(kept) => Box::new(kept),
+                None => Box::new(crate::regex_verify::RegexQuery::new(
+                    pattern, f.name, trigram, deadline,
+                )),
+            }
         }
         Node::Hash { hash } => match hex20(hash) {
             Some(bytes) if f.hash != ABSENT => Box::new(TermQuery::new(
