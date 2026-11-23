@@ -266,4 +266,69 @@ test.describe('first-run wizard', () => {
 		await expect(page.getByTestId('wizard-step-how')).toContainText('5. How it works · Not yet');
 		await expect(page.getByText('12. Done · Not yet')).toBeVisible();
 	});
+
+	test('phone stepper: icons differ in shape and pass 3:1, names carry number and status, the current step is whole at 320 px', async ({
+		page,
+		go
+	}) => {
+		await page.setViewportSize({ width: 320, height: 700 });
+		// Resume on Storage & retention (the longest step name), with Network done and How it works skipped.
+		await page.addInitScript(() =>
+			sessionStorage.setItem(
+				'lodestar.wizard',
+				JSON.stringify({ step: 'storage', skipped: ['how'], done: ['network'], restart: false })
+			)
+		);
+		await go('/welcome');
+		await expect(h2(page, 'Storage & retention')).toBeVisible();
+		const m = await page.evaluate(() => {
+			const lum = (c: string) => {
+				const v = c
+					.match(/[\d.]+/g)!
+					.slice(0, 3)
+					.map(Number);
+				const f = (x: number) => ((x /= 255) <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4);
+				return 0.2126 * f(v[0]!) + 0.7152 * f(v[1]!) + 0.0722 * f(v[2]!);
+			};
+			const bgOf = (el: Element | null): string => {
+				while (el) {
+					const b = getComputedStyle(el).backgroundColor;
+					if (!/rgba\(.*, 0\)|transparent/.test(b)) return b;
+					el = el.parentElement;
+				}
+				return 'rgb(255, 255, 255)';
+			};
+			const lis = [...document.querySelectorAll('[data-testid="wizard-progress"] li')];
+			const state = (st: string) => lis.find((li) => li.getAttribute('data-state') === st)!;
+			const icon = (st: string) => state(st).querySelector('svg')!;
+			const ratio = (st: string) => {
+				const svg = icon(st);
+				const [a, b] = [lum(getComputedStyle(svg).color), lum(bgOf(svg))].sort((x, y) => y - x);
+				return (a! + 0.05) / (b! + 0.05);
+			};
+			const cur = state('current') as HTMLElement;
+			return {
+				shapes: ['done', 'current', 'later', 'skipped'].map((st) => icon(st).innerHTML),
+				ratios: ['done', 'current', 'later', 'skipped'].map(ratio),
+				names: lis.map((li) => li.textContent!.replace(/\s+/g, ' ').trim()),
+				currentFits: cur.scrollWidth <= cur.clientWidth && cur.getBoundingClientRect().right <= 320,
+				page: document.documentElement.scrollWidth - document.documentElement.clientWidth
+			};
+		});
+		// (a) four icons, four shapes; each at least 3:1 against its background.
+		expect(new Set(m.shapes).size).toBe(4);
+		for (const r of m.ratios) expect(r).toBeGreaterThanOrEqual(3);
+		// (b) every item's name carries its number, its name and its status.
+		expect(m.names[3]).toBe('4. Network check · Done');
+		expect(m.names[4]).toBe('5. How it works · Skipped');
+		expect(m.names[5]).toBe('6. Crawl intensity · Done'); // before the current step
+		expect(m.names[7]).toBe('8. Download client · Not yet');
+		expect(m.names).toHaveLength(12);
+		// (d) the current step is spelled out and not cut at 320 px.
+		await expect(page.getByTestId('wizard-step-storage')).toContainText(
+			'7. Storage & retention · Current step'
+		);
+		expect(m.currentFits).toBe(true);
+		expect(m.page).toBeLessThanOrEqual(0);
+	});
 });
