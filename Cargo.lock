@@ -1962,6 +1962,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestar-sources-irc"
+version = "0.5.0"
+dependencies = [
+ "lodestar-integrations",
+ "proptest",
+ "rustls",
+ "rustls-platform-verifier",
+ "tokio",
+ "tokio-rustls",
+ "zeroize",
+]
+
+[[package]]
 name = "lodestar-sources-plugins"
 version = "0.5.0"
 dependencies = [

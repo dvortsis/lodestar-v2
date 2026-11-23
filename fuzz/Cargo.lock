@@ -1372,6 +1372,7 @@ dependencies = [
  "lodestar-sources",
  "lodestar-sources-feeds",
  "lodestar-sources-importers",
+ "lodestar-sources-irc",
  "lodestar-sources-plugins",
  "lodestar-store",
  "lodestar-tracker-scrape",
@@ -1524,6 +1525,18 @@ dependencies = [
  "tokio-postgres",
  "tokio-rustls",
  "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "lodestar-sources-irc"
+version = "0.5.0"
+dependencies = [
+ "lodestar-integrations",
+ "rustls",
+ "rustls-platform-verifier",
+ "tokio",
+ "tokio-rustls",
  "zeroize",
 ]
 

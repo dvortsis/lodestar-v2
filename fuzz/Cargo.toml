@@ -26,6 +26,7 @@ lodestar-sources = { path = "../crates/sources" }
 lodestar-sources-feeds = { path = "../crates/sources-feeds" }
 lodestar-sources-importers = { path = "../crates/sources-importers" }
 lodestar-sources-plugins = { path = "../crates/sources-plugins" }
+lodestar-sources-irc = { path = "../crates/sources-irc" }
 lodestar-store = { path = "../crates/store" }
 lodestar-tracker-scrape = { path = "../crates/tracker-scrape" }
 lodestar-update = { path = "../crates/update", features = ["testing"] }
@@ -436,6 +437,13 @@ bench = false
 [[bin]]
 name = "tmdb"
 path = "fuzz_targets/tmdb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "irc_line"
+path = "fuzz_targets/irc_line.rs"
 test = false
 doc = false
 bench = false
