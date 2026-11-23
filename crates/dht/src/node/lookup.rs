@@ -228,6 +228,18 @@ impl Lookup {
         self.slow
     }
 
+    /// Answers among the K closest live candidates.
+    #[cfg(test)]
+    pub fn answered_live(&self) -> usize {
+        let mut counts = Lookup::slot_filter(self.scrape);
+        self.candidates
+            .iter()
+            .filter(|c| counts(c))
+            .take(K)
+            .filter(|c| c.state == State::Responded)
+            .count()
+    }
+
     /// A queried node answered from `from`. Returns whether it was one
     /// of ours.
     pub fn on_response(
@@ -269,7 +281,15 @@ impl Lookup {
     /// to fresh, to be asked on a later drive, rather than counting as a
     /// node that failed to answer.
     pub fn retry_later(&mut self, id: &NodeId) {
-        self.settle(id, State::Fresh);
+        // Only a query just handed out, never a slow one still out.
+        if let Some(c) = self
+            .candidates
+            .iter_mut()
+            .find(|c| c.info.id == *id && c.state == State::InFlight)
+        {
+            c.state = State::Fresh;
+            self.in_flight -= 1;
+        }
     }
 
     /// Keeps the BEP 33 filters an in-flight node answered with. Call
@@ -314,18 +334,23 @@ impl Lookup {
 
     /// Done when nothing is in flight and the K closest live candidates
     /// have all answered. A slow candidate (CR-SOFT-TIMEOUT) is neither in
-    /// flight nor live.
+    /// flight nor live, so it doesn't hold a closest set of K that has
+    /// answered; but while any is out, fewer than K answers aren't a
+    /// closest set, and the leg waits for the slow ones to settle (answer
+    /// or reach the query timeout) as it would with the switch off.
     pub fn is_done(&self) -> bool {
         if self.in_flight > 0 || self.extra_in_flight > 0 {
             return false;
         }
         let mut counts = Lookup::slot_filter(self.scrape);
-        !self
-            .candidates
-            .iter()
-            .filter(|c| counts(c))
-            .take(K)
-            .any(|c| c.state == State::Fresh)
+        let mut answered = 0;
+        for c in self.candidates.iter().filter(|c| counts(c)).take(K) {
+            if c.state == State::Fresh {
+                return false;
+            }
+            answered += 1;
+        }
+        self.slow == 0 || answered >= K
     }
 
     /// CR-LOOKUP-END's convergence test: the [`K`] closest candidates that
@@ -348,6 +373,7 @@ impl Lookup {
             return false;
         }
         let mut seen: Vec<Network> = Vec::with_capacity(networks);
+        let mut answered = 0;
         for c in self
             .candidates
             .iter()
@@ -361,8 +387,11 @@ impl Lookup {
             if seen.len() < networks && !seen.contains(&net) {
                 seen.push(net);
             }
+            answered += 1;
         }
-        seen.len() >= networks
+        // CR-SOFT-TIMEOUT: with slow queries out, only K answers are a
+        // closest set (as in [`Lookup::is_done`]).
+        seen.len() >= networks && (self.slow == 0 || answered >= K)
     }
 
     /// The closest nodes that answered.
@@ -577,10 +606,12 @@ mod tests {
         assert_eq!(l.slow(), 1);
     }
 
-    /// CR-SOFT-TIMEOUT: a slow candidate doesn't hold the end, in either
-    /// end test; answering late, it counts again.
+    /// CR-SOFT-TIMEOUT: a slow candidate doesn't hold a closest set of K
+    /// answers, in either end test; but with fewer than K answers the leg
+    /// waits for it. Answering late, it counts again.
     #[test]
-    fn a_slow_candidate_does_not_hold_the_end() {
+    fn a_slow_candidate_holds_only_a_short_closest_set() {
+        // Three candidates: the slow one holds the end.
         let mut l = Lookup::new(NodeId([0; 20]), 0);
         for b in 1..=3 {
             l.add(spread(b));
@@ -588,13 +619,30 @@ mod tests {
         let q = l.next();
         l.on_response(&q[1].id, FROM, std::iter::empty(), &[]);
         l.on_response(&q[2].id, FROM, std::iter::empty(), &[]);
-        assert!(!l.is_done() && !l.closest_answered(2));
         assert!(l.soft_expire(&q[0].id));
-        assert!(l.is_done() && l.closest_answered(2));
+        assert!(!l.is_done() && !l.closest_answered(2), "only 2 answers");
         l.on_response(&q[0].id, FROM, std::iter::empty(), &[]);
         assert!(l.is_done());
         let closest: Vec<u8> = l.closest().map(|i| i.id.0[0]).collect();
         assert_eq!(closest, [1, 2, 3], "counts again once answered");
+        // Nine: K others answer, so the slow closest one doesn't hold it.
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        for b in 1..=9 {
+            l.add(spread(b));
+        }
+        let q = l.next();
+        assert!(l.soft_expire(&q[0].id));
+        while let Some(c) = l.next_limit(1).pop() {
+            assert!(!l.is_done());
+            l.on_response(&c.id, FROM, std::iter::empty(), &[]);
+        }
+        l.on_response(&q[1].id, FROM, std::iter::empty(), &[]);
+        l.on_response(&q[2].id, FROM, std::iter::empty(), &[]);
+        assert_eq!(l.answered_live(), K);
+        assert!(l.is_done() && l.closest_answered(2));
+        // A late answer then still settles it.
+        assert!(l.on_response(&q[0].id, FROM, std::iter::empty(), &[]));
+        assert_eq!(l.slow(), 0);
     }
 
     /// CR-SOFT-TIMEOUT: crowding by closer candidates never drops a slow

@@ -12,10 +12,12 @@ CR-0's ledger shows a lookup holding its slot for about 24 s of the 25 s `LOOKUP
 - **The soft expiry.** On the maintenance tick, after the hard timeouts, a leg's query to a candidate that has waited `SOFT_TIMEOUT` = **1 s** (never more than `query_timeout`) goes **soft**:
   - the candidate goes to a new state, `Slow`;
   - it frees its `ALPHA` lane, so the next candidate is asked (mechanism b);
-  - it counts like a failed candidate in both end tests (`Lookup::is_done`, `Lookup::closest_answered`) and in the choice of the `K` live candidates, so it no longer holds the closest-set end (mechanism a);
+  - it counts like a failed candidate in the choice of the `K` closest live candidates, so it no longer holds a closest set of `K` that has answered (mechanism a);
+  - **but it isn't a failure for ending the leg.** While any slow query is out, both end tests (`Lookup::is_done`, `Lookup::closest_answered`) need `K` answers among the closest live candidates. A leg whose candidates have run out, with slow ones still out and fewer than `K` answers, waits for them to answer or reach the query timeout, as it would with the switch off.
+    - **Why (from the self-review):** otherwise a leg whose only candidates left are slow would end at 1–2 s with nothing answered and lose their late answers. That ends a leg earlier than the same script with those answers on time, and not by its closest set or its values, which the runner's go ruled out.
   - the request's in-flight count drops by one at that moment, and never a second time.
   - **The value is checked on the existing 1 s tick,** as the hard timeout is. So a soft query waits 1–2 s, against today's 4–5 s.
-  - **The order is timeouts first, then soft expiries.** A leg whose slow queries just reached the query timeout can mark its next ones soft in the same tick.
+  - **The order is timeouts, their drives, then soft expiries and their drives.** A leg whose slow queries just reached the query timeout can mark its next ones soft in the same tick, and the 3/4 rule (below) sees the lanes the timeouts' drives refilled.
 - **The query stays out.** Its entry stays pending. So it keeps its place against the global outstanding cap, and against its address's pending count, until it is answered or reaches `query_timeout`.
 - **A late answer** (after going soft, before the query timeout) is accepted.
   - It settles its candidate once (`Slow` → `Responded`), and its nodes and values are taken as any answer's would be.
@@ -23,22 +25,26 @@ CR-0's ledger shows a lookup holding its slot for about 24 s of the 25 s `LOOKUP
   - The transaction id is removed when it settles, so a repeat finds nothing and is dropped.
   - At the query timeout, a slow query fails once (`Slow` → `Failed`).
 - **When a leg ends with soft queries out** (on its closest set, its values, its deadline, the query cap, a cancel or a shutdown), its soft queries aren't dropped as its other queries are.
-  - They're re-tagged `Purpose::Detached` and stay against the outstanding cap until they're answered (only the routing table hears of the answer) or time out.
+  - They're re-tagged `Purpose::Detached` and stay against the outstanding cap until they're answered or time out.
+  - **A detached answer feeds no lookup,** but it's handled as any matched answer is: it updates the routing table, offers its nodes to the sampler, votes on our external address and marks the address as answering. A detached timeout marks the node failed in the routing table and counts in `dht_timeouts_total`.
+  - **This makes the two arms unlike on timeouts.** With the switch off, a query that outlives its leg is dropped uncounted. With it on, a detached query that never answers counts as a timeout. So the timeout rate (CR-SIM's `unanswered` column, and the live rate) is biased upward with the switch on. Compare it between arms with that in mind.
   - A detached query no longer names its lookup id, so a late answer can't reach a later lookup that reuses the id.
 - **Two counters,** additive, in `docs/metrics.md` ("Soft timeout"): `dht_soft_timeouts_total` and `dht_soft_timeout_late_replies_total`.
 
 ## The bounds (runner, 2026-11-23, §2.26; flagged to the owner, §2.19)
 - **A leg holds at most `ALPHA` (3) slow queries.** While it holds 3, no more go soft, and its in-flight queries keep their lanes until the query timeout, as today.
   - **So a leg can now have up to 6 queries outstanding (2 · `ALPHA`), not 3.** This is a runner refinement under §2.26.
-  - All 6 are inside the global query rate and the outstanding cap, which are unchanged.
+  - The 3 lanes are shared by all of a request's family legs (`drive_lookup` gives a request `3 − in flight`), while the slow limit is per leg. So a request with two family legs holds at most 3 + 3 · 2 = 9 queries.
+  - All of them are inside the global query rate and the outstanding cap, which are unchanged.
   - **No single node receives more than today.** A slow candidate is never asked again by its leg (it isn't fresh), and the same node in another lookup is asked exactly as today.
   - `ALPHA`, the fresh concurrency, is still 3.
-- **Lookups keep within 3/4 of the outstanding cap (runner, 2026-11-23, §2.26; flagged §2.19).** A soft query frees a lane for one more query. So a query goes soft only while all lookups' queries out stay under 3/4 of the live preset's outstanding cap. That count includes soft and detached queries, and the maintenance lookups' queries. Past that, the query keeps its lane exactly as with the switch off. The per-leg limit of 3 slow queries stays.
-  - **Why:** with CR-1c on, Low has 32 slots and a 256 cap. At 2 · `ALPHA` per leg and two families, lookups alone could hold 384 queries. The actor would still enforce the cap, but lookups could fill it and crowd out sampling, which stops at 4/5 of the cap, and maintenance. CR-1c's own rule (`docs/decisions/2026-11-21-CR-1c.md`) keeps slots × `ALPHA` × 2 families within 3/4 of the cap. This applies the same line to soft queries.
-  - **When it binds:** Low with CR-1c on, and Balanced and Aggressive with CR-1c on and two families. With CR-1c off, 32 slots × 6 × 2 families = 384, under 3/4 of Balanced's 1,024, so it never binds there. Nor does it in the CR-SIM screen, which runs Balanced with one family.
+- **Lookups keep within 3/4 of the outstanding cap (runner, 2026-11-23, §2.26; flagged §2.19).** A soft query frees a lane for one more query. So a query goes soft only while all lookups' queries out stay under 3/4 of the live preset's outstanding cap. That count includes soft and detached queries, and the maintenance lookups' queries. It also counts, per request, the lanes earlier soft queries freed that a throttled drive hasn't refilled yet (up to that request's soft queries out), since each is a query promised. Past that, the query keeps its lane exactly as with the switch off. The per-leg limit of 3 slow queries stays.
+  - **Why:** with CR-1c on, Low has 32 slots and a 256 cap. At 9 per request with two families, lookups alone could hold 288 queries. The actor would still enforce the cap, but lookups could fill it and crowd out sampling, which stops at 4/5 of the cap, and maintenance. CR-1c's own rule (`docs/decisions/2026-11-21-CR-1c.md`) keeps slots × `ALPHA` × 2 families within 3/4 of the cap. This applies the same line to soft queries.
+  - **When it binds:** Low with CR-1c on, and Balanced and Aggressive with CR-1c on and two families. With CR-1c off, 32 slots × 9 = 288, under 3/4 of Balanced's 1,024 (768), so it never binds there. Nor does it in the CR-SIM screen, which runs Balanced with one family.
   - **Tests:**
     - `soft_expiry_stops_at_three_quarters_of_the_cap` puts lookups within 10 of the line at Low with CR-1c on, and checks that exactly 10 go soft and that sampling still sends in the same tick. With the check removed, all 96 go soft and the test fails (mutation run on this branch).
-    - Two paused-clock runs, at Low with CR-1c on and at Balanced with CR-1c off, every slot full of silent candidates and the pool refilling, check that sampling and a maintenance lookup still send. These two runs don't catch the mutation by themselves: in them, the table's failed nodes leave later requests short of candidates, so lookups never come near the line.
+    - `the_three_quarters_rule_counts_lanes_refilled_after_timeouts` makes half the slots' queries reach the query timeout in the tick where the other half's are due to go soft, with detached queries holding lookups at the line. Lookups stay within the line after every tick. With soft expiry run before the timeouts' drives (this branch's first order, which the self-review caught), they reach 234 against 192.
+    - Two paused-clock runs, at Low with CR-1c on and at Balanced with CR-1c off, every slot full of silent candidates and the pool refilling, check that sampling and a maintenance lookup still send. They also check that requests' and detached queries never pass the line, and that lookups with the maintenance lookups stay under the cap. The maintenance lookups send apart from soft expiry, into the room the rule keeps (at Low, up to 48 more). On their own, these two runs don't catch the first mutation: the table's failed nodes leave later requests short of candidates.
 - **Every other bound is unchanged:**
   - the 64-query per-request cap (every send counts, soft or not);
   - `LOOKUP_DEADLINE`, `query_timeout`, the query rate and the outstanding cap.

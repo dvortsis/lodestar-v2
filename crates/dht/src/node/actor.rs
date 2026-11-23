@@ -533,6 +533,10 @@ struct Actor {
     /// their lookup and request no longer count in flight. Empty, and
     /// never allocated, with `dht.soft_timeout` off.
     soft_tids: Set<u64>,
+    /// Tests only: each finished leg's answers among its K closest live
+    /// candidates, and its slow queries still out, at its end.
+    #[cfg(test)]
+    legs_ended: Vec<(usize, usize)>,
     stats: Arc<Stats>,
     rng: StdRng,
     epoch: Instant,
@@ -845,6 +849,8 @@ impl Actor {
             verify_rate: verify_bucket(cfg.intensity, now),
             verify_tids: Set::default(),
             soft_tids: Set::default(),
+            #[cfg(test)]
+            legs_ended: Vec::new(),
             families,
             ids,
             external: ExternalIp {
@@ -2714,6 +2720,8 @@ impl Actor {
         let Some(done) = self.lookups.remove(&lid) else {
             return;
         };
+        #[cfg(test)]
+        self.legs_ended.push((done.answered_live(), done.slow()));
         if done.bootstrap {
             let f = done.family;
             let found = !self.families[f].table.is_empty();
@@ -2976,6 +2984,22 @@ impl Actor {
             .values()
             .filter(|p| matches!(p.purpose, Purpose::Lookup(_) | Purpose::Detached))
             .count();
+        // Lanes soft queries freed that a throttled drive hasn't refilled
+        // yet are promised queries too: per request, its free lanes, up to
+        // its soft queries out.
+        let mut soft_by_owner: Map<u32, usize> = Map::default();
+        for tid in &self.soft_tids {
+            if let Some(Purpose::Lookup(lid)) = self.pending.get(tid).map(|p| p.purpose)
+                && let Some(owner) = self.lookups.get(&lid).and_then(|l| l.owner)
+            {
+                *soft_by_owner.entry(owner).or_default() += 1;
+            }
+        }
+        for (owner, soft) in &soft_by_owner {
+            if let Some(r) = self.peer_requests.get(owner) {
+                used += super::lookup::ALPHA.saturating_sub(r.inflight).min(*soft);
+            }
+        }
         for (tid, lid, id) in due {
             if used >= budget {
                 break;
@@ -3038,10 +3062,14 @@ impl Actor {
                 touched.push(lid);
             }
         }
-        // CR-SOFT-TIMEOUT: after the timeouts, so a leg whose slow queries
-        // just failed can mark its next ones soft in the same tick.
-        touched.extend(self.soft_expire(now_i));
         for lid in touched {
+            self.drive_lookup(sockets, lid);
+        }
+        // CR-SOFT-TIMEOUT: after the timeouts and their drives, so a leg
+        // whose slow queries just failed can mark its next ones soft in
+        // the same tick, and the 3/4 rule counts the lanes those drives
+        // refilled.
+        for lid in self.soft_expire(now_i) {
             self.drive_lookup(sockets, lid);
         }
 

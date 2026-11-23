@@ -832,14 +832,16 @@ These series measure lookup cost directly, instead of deriving it from other cou
 
 ## Soft timeout (CR-SOFT-TIMEOUT, 2026-11-23)
 
-With `dht.soft_timeout` on ([the decision](decisions/2026-11-23-CR-SOFT-TIMEOUT.md)), an owned peer request's `get_peers` to a candidate goes **soft** once it has been unanswered for 1 s, checked on the 1 s maintenance tick, so after 1–2 s. A soft query stops holding its leg: it frees its lane for the next candidate, and it no longer blocks the leg's closest-set end. It stays out until it is answered or reaches the 4 s query timeout, and it counts against the outstanding cap the whole time, even after its request has ended. A leg holds at most 3 soft queries, and a query goes soft only while all lookups' queries out stay under 3/4 of the outstanding cap. Both series are additive, always exported, and stay 0 with the switch off. No series has an infohash, endpoint or node-id label.
+With `dht.soft_timeout` on ([the decision](decisions/2026-11-23-CR-SOFT-TIMEOUT.md)), an owned peer request's `get_peers` to a candidate goes **soft** once it has been unanswered for 1 s, checked on the 1 s maintenance tick, so after 1–2 s. A soft query stops holding its leg: it frees its lane for the next candidate, and it no longer blocks a closest set of 8 answers. A leg with fewer than 8 answers still waits for its soft queries. It stays out until it is answered or reaches the 4 s query timeout, and it counts against the outstanding cap the whole time, even after its request has ended. A leg holds at most 3 soft queries, and a query goes soft only while all lookups' queries out stay under 3/4 of the outstanding cap. Both series are additive, always exported, and stay 0 with the switch off. No series has an infohash, endpoint or node-id label.
 
 | Series | Type | Labels | Meaning |
 |---|---|---|---|
 | `dht_soft_timeouts_total` | counter | — | Lookup queries that went soft. Hint and router queries, scrapes and the node's own `find_node` lookups never do. |
-| `dht_soft_timeout_late_replies_total` | counter | — | Of those, the ones answered, from the address asked, after going soft and before the query timeout, whether their request was still running or not. Each counts once. A late reply settles its candidate as an ordinary answer would; a repeat is dropped. |
+| `dht_soft_timeout_late_replies_total` | counter | — | Of those, the ones that got any reply from the address asked (an answer or a KRPC error) after going soft and before the query timeout, whether their request was still running or not. Each counts once. A late reply settles its candidate as an ordinary reply would; a repeat is dropped. |
 
 **Reading them.** `late ÷ soft`, over the same window, is the share of soft queries that would have answered within the query timeout: the live calibration signal for the 1 s value (CR-LEDGER has no time-to-answer series). A high share means the soft timeout is cutting off peers that answer. Each such peer costs at most one extra query to the next candidate, within the 64-query cap. A low share means it is cutting mostly silent ones. The calibrated CR-SIM scenario, whose only replies past 1 s are its slow 3 s ones, gives about 0.14–0.16. `W` falling with the switch on (the ledger's `W` above) is the mechanism check. `late ≤ soft` always holds.
+
+**Timeouts aren't like for like between arms.** With the switch off, a query still out when its request ends is dropped uncounted. With it on, a soft query outlives its request, and if it never answers it counts in `dht_timeouts_total` (and its node is marked failed). So the timeout rate reads higher with the switch on.
 
 ## Target prefixes (CR-1b, 2026-11-01)
 
