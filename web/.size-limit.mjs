@@ -130,15 +130,22 @@ const walk = (route, onDemand, collectOnDemand, beyond = [], byChunk = false) =>
 };
 const own = (route, { onDemand = [], beyond = [], byChunk = false } = {}) =>
 	walk(route, onDemand, false, beyond, byChunk);
-// A route entry ("… route (own JS + CSS)") is measured by the modules `own()` reaches, not by how
-// Rolldown split them into files (X-size-own-modules, runner r14): one JS and one CSS stream, the
-// links between chunks dropped and hashed file names normalised (scripts/size-modules.mjs). A shared
-// chunk regrouped or renamed no longer moves a route's figure; only its code does. `own()` itself
-// still returns the files, for the `beyond` lists and the checks that read them.
+// A route entry ("… route (own JS + CSS)") is measured by the chunk set `own()` reaches, not by how
+// Rolldown split modules among those chunks (X-size-own-modules, runner r14): one JS and one CSS
+// stream, the links between chunks dropped and hashed file names normalised
+// (scripts/size-modules.mjs). A regroup or rename within the route's chunks no longer moves its
+// figure; a regroup that pulls modules into or out of them does, as it changes what downloads.
+// `own()` itself still returns the files, for the `beyond` lists and the checks that read them.
+// Two measures, then: a route entry's figure is in the stream measure, every other entry's in the
+// per-file measure (gzip of each file, summed). §10.1's caps are in the per-file measure; the route
+// limits enforce them at the same proportion in the stream measure (runner, 2026-11-23).
+if (!existsSync('build/_app/immutable'))
+	throw new Error('size-limit: no client build at build/_app/immutable: run `npm run size:ci`');
 const byModules = moduleMeasurer({
 	outDir: '.svelte-kit/output/size-modules',
 	graphFile: '.svelte-kit/output/chunk-graph.json',
-	outputFiles: readdirSync('build/_app/immutable', { recursive: true }).map(String)
+	outputFiles: readdirSync('build/_app/immutable', { recursive: true }).map(String),
+	root: import.meta.dirname
 });
 const routeEntry = (name, files, limit) => entry(name, byModules(name, files), limit);
 // A lazily imported module (a manifest key), measured the same way: what the search route doesn't
@@ -324,7 +331,9 @@ const insightsDigestLazy = requireMeasuredJs(
 	onDemandOf('/settings/[section]', insightsDigest)
 );
 // The /insights print layout (S-insights-3): its markup, theme swap and print.css, loaded after the
-// overview mounts; measured beyond the overview's own chunks.
+// overview mounts; measured beyond the overview's own chunks. Both this entry's figure and the
+// chunks it leaves out are in the per-file measure ("Insights overview" itself is in the stream
+// measure).
 const OVERVIEW = 'src/lib/features/insights/overview/Overview.svelte';
 const PRINT = 'src/lib/features/insights/print/PrintReport.svelte';
 const insightsPrintLazy = requireMeasuredJs(
@@ -1420,8 +1429,10 @@ export default [
 	// measure were re-set to the new measure rounded up to 0.01 KB: Compare 31.79 → 22.88, Alert
 	// 46 → 35.03, Settings section 45.7 → 32.44, /t/[hash] 22.04 → 15.48, Insights stage pages
 	// 41.12 → 30.85, Insights overview 65.03 → 48.3, Welcome 16.5 → 12.08. Discover, Logs, Alerts
-	// and Settings overview keep theirs (the runner decides their headroom). Older numbers in the
-	// comments below are in the old measure.
+	// and Settings overview keep their headroom in proportion (runner, 2026-11-23): new limit = new
+	// measure + (old limit − old measure) × new measure ÷ old measure, rounded up: Discover 43 →
+	// 35.35, Logs 39.6 → 33.63, Alerts 26.3 → 19.04, Settings overview 45 → 31.8. Older numbers in
+	// the comments below are in the old (per-file) measure.
 	// Measured 25.96 KB with its lazy chunks (the screen, both layouts, labels, formatters, and the
 	// Svelte runtime only this route uses since #132 moved it out of /search's first load); 28.06 KB
 	// after #139 and #154 regrouped the shared chunks it pulls in (Button, Badge, transitions,
@@ -1442,12 +1453,12 @@ export default [
 			onDemand: [/^chunk:keys$/, /features\/discover\/commands\.ts$/],
 			byChunk: true
 		}),
-		'43 KB'
+		'35.35 KB'
 	),
 	// Logs (S-logs-1): the live log's own JS + CSS, with the virtual list, the stream client and
 	// both languages' messages. Limit = measured + 10% (measured 35.97 KB).
 	// Turn off now's privacy requests (S-logs-2) load on the click: gated with Logging's parts.
-	routeEntry('Logs route (own JS + CSS)', own('/logs', { onDemand: logsLater }), '39.6 KB'),
+	routeEntry('Logs route (own JS + CSS)', own('/logs', { onDemand: logsLater }), '33.63 KB'),
 	// Owner ruling, 2026-10-30 (S-settings-reconcile): with Settings a production route, Rolldown
 	// re-splits shared chunks (Toggle, format/bytes, Svelte's input bindings) these entries load;
 	// the same modules cost more chunk overhead. Alerts 29 → 29.1 KB, Alert 45 → 45.8 KB, Detail
@@ -1455,7 +1466,7 @@ export default [
 	// Raised by the runner (§2.26): +69 B from the chunk re-split when /logs was added (S-logs-1).
 	// X-alert-search-headroom: 29.2 → 26.3 KB. The New alert key loads after mount (−2.7 KB) and links
 	// no longer load the nav table (−0.6 KB); measured 25.73 KB. Keep the rules by `alertOnDemand`.
-	routeEntry('Alerts route (own JS + CSS)', alertsView, '26.3 KB'),
+	routeEntry('Alerts route (own JS + CSS)', alertsView, '19.04 KB'),
 	// Alerts: first view 26.11 KB (limit = measured + 10%). Alert: 41.2 KB, so 45 KB (the §10.1 cap) holds:
 	// the virtual list for long hit lists (VirtualList, its virtualiser, the hit row and composition bar).
 	// Raised from 45.8 KB by the runner under owner-decisions §2.26 (docs/decisions/2026-10-31-owner-delegation.md).
@@ -1466,7 +1477,7 @@ export default [
 	routeEntry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
-		'45 KB'
+		'31.8 KB'
 	),
 	// X-settings-trim: back at the §10.1 cap (44.95 kB measured) after the SRC-15a/LEGAL-1 raises.
 	// CMP-9a: the Companions registry entry adds ≈ 80 B here, which the 20 B of headroom couldn't take.
@@ -1870,6 +1881,8 @@ export default [
 	// them and "Wizard steps (on demand)" gates what they bring, the Settings engine's parts among
 	// them. Limits: measured + 10%. Part 2 (S-wizard-2) adds the download client's cards and the
 	// rule-pack step's flow, which load with their steps: 32.97 -> 48.74 KB, limit 53.6 KB.
+	// Measures differ: "Welcome route" is in the stream measure (X-size-own-modules), "Wizard steps"
+	// and "Blocklist wizard step" in the per-file one, so their figures don't add up.
 	routeEntry('Welcome route (own JS + CSS)', wizardFirst, '12.08 KB'),
 	// runner §2.26, UP-1: measured 53603 B, the watch labels.
 	// X-session-draft-keep (runner §2.26): 53.7 → 54.4 KB, measured 54.32: the wizard embeds

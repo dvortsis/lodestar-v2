@@ -123,6 +123,51 @@ describe('a route measured by its module set', () => {
 		expect(js).not.toMatch(/\bfrom"|export\{/);
 		expect(css).toBe(CSS);
 	});
+
+	const streams = (build: Build, files: string[], root?: string) =>
+		moduleStreams(files, {
+			graph: build.graph,
+			hashes: hashesOf(Object.keys(build.files)),
+			...(root ? { root } : {}),
+			read: (f) => build.files[f] ?? ''
+		});
+
+	it('refuses a JS file the chunk graph does not know', () => {
+		const build = route();
+		build.files['build/chunks/Stray000.js'] = 'var x=1;';
+		expect(() => streams(build, [...firstView(build), 'build/chunks/Stray000.js'])).toThrow(
+			'size-modules: build/chunks/Stray000.js is not in the chunk graph: run `npm run size:ci`'
+		);
+	});
+
+	it('refuses a file that is neither JS nor CSS', () => {
+		const build = route();
+		build.files['build/assets/Font.Ff000000.woff2'] = 'wOF2';
+		expect(() => streams(build, [...firstView(build), 'build/assets/Font.Ff000000.woff2'])).toThrow(
+			'is neither JS nor CSS'
+		);
+	});
+
+	it('orders stylesheets whose names differ only by hash by their content', () => {
+		const build = route();
+		build.files['build/assets/Panel.Bx0css00.css'] = '.a{color:red}';
+		const files = [...firstView(build), 'build/assets/Panel.Bx0css00.css'];
+		const { css } = streams(build, files);
+		expect(css).toBe(`.a{color:red}${CSS}`);
+		expect(streams(build, [...files].reverse()).css).toBe(css);
+	});
+
+	it('sorts chunks by module ids relative to the project root', () => {
+		// A module outside the checkout (`/t/x.ts`) sorts before `/w/src/…` by its absolute id, and
+		// after `/src/…` once the root `/w` is stripped: the checkout's path decides nothing.
+		const build = route();
+		build.files['build/chunks/Ext00000.js'] = 'var ext=1;';
+		build.graph.chunks['chunks/Ext00000.js'] = { modules: ['/t/x.ts'] };
+		const files = [...firstView(build), 'build/chunks/Ext00000.js'];
+		expect(streams(build, files).js.startsWith('var ext=1;')).toBe(true);
+		expect(streams(build, files, '/w').js.startsWith('var ext=1;')).toBe(false);
+		expect(streams(build, files, '/w').js.endsWith('var ext=1;')).toBe(true);
+	});
 });
 
 describe('stripLinks', () => {
