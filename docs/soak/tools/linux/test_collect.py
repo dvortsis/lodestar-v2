@@ -1424,5 +1424,92 @@ class NoticeRequiredTests(Base):
         self.assertNotIn("baseline", result.get("reason", ""))
 
 
+class FakeTimexLibc:
+    """libc's two timex calls, recorded. Each asserts the read is read-only (modes 0),
+    then fills the struct as the kernel would, or fails as seccomp would (-1)."""
+
+    def __init__(self, test, machine="x86_64", syscall=None, ntp_adjtime=None):
+        self.test, self.machine, self.calls = test, machine, []
+        self.answers = {"syscall": syscall, "ntp_adjtime": ntp_adjtime}
+
+    def _answer(self, name, ref):
+        timex = ref._obj  # byref() keeps its struct here; cast() can't take a byref
+        self.test.assertEqual(timex.modes, 0)  # never a write to the clock
+        self.calls.append(name)
+        answer = self.answers[name]
+        if answer is None:
+            return -1
+        state, fields = answer
+        for key, value in fields.items():
+            setattr(timex, key, value)
+        return state
+
+    def syscall(self, number, ref):
+        self.test.assertEqual(number.value, collect.ADJTIMEX_SYSCALL[self.machine])
+        return self._answer("syscall", ref)
+
+    def ntp_adjtime(self, ref):
+        return self._answer("ntp_adjtime", ref)
+
+
+@unittest.skipUnless(sys.maxsize > 2**32, "the adjtimex syscall is taken on 64-bit builds only")
+class KernelNtpTests(unittest.TestCase):
+    """D1a's kernel source (X-collector-ntp): adjtimex(2) by syscall, then ntp_adjtime."""
+
+    SYNCED = (0, {"status": 0x0001, "offset": 12, "esterror": 3})  # TIME_OK, STA_PLL, 12 µs
+
+    def status(self, machine="x86_64", **answers):
+        libc = FakeTimexLibc(self, machine, **answers)
+        return collect.kernel_ntp_status(libc=libc, machine=machine), libc.calls
+
+    def test_synchronised(self):
+        out, calls = self.status(syscall=self.SYNCED)
+        self.assertEqual(out, {"source": "kernel", "synchronized": True, "offset_seconds": 12e-6})
+        self.assertEqual(calls, ["syscall"])  # ntp_adjtime is never reached
+
+    def test_estimated_error_when_larger(self):
+        out, _ = self.status(syscall=(0, {"status": 0, "offset": 2, "esterror": 400}))
+        self.assertEqual(out["offset_seconds"], 400e-6)
+
+    def test_unsynchronised(self):
+        out, _ = self.status(syscall=(0, {"status": 0x0041, "offset": 5, "esterror": 0}))
+        self.assertEqual(out, {"source": "kernel", "synchronized": False, "offset_seconds": None})
+
+    def test_time_error(self):
+        out, _ = self.status(syscall=(5, {"status": 0x0001, "offset": 5, "esterror": 0}))
+        self.assertEqual(out, {"source": "kernel", "synchronized": False, "offset_seconds": None})
+
+    def test_sta_nano(self):
+        out, _ = self.status(syscall=(0, {"status": 0x2001, "offset": -3000, "esterror": 0}))
+        self.assertEqual(out["offset_seconds"], 3e-6)
+
+    def test_aarch64_takes_its_own_number(self):
+        out, calls = self.status(machine="aarch64", syscall=self.SYNCED)
+        self.assertEqual(calls, ["syscall"])
+        self.assertTrue(out["synchronized"])
+
+    def test_ntp_adjtime_when_the_syscall_is_refused(self):
+        out, calls = self.status(syscall=None, ntp_adjtime=self.SYNCED)
+        self.assertEqual(calls, ["syscall", "ntp_adjtime"])
+        self.assertEqual(out, {"source": "kernel", "synchronized": True, "offset_seconds": 12e-6})
+
+    def test_unknown_architecture_goes_straight_to_ntp_adjtime(self):
+        out, calls = self.status(machine="riscv64", syscall=self.SYNCED, ntp_adjtime=self.SYNCED)
+        self.assertEqual(calls, ["ntp_adjtime"])
+        self.assertTrue(out["synchronized"])
+
+    def test_unavailable_when_both_fail(self):
+        out, calls = self.status(syscall=None, ntp_adjtime=None)
+        self.assertEqual(calls, ["syscall", "ntp_adjtime"])
+        self.assertEqual(out, {"source": "unavailable", "synchronized": None, "offset_seconds": None})
+
+    def test_unavailable_when_libc_lacks_both(self):
+        self.assertEqual(collect.kernel_ntp_status(libc=object(), machine="x86_64"),
+                         {"source": "unavailable", "synchronized": None, "offset_seconds": None})
+
+    def test_syscall_numbers(self):  # asm/unistd_64.h and asm-generic/unistd.h
+        self.assertEqual(collect.ADJTIMEX_SYSCALL, {"x86_64": 159, "aarch64": 171})
+
+
 if __name__ == "__main__":
     unittest.main()
