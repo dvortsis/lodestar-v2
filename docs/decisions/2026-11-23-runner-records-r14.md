@@ -9,11 +9,12 @@ The runner's records PR after r13 (#1074). It records:
 Each runner call is flagged to the owner, who can veto it (§2.19). Size calls are the runner's under §2.26: performance and UX changes to owner-set numbers. The slices' own decisions files hold the detail.
 
 ## The owner's decisions, 2026-11-23 (owner-decisions §2.82)
-- **What the owner said.** The runner checked each message against the events of the session it was typed in (session_01MMjhn9MXEK8UMf3V5DqJ7M), except where marked as relayed:
+- **What the owner said.** The runner checked each message against the events of the session it was typed in (session_01MMjhn9MXEK8UMf3V5DqJ7M):
   - 00:26Z: "Let's go with whatever the runner recommends";
   - 00:27Z: "Unfortunately, the unraid box is still down. Can the test be run on the cloud machine first?";
   - 00:31:30Z: "That's OK. I authorize the tests. Run as many tests in parallel if needed. I have $133.72 remaining in credit. It's OK to use as much of that as needed.";
-  - about 00:40Z, relayed and not yet checked: "We should be able to run tests on unraid soon."
+  - 00:35:39Z: "We should be able to run tests on unraid soon.";
+  - 00:36:05Z: "Yes, go ahead with the tests."; asked whether that included the Unraid box, the owner chose "Cloud now, Unraid later" (00:36:17Z).
 - **The runner's calls on the crawler:**
   1. **Owner queue item 32 is answered, and the item is closed.** CR-1c goes into CR-AB-LC with CR-LOOKUP-END, in the B arm only (r5.1's stacking). Its screen conditions become three:
      - stored per minute rises;

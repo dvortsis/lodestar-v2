@@ -773,13 +773,14 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Testing:** no fixed number. Cloud testing, Unraid testing and other test lanes get a session each as the work needs one. This replaces §2.64's cap of four cloud-testing sessions; `limits.extra_shared` is now a reference number only; it limits nothing.
     - **Unchanged (runner's reading):** the cloud spending caps (§2.74), the host-safety rules (§2.68), at most three reviewers at a time, and every other bound.
 
-82. **The crawler's open calls go to the runner, and the cloud tests run first** (owner, 2026-11-23, in session_01MMjhn9MXEK8UMf3V5DqJ7M; checked by the runner against that session's events, except where marked relayed).
+82. **The crawler's open calls go to the runner, and the cloud tests run first** (owner, 2026-11-23, in session_01MMjhn9MXEK8UMf3V5DqJ7M; each message checked by the runner against that session's events).
     - **To the runner** (00:26Z): "Let's go with whatever the runner recommends". This was the answer to four recommendations: owner queue item 32, a soft-timeout slice, the experiment-host hold and cloud-first testing. The runner's calls are in `docs/decisions/2026-11-23-runner-records-r14.md`, and owner queue item 32 is closed.
     - **Cloud first** (00:27Z): "Unfortunately, the unraid box is still down. Can the test be run on the cloud machine first?" Cloud results are provisional relative effects. The G-v06-crawler gain still comes from the experiment host (runner's reading).
     - **The tests are authorized** (00:31Z): "That's OK. I authorize the tests. Run as many tests in parallel if needed. I have $133.72 remaining in credit. It's OK to use as much of that as needed."
       - **Spend (runner's reading):** new AWS spend for these tests from 00:31Z may use up to the remaining credit, stopping at 90% of it. The balance is confirmed from billing first, and the lower figure wins.
       - This replaces §2.74's $100 AWS cap for these tests only. Linode's cap and the fleet's are unchanged.
-    - **The experiment host** (about 00:40Z, relayed): "We should be able to run tests on unraid soon." The `ext:experiment-host` hold stands until the owner says the box is back. Its stage 1 run sheet is prepared meanwhile (X-host-ab-runsheet).
+    - **The experiment host** (00:35Z): "We should be able to run tests on unraid soon." The `ext:experiment-host` hold stands until the owner says the box is back. Its stage 1 run sheet is prepared meanwhile (X-host-ab-runsheet).
+    - **Cloud now, Unraid later** (00:36Z): "Yes, go ahead with the tests." Asked whether that included the Unraid box, the owner chose "Cloud now, Unraid later". The cloud stage 1 starts now; the hold above stands.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
