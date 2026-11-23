@@ -4,7 +4,7 @@ The runner's records PR after r15 (#1087). It records:
 - the owner's instruction of 2026-11-23T06:09Z and the two balances (owner-decisions §2.83);
 - the runner's calls from 2026-11-23T03:00Z to 09:00Z, in the cloud's stage 1, in running slices and on the API lane's PRs;
 - new held-finding ids, by id, severity and surface only;
-- eight new follow-up slices and owner queue item 36.
+- seven new follow-up slices and owner queue item 36.
 
 Apart from §2.83, everything here is the runner's, under the owner's 2026-11-23 delegation (§2.82) and §2.26 (performance and UX). Each call is flagged to the owner, who can veto it (§2.19). The slices' own decisions files hold the detail.
 
