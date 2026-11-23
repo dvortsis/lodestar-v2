@@ -9,6 +9,7 @@ import {
 	links,
 	problemUrl,
 	repoBase,
+	showUiBuild,
 	URL_LIMIT,
 	versionText,
 	type System
@@ -66,6 +67,17 @@ describe('stale-tab check', () => {
 		expect(isStale('a', null)).toBe(false);
 		expect(isStale('', 'b')).toBe(false);
 		expect(isStale('a', undefined)).toBe(false);
+	});
+});
+
+describe('the Interface build row', () => {
+	it('is hidden for the 0.0.0 placeholder, an empty id and an id that repeats the version or commit', () => {
+		const i = info();
+		expect(showUiBuild('0.0.0', i)).toBeNull();
+		expect(showUiBuild(null, i)).toBeNull();
+		expect(showUiBuild(i.version, i)).toBeNull();
+		expect(showUiBuild(i.build.commit!.slice(0, 7), i)).toBeNull();
+		expect(showUiBuild('ui-1', i)).toBe('ui-1');
 	});
 });
 
@@ -131,5 +143,26 @@ describe('the screen', () => {
 		render(AboutScreen);
 		expect(await screen.findByRole('heading', { name: 'Lodestar 0.5.2' })).toBeTruthy();
 		expect(await screen.findByText("Couldn't read the update state.")).toBeTruthy();
+	});
+	it('prints the tagline once (the lockup), marks external links with an icon and shows dates as text', async () => {
+		vi.mocked(fetch).mockImplementation(async (input) =>
+			String(input).includes('/system')
+				? json(info({ build: { ...info().build, ui_build_id: '0.0.0' } }))
+				: json({}, 500)
+		);
+		const { container } = render(AboutScreen);
+		await screen.findByRole('heading', { name: 'Lodestar 0.5.2' });
+		const tagline = screen.getAllByText('Every node is a new discovery');
+		expect(tagline).toHaveLength(1);
+		expect(tagline[0]!.classList.contains('sr-only')).toBe(true);
+		expect(screen.queryByText('Interface build')).toBeNull();
+		const external = container.querySelectorAll('a[target="_blank"]');
+		expect(external.length).toBeGreaterThan(0);
+		for (const a of external) expect(a.querySelector('svg')).toBeTruthy();
+		// Started (and the update and connection checks) show the date as text, not only in a tooltip.
+		const started = screen.getByText('Started').nextElementSibling!;
+		expect(started.querySelector('span[aria-hidden="true"]')?.textContent).toMatch(/·.*\d/);
+		// The build date is visible text in the row, not only a tooltip.
+		expect(screen.getByText('Build date').nextElementSibling?.textContent).toMatch(/\d/);
 	});
 });

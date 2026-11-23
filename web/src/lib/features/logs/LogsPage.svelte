@@ -9,8 +9,10 @@
 	import IconError from '~icons/ph/x-circle-bold';
 	import IconWarn from '~icons/ph/warning-bold';
 	import IconInfo from '~icons/ph/info-bold';
+	import IconCheck from '~icons/ph/check-circle-bold';
 	import IconDebug from '~icons/ph/bug-bold';
 	import IconTrace from '~icons/ph/dots-three-circle-bold';
+	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Input from '$lib/ui/fields/Input.svelte';
@@ -76,7 +78,23 @@
 	let components = $state<LogComponent[]>([]);
 	let text = $state('');
 	let utc = $state(false);
-	let wrap = $state(false);
+	// `null` is "not chosen yet": the row's own CSS decides (wrapped below 640 px, one line above), so
+	// the list never switches layout after the first paint. A press of the toggle fixes it either way.
+	let wrap = $state<boolean | null>(null);
+	const NARROW = '(width < 40rem)';
+	let narrow = $state(typeof matchMedia === 'function' && matchMedia(NARROW).matches);
+	onMount(() => {
+		if (typeof matchMedia !== 'function') return;
+		const mq = matchMedia(NARROW);
+		const on = () => (narrow = mq.matches);
+		on();
+		mq.addEventListener('change', on);
+		return () => mq.removeEventListener('change', on);
+	});
+	const wrapped = $derived(wrap ?? narrow);
+	// A phone row is two lines (time, level, component, then the message), about 44 px: the first
+	// paint then matches the measured height and the list doesn't move once rows are measured.
+	const ROW_TWO_LINES = 44;
 	let root = $state<HTMLElement>();
 	let wrapper = $state<HTMLElement>();
 	let activeIndex = $state(0);
@@ -261,30 +279,30 @@
 				</Banner>
 			{/if}
 
-			<div
-				class="logs-toolbar flex flex-wrap items-center gap-2"
-				role="toolbar"
-				aria-label={m.logs_toolbar()}
-			>
-				<Select
-					dense
-					aria-label={m.logs_level_label()}
-					bind:value={level}
-					options={LEVELS.map((l) => ({
-						value: l,
-						label: m.logs_level_min({ level: levelName(l) })
-					}))}
-				/>
-				<Input
-					dense
-					type="search"
-					class="logs-filter"
-					bind:value={text}
-					data-logs-filter
-					aria-label={m.logs_filter_label()}
-					placeholder={m.logs_filter_placeholder()}
-					maxlength={200}
-				/>
+			<div class="logs-toolbar flex flex-wrap gap-2" role="toolbar" aria-label={m.logs_toolbar()}>
+				<label class="logs-field">
+					<span class="text-caption text-muted-text">{m.logs_level_label()}</span>
+					<Select
+						dense
+						bind:value={level}
+						options={LEVELS.map((l) => ({
+							value: l,
+							label: m.logs_level_min({ level: levelName(l) })
+						}))}
+					/>
+				</label>
+				<label class="logs-field">
+					<span class="text-caption text-muted-text">{m.logs_filter_label()}</span>
+					<Input
+						dense
+						type="search"
+						class="logs-filter"
+						bind:value={text}
+						data-logs-filter
+						placeholder={m.logs_filter_placeholder()}
+						maxlength={200}
+					/>
+				</label>
 				<Button
 					dense
 					variant={utc ? 'primary' : 'secondary'}
@@ -295,9 +313,9 @@
 				</Button>
 				<Button
 					dense
-					variant={wrap ? 'primary' : 'secondary'}
-					aria-pressed={wrap}
-					onclick={() => (wrap = !wrap)}
+					variant={wrapped ? 'primary' : 'secondary'}
+					aria-pressed={wrapped}
+					onclick={() => (wrap = !wrapped)}
 				>
 					{m.logs_wrap()}
 				</Button>
@@ -324,9 +342,10 @@
 				{#each COMPONENTS as c (c)}
 					<Button
 						dense
-						variant={components.includes(c) ? 'primary' : 'quiet'}
+						variant={components.includes(c) ? 'primary' : 'secondary'}
 						aria-pressed={components.includes(c)}
-						onclick={() => toggleComponent(c)}>{c}</Button
+						onclick={() => toggleComponent(c)}
+						>{#if components.includes(c)}<IconCheck aria-hidden="true" />{/if}{c}</Button
 					>
 				{/each}
 			</div>
@@ -372,7 +391,12 @@
 						text={filtered ? undefined : m.logs_empty_text()}
 					>
 						{#snippet action()}
-							{#if filtered}<Button onclick={clearFilters}>{m.logs_clear_filters()}</Button>{/if}
+							{#if filtered}<Button onclick={clearFilters}>{m.logs_clear_filters()}</Button>{:else}
+								<a
+									href={loggingHref}
+									class="btn btn-outline border-field-border {FOCUS_RING} {TARGET_MIN}"
+									>{m.logs_empty_action()}</a
+								>{/if}
 						{/snippet}
 					</EmptyState>
 				{:else}
@@ -384,7 +408,7 @@
 								getKey={keyOf}
 								label={m.logs_list_label()}
 								measureRows
-								estimateSize={28}
+								estimateSize={wrapped ? ROW_TWO_LINES : 28}
 								bind:activeIndex
 								onActivate={(_, l) => toggle(keyOf(l))}
 								class="font-mono text-small"
@@ -393,7 +417,13 @@
 									{@const Icon = ICONS[l.level]}
 									{@const open = expanded.has(keyOf(l))}
 									<div class="px-2 py-1 {TONE[l.level]}">
-										<div class="flex gap-2 {wrap || open ? '' : 'truncate'}">
+										<div
+											class="logs-line flex {open || wrap === true
+												? 'logs-wrap'
+												: wrap === false
+													? 'logs-one'
+													: ''}"
+										>
 											<span class="shrink-0 text-muted-text"
 												>{formatTime(l.ts, utc, displayTimeZone())}</span
 											>
@@ -403,11 +433,7 @@
 											<span class="logs-component shrink-0 text-muted-text"
 												>{safe(l.component, 32)}</span
 											>
-											<span
-												class="min-w-0 {wrap || open
-													? 'break-words whitespace-pre-wrap'
-													: 'truncate'}"
-											>
+											<span class="logs-msg min-w-0">
 												{safe(l.msg || l.event || l.target, open ? FIELD_MAX : undefined)}
 												{#if l.repeated}<span class="text-muted-text">
 														{m.logs_repeated({
@@ -464,26 +490,94 @@
 		height: calc(100dvh - 8rem);
 		min-height: calc(var(--row-height-comfortable) * 8);
 	}
-	.logs-filter {
-		max-width: 16rem;
-	}
 	@media (min-width: 64rem) {
 		.logs-toolbar {
 			flex-wrap: nowrap;
 		}
-		.logs-toolbar :global(select) {
-			width: auto;
-			flex: none;
-		}
-		.logs-toolbar :global(.logs-filter) {
+		.logs-toolbar .logs-field:has(:global(.logs-filter)) {
 			flex: 1 1 auto;
 			max-width: var(--manuscript-width);
+		}
+		.logs-toolbar :global(.logs-filter) {
+			width: 100%;
 		}
 	}
 	.logs-level {
 		width: 5rem;
 	}
+	/*
+	 * A row is a phone-first two-line layout: time, level and component, then the whole message
+	 * wrapped. From 640 px it is one line with the message truncated. The wrap toggle forces either
+	 * (`logs-wrap`, `logs-one`); the default is decided here, in CSS, so nothing moves after paint.
+	 */
+	.logs-toolbar {
+		align-items: flex-end;
+	}
+	.logs-field {
+		display: flex;
+		flex-direction: column;
+		gap: calc(var(--spacing) * 0.5);
+	}
+	.logs-line {
+		flex-wrap: wrap;
+		column-gap: calc(var(--spacing) * 2);
+		overflow: hidden;
+	}
 	.logs-component {
-		width: 6rem;
+		max-width: 8rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.logs-msg {
+		flex: 1 1 100%;
+		overflow-wrap: anywhere;
+		white-space: pre-wrap;
+	}
+	.logs-field {
+		flex: 1 1 100%;
+	}
+	.logs-field :global(select),
+	.logs-field :global(.logs-filter) {
+		width: 100%;
+		max-width: none;
+	}
+	.logs-wrap .logs-msg {
+		flex-basis: 100%;
+	}
+	.logs-one {
+		flex-wrap: nowrap;
+	}
+	.logs-one .logs-msg {
+		flex-basis: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	@media (min-width: 40rem) {
+		.logs-field {
+			flex: none;
+		}
+		.logs-field :global(select) {
+			width: auto;
+		}
+		.logs-field :global(.logs-filter) {
+			width: 16rem;
+		}
+		.logs-line:not(.logs-wrap) {
+			flex-wrap: nowrap;
+		}
+		.logs-line:not(.logs-wrap) .logs-msg {
+			flex-basis: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.logs-component {
+			width: 6rem;
+		}
+		.logs-wrap .logs-msg {
+			flex-basis: 0;
+		}
 	}
 </style>
