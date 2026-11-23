@@ -468,10 +468,12 @@ fn valid_nick(n: &str) -> bool {
 /// A nick the server assigns: its NICKLEN may be over 30, so only the
 /// characters a nick can't have are refused, up to 64 bytes, along with
 /// control and Unicode format characters (bidi controls, zero-width
-/// characters), since the nick is shown in [`State::Ready`].
+/// characters) and the line and paragraph separators (U+2028, U+2029,
+/// which some viewers show as line breaks), since the nick is shown in
+/// [`State::Ready`].
 fn valid_server_nick(n: &str) -> bool {
     (1..=64).contains(&n.len())
-        && !n.contains([' ', '!', '@', ':', ','])
+        && !n.contains([' ', '!', '@', ':', ',', '\u{2028}', '\u{2029}'])
         && !has_control(n)
         && !has_format(n)
 }
@@ -813,7 +815,12 @@ impl fmt::Debug for Handle {
 impl Handle {
     /// Queues `PRIVMSG <target> :<text>`.
     pub fn privmsg(&self, target: &str, text: &str) -> Result<(), SendError> {
-        if target.is_empty() || target.len() > 64 || target.contains(',') || has_control(target) {
+        if target.is_empty()
+            || target.len() > 64
+            || target.contains(',')
+            || has_control(target)
+            || has_format(target)
+        {
             return Err(SendError::BadTarget);
         }
         if text.contains('\u{1}') {
@@ -824,14 +831,20 @@ impl Handle {
 
     /// Queues `PRIVMSG <target> :<prefix><secret>`, for a command that
     /// carries a credential (a tracker bot's invite command with the
-    /// user's IRC key). Refused on a plaintext connection, like a channel
-    /// key; the line is built in a buffer wiped on drop.
+    /// user's IRC key). The target must be one nick, optionally
+    /// `@server` (like NickServ's), never a channel, a mask or a list, so
+    /// the secret reaches one recipient. Refused on a plaintext
+    /// connection, like a channel key; the line is built in a buffer wiped
+    /// on drop.
     pub fn privmsg_secret(
         &self,
         target: &str,
         prefix: &str,
         secret: &Secret,
     ) -> Result<(), SendError> {
+        if !valid_service(target) {
+            return Err(SendError::BadTarget);
+        }
         if !self.tls {
             return Err(SendError::KeyNeedsTls);
         }
@@ -970,19 +983,31 @@ async fn stop_asked(rx: &mut watch::Receiver<bool>) {
     let _ = rx.wait_for(|s| *s).await;
 }
 
+/// Whether the wait before the attempt after `failures` failures in a row
+/// was already the back-off's cap (before jitter). The first attempt had
+/// no wait, so it never is.
+pub(crate) fn at_cap(r: &Reconnect, failures: u32) -> bool {
+    let shift = failures.saturating_sub(1).min(20);
+    failures > 0 && r.base.saturating_mul(1u32 << shift) >= r.cap
+}
+
 /// Counts connections in a row the server ended with `ERROR` before any
-/// registered.
+/// registered, once the back-off had reached its cap.
 #[derive(Debug, Default)]
 pub(crate) struct ErrorStreak(u32);
 
 impl ErrorStreak {
     /// Records how a connection ended; `true` when the client should stop
-    /// as [`Stop::Banned`]. A registration ends the streak; another kind of
-    /// failure (a connect error, a timeout) neither ends nor extends it.
-    pub(crate) fn banned(&mut self, registered: bool, why: &Disconnect) -> bool {
+    /// as [`Stop::Banned`]. An `ERROR` counts only when the wait before
+    /// that connection was already the cap (`at_cap`): quick `ERROR`s
+    /// below it are a server's reconnect throttle ("too many
+    /// connections"), which the back-off itself outlasts. A registration
+    /// ends the streak; another kind of failure (a connect error, a
+    /// timeout), or an `ERROR` below the cap, neither ends nor extends it.
+    pub(crate) fn banned(&mut self, registered: bool, at_cap: bool, why: &Disconnect) -> bool {
         if registered {
             self.0 = 0;
-        } else if *why == Disconnect::ServerError {
+        } else if at_cap && *why == Disconnect::ServerError {
             self.0 += 1;
         }
         self.0 >= SERVER_ERRORS
@@ -1005,7 +1030,8 @@ async fn run(mut ctx: Ctx) {
             }
             End::Retry(why) => why,
         };
-        if errors.banned(registered.is_some(), &why) {
+        let capped = at_cap(&ctx.cfg.reconnect, failures);
+        if errors.banned(registered.is_some(), capped, &why) {
             ctx.state.send_replace(State::Stopped(Stop::Banned));
             return;
         }
@@ -1076,6 +1102,7 @@ async fn session(ctx: &mut Ctx, registered: &mut Option<Instant>) -> End {
     let tcp = tokio::select! {
         biased;
         _ = stop_asked(shutdown) => return End::Stop(Stop::Shutdown),
+        _ = events.closed() => return End::Stop(Stop::Shutdown),
         r = connect_tcp_routed(
             &*egress.resolver,
             &cfg.host,
@@ -1097,6 +1124,7 @@ async fn session(ctx: &mut Ctx, registered: &mut Option<Instant>) -> End {
                 biased;
                 _ = &mut down => return End::Retry(Disconnect::KillSwitch),
                 _ = stop_asked(shutdown) => return End::Stop(Stop::Shutdown),
+                _ = events.closed() => return End::Stop(Stop::Shutdown),
                 r = handshake => match r {
                     Err(_) => return End::Retry(Disconnect::Tls),
                     Ok(Err(e)) if is_certificate_error(&e) => return End::Stop(Stop::Certificate),
@@ -1121,6 +1149,12 @@ async fn session(ctx: &mut Ctx, registered: &mut Option<Instant>) -> End {
     loop {
         let now = Instant::now();
         proto.on_tick(now);
+        // Registered from the welcome on, the NickServ wait included, and
+        // marked before the end is taken, so a welcome and an `ERROR` read
+        // together still count as a registration.
+        if proto.registered() && registered.is_none() {
+            *registered = Some(now);
+        }
         if let Some(end) = proto.end.take() {
             return end;
         }
@@ -1139,16 +1173,11 @@ async fn session(ctx: &mut Ctx, registered: &mut Option<Instant>) -> End {
                 Stats::bump(&stats.lines_out);
             }
         }
-        if proto.ready() {
-            if registered.is_none() {
-                *registered = Some(now);
-            }
-            if shown.as_deref() != Some(proto.nick.as_str()) {
-                shown = Some(proto.nick.clone());
-                state.send_replace(State::Ready {
-                    nick: proto.nick.clone(),
-                });
-            }
+        if proto.ready() && shown.as_deref() != Some(proto.nick.as_str()) {
+            shown = Some(proto.nick.clone());
+            state.send_replace(State::Ready {
+                nick: proto.nick.clone(),
+            });
         }
         let can_send = proto.ready() && !proto.has_output() && bucket.available(now);
         let mut wake = proto.deadline();
@@ -1534,6 +1563,13 @@ impl Proto {
                 Handled::Internal
             }
             "001" => {
+                if self.in_sasl() {
+                    // Registered without the login the config asks for:
+                    // dropped at once, before any join, and tried again
+                    // later. The plugin never sees this welcome.
+                    self.retry(Disconnect::SaslUnavailable);
+                    return Handled::Internal;
+                }
                 self.on_welcome(&msg, now);
                 Handled::Emit(msg)
             }
@@ -1680,12 +1716,6 @@ impl Proto {
     }
 
     fn on_welcome(&mut self, msg: &Message, now: Instant) {
-        if self.in_sasl() {
-            // Registered without the login the config asks for: dropped at
-            // once, before any join, and tried again later.
-            self.retry(Disconnect::SaslUnavailable);
-            return;
-        }
         if self.phase != Phase::Registering {
             return;
         }
@@ -1919,7 +1949,8 @@ mod tests {
         // before any join, and retried.
         let mut p = fresh();
         p.on_message(msg(":s 421 * CAP :Unknown command"), now);
-        p.on_message(msg(":s 001 lode :Welcome"), now);
+        let welcome = p.on_message(msg(":s 001 lode :Welcome"), now);
+        assert!(matches!(welcome, Handled::Internal), "never passed on");
         assert_eq!(p.end, unavailable);
         assert!(!p.ready());
         assert!(!drain(&mut p).iter().any(|l| l.starts_with("JOIN")));
@@ -1927,7 +1958,8 @@ mod tests {
         let mut p = acked(sasl(), true, now);
         p.on_message(msg("AUTHENTICATE +"), now);
         drain(&mut p);
-        p.on_message(msg(":s 001 lode :Welcome"), now);
+        let welcome = p.on_message(msg(":s 001 lode :Welcome"), now);
+        assert!(matches!(welcome, Handled::Internal), "never passed on");
         assert_eq!(p.end, unavailable);
         assert!(drain(&mut p).is_empty());
         // A wrong password.
@@ -2097,6 +2129,8 @@ mod tests {
             "lo\u{ad}de",
             "lo\u{61c}de",
             "lo\u{e0041}",
+            "lo\u{2028}de",
+            "lo\u{2029}de",
             "a".repeat(65).as_str(),
         ] {
             assert!(!valid_server_nick(bad), "{bad:?}");
@@ -2377,25 +2411,152 @@ mod tests {
     }
 
     #[test]
-    fn repeated_server_errors_before_registering_are_a_ban() {
-        let mut e = ErrorStreak::default();
+    fn repeated_server_errors_at_the_cap_are_a_ban() {
         let err = Disconnect::ServerError;
-        assert!(!e.banned(false, &err));
-        assert!(!e.banned(false, &err));
+        // Quick ERRORs below the cap (a reconnect throttle) never stop it.
+        let mut e = ErrorStreak::default();
+        for _ in 0..10 {
+            assert!(!e.banned(false, false, &err));
+        }
+        // Three at the cap do; ones below it don't count.
+        let mut e = ErrorStreak::default();
+        assert!(!e.banned(false, true, &err));
+        assert!(!e.banned(false, false, &err));
+        assert!(!e.banned(false, true, &err));
         // Other failures in between neither end nor extend the streak.
-        assert!(!e.banned(false, &Disconnect::Closed));
-        assert!(!e.banned(false, &Disconnect::PingTimeout));
-        assert!(e.banned(false, &err));
+        assert!(!e.banned(false, true, &Disconnect::Closed));
+        assert!(!e.banned(false, true, &Disconnect::PingTimeout));
+        assert!(e.banned(false, true, &err));
 
         // A registration in between ends it.
         let mut e = ErrorStreak::default();
-        assert!(!e.banned(false, &err));
-        assert!(!e.banned(false, &err));
-        assert!(!e.banned(true, &err), "registered, then ERROR");
-        assert!(!e.banned(false, &err));
-        assert!(!e.banned(false, &err));
-        assert!(e.banned(false, &err));
+        assert!(!e.banned(false, true, &err));
+        assert!(!e.banned(false, true, &err));
+        assert!(!e.banned(true, true, &err), "registered, then ERROR");
+        assert!(!e.banned(false, true, &err));
+        assert!(!e.banned(false, true, &err));
+        assert!(e.banned(false, true, &err));
         assert_eq!(SERVER_ERRORS, 3);
+    }
+
+    #[test]
+    fn the_cap_is_reached_on_the_capped_step() {
+        // Defaults: 5, 10, 20, 40, 80, 160, 320 s, then 640 s capped to
+        // 600 s on the 8th wait.
+        let r = Reconnect::default();
+        assert!(!at_cap(&r, 0), "the first attempt had no wait");
+        for f in 1..=7 {
+            assert!(!at_cap(&r, f), "{f}");
+        }
+        for f in [8, 9, 1000, u32::MAX] {
+            assert!(at_cap(&r, f), "{f}");
+        }
+        let flat = Reconnect {
+            base: Duration::from_secs(1),
+            cap: Duration::from_secs(1),
+            ..Reconnect::default()
+        };
+        assert!(!at_cap(&flat, 0));
+        assert!(at_cap(&flat, 1));
+    }
+
+    /// Unicode 16's Cf list, written out again here so that dropping or
+    /// narrowing a range in `has_format` fails: both ends of each range
+    /// are refused, and the code point either side is accepted unless it
+    /// is itself Cf.
+    #[test]
+    fn format_ranges_are_exact() {
+        const CF: &[(u32, u32)] = &[
+            (0x00AD, 0x00AD),
+            (0x0600, 0x0605),
+            (0x061C, 0x061C),
+            (0x06DD, 0x06DD),
+            (0x070F, 0x070F),
+            (0x0890, 0x0891),
+            (0x08E2, 0x08E2),
+            (0x180E, 0x180E),
+            (0x200B, 0x200F),
+            (0x202A, 0x202E),
+            (0x2060, 0x2064),
+            (0x2066, 0x206F),
+            (0xFEFF, 0xFEFF),
+            (0xFFF9, 0xFFFB),
+            (0x110BD, 0x110BD),
+            (0x110CD, 0x110CD),
+            (0x13430, 0x1343F),
+            (0x1BCA0, 0x1BCA3),
+            (0x1D173, 0x1D17A),
+            (0xE0001, 0xE0001),
+            (0xE0020, 0xE007F),
+        ];
+        let is_cf = |c: u32| CF.iter().any(|&(lo, hi)| (lo..=hi).contains(&c));
+        let text = |c: u32| char::from_u32(c).map(|c| format!("a{c}b")).unwrap();
+        for &(lo, hi) in CF {
+            for c in [lo, hi] {
+                assert!(has_format(&text(c)), "U+{c:04X} is Cf");
+            }
+            for c in [lo - 1, hi + 1] {
+                if !is_cf(c) {
+                    assert!(!has_format(&text(c)), "U+{c:04X} isn't Cf");
+                }
+            }
+        }
+    }
+
+    /// A handle with no client behind it, and the queue it writes to.
+    fn handle(tls: bool) -> (Handle, mpsc::Receiver<Zeroizing<Vec<u8>>>) {
+        let (commands, rx) = mpsc::channel(COMMAND_QUEUE);
+        let (_, state) = watch::channel(State::Registering);
+        let (stop, _) = watch::channel(false);
+        let h = Handle {
+            commands,
+            state,
+            stats: Arc::new(Stats::default()),
+            shutdown: Arc::new(stop),
+            tls,
+        };
+        (h, rx)
+    }
+
+    #[test]
+    fn secrets_go_to_one_nick_only() {
+        let (h, mut rx) = handle(true);
+        let key = Secret::new("irc-key-test");
+        for bad in [
+            "#announce",
+            "&local",
+            "Bot,Other",
+            "*!*@host",
+            "$*.example",
+            "Bot@",
+            "Bot@-bad",
+            "Bo t",
+            "",
+        ] {
+            assert_eq!(
+                h.privmsg_secret(bad, "!invite ", &key),
+                Err(SendError::BadTarget),
+                "{bad:?}"
+            );
+        }
+        assert!(rx.try_recv().is_err(), "nothing was queued");
+        for ok in ["Bot", "NickServ@services.example.test"] {
+            h.privmsg_secret(ok, "!invite ", &key).unwrap();
+            let line = rx.try_recv().unwrap();
+            let want = format!("PRIVMSG {ok} :!invite irc-key-test\r\n");
+            assert_eq!(&line[..], want.as_bytes());
+        }
+    }
+
+    #[test]
+    fn targets_refuse_format_characters() {
+        let (h, mut rx) = handle(false);
+        for bad in ["#a\u{200b}", "\u{202e}Bot", "Bot\u{feff}"] {
+            assert_eq!(h.privmsg(bad, "x"), Err(SendError::BadTarget), "{bad:?}");
+        }
+        assert!(rx.try_recv().is_err(), "nothing was queued");
+        h.privmsg("#a", "x").unwrap();
+        assert_eq!(&rx.try_recv().unwrap()[..], b"PRIVMSG #a x\r\n");
     }
 
     #[test]

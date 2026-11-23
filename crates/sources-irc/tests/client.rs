@@ -579,18 +579,27 @@ async fn garbage_is_still_silence() {
     assert!(stats.overlong > 0 && stats.malformed > 0, "{stats:?}");
 }
 
+/// Accepts a connection and ends it with `ERROR` before registering.
+async fn refuse_with_error(srv: &mut Server) {
+    let mut conn = srv.accept().await;
+    conn.expect("NICK lode").await;
+    conn.send("ERROR :Closing Link: lode (K-lined)").await;
+    conn.closed().await;
+}
+
 /// A server that ends every connection with `ERROR` before registering
-/// (a K-line) stops the client after three, instead of being retried
-/// forever.
+/// (a K-line) stops the client after three once the back-off is at its
+/// cap, instead of being retried forever.
 #[tokio::test]
-async fn repeated_errors_before_registering_stop_the_client() {
+async fn repeated_errors_at_the_cap_stop_the_client() {
     let mut srv = Server::start(false).await;
-    let (h, _ev) = spawn(config(srv.port, false), egress()).unwrap();
-    for _ in 0..3 {
-        let mut conn = srv.accept().await;
-        conn.expect("NICK lode").await;
-        conn.send("ERROR :Closing Link: lode (K-lined)").await;
-        conn.closed().await;
+    let mut c = config(srv.port, false);
+    c.reconnect.cap = c.reconnect.base;
+    let (h, _ev) = spawn(c, egress()).unwrap();
+    // The first attempt had no wait, so its ERROR doesn't count; every
+    // later wait is the cap.
+    for _ in 0..4 {
+        refuse_with_error(&mut srv).await;
     }
     state(&h, "Stopped", |s| *s == State::Stopped(Stop::Banned)).await;
     let deadline = Instant::now() + WAIT;
@@ -598,5 +607,104 @@ async fn repeated_errors_before_registering_stop_the_client() {
         assert!(Instant::now() < deadline, "the client kept running");
         tokio::task::yield_now().await;
     }
-    assert_eq!(srv.accepted(), 3);
+    assert_eq!(srv.accepted(), 4);
+}
+
+/// Quick `ERROR`s while the back-off is still below its cap are a
+/// server's reconnect throttle ("too many connections"): the client keeps
+/// trying, and registers once the server lets it.
+#[tokio::test]
+async fn quick_errors_below_the_cap_are_retried() {
+    let mut srv = Server::start(false).await;
+    let mut c = config(srv.port, false);
+    c.reconnect.cap = Duration::from_secs(60);
+    let (h, _ev) = spawn(c, egress()).unwrap();
+    for _ in 0..3 {
+        refuse_with_error(&mut srv).await;
+    }
+    let mut conn = srv.accept().await;
+    conn.register().await;
+    ready(&h).await;
+}
+
+/// An `ERROR` during the NickServ wait comes after the welcome, so it is
+/// a registered connection: it ends the `ERROR` streak instead of
+/// extending it.
+#[tokio::test]
+async fn an_error_while_identifying_ends_the_streak() {
+    let mut srv = Server::start(true).await;
+    let mut c = config(srv.port, true);
+    c.reconnect.cap = c.reconnect.base;
+    c.auth = Auth::NickServ {
+        account: "acct".into(),
+        password: Secret::new("pw-test"),
+        service: None,
+    };
+    let (h, _ev) = spawn(c, egress()).unwrap();
+    // One uncounted (no wait before it), then two at the cap.
+    for _ in 0..3 {
+        refuse_with_error(&mut srv).await;
+    }
+    let mut conn = srv.accept().await;
+    conn.register().await;
+    conn.expect("PRIVMSG NickServ :IDENTIFY acct pw-test").await;
+    conn.send("ERROR :Closing Link: lode (Services restarting)")
+        .await;
+    conn.closed().await;
+    // Not a ban: the next connection comes and registers.
+    let mut conn = srv.accept().await;
+    conn.register().await;
+    conn.expect("PRIVMSG NickServ :IDENTIFY acct pw-test").await;
+    conn.send(":irc.test 900 lode lode!u@h acct :You are now logged in")
+        .await;
+    ready(&h).await;
+}
+
+/// A resolver that never answers, so the connect never finishes.
+struct Hang;
+
+impl Resolve for Hang {
+    fn resolve<'a>(&'a self, _: &'a str) -> BoxFuture<'a, io::Result<Vec<IpAddr>>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+/// Dropping `Events` stops a client stuck connecting at once, not after
+/// the connect timeout (set to its 10 min maximum here, well past every
+/// wait's deadline).
+#[tokio::test]
+async fn dropping_events_stops_a_stuck_connect() {
+    let mut c = config(6667, false);
+    c.timeouts.connect = Duration::from_secs(600);
+    let egress = Egress::new(
+        Arc::new(Hang),
+        NetPolicy::download_client(),
+        Route::Direct,
+        None,
+    );
+    let (h, ev) = spawn(c, egress).unwrap();
+    state(&h, "Connecting", |s| matches!(s, State::Connecting { .. })).await;
+    drop(ev);
+    state(&h, "Stopped", |s| *s == State::Stopped(Stop::Shutdown)).await;
+}
+
+/// The same during a TLS handshake the server never answers.
+#[tokio::test]
+async fn dropping_events_stops_a_stuck_tls_handshake() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut c = config(listener.local_addr().unwrap().port(), true);
+    c.timeouts.connect = Duration::from_secs(600);
+    let (h, ev) = spawn(c, egress()).unwrap();
+    let (mut silent, _) = tokio::time::timeout(WAIT, listener.accept())
+        .await
+        .expect("no connection within the deadline")
+        .unwrap();
+    // The ClientHello's first bytes: the client is in the handshake.
+    let mut hello = [0u8; 1];
+    tokio::time::timeout(WAIT, silent.read_exact(&mut hello))
+        .await
+        .expect("no ClientHello within the deadline")
+        .unwrap();
+    drop(ev);
+    state(&h, "Stopped", |s| *s == State::Stopped(Stop::Shutdown)).await;
 }
