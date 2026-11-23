@@ -101,3 +101,9 @@ Build-plan §0.5's standing rule: keep only if stored per slot-second and stored
   - hostile replies to soft queries (spoofed, repeated, to detached queries, with ticks between) settle nothing twice, end nothing more than once and stay bounded;
   - in `lookup.rs`, any sequence of adds, sends, soft expiries, answers, failures and retries keeps the counters equal to the states and within `ALPHA`.
 - **CR-SIM:** `soft_timeout_runs_deterministically` (not ignored) and the `#[ignore]` screen above.
+
+## The fleet and collector (runner, 2026-11-23: owns extended for these lines)
+- **`LODESTAR_DHT_SOFT_TIMEOUT` is a switch the collector records.** It's added to `SWITCH_ENV` in `docs/soak/tools/linux/collect.py` as `soft_timeout`, recorded and off unless set, with no treatment yet (as CR-SAMPLE-BACKOFF-ESCALATE was in #1029).
+- **The fleet's VM stack passes it through by bare name** (`infra/fleet/steps/vm/compose.yaml`), so a cloud screen or an A/B block can set it and one that doesn't leaves it at its default.
+- **Why:** X-fleet-switch-passthrough's test requires every `LODESTAR_DHT_*` variable `config.rs` reads to be one or the other, so a new switch can't be missed. Without these lines, CI's `infra` job fails on this PR.
+- **The analyzer needed no change.** `analyze_cr.py` derives its switch lists from `SWITCH_ENV`, and its tests pass with the new entry.
