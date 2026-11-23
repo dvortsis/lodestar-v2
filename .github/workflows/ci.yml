@@ -250,9 +250,9 @@ jobs:
   # Index and store size against the owner's §3 budgets, on 50k seeded
   # synthetic torrents (GS-gate). It runs on any change to a crate the bench
   # builds (search, classify, store and the rest, plus bench/ itself), and
-  # ci-ok needs it, so a producer that takes the torrent index over 512 B is
-  # red. It fails closed: size-report fails when it can't measure, and the
-  # summary always says why.
+  # ci-ok needs it, so a producer that takes the torrent index over 560 B
+  # or the store over 976 B is red. It fails closed: size-report fails when
+  # it can't measure, and the summary always says why.
   size-budget:
     name: size budget (§3)
     needs: changes

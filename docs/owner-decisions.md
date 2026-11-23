@@ -783,6 +783,10 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **The experiment host** (00:35Z): "We should be able to run tests on unraid soon." Experiment-host runs wait until the owner says the box is back (the standing permission of §2.68 is unchanged). Its stage 1 run sheet is prepared meanwhile (X-host-ab-runsheet).
     - **Cloud now, Unraid later** (00:36Z): "Yes, go ahead with the tests." Asked whether that included the Unraid box, the owner chose "Cloud now, Unraid later". The cloud stage 1 starts now; the hold above stands.
 
+83. **Finish the running build slices, then support cloud testing and the API lane** (owner, in the runner session, 2026-11-23T06:09Z): "finish the build slices you've got going on and then focus on supporting the cloud testing and api session. Don't start any new slices unless the cloud testing environment or api runner needs something."
+    - **Runner's reading:** slices already running finish and merge as usual. A freed build slot stays empty. A queued follow-up waits. A new slice starts only when the cloud-testing session (X-test-vm) or the API lane needs one, and the runner records why. This pauses §2.81's four build sessions; testing sessions are unchanged.
+    - **Balances** (owner, the same session, about 06:30Z): the Claude API balance is "$154.86", and "The AWS balance is $130.56". So §2.82's AWS stop is 90% of the lower of $130.56 and $133.72: **$117.50 of new AWS spend from 2026-11-23T00:31Z**. Linode's cap and the fleet's are unchanged.
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

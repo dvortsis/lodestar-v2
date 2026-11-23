@@ -285,6 +285,7 @@ placement:
   - X-settings-find
   - X-field-layout
   - X-setup-token-boot
+  - X-setup-token-nits
   - X-first-run
   - X-client-handoff
 - ws: ws-filters
@@ -312,6 +313,8 @@ placement:
   - X-cards-raw-name
   - X-rowactions-arrowdown
   - X-index-banner-late
+  - X-querybar-static-q
+  - X-shell-nav-cls
   - S-search-*
   - S-detail
   - S-compare
@@ -579,6 +582,7 @@ placement:
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
   - X-fleet-baab
+  - X-fleet-baab-tails
   - X-pia-bridge-manual
   - X-pia-bridge-docs
   - X-restart-banner-polish
@@ -641,6 +645,7 @@ placement:
   - X-pool-first-request-docs
   - X-pool-past-cap-room
   - CR-SOFT-TIMEOUT
+  - X-soft-lane-free
   - X-sampler-streak-metrics
   - X-capacity-rejection-source
 - ws: ws-cr-live
@@ -728,6 +733,8 @@ placement:
   match:
   - RX-1
   - RX-2
+  - X-trigram-switch
+  - X-regex-lazy-verify
   - GS-3
   - X-gs3-nits
   - X-search-param-errors
@@ -1945,6 +1952,11 @@ owner_queue:
   action: 'May a provisional cloud A/B stage keep one test instance for up to 44 h, as the fleet does (cloud-fleet-runbook.md), instead of at most 24 h? You approved Linux test instances on AWS with 24 h expiry tags. A stage runs two blocks of about 18 h each, so with 24 h each block gets a fresh instance and IP. That still gives a valid result, because each block is balanced within its own instance, but the spread between blocks is wider. The 48 h guard and the spend stop are unchanged either way. The runner recommends yes, for the cloud A/B stages only (runner records r15).'
   unblocks: One instance and IP for a whole cloud stage, so stage results are a little tighter
   when: Any time; until then each block gets its own instance
+- n: 36
+  type: decision
+  action: 'May the experiment-host operator move Unraid''s mover schedule for the length of a host A/B stage, then put it back? A mover run inside a block invalidates a segment (it counts as an array operation), §2.68 lets the operator pause parity checks and backups but not change the mover, and Unraid''s default mover runs daily, so most blocks would hit it. Today the run sheet stops before starting and asks you (docs/soak/runsheets/host-stage1-ab-runsheet.md step 4b). The runner recommends yes: move it outside the block''s hours and restore it at the end, recorded in the stage''s records (runner records r16).'
+  unblocks: Host A/B blocks that start on time instead of waiting on a daily mover run
+  when: Before the experiment host's stage 1 starts; until then the run sheet asks you each time
 
 gates:
 - id: G-v05
