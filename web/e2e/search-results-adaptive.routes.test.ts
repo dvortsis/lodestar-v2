@@ -195,6 +195,14 @@ test.describe('the drawer beside the results', () => {
 		await go('/search?q=lantern');
 		await openRow(page, 2);
 		await expect(host(page)).toHaveAttribute('data-mode', 'inline');
+		// The Technical details section loads when it scrolls near, and the shot's own resize doesn't wait
+		// for it: scroll it into view, wait for it, and put every scroller back before the shot.
+		await page.locator('[data-testid="detail-view"] > :last-child').scrollIntoViewIfNeeded();
+		await expect(page.locator('[data-section="technical"]')).toBeVisible({ timeout: 10_000 });
+		await page.evaluate(() => {
+			window.scrollTo(0, 0);
+			for (const el of document.querySelectorAll('*')) if (el.scrollTop > 0) el.scrollTop = 0;
+		});
 		await expectPageSnapshot(page, 'search-drawer-1440');
 	});
 });

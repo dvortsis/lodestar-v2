@@ -80,6 +80,15 @@
 		if (d.mark) out.splice(d.mark.before, 0, { kind: 'mark', key: 'mark', at: d.mark.at });
 		return out;
 	});
+
+	// A short list ends where its rows end (no blank card); a list with more to load keeps the full
+	// height. A mark row is pinned to 10 spacing steps, 2.5rem (`.al-divider`), so the sum scales with the
+	// root font size like the mark does.
+	const listHeight = $derived.by(() => {
+		if (d.hasMore) return undefined;
+		const marks = items.filter((it) => it.kind === 'mark').length;
+		return `calc(${(items.length - marks) * rowHeight}px + ${marks * 2.5}rem)`;
+	});
 	let active = $state(0);
 
 	function open(_: number, item: Item) {
@@ -293,7 +302,7 @@
 						{d.search.paused ? m.alerts_empty_detail_paused() : m.alerts_empty_detail()}
 					</p>
 				{:else}
-					<div class="al-list" bind:this={listEl}>
+					<div class="al-list" bind:this={listEl} style:--al-rows={listHeight}>
 						<VirtualList
 							{items}
 							role="grid"
@@ -405,27 +414,34 @@
 	.al-skeleton :global(.al-skeleton-row) {
 		block-size: var(--row-height-comfortable);
 	}
+	/* A row's visually hidden text (an absolutely placed span) must not widen the scroll height. */
+	.al-list [role='gridcell'] {
+		contain: paint;
+	}
 	.al-empty {
 		margin: 0;
 		padding: calc(var(--spacing) * 6) 0;
 		color: var(--color-muted-text);
 	}
 	.al-list {
-		block-size: max(calc(var(--row-height-comfortable) * 6), calc(100dvh - var(--spacing) * 64));
+		block-size: min(
+			calc(var(--al-rows, 100dvh) + var(--border) * 2),
+			max(calc(var(--row-height-comfortable) * 6), calc(100dvh - var(--spacing) * 64))
+		);
 		border: var(--border) solid var(--color-base-300);
 		border-radius: var(--radius-box);
 		background: var(--color-base-100);
 		overflow: hidden;
 	}
 	.al-divider {
-		display: flex;
-		align-items: center;
-		margin: 0;
-		min-block-size: calc(var(--spacing) * 10);
+		/* Pinned, so the list can be sized from its rows: one line, cut with an ellipsis. */
+		block-size: calc(var(--spacing) * 10);
 		padding-inline: calc(var(--spacing) * 4);
-		color: var(--color-base-content);
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
 		font-size: var(--text-small);
-		line-height: var(--text-small--line-height);
+		line-height: calc(var(--spacing) * 9);
 		font-weight: var(--font-weight-medium);
 		background: var(--color-selected);
 		border-block: var(--border) solid var(--color-primary);

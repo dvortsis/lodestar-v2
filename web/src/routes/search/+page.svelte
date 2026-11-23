@@ -47,10 +47,12 @@
 	// S-search-3's toolbar, which shows once there is a query.
 	type Panel = typeof import('$lib/features/search/results/ResultsPanel.svelte').default;
 	type Host = typeof import('$lib/features/search/facets/FacetsHost.svelte').default;
+	type HomeComponent = typeof import('$lib/features/search/home/Home.svelte').default;
 	type Bar = typeof import('$lib/features/search/toolbar/ResultsToolbar.svelte').default;
 	let Results = $state<Panel>();
 	let Toolbar = $state<Bar>();
 	let Facets = $state<Host>();
+	let Home = $state<HomeComponent>();
 	// A failed set shows an alert in #results. It clears the cached promise, so a new query calls
 	// `import()` again (Chromium 157 refetches; 153 keeps the failure for the module graph). Retry
 	// reloads the page at the current URL, as Insights does. The tab's `window.name` carries a
@@ -69,9 +71,11 @@
 			import('$lib/features/search/results/row.css'),
 			import('$lib/features/search/results/results.css'),
 			import('$lib/features/search/toolbar/ResultsToolbar.svelte'),
-			import('$lib/features/search/toolbar/toolbar.css')
+			import('$lib/features/search/toolbar/toolbar.css'),
+			import('$lib/features/search/home/Home.svelte')
 		]).then(
-			([panel, host, , , bar]) => {
+			([panel, host, , , bar, , home]) => {
+				Home = home.default;
 				Results = panel.default;
 				Facets = host.default;
 				Toolbar = bar.default;
@@ -169,7 +173,7 @@
 					</div>
 				{/if}
 				{#if Toolbar}<Toolbar />{/if}
-				{#if Results}<Results focusBar={() => bar?.focusEnd()} />{:else if failed}
+				{#if Results}<Results focusBar={() => bar?.focusEnd()} {Home} />{:else if failed}
 					<div class="flex flex-col gap-4 p-6" role="alert">
 						{m.search_page_results_failed()}<button class="btn btn-primary" onclick={reload}
 							>{m.search_page_retry()}</button

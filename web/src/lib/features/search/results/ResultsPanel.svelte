@@ -5,7 +5,7 @@
 	//   the last good rows, as the strip keeps the last good chips.
 	// - j/k move through the rows (scope `search`); `c` and `o` act on the focused row through
 	//   S-detail's `setCommandTarget`; Enter or a click opens the drawer.
-	import { onMount, tick, untrack } from 'svelte';
+	import { onMount, tick, untrack, type Component } from 'svelte';
 	import { page } from '$app/state';
 	import { api, type ApiError } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
@@ -27,9 +27,8 @@
 		withoutFilters,
 		type Clause
 	} from '../query/clauses';
-	import { EXAMPLES } from '../query/examples';
 	import { ensureSearchPath } from '../query/path';
-	import { appearanceHref, searchHref } from './links';
+	import { appearanceHref } from './links';
 	import { bannerFor, type IndexState } from './recover';
 	import { results, type ResultsQuery } from './results.svelte';
 	import ResultRow, { type Density, type SearchHit } from './ResultRow.svelte';
@@ -38,8 +37,14 @@
 	interface Props {
 		/** Focus the query bar (the empty state's next step). */
 		focusBar: () => void;
+		/** The home screen (search/home), loaded beside the panel in its own chunk. */
+		Home?: Component<{
+			focusBar: () => void;
+			count: number | null;
+			saved: components['schemas']['SavedSearchView'][];
+		}>;
 	}
-	let { focusBar }: Props = $props();
+	let { focusBar, Home }: Props = $props();
 
 	/** §10.4 "First load": skeletons only after this long, so a quick answer never flashes them. */
 	const SKELETON_AFTER_MS = 300;
@@ -429,39 +434,7 @@
 	{:else if fullCold && Index}
 		<!-- the cold-start page above stands in for the empty state -->
 	{:else if results.status === 'empty'}
-		<div class="rp-empty" data-testid="results-empty">
-			<p class="rp-empty-title" data-testid="results-empty-title">
-				{figures
-					? m.search_results_empty_title({
-							count: formatCount(figures.searchable_torrents, locale)
-						})
-					: m.search_results_empty_title_unknown()}
-			</p>
-			<p>{m.search_results_empty_lead()}</p>
-			<ul class="rp-examples">
-				{#each EXAMPLES.slice(0, 3) as ex (ex.query)}
-					<li>
-						<!-- The query last on its line: the mono font arrives late, and growing text there moves
-						     nothing after it (a layout shift otherwise). -->
-						{ex.goal()} ·
-						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- searchHref() resolves -->
-						<a class="rp-link" href={searchHref(ex.query)}><code>{ex.query}</code></a>
-					</li>
-				{/each}
-			</ul>
-			<Button onclick={focusBar}>{m.search_results_empty_focus()}</Button>
-			<!-- Last: the list arrives with its request, after the rest has painted, and must not push
-			     anything down (a layout shift). -->
-			{#if saved.length}
-				<h3 class="rp-empty-sub">{m.search_results_empty_saved()}</h3>
-				<ul class="rp-examples" data-testid="results-saved">
-					{#each saved as s (s.id)}
-						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- searchHref() resolves -->
-						<li><a class="rp-link" href={searchHref(s.q, s.sort)}>{s.name}</a></li>
-					{/each}
-				</ul>
-			{/if}
-		</div>
+		{#if Home}<Home {focusBar} count={figures?.searchable_torrents ?? null} {saved} />{/if}
 	{:else if results.status === 'loading'}
 		<div class="rp-skeleton" data-testid="results-loading" role="status">
 			<span class="sr-only">{m.search_results_loading()}</span>

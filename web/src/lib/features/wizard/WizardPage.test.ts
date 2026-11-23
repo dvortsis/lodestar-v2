@@ -54,10 +54,10 @@ describe('wizard shell', () => {
 		const list = screen.getByTestId('wizard-progress');
 		// /setup's steps (the Legal Notice first), then this list's, numbered on from them.
 		const items = within(list).getAllByRole('listitem');
-		expect(items.slice(0, 3).map((li) => li.textContent?.trim().split(/\s+/)[0])).toEqual([
-			'Legal',
-			'Setup',
-			'Admin'
+		expect(items.slice(0, 3).map((li) => li.textContent?.trim())).toEqual([
+			'1. Legal Notice · Done',
+			'2. Setup token · Done',
+			'3. Admin password · Done'
 		]);
 		expect(screen.getByTestId('wizard-step-network').textContent).toContain('4. Network check');
 		expect(screen.getByTestId('wizard-step-network').getAttribute('aria-current')).toBe('step');

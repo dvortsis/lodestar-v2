@@ -283,6 +283,7 @@ placement:
   - X-auth-early-401
   - X-settings-leave-guard-split
   - X-settings-find
+  - X-field-layout
   - X-setup-token-boot
   - X-first-run
   - X-client-handoff
@@ -304,6 +305,13 @@ placement:
   - X-detail-depth
   - X-units-typed
   - X-hit-resolution
+  - X-hit-resolution-nits
+  - X-detail-attributes
+  - X-hidden-count
+  - X-detail-depth-compare
+  - X-cards-raw-name
+  - X-rowactions-arrowdown
+  - X-index-banner-late
   - S-search-*
   - S-detail
   - S-compare
@@ -314,6 +322,7 @@ placement:
   - X-insights-scroll-a11y
   - X-insights-story
   - X-insights-story-stages
+  - X-insights-reconcile-test
   - X-charts
   - X-alert-noun
   - X-alert-noun-text
@@ -364,6 +373,10 @@ placement:
   - X-insights-source-names
   - X-shell-home
   - X-narrow-states
+  - X-narrow-states-2
+  - X-skip-results-flake
+  - X-retry-typed-flake
+  - X-size-own-modules
   - X-help
   - X-ui-checks
   - X-ui-checks-1
@@ -565,6 +578,7 @@ placement:
   - X-worker-oversize-nits
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
+  - X-fleet-baab
   - X-pia-bridge-manual
   - X-pia-bridge-docs
   - X-restart-banner-polish
@@ -626,10 +640,14 @@ placement:
   - CR-UTP-FIRST-WINDOW
   - X-pool-first-request-docs
   - X-pool-past-cap-room
+  - CR-SOFT-TIMEOUT
+  - X-sampler-streak-metrics
+  - X-capacity-rejection-source
 - ws: ws-cr-live
   match:
   - CR-AB-*
   - CR-CP1
+  - X-host-ab-runsheet
 - ws: ws-cr-tune
   match:
   - CR-5
@@ -1040,7 +1058,7 @@ conditions:
     met: true
     who: you
     label: 'Standing permission, no per-run booking (§2.68). A crawler run never overlaps another run, a comparator day, an import pilot or a soak. It may pause only Appdata Backup and a scheduled parity check, with a restore step that always runs'
-    note: 'cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h'
+    note: 'cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h. The box is down (you, 2026-11-23): runs there wait until you say it is back, and provisional cloud runs go first (§2.82)'
   owner-checkpoint-1:
     met: true
     who: you
@@ -1309,17 +1327,19 @@ roadmap:
     - CR-LOOKUP-END
     - CR-HINT-FIRST
     - X-sampler-cooldown-split
+    - CR-SOFT-TIMEOUT
     - X-crawler-sim-calibrate
     - CR-COL-5
   - id: crab
     label: Live A/B on the experiment host
-    plain: Paired on/off runs plus a bitmagnet comparator. Needs your host.
+    plain: Paired on/off runs plus a bitmagnet comparator. Needs your host, which is down; provisional cloud runs go first and never count as the gain (§2.82), and the host's run sheet is prepared meanwhile.
     col: 1
     row: 0
     members:
     - CR-AB-COMP
     - CR-AB-ADM
     - CR-AB-4
+    - X-host-ab-runsheet
   - id: cp1
     label: Checkpoint 1
     plain: Does the measured gain project to 100 torrents a minute? If not, you re-decide.
@@ -1697,6 +1717,13 @@ roadmap:
     - X-hit-resolution
     - X-charts
     - X-narrow-states
+    - X-narrow-states-2
+    - X-detail-depth-compare
+    - X-field-layout
+    - X-cards-raw-name
+    - X-rowactions-arrowdown
+    - X-index-banner-late
+    - X-hidden-count
     - X-setup-token-boot
     - X-first-run
     - X-alert-noun
@@ -1903,11 +1930,6 @@ owner_queue:
   action: 'Require the Purpose=X-test-vm tag on test-VM volumes in the test-VM IAM policy (infra/dev-vm/aws-claude-testvm.json, RunOnlyEncryptedBoundedVolumes)? Today it requires only Project=Lodestar on volumes, so a volume launched without Purpose would slip past the teardown check, which looks for Purpose. The runner recommends yes. X-testvm-teardown-by-id also checks each lane''s own volume by id'
   unblocks: A teardown check that can't miss a leftover test volume
   when: Any time; IAM changes are yours
-- n: 32
-  type: decision
-  action: 'CR-1c (lookup slots sized to the preset) failed one of its two screen conditions on 8 seeds: stored per minute +110% and stored per DHT query +26%, but stored per slot-second -16%, because each extra lookup reaches lower-value hashes. Should a change whose purpose is more slots need per slot-second to rise, or are per query (politeness) and the memory bound the right conditions? Until you answer, CR-1c merges with its switch off and stays out of CR-AB-LC (docs/decisions/2026-11-21-runner-records-r6.md)'
-  unblocks: Whether CR-1c is tested with CR-LOOKUP-END in CR-AB-LC, as you asked on 2026-11-20
-  when: Before CR-AB-LC starts on the experiment host
 - n: 33
   type: decision
   action: 'Grant the test-VM user ec2:DeleteVolume on its own test volumes (infra/dev-vm/aws-claude-testvm.json)? Today it has none, so a test volume that survives teardown waits for you to delete it, and a 100 GiB volume costs about $0.011/h (about $8 a month) until then. The runner recommends yes, scoped like the existing terminate permission (ManageOnlyOwnLodestarTestInstances): Project=Lodestar, Environment=Test, Purpose=X-test-vm and LaunchedBy=its own UserId'
@@ -1918,6 +1940,11 @@ owner_queue:
   action: 'Should a metadata fetch over uTP get one extra 4 s for its first window, only while pieces are still arriving (CR-UTP-FIRST-WINDOW option (b), on top of (d), which merged as #1054)? A slow uTP peer could then hold its first claim for 8 s instead of 4 s; a silent peer still has 4 s, and TCP is unchanged. After (d), at most 9.25% of first windows still miss at 20% packet loss and 2.5% at 15%; the extension would save those that need under 8 s (not measured with it in place). The runner recommends no, unless live data show uTP paths at 15% loss or worse are common (docs/decisions/2026-11-22-CR-UTP-FIRST-WINDOW.md)'
   unblocks: Fewer missed metadata fetches over lossy uTP paths, at a looser bound against slow peers
   when: Any time; until then the 4 s deadline holds for every transport
+- n: 35
+  type: decision
+  action: 'May a provisional cloud A/B stage keep one test instance for up to 44 h, as the fleet does (cloud-fleet-runbook.md), instead of at most 24 h? You approved Linux test instances on AWS with 24 h expiry tags. A stage runs two blocks of about 18 h each, so with 24 h each block gets a fresh instance and IP. That still gives a valid result, because each block is balanced within its own instance, but the spread between blocks is wider. The 48 h guard and the spend stop are unchanged either way. The runner recommends yes, for the cloud A/B stages only (runner records r15).'
+  unblocks: One instance and IP for a whole cloud stage, so stage results are a little tighter
+  when: Any time; until then each block gets its own instance
 
 gates:
 - id: G-v05
@@ -2123,7 +2150,7 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-20'
+  updated: '2026-11-23'
   now:
   - label: The runner decides the owner queue, except the filters (§2.69)
     text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto. You chose FILTER-01 and FILTER-03 (§2.70). Crawler tests on the Unraid box need no booking now (§2.68). The API credit now funds the owner-run build lane, whose enrichment PRs are landing (seven combined in #971), and the operator is unfunded (§2.75).'
@@ -2136,7 +2163,7 @@ notes:
   - label: v0.5.1 is published
     text: You published v0.5.1 on 2026-11-07 from 12cd25ca, after it passed the 24-hour memory test (0.91 MiB an hour, upper bound 1.35, bar 2.0), the VPN (gluetun) leg and the Windows MSI check. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
-    text: 'It finds about 12 torrents a minute and the v0.6 tag needs 100. The CR-0 run showed that each lookup costs too much, so the plan you approved on 2026-11-20 follows that (§2.79). CR-LEDGER''s counters come first. Then, on your Unraid box: stage 1 tests admission and uTP; stage 2 tests the lookup-cost pair (CR-LOOKUP-END with CR-1c) on top of their winners, as one treatment, as you chose (§2.80); stage 3 tests hint-first, then the sampler fix. That is about 16.5 to 28.5 host-days, three to five weeks with retries. Every change is behind an off switch, and cloud runs only check that a change works as designed, never whether it gains.'
+    text: 'It finds about 12 torrents a minute and the v0.6 tag needs 100. The CR-0 run showed that each lookup costs too much, so the plan you approved on 2026-11-20 follows that (§2.79). Stage 1 tests admission and uTP; stage 2 tests the lookup-cost pair (CR-LOOKUP-END with CR-1c, which joins it by the runner''s call on your 2026-11-23 delegation) on top of their winners, as one treatment, as you chose (§2.80); stage 3 tests hint-first, then the sampler fix. Your Unraid box is down, so by your 2026-11-23 go-ahead stage 1 runs first on AWS, two treatments in parallel on their own instances, within the credit you named (§2.82). Cloud results are provisional: they pick the stacked control for the cloud''s stage 2 and can stop only a clear failure; every stage 1 treatment still gets its run on your box, which gives the gain of record. Every change is behind an off switch.'
   - label: Sources are being laid down
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and

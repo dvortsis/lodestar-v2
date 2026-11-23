@@ -169,7 +169,7 @@ const filtersDoor = [/features\/filters\/flows-(?:door|root)\.ts$/];
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
-	/features\/detail\/(Contents|ErrorState|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment|identified\/Identified)\.svelte$/,
+	/features\/detail\/(Contents|ErrorState|TechnicalDetails|ActionsMenu|swarm\/Swarm|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment|identified\/Identified)\.svelte$/,
 	// Clipboard failure is an interaction, not part of opening the detail view.
 	// Its UI and mount runtime remain included in the on-demand budget below.
 	/features\/detail\/manual-mount\.ts$/,
@@ -1076,6 +1076,20 @@ const resultsFirst = [
 	)
 ];
 const resultsKeysLazy = resultsLazy.filter((f) => !resultsFirst.includes(f));
+// The search home (X-shell-home, runner r14): the empty state, its own chunk. The page loads it in the
+// same Promise.all as the panel and hands it to the panel, so it is in the first frame and every entry
+// that loads later counts it as already loaded (`resultsLoaded`). It is not in RESULTS, so it does not
+// grow 'Search results (lazy)'; adding it to the "already loaded" lists is a partition fix, and
+// 'Search index-state banners' goes back under its limit with no raise.
+const homeLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/home/Home.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy
+		])
+	)
+];
+const resultsLoaded = [...resultsLazy, ...homeLazy];
 // The facet rail (S-search-2b): its host loads with the results, and the rail with it where the
 // rail shows (x-large); below that, on the first Filters press, which also brings the sheet (on
 // demand). Measured beyond the engaged view and the results panel it loads with.
@@ -1089,7 +1103,7 @@ const recoverLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/results/Recover.svelte', [], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
@@ -1097,7 +1111,7 @@ const settleLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/results/settle.ts', [], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
@@ -1105,14 +1119,14 @@ const indexStateLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/results/IndexState.svelte', [], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
 const facetsOnDemand = [/ui\/overlays\/Sheet\.svelte$/];
 const facetsLazy = [
 	...new Set(
-		FACETS.flatMap((k) => ownChunk(k, facetsOnDemand, false, [...engagedSearch, ...resultsLazy]))
+		FACETS.flatMap((k) => ownChunk(k, facetsOnDemand, false, [...engagedSearch, ...resultsLoaded]))
 	)
 ];
 // The results toolbar (S-search-3): loads with the results and shows once there is a query.
@@ -1127,7 +1141,9 @@ const saveLoader = [/features\/search\/toolbar\/save-dialog\.ts$/];
 const toolbarOnDemand = [/features\/alerts\/SaveSearchDialog\.svelte$/, ...saveLoader];
 const toolbarLazy = [
 	...new Set(
-		TOOLBAR.flatMap((k) => ownChunk(k, toolbarOnDemand, false, [...engagedSearch, ...resultsLazy]))
+		TOOLBAR.flatMap((k) =>
+			ownChunk(k, toolbarOnDemand, false, [...engagedSearch, ...resultsLoaded])
+		)
 	)
 ];
 
@@ -1139,7 +1155,7 @@ const tableLazy = [
 			'src/lib/features/search/table/ResultsTable.svelte',
 			[/search\/table\/ColumnChooser\.svelte$/],
 			false,
-			[...engagedSearch, ...resultsLazy]
+			[...engagedSearch, ...resultsLoaded]
 		)
 	)
 ];
@@ -1147,7 +1163,7 @@ const chooserLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/table/ColumnChooser.svelte', [], false, [
 			...engagedSearch,
-			...resultsLazy,
+			...resultsLoaded,
 			...tableLazy
 		])
 	)
@@ -1156,7 +1172,7 @@ const pickLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/bulk/RowPick.svelte', [], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
@@ -1164,7 +1180,7 @@ const bulkLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/bulk/BulkBar.svelte', [/^chunk:magnet$/], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
@@ -1194,7 +1210,7 @@ const liveLazy = [
 		[
 			'src/lib/features/search/live/live.svelte.ts',
 			'src/lib/features/search/live/LiveHost.svelte'
-		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLazy]))
+		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLoaded]))
 	)
 ];
 const cardsLazy = [
@@ -1205,7 +1221,7 @@ const cardsLazy = [
 			'src/lib/features/search/cards/Card.svelte',
 			'src/lib/features/search/cards/cards.ts',
 			'src/lib/features/search/cards/cards.css'
-		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLazy]))
+		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLoaded]))
 	)
 ];
 
@@ -1304,6 +1320,34 @@ const adultSection = ownChunk('src/lib/features/detail/adult/AdultEnrichment.sve
 	...torrentView
 ]);
 // ENR-13: the "Identified as" section loads only when the API sent `identified_as`; own entry, as above.
+// The shared Menu chunk (bits-ui) is loaded on demand by the results' row menu too, so the detail
+// entries leave it out and "Detail actions menu" counts only ActionsMenu's own chunk.
+// ActionsMenu's own chunk and its icons: the chunks every other detail section shares are left out.
+const actionsOwn = [/^chunk:(?:Menu|vendor|runtime|Button|model\.svelte|dots-three-bold)$/];
+const actionsMenu = ownChunk(
+	'src/lib/features/detail/ActionsMenu.svelte',
+	actionsOwn,
+	false,
+	engagedSearch
+);
+// The shared Menu (bits-ui) loads on demand for the results' row menu too, so "Detail sections"
+// leaves its chunks out, by the chunk names the build gives them (the Menu, bits-ui's index-client,
+// scroll-lock and the popper/floating-layer pieces).
+// X-detail-depth (runner r14): the growth 38.82 → 47.49 KB is the Swarm chunk 3.8 KB + 0.6 KB CSS,
+// Technical details 1.5 KB + its CSS and the tracker "checked" time (RelativeTime) 0.9 KB; all load
+// when a section opens. Review round: +47 B for the Swarm "never scraped" and has-data branches; the
+// actions menu 0.68 → 0.79 KB for the "Set up a download client…" item and the pre-load ArrowDown
+// handler. /t gives back its raise: 22.21 → 22.04 KB (the inline hint is gone).
+const MENU_CHUNKS = new Set([
+	'Menu',
+	'index-client',
+	'scroll-lock',
+	'popper-layer-force-mount',
+	'floating-layer-anchor'
+]);
+const menuOnly = Object.values(manifest)
+	.filter((c) => MENU_CHUNKS.has(c.name))
+	.map((c) => `build/${c.file}`);
 const identifiedSection = ownChunk(
 	'src/lib/features/detail/identified/Identified.svelte',
 	[],
@@ -1362,7 +1406,7 @@ export default [
 	// Svelte runtime only this route uses since #132 moved it out of /search's first load); 28.06 KB
 	// after #139 and #154 regrouped the shared chunks it pulls in (Button, Badge, transitions,
 	// messages). Limit: measured + 10%.
-	entry('Compare route (own JS + CSS)', own('/compare'), '31 KB'),
+	entry('Compare route (own JS + CSS)', own('/compare'), '31.14 KB'),
 	// Measured 42.8 KB: over the 15 KB target because the screen is a virtualised list (12 KB with
 	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.
@@ -1626,7 +1670,7 @@ export default [
 				'src/lib/features/search/toolbar/save-dialog.ts',
 				[/features\/alerts\/SaveSearchDialog\.svelte$/],
 				false,
-				[...engagedSearch, ...resultsLazy, ...toolbarLazy]
+				[...engagedSearch, ...resultsLoaded, ...toolbarLazy]
 			)
 		),
 		'0.55 KB' // measured 0.49 KB + 10%
@@ -1659,6 +1703,8 @@ export default [
 	// catalogue's `common_just_now`, about 19 B in each chunk that uses it.
 	// +0.01 kB: hashed chunk-name compression noise (X-hit-resolution: a renamed table chunk costs Results 3 B; no code moved). Runner, r14.
 	entry('Search results (lazy)', resultsFirst, '40.86 KB'),
+	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
+	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
@@ -1742,13 +1788,19 @@ export default [
 	// X-auth-early-401 (runner §2.26): the same replay: 21,967 B measured locally, 21,971 B in CI
 	// (its build SHA moves the chunk names), rounded up to the next 0.01 KB.
 	// X-labels (runner §2.26): 21,979 → 22,129 B, as the drawer.
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '22.13 KB'),
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '22.04 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[
 			...new Set([...ownChunk(DRAWER, detailLazy, true), ...onDemandOf('/t/[hash]', detailLazy)])
-		].filter((f) => !adultSection.includes(f) && !identifiedSection.includes(f)),
-		'38.82 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		].filter(
+			(f) =>
+				!adultSection.includes(f) &&
+				!identifiedSection.includes(f) &&
+				!menuOnly.includes(f) &&
+				!actionsMenu.includes(f)
+		),
+		'47.49 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
@@ -1757,7 +1809,12 @@ export default [
 	// Measured 1,530 B; limit = measured + 10%, rounded.
 	entry('Detail adult-enrichment section (on demand)', adultSection, '1700 B'),
 	// ENR-13: the "Identified as" section, on demand and only when the API sent the field. Measured 1,830 B; limit = measured + at most 10%, rounded up to 100 B.
-	entry('Detail identified-as section (on demand)', identifiedSection, '2000 B'),
+	entry(
+		'Detail actions menu (on demand)',
+		requireMeasuredJs('Detail actions menu (on demand)', actionsMenu),
+		'0.79 KB'
+	),
+	entry('Detail identified-as section (on demand)', identifiedSection, '2.84 KB'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	entry(

@@ -87,6 +87,8 @@ Every UI slice reads the skills listed in its brief, so it fills gaps consistent
 - **Status** is always icon plus text, never colour alone. Focus is always visible, and targets are at least 44 × 44 px under `pointer: coarse`.
 - **Strings** live in the feature's `messages/{en,zh}.json`, worded per `docs/ui-glossary.md` and §10.14.
 - **Budgets (§10.1):** search-route JS ≤ 45 KB, CSS ≤ 20 KB, total first load ≤ 100 KB gzipped. Detail drawer ≤ 15 KB, Insights ≤ 45 KB, fonts on first paint ≤ 35 KB.
+- **Format only with `npm run format` in `web/`.** Never run prettier by hand over other paths: a run over `docs/decisions/` rewrote 520 records in #1080 (runner records r15).
+- **Never write the bare word "divider"** in a scanned source file, a code comment included: Tailwind then emits DaisyUI's `.divider` into the global CSS (+162 B, over its limit). Use another word (runner records r15).
 
 ## 4b. User documentation
 - **Audience: someone who can install an app from the Unraid app store but may not know how to set it up, or good security practice** (owner's decision §2.14). Any slice that writes or changes user-facing docs follows the project skill `user-docs` (`.claude/skills/user-docs/SKILL.md`), which layers Lodestar's rules on the owner's `documentation-skills` (`github-docs`, `material-composer`). It passes their gates, `lint_docs.py docs/user --strict` with 0 failed, and puts the `LINT:` line in the PR description. User-facing docs are the README, `docs/user/`, `docs/operations.md`, release notes, and in-app help or "Learn more" pages.

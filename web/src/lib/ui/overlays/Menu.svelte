@@ -62,6 +62,7 @@
 		<DropdownMenu.Content
 			{align}
 			sideOffset={4}
+			preventScroll={false}
 			aria-label={label}
 			bind:ref={content}
 			onOpenAutoFocus={openAutoFocus}

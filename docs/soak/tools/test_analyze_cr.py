@@ -5,6 +5,9 @@ metrics/NNNNN.prom, result.json, activity.jsonl) from a small simulation, so
 every rule is exercised through the same files a real run produces.
 """
 
+import contextlib
+import hashlib
+import io
 import json
 import math
 import sys
@@ -848,6 +851,194 @@ class CheckpointTests(unittest.TestCase):
         self.assertAlmostEqual(out["projection"], 110)
         self.assertEqual(out["p95_seconds"], 120)
         self.assertFalse(out["on_track"])  # no worst-hour ratios, so not on track
+
+
+GOLDEN_EFFECT = HERE / "fixtures" / "cr_effect_abba_golden.json"
+
+
+def golden_cases():
+    """The effect inputs fixtures/cr_effect_abba_golden.json was captured from, with the
+    analyzer before X-fleet-baab: each case's report, as `effect` writes it, by sha256."""
+    route = lambda order, start: [seg(a, 100, start + i * 7.083, switch="route_backoff",
+                                      verdict="void" if a == "B" else "valid",
+                                      reasons=["no_opportunity"] if a == "B" else ()) for i, a in enumerate(order)]
+    adm = lambda order, means, start=0.0: block(order, means, start=start, switch="coordinated_admission")
+    return {
+        "utp_win_abba_baab": ("utp", [block("ABBA", [100, 112, 111, 101]), block("BAAB", [110, 99, 100, 111], start=12)]),
+        "utp_four_blocks": ("utp", [block("ABBA", [100, 101, 100, 100]), block("BAAB", [100, 100, 101, 100], start=12),
+                                    block("ABBA", [100, 100, 100, 101], start=48),
+                                    block("BAAB", [101, 100, 100, 100], start=60)]),
+        "utp_loss_without_fit": ("utp", [block("ABBA", [100, 0, 110, 100]), block("BAAB", [110, 99, 100, 111], start=12)]),
+        "utp_inconclusive": ("utp", [block("ABBA", [100, 130, 80, 100]), block("BAAB", [70, 101, 140, 120], start=12)]),
+        "utp_on_only": ("utp", [block("BBBB", [110, 111, 112, 113]), block("BBBB", [110, 111, 112, 113], start=12)]),
+        "utp_bad_order": ("utp", [block("ABAB", [100, 110, 100, 110]), block("BAAB", [110, 99, 100, 111], start=12)]),
+        "utp_all_off": ("utp", [block("AAAA", [100, 101, 99, 100]), block("AAAA", [100, 99, 101, 100], start=12)]),
+        "utp_unpaired": ("utp", [block("ABBA", [100, 110, 110, 100]), block("ABBA", [100, 110, 110, 100], start=12)]),
+        "adm_win": ("adm", [adm("ABBA", [100, 120, 121, 100]), adm("BAAB", [119, 100, 101, 120], start=12)]),
+        "route_no_opportunity": ("route", [route("ABBA", 0), route("BAAB", 12)]),
+    }
+
+
+def written(report):
+    return json.dumps(report, indent=2, allow_nan=False) + "\n"  # analyze_cr.write's text
+
+
+class DesignTests(unittest.TestCase):
+    """X-fleet-baab: the recorded design (--design) is checked against the switches, an A/A run
+    (--aa) reports only a noise floor, and without --design nothing changes."""
+
+    def test_without_design_the_output_is_byte_identical(self):
+        golden = json.loads(GOLDEN_EFFECT.read_text())
+        cases = golden_cases()
+        self.assertEqual(sorted(cases), sorted(golden))
+        for name, (treatment, blocks) in cases.items():
+            with self.subTest(case=name):
+                text = written(analyze_cr.analyze_effect(treatment, blocks)).encode()
+                self.assertEqual((hashlib.sha256(text).hexdigest(), len(text)),
+                                 (golden[name]["sha256"], golden[name]["bytes"]))
+
+    def test_a_matching_design_changes_nothing(self):
+        for name in ("utp_win_abba_baab", "utp_four_blocks", "adm_win", "route_no_opportunity"):
+            treatment, blocks = golden_cases()[name]
+            designs = ["abba", "baab"] * (len(blocks) // 2)
+            with self.subTest(case=name):
+                self.assertEqual(written(analyze_cr.analyze_effect(treatment, blocks, designs=designs)),
+                                 written(analyze_cr.analyze_effect(treatment, blocks)))
+
+    def test_a_design_the_switches_dont_follow_is_refused(self):
+        judged = analyze_cr.judge_block(block("ABBA", [100, 110, 110, 100]), "utp", design="baab")
+        self.assertFalse(judged["valid"])
+        self.assertEqual(judged["problems"], ["order_differs_from_design"])
+        out = analyze_cr.analyze_effect("utp", [block("ABBA", [100, 112, 111, 101]),
+                                                block("BAAB", [110, 99, 100, 111], start=12)], designs=["baab", "baab"])
+        self.assertEqual((out["outcome"], out["decided"], out["valid_blocks"]), ("not_decidable", False, 1))
+        self.assertNotIn("fit", out)
+        same = analyze_cr.judge_block(block("AAAA", [100, 101, 99, 100]), "utp", design="abba")
+        self.assertIn("order_differs_from_design", same["problems"])  # identical arms, not labelled A/A
+        self.assertIn("order_not_abba_or_baab", same["problems"])
+
+    def test_a_baab_block_is_judged_by_its_design(self):
+        judged = analyze_cr.judge_block(block("BAAB", [110, 99, 100, 111]), "utp", design="baab")
+        self.assertEqual((judged["valid"], judged["order"]), (True, "BAAB"))
+
+    def aa_blocks(self, means=((100, 103, 98, 101), (99, 101, 102, 100)), **kw):
+        return [block("AAAA", list(m), start=12 * i, **kw) for i, m in enumerate(means)]
+
+    def test_an_aa_run_reports_the_noise_floor_by_the_design_labels(self):
+        blocks = self.aa_blocks()
+        out = analyze_cr.analyze_effect("utp", blocks, designs=["abba", "baab"], aa=True)
+        self.assertEqual((out["analysis"], out["outcome"], out["decided"], out["valid_blocks"]),
+                         ("noise_floor", "noise_floor", False, 2))
+        self.assertNotIn("fit", out)
+        self.assertEqual([b["order"] for b in out["blocks"]], ["ABBA", "BAAB"])
+        # The same estimator on the design labels, by hand.
+        by_hand = analyze_cr.fit_effect([dict(analyze_cr.judge_block(b, "utp"), order=o)
+                                         for b, o in zip(blocks, ("ABBA", "BAAB"))], "net")
+        self.assertEqual(out["noise_floor"], by_hand)
+        self.assertEqual(out["noise_floor"]["df"], 3)
+        self.assertEqual(sorted(out["also_reported"]), ["fetch_success_per_attempt", "gross", "stored"])
+        self.assertNotIn(out["outcome"], analyze_cr.FINAL_OUTCOMES)  # never an effect's outcome
+
+    def test_one_aa_block_is_enough(self):
+        out = analyze_cr.analyze_effect("utp", self.aa_blocks()[:1], designs=["baab"], aa=True)
+        self.assertEqual((out["valid_blocks"], out["noise_floor"]["df"]), (1, 1))
+
+    def test_a_stacked_aa_run(self):
+        """lc on the winners (adm): both arms the stacked control, judged against --winners."""
+        def stacked(means, start):
+            out = block("AAAA", means, start=start, others={"coordinated_admission": True})
+            for s in out:
+                s.update(treatment="lc", winners=["coordinated_admission"])
+            return out
+        blocks = [stacked([100, 103, 98, 101], 0), stacked([99, 101, 102, 100], 12)]
+        out = analyze_cr.analyze_effect("lc", blocks, winners=["coordinated_admission"], designs=["abba", "baab"],
+                                        aa=True)
+        self.assertEqual((out["analysis"], out["valid_blocks"], out["winners"]),
+                         ("noise_floor", 2, ["coordinated_admission"]))
+        self.assertEqual([b["control_switches"] for b in out["blocks"]],
+                         [["coordinated_admission", "safe_restart"]] * 2)
+        self.assertEqual(out["noise_floor"]["df"], 3)
+        other = analyze_cr.analyze_effect("lc", blocks, winners=["utp"], designs=["abba", "baab"], aa=True)
+        self.assertEqual(other["valid_blocks"], 0)
+        self.assertIn("control_not_the_stacked_winners", other["blocks"][0]["problems"])
+
+    def test_aa_needs_identical_switches(self):
+        blocks = self.aa_blocks()
+        blocks[0][2]["identity"]["switches"]["utp"] = True  # one segment ran the treatment
+        blocks[1][1]["identity"]["switches"]["responder_hints"] = True
+        out = analyze_cr.analyze_effect("utp", blocks, designs=["abba", "baab"], aa=True)
+        self.assertEqual(out["valid_blocks"], 0)
+        for b in out["blocks"]:
+            self.assertIn("aa_switches_differ", b["problems"])
+        self.assertNotIn("noise_floor", out)
+        self.assertEqual((out["outcome"], out["reason"]), ("noise_floor", "no valid A/A block"))
+        # Every other block check still applies.
+        bad = self.aa_blocks()
+        bad[0][1]["verdict"] = "invalid"
+        judged = analyze_cr.judge_block(bad[0], "utp", design="abba", aa=True)
+        self.assertEqual(judged["problems"], ["segment_invalid"])
+        # Both arms must be the control: an all-on block isn't an A/A of the control.
+        on = block("BBBB", [100, 103, 98, 101])
+        self.assertEqual(analyze_cr.judge_block(on, "utp", design="abba", aa=True)["problems"], ["aa_treatment_on"])
+        # A low B-labelled mean is noise, never a loss.
+        low = self.aa_blocks(means=((100, 0, 98, 101),))[0]  # a B-labelled net of 0: a loss outside A/A
+        self.assertFalse(analyze_cr.judge_block(low, "utp", design="abba", aa=True)["loss_without_fit"])
+
+    def test_design_arguments_are_checked(self):
+        blocks = self.aa_blocks()
+        for designs, aa in ((["abba"], False), (["abba", "baab", "abba"], False), (["abba", "ab"], False),
+                            (None, True)):
+            with self.subTest(designs=designs, aa=aa):
+                with self.assertRaises(ValueError):
+                    analyze_cr.analyze_effect("utp", blocks, designs=designs, aa=aa)
+        for design, aa in ((None, True), ("ab", True), ("ABBA", False)):  # judge_block called directly
+            with self.subTest(design=design, aa=aa), self.assertRaises(ValueError):
+                analyze_cr.judge_block(blocks[0], "utp", design=design, aa=aa)
+
+    def test_checkpoint1_and_gate_refuse_a_noise_floor(self):
+        out = analyze_cr.analyze_effect("utp", self.aa_blocks(), designs=["abba", "baab"], aa=True)
+        self.assertEqual(analyze_cr.checkpoint1(out, [], None, None)["error"], analyze_cr.NOISE_FLOOR_REFUSED)
+        utp = {"treatment": "utp", "outcome": "no_effect", "control_segments": []}
+        self.assertEqual(analyze_cr.checkpoint1(utp, [dict(out, treatment="adm")], None, None)["error"],
+                         analyze_cr.NOISE_FLOOR_REFUSED)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "aa.json"
+            path.write_text(written(out))
+            for argv in (["gate", str(path)],
+                         ["checkpoint1", "--utp", str(path), "--adm", str(path), "--comparator", str(path),
+                          "--cr0-report", str(path)]):
+                with self.subTest(argv=argv[0]):
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        self.assertEqual(analyze_cr.main(argv), 2)
+                    self.assertIn(analyze_cr.NOISE_FLOOR_REFUSED, err.getvalue())
+
+    def test_the_command_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            paths = []
+            for b, blk in enumerate(self.aa_blocks() + golden_cases()["utp_win_abba_baab"][1]):
+                paths.append([])
+                for i, report in enumerate(blk):
+                    path = tmp / f"b{b}s{i}.json"
+                    path.write_text(json.dumps(report))
+                    paths[-1].append(str(path))
+            run = lambda *argv: analyze_cr.main(["effect", "--treatment", "utp", *argv])
+            blocks = lambda idx: [a for i in idx for a in ["--block", *paths[i]]]
+            self.assertEqual(run(*blocks([0, 1]), "--design", "abba", "--design", "baab", "--aa",
+                                 "--output", str(tmp / "aa.json")), 0)
+            self.assertEqual(json.loads((tmp / "aa.json").read_text())["analysis"], "noise_floor")
+            self.assertEqual(run(*blocks([2, 3]), "--output", str(tmp / "plain.json")), 0)
+            self.assertEqual(run(*blocks([2, 3]), "--design", "abba", "--design", "baab",
+                                 "--output", str(tmp / "designed.json")), 0)
+            self.assertEqual((tmp / "plain.json").read_bytes(), (tmp / "designed.json").read_bytes())
+            self.assertEqual(hashlib.sha256((tmp / "plain.json").read_bytes()).hexdigest(),
+                             json.loads(GOLDEN_EFFECT.read_text())["utp_win_abba_baab"]["sha256"])
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(run(*blocks([0, 1]), "--aa"), 2)  # --aa without --design
+                self.assertEqual(run(*blocks([0, 1]), "--design", "abba"), 2)  # one design for two blocks
+            self.assertIn("--design", err.getvalue())
 
 
 if __name__ == "__main__":

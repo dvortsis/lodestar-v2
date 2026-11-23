@@ -1,0 +1,8 @@
+/* Technical details' own rules (lazy chunk). */
+.ls-detail-disclosure {
+	cursor: pointer;
+	font-weight: var(--font-weight-semibold);
+}
+.ls-detail-disclosed {
+	margin-block-start: calc(var(--spacing) * 3);
+}
