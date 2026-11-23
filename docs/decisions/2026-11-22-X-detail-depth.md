@@ -30,3 +30,7 @@ Runner brief, 2026-11-22Z, split into two PRs by the runner (`runner/` r14): thi
 - **§10.5 header:** the actions sit in a row under the title inside the scrolling body, not in the drawer's sticky header, so Copy magnet scrolls away with the content. A sticky sub-header needs `ui/overlays/Drawer.svelte`, outside this slice's paths: a follow-up.
 - **"Open full page" is a menu item that navigates**, not a link, so middle-click and "copy link" don't work on it. `Menu.svelte` has no link item; a follow-up can add one.
 - The client hint is gone (see above).
+
+## Baselines
+- **Every theme's `/t` shot and the fixture's moved,** not only the sampled cells: the layout change reaches them all (runner, r14). The regenerated Riverstone cells, all 46 theme cells and the fixture's `/t` shot are kept, so the nightly all-themes and fixture runs stay green. I looked at the high-contrast light and dark, Dracula dark and the fixture shots: they differ from main only by the intended layout.
+- **`search-drawer-1440` waits for the Technical details section** (`[data-section="technical"]`, 10 s deadline, no sleep) before the screenshot, so the baseline has no loading skeleton. That spec edit is in `search-results-adaptive.routes.test.ts`, approved by the runner.

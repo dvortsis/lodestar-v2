@@ -195,6 +195,8 @@ test.describe('the drawer beside the results', () => {
 		await go('/search?q=lantern');
 		await openRow(page, 2);
 		await expect(host(page)).toHaveAttribute('data-mode', 'inline');
+		// The Technical details section loads when it scrolls near; the shot waits for it, not a skeleton.
+		await expect(page.locator('[data-section="technical"]')).toBeVisible({ timeout: 10_000 });
 		await expectPageSnapshot(page, 'search-drawer-1440');
 	});
 });
