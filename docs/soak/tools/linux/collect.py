@@ -15,6 +15,8 @@ Anything this host cannot provide is left out of the row, never invented.
 """
 
 import argparse
+import ctypes
+import ctypes.util
 import hashlib
 import http.client
 import ipaddress
@@ -1268,37 +1270,43 @@ def ntp_status(run_command):
 
 
 # adjtimex(2)'s number where a 64-bit kernel takes the struct below. The raw syscall comes first
-# (X-collector-ntp): current glibc builds ntp_adjtime on clock_adjtime, which the collector's
-# container was seen to refuse even read-only (X-test-vm's lead: Docker's default seccomp profile
-# gates clock_adjtime on CAP_SYS_TIME). modes stays 0, so neither call can set the clock.
+# (X-collector-ntp): glibc builds ntp_adjtime on clock_adjtime. In the fleet's collector container
+# the kernel source read unavailable; that clock_adjtime was refused there is a hypothesis
+# (Docker's default seccomp profile has allowed it since moby 20.10), pending X-test-vm's probe.
+# adjtimex goes first either way. modes stays 0, so neither call can set the clock.
 ADJTIMEX_SYSCALL = {"x86_64": 159, "aarch64": 171}
 NTP_UNAVAILABLE = {"source": "unavailable", "synchronized": None, "offset_seconds": None}
 
 
-def kernel_ntp_status(libc=None, machine=None):
-    """The kernel's NTP state, read-only: adjtimex(2) by syscall, then glibc's ntp_adjtime."""
-    try:
-        import ctypes
-        import ctypes.util
-        import platform
+class Timex(ctypes.Structure):
+    """struct timex as a 64-bit kernel and glibc take it; the pad covers the fields after tick."""
+    _fields_ = [("modes", ctypes.c_uint), ("offset", ctypes.c_long), ("freq", ctypes.c_long),
+                ("maxerror", ctypes.c_long), ("esterror", ctypes.c_long), ("status", ctypes.c_int),
+                ("constant", ctypes.c_long), ("precision", ctypes.c_long),
+                ("tolerance", ctypes.c_long), ("time_sec", ctypes.c_long),
+                ("time_usec", ctypes.c_long), ("tick", ctypes.c_long),
+                ("pad", ctypes.c_byte * 256)]
 
-        class Timex(ctypes.Structure):
-            _fields_ = [("modes", ctypes.c_uint), ("offset", ctypes.c_long), ("freq", ctypes.c_long),
-                        ("maxerror", ctypes.c_long), ("esterror", ctypes.c_long), ("status", ctypes.c_int),
-                        ("constant", ctypes.c_long), ("precision", ctypes.c_long),
-                        ("tolerance", ctypes.c_long), ("time_sec", ctypes.c_long),
-                        ("time_usec", ctypes.c_long), ("tick", ctypes.c_long),
-                        ("pad", ctypes.c_byte * 256)]
-        if libc is None:
-            libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
-        number = ADJTIMEX_SYSCALL.get(machine if machine is not None else platform.machine())
-    except (OSError, AttributeError, ImportError):
-        return dict(NTP_UNAVAILABLE)
+
+def timex_calls(libc, machine):
+    """The read-only timex calls, in order: the raw adjtimex syscall where its number is known
+    on a 64-bit build, then glibc's ntp_adjtime. Each takes a zeroed Timex and returns the state."""
+    number = ADJTIMEX_SYSCALL.get(machine)
     calls = []
     if number is not None and ctypes.sizeof(ctypes.c_long) == 8:
         calls.append(lambda t: libc.syscall(ctypes.c_long(number), ctypes.byref(t)))
     calls.append(lambda t: libc.ntp_adjtime(ctypes.byref(t)))
-    for call in calls:
+    return calls
+
+
+def kernel_ntp_status(libc=None, machine=None):
+    """The kernel's NTP state, read-only: adjtimex(2) by syscall, then glibc's ntp_adjtime."""
+    if libc is None:
+        try:
+            libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        except OSError:
+            return dict(NTP_UNAVAILABLE)
+    for call in timex_calls(libc, machine if machine is not None else platform.machine()):
         timex = Timex()  # zeroed: modes 0 reads and never sets
         try:
             state = call(timex)

@@ -1510,6 +1510,38 @@ class KernelNtpTests(unittest.TestCase):
     def test_syscall_numbers(self):  # asm/unistd_64.h and asm-generic/unistd.h
         self.assertEqual(collect.ADJTIMEX_SYSCALL, {"x86_64": 159, "aarch64": 171})
 
+    def test_struct_layout(self):  # struct __kernel_timex on LP64 (include/uapi/linux/timex.h)
+        import ctypes
+        self.assertEqual(collect.Timex.offset.offset, 8)
+        self.assertEqual(collect.Timex.esterror.offset, 32)
+        self.assertEqual(collect.Timex.status.offset, 40)
+        self.assertEqual(collect.Timex.tolerance.offset, 64)
+        self.assertEqual(collect.Timex.tick.offset, 88)
+        self.assertGreaterEqual(ctypes.sizeof(collect.Timex), 208)
+
+
+@unittest.skipUnless(sys.platform.startswith("linux") and sys.maxsize > 2**32
+                     and os.uname().machine in collect.ADJTIMEX_SYSCALL,
+                     "the live read needs 64-bit Linux on a known architecture")
+class LiveKernelNtpTests(unittest.TestCase):
+    """The real calls, read-only (modes 0): what this host's kernel says."""
+
+    def test_kernel_source(self):
+        self.assertEqual(collect.kernel_ntp_status()["source"], "kernel")
+
+    def test_raw_syscall_and_ntp_adjtime_agree(self):
+        import ctypes
+        import ctypes.util
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        reads = []
+        for call in collect.timex_calls(libc, os.uname().machine):
+            timex = collect.Timex()
+            self.assertEqual(timex.modes, 0)
+            self.assertGreaterEqual(call(timex), 0, f"errno {ctypes.get_errno()}")
+            reads.append((timex.status, timex.tick, timex.tolerance))
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(reads[0], reads[1])
+
 
 if __name__ == "__main__":
     unittest.main()
