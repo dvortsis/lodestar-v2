@@ -60,7 +60,7 @@ CR-0's ledger shows a lookup holding its slot for about 24 s of the 25 s `LOOKUP
   - Every real reply there arrives within 460 ms, except the 15 % that are slow at 3 s. Stale contacts never answer, and they are what hold `W` near 24 s.
   - 1 s covers every fast reply with at least 2× margin. The 3 s replies become late replies, which exercises the late path in the screen.
 - **CR-LEDGER has no time-to-answer series,** only each request's time to first values. So it couldn't place the value. The live calibration signal is the ratio of the two new counters, `late ÷ soft`: the cloud lane's mechanism check reads it beside `W`.
-- **The runner's choice rule** (2026-11-23): keep 1 s if it passes the standing rule and its `late ÷ soft` isn't much worse than 2 s; otherwise use 2 s. 1 s passed on every seed, with `late ÷ soft` 0.142 against 0.133 (`lookup_end` off) and 0.157 against 0.145 (on). So 1 s stands.
+- **The runner's choice rule** (2026-11-23): keep 1 s if it passes the standing rule and its `late ÷ soft` isn't much worse than 2 s; otherwise use 2 s. 1 s passed on every seed, with `late ÷ soft` 0.134 against 0.133 (`lookup_end` off) and 0.147 against 0.144 (on). So 1 s stands. (These are the final code's figures, after the self-review's fixes; the first build's were 0.142 and 0.157, with smaller gains.)
   - **A screen-only knob** (`Config::soft_timeout_after`, default `SOFT_TIMEOUT`) lets CR-SIM run the 2 s variant. The app has no setting for it and always runs 1 s.
 
 ## The screen (calibrated `live-lookup`, 8 seeds, off against on)
@@ -69,14 +69,14 @@ Build-plan §0.5's standing rule: keep only if stored per slot-second and stored
 | `lookup_end` | arm | `W` (Little) s | `q` | `y` | stored/min | stored/slot-s | stored/query | late ÷ soft |
 |---|---|---|---|---|---|---|---|---|
 | off | off | 23.11 | 24.4 | 0.164 | 13.13 | 0.0071 | 0.0028 | — |
-| off | on, 1 s | 14.58 | 26.3 | 0.196 | 24.92 | 0.0134 | 0.0041 | 0.142 |
-| off | on, 2 s | 16.86 | 26.1 | 0.181 | 20.00 | 0.0107 | 0.0036 | 0.133 |
+| off | on, 1 s | 12.72 | 26.2 | 0.184 | 26.76 | 0.0145 | 0.0041 | 0.134 |
+| off | on, 2 s | 15.35 | 26.0 | 0.185 | 22.35 | 0.0120 | 0.0038 | 0.133 |
 | on | off | 16.20 | 19.4 | 0.164 | 18.64 | 0.0101 | 0.0038 | — |
-| on | on, 1 s | 9.21 | 19.9 | 0.180 | 36.18 | 0.0196 | 0.0054 | 0.157 |
-| on | on, 2 s | 10.87 | 19.8 | 0.174 | 29.68 | 0.0160 | 0.0048 | 0.145 |
+| on | on, 1 s | 8.08 | 19.9 | 0.177 | 40.10 | 0.0219 | 0.0055 | 0.147 |
+| on | on, 2 s | 9.88 | 19.7 | 0.177 | 33.24 | 0.0179 | 0.0052 | 0.144 |
 
 - **Verdict:** in every arm, stored per minute is Better on 8/8 seeds, and stored per slot-second and stored per query each rose on 8/8.
-- **What moved:** `W` falls by 37–43 % at 1 s (27–33 % at 2 s). `q` rises by under 8 %: the successors asked while a slow candidate was still out. `y` rises too. A likely reason is that more legs reach their closest set before the deadline, but the screen doesn't separate the causes.
+- **What moved:** `W` falls by 45–50 % at 1 s (34–39 % at 2 s). `q` rises by under 8 %: the successors asked while a slow candidate was still out. `y` rises too. A likely reason is that more legs reach their closest set before the deadline, but the screen doesn't separate the causes.
 - **What a screen can't show:** it never replaces a live run. The simulator is IPv4-only, with approximate routing and no churn, and its latency model is two-valued. Live RTTs are spread, so `late ÷ soft` there will differ, and that is what the cloud mechanism check reads.
 - Reproduce with `cargo test -p lodestar-crawler-sim --test sim soft_timeout_screen -- --ignored --nocapture`.
 
@@ -88,11 +88,16 @@ Build-plan §0.5's standing rule: keep only if stored per slot-second and stored
   - a late answer feeds a running leg and settles once;
   - a slow query fails once at the timeout;
   - each permit comes back exactly once on every end (closest set, no values, deadline, cancel, shutdown), and the soft queries are detached, not dropped;
-  - the 64-query cap and the deadline hold against endless closer ids;
+  - the 64-query cap and the deadline hold against endless closer ids, and a request that spends its 64 queries with soft ones out ends on the cap with them detached;
+  - a leg whose only candidates left are slow waits for them, and their late answers feed it;
+  - the values end (`dht.lookup_end`) with soft queries out detaches them and returns the permit once;
+  - a late KRPC error fails a slow query once;
+  - refresh and scrape lookups never go soft;
+  - the 3/4 rule, alone and when timeouts and soft expiries share a tick;
   - a freed lane waits for the rate and for the outstanding cap;
   - a detached answer never reaches a lookup that reused its id.
 - **Property tests:**
-  - a scripted network (fast, late and silent nodes): with the switch on, a leg never ends earlier than the same script with every late node answering on time, except by its closest set or its values, and the bookkeeping holds at every step;
+  - a scripted network of 80 fast, late and silent nodes (so the 64-query cap is reachable): with the switch on, a leg never ends earlier than the same script with every late node answering on time, except by a closest set of K answers or its values; a leg never ends with slow queries out and fewer than K answers; and the bookkeeping holds at every step. Putting the first build's end rule back fails it, and two other tests;
   - hostile replies to soft queries (spoofed, repeated, to detached queries, with ticks between) settle nothing twice, end nothing more than once and stay bounded;
   - in `lookup.rs`, any sequence of adds, sends, soft expiries, answers, failures and retries keeps the counters equal to the states and within `ALPHA`.
 - **CR-SIM:** `soft_timeout_runs_deterministically` (not ignored) and the `#[ignore]` screen above.
