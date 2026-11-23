@@ -31,12 +31,12 @@ Developer and operator doc. Follow it top to bottom, one step at a time. The ope
 | 4 | CR-AB-4 uTP, block 2, BAAB | same | same |
 | 5 | **Route backoff arm: only if** the baseline shows `fetch_no_route_total{family="ipv6"}` above 0 | | `dht.route_backoff` on |
 
-- The two treatments run **back to back** (r5.1 A3), apart from the wait in the next bullet when a backup or parity check is due. Start step 3 as soon as step 2's last segment closes. Block 2 of each treatment should start about 12 h out of phase with block 1 (CR-SPEC rule 6.1): if the next block would start about 10 h out of phase, shift it by waiting, and write the wait in the run record.
+- The two treatments run **back to back** (r5.1 A3), apart from the wait in the next bullet when a backup or parity check is due. Start step 3 as soon as step 2's last segment closes. **Block 2 of each treatment starts at block 1's start + 36 h, give or take 1 h** (about 12 h out of phase, CR-SPEC rule 6.1). If a re-run or a due backup pushes it past that, start as soon as possible and write the offset in the run record.
 - **The pause (section 4.1) is per block:** pause at a block's start, restore at its end, or at once on any stop. Between blocks, a backup or scheduled parity check that is due or overdue runs and finishes before the next block starts. See section 4.1.
 - **Stage 1 keeps the shipped-default control** for both treatments. There is no `--winners` file in stage 1 (r5.1 A2).
 - **Every other crawler switch stays at its shipped default (off)** in every block. The one exception is `dht.safe_restart`, which is `true` in every segment of a block, in both arms (spec rule 2.3).
 - **Step 5 is decided from data, not from this sheet.** After both treatments' blocks are in, run `analyze_cr.py route-baseline` on **every stage-1 segment report** (all CR-AB-ADM segments, both arms, and all CR-AB-4 segments). The analyzer picks the segments with `dht.route_backoff` and `dht.utp` both off (the spec's rule 5.3); leaving any report out can only lower the sum. If the ipv6 no-route sum is 0, route backoff is a **recorded skip** (the runner writes a decisions file). On the default IPv4-only bind, 0 is the expected result. Don't run step 5 unless the runner says so.
-- **Two blocks are the minimum before any outcome.** If the outcome is inconclusive, the runner asks for two more blocks (ABBA then BAAB again). Never run one extra block on its own: extras come in pairs.
+- **Two blocks are the minimum before any outcome.** If the outcome is inconclusive after block 2, the runner asks for blocks 3 and 4 (ABBA then BAAB again): extras come once, in a pair, never one alone. After block 4, an inconclusive result **stays inconclusive and the switch stays off** (CR-SPEC rule 6.3).
 - **An outcome is the runner's.** You collect and analyze; you don't decide whether a switch wins.
 
 ## 2. The design in numbers
@@ -57,9 +57,9 @@ Developer and operator doc. Follow it top to bottom, one step at a time. The ope
 | `dht.safe_restart` | `true` in every segment, both arms | CR-SPEC rule 2.3 |
 | Witness directory | on the host, outside the data directory, fresh per block (`LODESTAR_DHT_WITNESS_DIR`) | CR-SPEC rule 2.3 |
 | Preset | Balanced | CR-SPEC rule 5.5 |
-| Blocks per treatment | at least two: ABBA, then BAAB about 12 h out of phase | CR-SPEC rule 6.1 |
+| Blocks per treatment | at least two: ABBA, then BAAB about 12 h out of phase. **Start block 2 at block 1's start + 36 h, give or take 1 h.** The spec says only "about 12 h" and gives no bound. If a re-run or a due backup pushes the start later, start as soon as possible and record the offset | CR-SPEC rule 6.1 |
 | Block length | about 34 h (6 h hold, warm-ups, four 6 h windows) | r5.1, "Calendar" |
-| Outcome | win: CI lower bound above 0 and at least +5 %; no effect: CI within ±5 %; loss: CI upper bound below 0; else inconclusive | CR-SPEC rule 6.3 |
+| Outcome | win: CI lower bound above 0 and the point estimate at least +5 %; no effect: CI within ±5 %; loss: CI upper bound below 0; else inconclusive | CR-SPEC rule 6.3 |
 | Re-runs | an invalid or void segment invalidates its block; re-run the block from a fresh directory, same order. Never stitch | CR-SPEC rule 6.7 |
 | Retry budget | about 30 % | build-plan §0.7 |
 
@@ -70,7 +70,7 @@ Developer and operator doc. Follow it top to bottom, one step at a time. The ope
 **The spec has no early-stop rule.** It says what makes a segment invalid (rule 6.5) and when a block is re-run (rule 6.7), and nothing about ending a block early because of what the numbers look like. So:
 
 - **Finish every segment** unless a collector guard trips or a host-safety rule in section 4 says stop.
-- **Never stop because of what the data shows.** The collector shows no rates while a window is open, and you don't go looking (the no-peeking rule, CR-SPEC rule 6.11 and r5.1 A3). Rates are seen only after a window ends.
+- **Never stop because of what the data shows.** The collector shows no rates while a window is open, and you don't go looking (the no-peeking rule, CR-SPEC rule 1.3 and r5.1 A3). Rates are seen only after a window ends.
 - A stopped or invalid segment means the block is re-run, not continued.
 
 ## 3. Before the day
@@ -91,11 +91,11 @@ Do these when the owner says the box is back, **before** the first start. Record
 3. **Preset and switches.** Preset Balanced, which is the shipped default: leave `LODESTAR_INTENSITY` unset (or `balanced`) and don't change the preset in the UI. Every crawler switch at its shipped default, except `LODESTAR_DHT_SAFE_RESTART=true` and the treatment's own switch on the B arm:
    - CR-AB-ADM B arm: `LODESTAR_DHT_COORDINATED_ADMISSION=true`
    - CR-AB-4 B arm: `LODESTAR_DHT_UTP=true`
-4. **Network is unchanged** (owner-decisions §2.51). The DHT UDP port is **not** forwarded, UPnP stays off, and the router, the LAN and the public IP are the same as for the last comparator run. If any of them changed, stop and tell the runner: the comparator is re-run before the next run.
+4. **Network is unchanged** (owner-decisions §2.51). The DHT UDP port is **not** forwarded, Lodestar's own UPnP stays off (its default), and the router and its UPnP state, the LAN and the public IP are the same as for the last comparator run. You never change the router or its UPnP state. If any of them changed, stop and tell the runner: the comparator is re-run before the next run.
 4a. **Clock.** The host clock must be synchronised (NTP) to within 1 s, or every segment fails (CR-SPEC D1a). Check it in the Unraid UI and note "synced".
-4b. **Mover.** A mover run counts as an `array_operation` and invalidates a segment, and §2.68 doesn't let you pause it. Look at the mover schedule: if it falls inside a block, **don't start; ask the runner**, who asks the owner.
-4c. **Both the auto-update plugin and Appdata Backup must already exclude the Lodestar container,** and you note each one's next scheduled run. Excluding a container is a settings change, which §2.68 doesn't cover: a test only pauses and restores. If the container isn't excluded from either, **stop and ask the owner** (through the runner).
-4d. **The admin password file.** The collector needs one (`--password-file`). Create it with the container's admin password, `chmod 600`, outside the data and evidence directories. Never send or commit it (section 9.3).
+4b. **Mover.** A mover run counts as an `array_operation` and invalidates a segment, and §2.68 doesn't let you pause it. Unraid's default mover schedule is daily, so this will often trip. Changing the mover schedule is a settings change, which is the owner's. **If a mover run falls inside the block, don't start: ask the owner through the runner.** Find the schedule in the Unraid UI under Settings → Scheduler → Mover Settings.
+4c. **Both the auto-update plugin and Appdata Backup must already exclude the Lodestar container,** and you note each one's next scheduled run (Appdata Backup's own schedule page in the Unraid UI; the auto-update plugin's settings page). Excluding a container is a settings change, which §2.68 doesn't cover: a test only pauses and restores. If the container isn't excluded from either, **stop and ask the owner** (through the runner).
+4d. **The admin password file.** The collector needs one (`--password-file`). It holds the admin password you set when you claim each block's fresh instance (5.3, step 3), so it is made before the block and used for every segment of that block. `chmod 600`, outside the data and evidence directories. Never send or commit it (section 9.3).
 5. **Nothing else crawls from this box or this public IP.** No bitmagnet, no other Lodestar, no import. Runs never overlap a soak on the same box.
 6. **Disk and memory room** (section 4.3). Check them now.
 7. **Rehearse once** if the runner asks. The runner supplies the exact rehearsal command (it needs the password file and the checklist too). A rehearsal never counts and is marked in `run.json`.
@@ -108,19 +108,22 @@ Pause only these two, and only for the run:
 
 | Pause | How to restore |
 |---|---|
-| Appdata Backup: pause the schedule. The Lodestar container must **already** be excluded from it (4c) | put the schedule back |
-| Scheduled parity check (correcting or not) | put the schedule back |
+| Appdata Backup (its own schedule page): pause the schedule. The Lodestar container must **already** be excluded from it (4c) | put the schedule back |
+| Scheduled parity check, correcting or not (Settings → Scheduler → Parity Check) | put the schedule back |
 
-For each, write down **before** the pause: the setting as it was, and its next scheduled run in UTC. The collector takes the **backup** and **auto-update** next-run times (`--next-run`); the parity time is for your own restore record only.
+For each, write down **before** the pause: the setting as it was (each item's own), and its next scheduled run in UTC. The collector takes the **backup** and **auto-update** next-run times (`--next-run`); the parity time is for your own restore record only. Write the time as `YYYY-MM-DDTHH:MM:SSZ`.
 
 **The pause is per block, not for the whole stage** (six days without backups is too long for the owner's data):
 
 - Pause at the start of each block and restore at its end, or at once on any stop.
-- **Between blocks**, if a backup or a scheduled parity check is due or overdue, let it run and finish **before** the next block starts. Never start a block while one runs (4.2). Record what ran and when.
+- **Between blocks**, a backup or scheduled parity check that is due or overdue is handled so that nothing runs inside a segment:
+  - **Backup:** if its schedule fell inside the block, start it **by hand** at the block's end, with Appdata Backup's own start button. This restores what the pause took away and changes no setting. It must **finish before the next block starts**. Record it (UTC start and end). *(Runner's call, owner-decisions §2.26, flagged §2.19.)*
+  - **Parity check:** a scheduled check that was missed is **not** started by hand. Record it and tell the runner, who tells the owner. The next scheduled check runs as usual.
+  - Never start a block while either is running (4.2).
 - Log every pause and restore per block (section 12).
 - This means the CR-AB-4 block may start later than the ADM block's end; the no-idle aim (r5.1 A3) gives way to this rule.
 
-**The restore always runs**: when a block finishes (not only when stage 1 ends), when it fails, when you stop it, when you're out of time. It is not optional and doesn't wait for analysis.
+**The restore puts the schedule back. The exclusion stays.** It always runs: when a block finishes (not only when stage 1 ends), when it fails, when you stop it, when you're out of time. Write a "restore due (UTC)" time in the run record when you start a block (start + about 36 h), and check it first after any absence. It is not optional and doesn't wait for analysis.
 
 ### 4.2 Start gates
 
@@ -129,7 +132,7 @@ Do not start a block if any of these holds:
 - A **parity check, sync, rebuild, recovery or mover run is in progress.** Wait for it to finish. Never cancel it (§2.68). Once it has finished, pause the schedule and start.
 - A scheduled parity check or backup will start inside the block's window and you can't pause it.
 - Free disk is under 50 GiB on the evidence volume or the block's data volume. The collector guards only the evidence volume and the paths you give with `--storage-path`, so always pass `--storage-path <block directory on appdata>`.
-- A mover run is scheduled inside the block (4b).
+- A mover run falls inside the block (4b): stop before starting and ask the owner through the runner.
 - Another crawler is running on the host or the public IP.
 
 **A parity, sync or rebuild inside a segment invalidates that segment** (CR-SPEC rule 6.5). Write a host-activity entry when it happens (section 6).
@@ -182,7 +185,7 @@ Do this once per block. Steps 5.1 and 5.2 happen once; 5.3 to 5.5 repeat for eac
 | Witness | the block's witness directory, bind-mounted from the host at a container path **outside `/data`**, e.g. `/witness`, with `LODESTAR_DHT_WITNESS_DIR=/witness`. A path under `/data` makes every segment invalid |
 | Preset | Balanced (unset `LODESTAR_INTENSITY`) |
 | Switches | `LODESTAR_DHT_SAFE_RESTART=true`; the treatment's switch `true` on B and unset or `false` on A; nothing else |
-| Network | as for every earlier run: DHT port not forwarded, UPnP off |
+| Network | as for every earlier run: DHT port not forwarded, Lodestar's own UPnP off (the default) |
 
 Changing an environment variable on Docker recreates the container. That is expected: the witness directory is mounted from the host so it survives.
 
@@ -192,9 +195,9 @@ Changing an environment variable on Docker recreates the container. That is expe
 2. **Start the collector within minutes.** It must see the start-up. Example for the first segment of a CR-AB-ADM block (fill in the values; the collector checks them):
 
    ```bash
-   python3 docs/soak/tools/linux/collect.py --mode docker --container <container> --root <evidence>/adm-b1-s1 \
+   python3 docs/soak/tools/linux/collect.py --mode docker --container <container> --root <evidence>/adm-b1-a1-s1 \
      --run-kind ab --treatment adm --commit <commit> --spec-commit <spec-commit> \
-     --url <http://127.0.0.1:<host port>> --password-file <password file> \
+     --url http://127.0.0.1:<host port> --password-file <password file> \
      --storage-path <block directory on appdata> \
      --checklist auto_update=excluded --checklist backup=excluded \
      --next-run auto_update=<UTC time of its next run> --next-run backup=<UTC time of its next run> \
@@ -203,12 +206,18 @@ Changing an environment variable on Docker recreates the container. That is expe
 
    - Use `--treatment utp` for CR-AB-4.
    - Use `python3 docs/soak/tools/linux/collect.py --help` for the current flags. The checklist and `--next-run` must name both items, or the collector refuses.
-   - `--url` must match the container's host port mapping (the default is `http://127.0.0.1:8484`).
+   - `--url` must match the container's host port mapping (the default is `http://127.0.0.1:8484`). Give the next-run times as `YYYY-MM-DDTHH:MM:SSZ`.
    - `--password-file` is required (3, step 4d).
    - Leave the command running in `tmux` or similar. Progress is in `status.json`; don't open `samples.jsonl` until the run ends.
    - `--stop` makes the collector stop the verified container when collection ends.
-3. Check the collector's first lines: the mode, the image digest and the arm. Check once. Don't look at rates.
-4. Note the start time in the run record, and work out the expected end of this segment (first segment: start + about 13 h; later ones: start + about 7 h) so you're there for the next arm switch.
+3. **Segment 1 of each block only: claim the fresh instance.** A new data directory waits for setup, and without it every segment is invalid. Within the first minutes:
+   1. Read the newest setup token from the container's log (`docker logs <container> 2>&1 | grep 'setup token' | tail -1`). Only the newest token works, and each start prints a new one. The token stays private: never paste it anywhere.
+   2. In the browser, complete setup: accept the Legal Notice, and set a **new admin password equal to the password file's contents**.
+   3. **Save no other settings.** Saved settings override the environment and would decide an arm (decisions/2026-11-02-CR-4.md).
+   4. Write the claim time (UTC) in the run record. Later segments of the block need no claim: the data directory keeps it.
+   The runner's rehearsal confirms the order of this step and the collector's start.
+4. Check the collector's first lines: the mode, the image digest and the arm. Check once. Don't look at rates.
+5. Note the start time in the run record, and work out the expected end of this segment (first segment: start + about 13 h; later ones: start + about 7 h) so you're there for the next arm switch.
 
 ### 5.4 During a segment
 
@@ -218,7 +227,7 @@ See section 6. In short: touch nothing, write a host-activity entry for any even
 
 The arm switch must be **a clean stop, then a start, within 10 minutes** (CR-SPEC rule 2.3). Plan the minutes before you begin; don't do it while distracted.
 
-1. The clock for the 10 minutes starts at the collector's **last scrape**, in practice when it reports done. Watch for `result.json` appearing in the evidence directory: that means it has finished. Check it is complete.
+1. The clock for the 10 minutes starts at the collector's **last scrape**, in practice when it reports done. Watch for `result.json` appearing in the evidence directory: that means it has finished. Check it is complete. About 8 minutes of the 10 are left once `result.json` appears, so be ready with the next start.
 2. The collector stops the container (because of `--stop`). Confirm it stopped cleanly. A kill is not a clean stop.
 3. **Start the next segment's container at once** with only the treatment's switch changed. Keep the same data directory, witness directory, image digest and every other setting.
 4. Start a new collector with a **new, empty** evidence directory.
@@ -229,8 +238,8 @@ After segment 4, don't start another. Go to 5.6.
 ### 5.6 End of the block
 
 1. Check that the collector for segment 4 finished and wrote `result.json`.
-2. Run the analysis (section 8) for each segment, one by one, then the block's effect once all four exist.
-3. **Run the restore (4.1) now**, at the block's end, before anything else.
+2. **Run the restore (4.1) now**, at the block's end, before anything else. If a backup was missed, start it by hand as 4.1 says.
+3. Run the analysis (section 8) for each segment, one by one, then the block's effect once all four exist.
 4. Check the restore worked: look at the schedules in the Unraid UI and confirm they are back. If you can't confirm, that is a failed restore: **Rule 0 applies.**
 
 ## 6. During a segment
@@ -240,7 +249,7 @@ After segment 4, don't start another. Go to 5.6.
 - Don't restart, stop or recreate the container, or let a plugin do it (backup, auto-update). Write an entry if it happens.
 - Don't look at rates, the dashboard's numbers or the metrics. The collector shows none while a window is open, on purpose.
 - Don't run an import, a second crawler, a parity operation, or a backup.
-- Don't change network settings, ports, UPnP or the router.
+- Don't change network settings, ports, Lodestar's UPnP setting, or the router or its UPnP state.
 - Don't update the collector, the image or the config.
 - Don't run builds, test suites or large jobs on the box. Keep the box quiet.
 
@@ -262,7 +271,7 @@ After segment 4, don't start another. Go to 5.6.
 At the end the analyzer judges each segment against the spec. In plain terms:
 
 - **ADM off:** every `fetch_admission_*_total` delta is 0 and `fetch_admission_permits_in_use` reads 0 at every scrape.
-- **ADM on:** `fetch_admission_grants_total` grew, and the permit identity returns to 0 at some scrape within every 60 minutes. Off: every `fetch_admission_*_total` delta is 0.
+- **ADM on:** `fetch_admission_grants_total` grew, and the permit identity returns to 0 at some scrape within every 60 minutes.
 - **uTP on:** `dht_utp_in_total` and `fetch_attempts_total{transport="utp"}` both grew. Off: both are 0 and no `utp_*` series appears.
 - **A segment whose treatment did not take effect is void, not negative.** A void segment invalidates its block (except route backoff's "no opportunity").
 - **Every segment:** Balanced preset, no import job, same image digest across the block, only the expected switches on.
@@ -275,7 +284,9 @@ At the end the analyzer judges each segment against the spec. In plain terms:
 | You stopped the run (4.4) | same |
 | The host rebooted or lost power | same. Write an entry when you can. |
 | The arm switch took more than 10 min | the segment is invalid. Finish nothing more in this block unless the runner says so. Restore. |
-| A parity operation or backup ran during a segment | write the entry; the segment is invalid. Restore. |
+| A parity operation, sync or rebuild ran during a segment | write the entry (`array_operation`); the segment is invalid. Restore. |
+| A backup ran during a segment | A backup alone doesn't invalidate a segment. If it stopped or restarted Lodestar, write `plugin_container_action` (invalid). Otherwise write `other`. **If the schedule was paused and a backup still fired, the pause failed: restore, stop, and tell the runner.** |
+| **You were away or your session dropped** (no `result.json` when due, or `status.json` stale) | the segment is invalid. Stop the container, run the restore, tell the runner. **After any absence, check this first.** |
 | The analyzer says a segment is void or invalid | the block is re-run in the same order from a fresh directory. The failed block is published with its reason. |
 | **A restore failed or can't be confirmed** | **Stop. No further tests. Tell the owner at once** (§2.68), and the runner. |
 
@@ -297,8 +308,8 @@ Run from the repo checkout at the pinned commit. Replace the paths.
 
    ```bash
    python3 docs/soak/tools/analyze_cr.py effect --treatment adm \
-     --block <reports>/adm-b1-s1.json <reports>/adm-b1-s2.json <reports>/adm-b1-s3.json <reports>/adm-b1-s4.json \
-     --block <reports>/adm-b2-s1.json <reports>/adm-b2-s2.json <reports>/adm-b2-s3.json <reports>/adm-b2-s4.json \
+     --block <reports>/adm-b1-a1-s1.json <reports>/adm-b1-a1-s2.json <reports>/adm-b1-a1-s3.json <reports>/adm-b1-a1-s4.json \
+     --block <reports>/adm-b2-a1-s1.json <reports>/adm-b2-a1-s2.json <reports>/adm-b2-a1-s3.json <reports>/adm-b2-a1-s4.json \
      --design abba --design baab --output <reports>/adm-effect.json
    ```
 
@@ -339,7 +350,7 @@ Tick each one. Write the time (UTC) beside it.
 - [ ] The runner gave me the commit, the digest and the spec commit
 - [ ] No parity check, sync, rebuild or recovery is running
 - [ ] No other crawler or import is running on the box
-- [ ] Network unchanged: port not forwarded, UPnP off, public IP the same
+- [ ] Network unchanged: port not forwarded, Lodestar's UPnP off, router untouched, public IP the same
 - [ ] I noted the backup and parity settings and their next runs (UTC)
 - [ ] Container already excluded from Appdata Backup (next run noted); backup schedule paused
 - [ ] Parity check schedule paused
@@ -387,8 +398,11 @@ preset:              Balanced
 switches on (A):     safe_restart
 switches on (B):     safe_restart + <treatment switch>
 witness mounted from host:  yes | no
-backup paused at (UTC):     <time>   next run was (UTC): <time>
-parity paused at (UTC):     <time>   next run was (UTC): <time>
+attempt:             <n>
+claim time (UTC):    <time>      block start (UTC): <time>      restore due (UTC): <time>
+offset from block 1 start + 36 h (block 2 only): <hours>
+backup setting before the pause:  <as it was>   paused at (UTC): <time>   next run was (UTC): <time>
+parity setting before the pause:  <as it was>   paused at (UTC): <time>   next run was (UTC): <time>
 
 segment  arm  start (UTC)  T_open (UTC)  end (UTC)  verdict  reason
 1
@@ -398,5 +412,7 @@ segment  arm  start (UTC)  T_open (UTC)  end (UTC)  verdict  reason
 
 arm-switch gaps (minutes, each must be 10 or less):  s1-s2 __  s2-s3 __  s3-s4 __
 host-activity entries (category, time UTC):
-restore done at (UTC):      <time>     confirmed: yes | NO
+restore done at (UTC):      <time>
+  backup restored, confirmed: yes | NO      parity restored, confirmed: yes | NO
+backup / parity runs between blocks (what, start and end UTC):
 ```
