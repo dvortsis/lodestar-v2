@@ -171,8 +171,41 @@ test.describe('a lazy chunk fails to load', () => {
 		await expect(failed).toHaveText("Results couldn't load.Retry");
 		expect(gate.hit).toBeGreaterThan(0);
 		await expect(page.getByRole('grid', { name: 'Matching torrents' })).toHaveCount(0);
+		// The bar shows the URL's query only once its lazy editor (`Live.svelte`) has mounted, which
+		// under load can be well after the results failed. Until then a select-all selects an empty
+		// bar, and the query then fills in ahead of the typing (`q=lanternharbor`).
+		await expect(page.getByRole('combobox', { name: 'Search torrents' })).toHaveText('lantern');
 		return { errors, failed, gate };
 	}
+
+	test('Search bar: typing before its editor loads keeps exactly what was typed', async ({
+		page,
+		go,
+		mock
+	}) => {
+		const errors: string[] = [];
+		page.on('pageerror', (error) => errors.push(error.message));
+		server(mock, () => body(hits(2)));
+		mock.on('searchIndexState', indexState(5_000_000));
+		// Hold the editor's chunk (the only one with its message line) until the typing is done.
+		const gate = await blockChunk(page, '<p data-live=');
+		gate.blocked = false;
+		let release!: () => void;
+		gate.hold = new Promise((resolve) => (release = resolve));
+		await go('/search?q=lantern');
+		await expect.poll(() => gate.seen).toBeGreaterThan(0); // the held request has arrived
+		const box = page.getByRole('combobox', { name: 'Search torrents' });
+		await box.click();
+		await page.keyboard.press('ControlOrMeta+a');
+		await page.keyboard.type('harbor');
+		await expect(page.locator('[data-live]')).toHaveCount(0); // still the static bar
+		release();
+		await expect(page.locator('[data-live]')).toHaveCount(1);
+		// The typed text wins over the URL's query: no `lantern` in front of it, in the bar or the URL.
+		await expect(page).toHaveURL(/[?&]q=harbor(&|$)/);
+		await expect(box).toHaveText('harbor');
+		expect(errors).toEqual([]);
+	});
 
 	/** Whether focus is inside the results region: never lost to the page body. */
 	const focusInResults = (page: Page) =>
