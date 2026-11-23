@@ -16,7 +16,7 @@ Slice `X-skip-results-flake`, from one failure of `web/e2e/search-toolbar.keyboa
 - **The fix: presses until the attach are kept, and replayed when that can't act twice or against the user.**
   - **What the shell keeps (`Shell.svelte`).** It keeps each keydown from the first one until the chrome reports its listener attached (`onkeys`).
     - It keeps the latest 32; older ones are shifted out.
-    - It leaves out modifier-only presses and presses on an INPUT, TEXTAREA, SELECT or contenteditable target. This tag-name rule is a superset of the registry's `isEditable`, so a key pressed on a checkbox or other non-text INPUT in that window is dropped, not kept, the same as before this PR. The shell is on the first load, which has no room for the exact rule (the search route's initial JS is 44.98 of 45 kB); the exact rule applies at replay instead. This filter only keeps typing from filling the 32 slots: the replay and the registry both ignore it already.
+    - It leaves out only modifier-only presses. It doesn't filter typing: the chrome drops a press on an editable target at replay (the registry's exact `isEditable`), and a press made before focus moved into a field is dropped by the focus rule. A filter here would cost first-load bytes the search route doesn't have: merged with X-shell-home (#1088), an earlier tag-name filter put the route's initial JS at 45.01 of 45 kB.
     - It takes Ctrl/Cmd+K for the palette on any press in that window, not only the first, and keeps that press so the chrome can see where the palette started. In that window the key only opens the palette; it doesn't toggle it.
   - **How the chrome replays them (`Chrome.svelte`).** It hands the kept presses to `keys.handle` in order, right after `attach`. It hands them to the registry only: the page has already seen the real events. It leaves out:
     - **A press the browser or page already acted on, and every press before it.** That means Tab, Enter or Space on a control (the registry's CONTROL list, copied in Chrome), and any default-prevented press (the list's own arrows, Home, Enter and type-ahead). Replayed afterwards, an earlier key would undo that action, for example a j pulling focus back from where the user tabbed to.
@@ -27,7 +27,7 @@ Slice `X-skip-results-flake`, from one failure of `web/e2e/search-toolbar.keyboa
       - One made between the shell's first key and the chrome's mount isn't seen: watching from the shell would cost the first load, and the runner chose not to spend that.
     - **The Ctrl/Cmd+K the shell took, and every press after it, since those were meant for the palette. If the palette is open at the attach, every kept press.**
       - These are two layers. The test fails only when both are removed.
-    - **A press on an editable target** (the registry's `isEditable`).
+    - **A press on an editable target** (the registry's `isEditable`): the text is already there.
     - **A plain key, with no Ctrl, Alt or Meta, while focus is in an editable field at replay time.** After a replayed `/` moves focus into the search box, the letters typed after it were meant as text. They are dropped, never run as shortcuts like j, x, s, o or c.
     - **A press whose target is gone.**
     - **A press older than 5 s at the attach** (`STALE_KEY_MS`; `event.timeStamp` and `performance.now()` share the document's time origin), so a stalled load never fires a late burst of shortcuts.
@@ -56,6 +56,5 @@ Slice `X-skip-results-flake`, from one failure of `web/e2e/search-toolbar.keyboa
   - **Untested, and why:**
     - The cap's existence: only which 32 are kept is observable, since a missing cap behaves the same with fewer than 33 presses.
     - `isConnected`: its target can't be removed in that window without a click, focus move or new query, each of which is already a barrier.
-    - The shell's typing filter: the replay's `isEditable` rule and the registry both drop the same presses, so removing it changes nothing a test can see.
 - **Not this cause.** `e2e/ui-checks/chunk-load.routes.test.ts:291` (X-retry-typed-flake) fails about 1 run in 6 with this change and 1 in 3 without it. In both cases the failing runs have the same signature: Ctrl/Cmd+A in the search box didn't select the old text. Those keys and the typed text target the editable box, which the shell never keeps, and Retry is a click. So that slice stays open.
-- **Size (`npm run size:ci`).** The search route's initial JS is 44.98 kB against its 45 kB limit (44.95 kB without the change, measured the same way). A first version that filtered in the shell measured 45.02 kB, so the filters moved to the chrome. No entry is red.
+- **Size (`npm run size:ci`).** Merged with main at a6ed7bc8, which includes X-shell-home (#1088), the search route's initial JS is 44.95 kB against its 45 kB limit. With the shell's earlier typing filter it measured 45.01 kB, so that filter went. Before that, filtering everything in the shell measured 45.02 kB, which is why the filters live in the chrome. No entry is red.

@@ -163,13 +163,14 @@
 							e.defaultPrevented ||
 							e.timeStamp < moved ||
 							e.key === 'Tab' ||
-							((e.key === 'Enter' || e.key === ' ') && (e.target as Element).closest(CONTROL))
+							((e.key === 'Enter' || e.key === ' ') &&
+								(e.target as Element | null)?.closest(CONTROL))
 						)
 							from = i + 1;
 					});
 					for (const e of kept.slice(from, to))
 						if (
-							(e.target as Node).isConnected &&
+							(e.target as Node | null)?.isConnected &&
 							performance.now() - e.timeStamp < STALE_KEY_MS &&
 							!keysModule.isEditable(e.target) &&
 							(e.ctrlKey || e.metaKey || e.altKey || !keysModule.isEditable(document.activeElement))

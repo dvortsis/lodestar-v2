@@ -25,12 +25,11 @@
 	// no shift. The chrome replaces it with the full bar a moment later.
 	let slot = $state<HTMLElement>();
 	// Key presses before the chrome's key listener attaches, kept (the latest 32) for it to hand to the
-	// registry in order once its shortcuts exist (X-skip-results-flake). Typing is not kept: the text
-	// is there. The chrome leaves out the other keys the browser has already acted on.
+	// registry in order once its shortcuts exist (X-skip-results-flake). The chrome leaves out the
+	// ones that mustn't run (typing, and keys the browser has already acted on): this file is on the
+	// first load, so it only keeps them.
 	const early: KeyboardEvent[] = [];
 	let attached = false;
-	const typing = (el: HTMLElement) =>
-		el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
 	onMount(() => {
 		// The palette's modifier is Cmd on a Mac and Ctrl elsewhere (Ctrl+K in a Mac text field deletes
 		// to the end of the line); the same rule as lib/keys/combo.ts.
@@ -47,9 +46,8 @@
 			if (!bare && (mac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 'k') {
 				e.preventDefault();
 				shell.paletteOpen = true;
-				return void early.push(e);
 			}
-			if (e.target instanceof HTMLElement && !typing(e.target) && early.push(e) > 32) early.shift();
+			if (early.push(e) > 32) early.shift();
 		};
 		addEventListener('keydown', first, { capture: true });
 		return () => removeEventListener('keydown', first, true);
