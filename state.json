@@ -10684,7 +10684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T06:38:42Z",
+    "updated": "2026-11-23T06:49Z",
     "items": [
       {
         "slot": 1,
@@ -10706,12 +10706,9 @@
       },
       {
         "slot": 3,
-        "slice": "X-index-banner-late",
-        "role": "build",
-        "agent": "session_01MMjhn97dJhp7ywVm6pLZy2",
-        "model": "opus",
-        "since": "2026-11-23T04:05:10Z",
-        "doing": "#1093 accepted c746790c; CI then merge"
+        "status": "idle",
+        "doing": "empty: #1093 merged; no new build slices (owner 06:09Z)",
+        "since": "2026-11-23T06:49Z"
       },
       {
         "slot": 4,
