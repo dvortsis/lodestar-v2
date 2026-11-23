@@ -926,6 +926,10 @@ fn recovery_path(
     for class in classes(a.seed, a.queries.min(RECOVERY_QUERIES), a.hot)
         .into_iter()
         .filter(|c| a.only.as_deref().is_none_or(|o| c.name.contains(o)))
+        // Each removal keeps the `/…/` clause and verifies its candidates
+        // again, so a regex's recovery is cut by the budget by design
+        // (RX-1); the regex class itself is timed above.
+        .filter(|c| c.name != "regex")
     {
         let mut searches = Vec::with_capacity(class.queries.len());
         let mut times = Vec::with_capacity(class.queries.len());
