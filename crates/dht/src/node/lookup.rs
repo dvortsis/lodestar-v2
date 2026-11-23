@@ -26,9 +26,10 @@ enum State {
     Fresh,
     InFlight,
     /// CR-SOFT-TIMEOUT: asked, unanswered past the soft timeout. Its query
-    /// is still out and still holds its [`ALPHA`] lane, exactly as with
-    /// the switch off (a late answer settles it); it only stops holding the
-    /// leg's end once [`K`] others have answered.
+    /// is still out and still holds its [`ALPHA`] lane (a late answer
+    /// settles it), but it gives its place among the [`K`] closest up: the
+    /// next candidate is asked once a lane frees, and the leg can end once
+    /// [`K`] others have answered.
     Slow,
     Responded,
     Failed,
@@ -136,13 +137,13 @@ impl Lookup {
     /// first K responders that sent no filters (they don't store the hash,
     /// or don't speak BEP 33) give their slot up, so the lookup reaches the
     /// nodes that do; that bounds a scrape at 2K answers. A slow candidate
-    /// (CR-SOFT-TIMEOUT) takes its slot when choosing whom to ask, exactly
-    /// as an in-flight one does with the switch off; only the end tests
-    /// pass `skip_slow`.
-    fn slot_filter(scrape: bool, skip_slow: bool) -> impl FnMut(&Candidate) -> bool {
+    /// (CR-SOFT-TIMEOUT) gives its slot up, as a failed one does: when
+    /// choosing whom to ask, so the next candidate is asked once a lane
+    /// frees, and in the end tests.
+    fn slot_filter(scrape: bool) -> impl FnMut(&Candidate) -> bool {
         let mut skipped = 0;
         move |c: &Candidate| {
-            if c.state == State::Failed || (skip_slow && c.state == State::Slow) {
+            if matches!(c.state, State::Failed | State::Slow) {
                 return false;
             }
             if scrape && c.state == State::Responded && c.blooms.is_none() && skipped < K {
@@ -162,7 +163,7 @@ impl Lookup {
     pub fn next_limit(&mut self, limit: usize) -> Vec<NodeInfo> {
         let mut out = Vec::new();
         let mut live = 0;
-        let mut counts = Lookup::slot_filter(self.scrape, false);
+        let mut counts = Lookup::slot_filter(self.scrape);
         for c in &mut self.candidates {
             if self.in_flight >= ALPHA || out.len() >= limit || live >= K {
                 break;
@@ -201,11 +202,12 @@ impl Lookup {
     }
 
     /// CR-SOFT-TIMEOUT: the query out to `id` has gone unanswered past the
-    /// soft timeout. It keeps its [`ALPHA`] lane, so the leg asks exactly
-    /// whom, and when, it would with the switch off; it only stops holding
-    /// the leg's end once [`K`] others have answered. Its answer, if one
-    /// comes before the query timeout, still settles it. False when `id`
-    /// has no query in flight.
+    /// soft timeout. It keeps its [`ALPHA`] lane, so a leg never has more
+    /// than [`ALPHA`] queries out, but it gives its place among the [`K`]
+    /// closest up: the next candidate is asked once a lane frees, and the
+    /// leg can end once [`K`] others have answered. Its answer, if one comes
+    /// before the query timeout, still settles it. False when `id` has no
+    /// query in flight.
     pub fn soft_expire(&mut self, id: &NodeId) -> bool {
         match self
             .candidates
@@ -231,7 +233,7 @@ impl Lookup {
     /// Answers among the K closest live candidates.
     #[cfg(test)]
     pub fn answered_live(&self) -> usize {
-        let mut counts = Lookup::slot_filter(self.scrape, true);
+        let mut counts = Lookup::slot_filter(self.scrape);
         self.candidates
             .iter()
             .filter(|c| counts(c))
@@ -337,12 +339,12 @@ impl Lookup {
     /// once the K closest candidates that are neither failed nor slow have
     /// all answered. With fewer than K such answers, the leg waits for the
     /// slow ones to settle (answer or reach the query timeout), as with the
-    /// switch off. Whenever the switch-off test holds, this one does.
+    /// switch off.
     pub fn is_done(&self) -> bool {
         if self.in_flight > self.slow || self.extra_in_flight > 0 {
             return false;
         }
-        let mut counts = Lookup::slot_filter(self.scrape, true);
+        let mut counts = Lookup::slot_filter(self.scrape);
         let mut answered = 0;
         for c in self.candidates.iter().filter(|c| counts(c)).take(K) {
             if c.state == State::Fresh {

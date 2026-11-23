@@ -867,6 +867,15 @@ async fn play(script: &Script, soft: bool, lookup_end: bool) -> Played {
         if step % 10 == 0 {
             a.maintain(&s);
             check(&a);
+            // No timer is extended: after a tick, nothing is still out
+            // past the query timeout, soft or detached included.
+            let now = Instant::now();
+            assert!(
+                a.pending
+                    .values()
+                    .all(|p| now.duration_since(p.sent) < a.cfg.query_timeout),
+                "a query outlived its timeout"
+            );
             known = record(&a, step, &mut sends);
         }
         if rx.try_recv().is_ok() {
@@ -893,28 +902,26 @@ async fn play(script: &Script, soft: bool, lookup_end: bool) -> Played {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
-    /// The guarantee, on a scripted network of fast, late and silent nodes,
-    /// with `dht.lookup_end` off and on: with the switch on a leg never
-    /// ends later than with it off, and until it ends it sends exactly the
-    /// same queries at the same times. A leg that ends with slow queries
-    /// out has its K answers. The bookkeeping holds at every step.
+    /// The bounds, on a scripted network of fast, late and silent nodes,
+    /// with `dht.lookup_end` off and on: a leg never has more than `ALPHA`
+    /// queries out and a request never sends more than its 64, both at
+    /// every step ([`check`]); no query's timer is extended (checked after
+    /// every tick in [`play`]); and a leg that ends with slow queries out
+    /// has its K answers. The switch-off run holds the same bounds.
     #[test]
-    fn on_never_ends_later_and_sends_the_same_queries(script in script(), lookup_end in any::<bool>()) {
+    fn soft_expiry_keeps_every_bound(script in script(), lookup_end in any::<bool>()) {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .start_paused(true)
             .build()
             .unwrap();
         let on = rt.block_on(play(&script, true, lookup_end));
-        let off = rt.block_on(play(&script, false, lookup_end));
-        prop_assert!(on.step <= off.step, "on ended at {} ({:?}), off at {} ({:?})", on.step, on.why, off.step, off.why);
         prop_assert!(on.slow == 0 || on.answered >= K, "ended with {} slow and {} answers", on.slow, on.answered);
-        let before = |v: &[(u32, SocketAddr)]| v.iter().filter(|(t, _)| *t < on.step).copied().collect::<Vec<_>>();
-        prop_assert_eq!(before(&on.sends), before(&off.sends), "the same queries before the end");
-        let at_end = |v: &[(u32, SocketAddr)]| v.iter().filter(|(t, _)| *t == on.step).copied().collect::<Vec<_>>();
-        let off_at_end = at_end(&off.sends);
-        prop_assert!(at_end(&on.sends).iter().all(|q| off_at_end.contains(q)), "nothing extra at the end");
-        prop_assert!(on.sends.iter().all(|(t, _)| *t <= on.step));
+        prop_assert!(on.sends.len() <= MAX_PEER_QUERIES, "{} sent", on.sends.len());
+        let off = rt.block_on(play(&script, false, lookup_end));
+        prop_assert!(off.sends.len() <= MAX_PEER_QUERIES);
+        // The run reached its end by a recorded reason.
+        prop_assert!(on.step > 0 && LedgerEnd::ALL.contains(&on.why));
     }
 }
 

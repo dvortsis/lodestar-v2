@@ -1140,10 +1140,11 @@ fn soft_timeout_runs_deterministically() {
 /// switch off against on at 1 s and at 2 s, over `SCREEN_SEEDS`, with
 /// `dht.lookup_end` off and then on in every arm. Reports `W`, `q`, `y`,
 /// stored per minute, stored per slot-second and stored per DHT query,
-/// and late ÷ soft (soft-expired queries answered before the query
-/// timeout). An arm is kept only if stored per slot-second and stored per
-/// query both rise (build-plan §0.5's standing rule); 1 s is chosen over
-/// 2 s only if it passes and its late ÷ soft isn't much worse (runner,
+/// late ÷ soft (soft-expired queries answered before the query timeout),
+/// and lookup duration p50, p90 and p99 (admission to answer). A value
+/// passes only if stored per slot-second and stored per query both rise on
+/// 8/8 seeds (build-plan §0.5's standing rule) and p90 and p99 are no
+/// worse than off, meaned over the seeds (the runner's distribution rule,
 /// 2026-11-23).
 /// `cargo test -p lodestar-crawler-sim --test sim soft_timeout_screen -- --ignored --nocapture`
 #[test]
@@ -1160,6 +1161,7 @@ fn soft_timeout_screen() {
                 soft_timeout,
                 ..Switches::default()
             },
+            lookup_times: true,
             ..scenario::live_lookup()
         };
         let off = over_seeds(&arm(None));
@@ -1229,14 +1231,47 @@ fn soft_timeout_screen() {
                 .zip(&on)
                 .map(|(a, b)| b.steady_stored - a.steady_stored)
                 .collect();
+            let (slot_up, query_up) = (rises(&per_slot_s), rises(&per_query));
             println!(
-                "stored/min diffs {diffs:?}: {:?}; stored/slot-s rose on {}/8 seeds, stored/query on {}/8",
+                "stored/min diffs {diffs:?}: {:?}; stored/slot-s rose on {slot_up}/8 seeds, stored/query on {query_up}/8",
                 sign_test(&diffs),
-                rises(&per_slot_s),
-                rises(&per_query),
+            );
+            // The runner's distribution rule (2026-11-23): lookup duration
+            // (admission to answer, after the warmup), each seed's
+            // percentiles, meaned over the seeds.
+            let mean_pct = |runs: &[run::Report], p: f64| {
+                runs.iter()
+                    .map(|r| percentile(&r.lookup_ms, p))
+                    .sum::<f64>()
+                    / runs.len() as f64
+            };
+            let mut tail_ok = true;
+            for p in [0.5, 0.9, 0.99] {
+                let (a, b) = (mean_pct(&off, p), mean_pct(&on, p));
+                if p > 0.5 && b > a {
+                    tail_ok = false;
+                }
+                println!("lookup ms p{:.0}: off {a:.0}, on {b:.0}", p * 100.0);
+            }
+            let n_off: usize = off.iter().map(|r| r.lookup_ms.len()).sum();
+            let n_on: usize = on.iter().map(|r| r.lookup_ms.len()).sum();
+            println!(
+                "lookups timed: off {n_off}, on {n_on}; passes: {}",
+                slot_up == 8 && query_up == 8 && tail_ok
             );
         }
     }
+}
+
+/// The `p` quantile (nearest rank) of `ms`, or 0 when empty.
+fn percentile(ms: &[u64], p: f64) -> f64 {
+    if ms.is_empty() {
+        return 0.0;
+    }
+    let mut v = ms.to_vec();
+    v.sort_unstable();
+    let rank = ((p * v.len() as f64).ceil() as usize).clamp(1, v.len());
+    v[rank - 1] as f64
 }
 
 /// The CR-LOOKUP-END screen: the calibrated `live-lookup` scenario, the
