@@ -11,10 +11,12 @@
 //!   the roots given). Credentials (server password, SASL, NickServ,
 //!   channel keys) are refused in a plaintext [`Config`] and, again, by the
 //!   protocol state machine before any is written.
-//! - **SASL PLAIN** is negotiated with `CAP LS 302`; a server that doesn't
-//!   offer it, refuses it or registers the client without it stops the
-//!   client (fail closed). A failed SASL login stops it too, instead of retrying
-//!   into an account lock.
+//! - **SASL PLAIN** is negotiated with `CAP LS 302` and fails closed: the
+//!   client never registers without it. A server that doesn't offer it, or
+//!   registers the client without it, is dropped and retried with back-off
+//!   (networks drop the capability while services are split); one that
+//!   refuses it (`NAK`), or a failed login, stops the client instead of
+//!   retrying into an account lock.
 //! - **Bounded everywhere:** one line's worth of read buffer
 //!   ([`LineBuffer`]), [`EVENT_QUEUE`] messages waiting for the plugin
 //!   (more are dropped and counted), [`COMMAND_QUEUE`] lines waiting to be
@@ -24,8 +26,13 @@
 //!   ([`Reconnect`]); the count resets after a connection stays up.
 //! - **Ignored:** CTCP (and so DCC), and invitations to any channel that
 //!   isn't configured.
-//! - **No logging.** The client reports through [`State`] and [`Stats`];
-//!   no variant of either carries server text or a credential.
+//! - **No logging.** The client reports through [`State`] and [`Stats`],
+//!   which never carry a credential. The only server-chosen text in either
+//!   is the nick in [`State::Ready`], filtered by `valid_server_nick` (no
+//!   control or Unicode format characters).
+//! - **[`Events`] carry raw server text:** a [`Message`]'s source,
+//!   parameters and tag values may hold control and formatting characters.
+//!   The consumer strips them before storing or logging any.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -58,6 +65,10 @@ pub const MAX_CHANNELS: usize = 32;
 pub const MAX_CAP_LS_LINES: u8 = 16;
 /// Alternative nicks tried while registering when the nick is taken.
 pub const NICK_RETRIES: u8 = 3;
+/// Connections in a row the server may end with `ERROR` before any
+/// registers, before the client stops as [`Stop::Banned`] (a K-line or
+/// similar ban sends `ERROR`, not 465).
+pub const SERVER_ERRORS: u32 = 3;
 /// Bytes of the SASL payload per `AUTHENTICATE` line (IRCv3).
 const SASL_CHUNK: usize = 400;
 /// The read size per wake-up.
@@ -99,11 +110,22 @@ pub enum Auth {
     None,
     /// SASL PLAIN during registration (needs TLS).
     SaslPlain { account: String, password: Secret },
-    /// `PRIVMSG NickServ :IDENTIFY <account> <password>` after the welcome
-    /// (needs TLS). Channels are joined once services confirm (numeric
-    /// 900) or after [`Timeouts::nickserv`].
-    NickServ { account: String, password: Secret },
+    /// `PRIVMSG <service> :IDENTIFY <account> <password>` after the
+    /// welcome (needs TLS). Channels are joined once services confirm
+    /// (numeric 900) or after [`Timeouts::nickserv`].
+    NickServ {
+        account: String,
+        password: Secret,
+        /// Where `IDENTIFY` goes: `None` for `NickServ`, or a nick with an
+        /// optional server (`NickServ@services.example.test`), which
+        /// networks offer so a password can't reach an impostor holding
+        /// the nick `NickServ` during a services split.
+        service: Option<String>,
+    },
 }
+
+/// The default target of NickServ's `IDENTIFY`.
+pub const NICKSERV: &str = "NickServ";
 
 impl fmt::Debug for Auth {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -305,7 +327,10 @@ impl Config {
         }
         match &self.auth {
             Auth::None => {}
-            Auth::SaslPlain { account, password } | Auth::NickServ { account, password } => {
+            Auth::SaslPlain { account, password }
+            | Auth::NickServ {
+                account, password, ..
+            } => {
                 if !valid_word(account, 64) {
                     return Err(Invalid("account"));
                 }
@@ -313,6 +338,13 @@ impl Config {
                     return Err(Invalid("password"));
                 }
             }
+        }
+        if let Auth::NickServ {
+            service: Some(s), ..
+        } = &self.auth
+            && !valid_service(s)
+        {
+            return Err(Invalid("NickServ target"));
         }
         if self.channels.len() > MAX_CHANNELS {
             return Err(Invalid("channels"));
@@ -434,9 +466,32 @@ fn valid_nick(n: &str) -> bool {
 }
 
 /// A nick the server assigns: its NICKLEN may be over 30, so only the
-/// characters a nick can't have are refused, up to 64 bytes.
+/// characters a nick can't have are refused, up to 64 bytes, along with
+/// control and Unicode format characters (bidi controls, zero-width
+/// characters), since the nick is shown in [`State::Ready`].
 fn valid_server_nick(n: &str) -> bool {
-    (1..=64).contains(&n.len()) && !n.contains([' ', '!', '@', ':', ',']) && !has_control(n)
+    (1..=64).contains(&n.len())
+        && !n.contains([' ', '!', '@', ':', ','])
+        && !has_control(n)
+        && !has_format(n)
+}
+
+/// NickServ's `IDENTIFY` target: an RFC 2812 nick, optionally `@` and a
+/// server name (letters, digits, `-` and `.`). Never a channel, a mask or
+/// a list, so the password can only go to one services nick.
+fn valid_service(s: &str) -> bool {
+    let (nick, server) = match s.split_once('@') {
+        Some((n, h)) => (n, Some(h)),
+        None => (s, None),
+    };
+    valid_nick(nick)
+        && server.is_none_or(|h| {
+            (1..=253).contains(&h.len())
+                && !h.starts_with(['.', '-'])
+                && !h.ends_with('.')
+                && h.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.'))
+        })
 }
 
 /// A channel name: a `#`, `&`, `+` or `!` prefix, 2 to 50 bytes, and none
@@ -459,6 +514,40 @@ fn valid_word(w: &str, max: usize) -> bool {
 
 fn has_control(s: &str) -> bool {
     s.chars().any(char::is_control)
+}
+
+/// Whether `s` has a Unicode format character (general category Cf):
+/// bidi controls, zero-width characters, the soft hyphen, tag characters
+/// and the rest. Unicode 16's full list, written out so no dependency is
+/// needed; they render invisibly or reorder the text around them.
+fn has_format(s: &str) -> bool {
+    const CF: &[(u32, u32)] = &[
+        (0x00AD, 0x00AD),
+        (0x0600, 0x0605),
+        (0x061C, 0x061C),
+        (0x06DD, 0x06DD),
+        (0x070F, 0x070F),
+        (0x0890, 0x0891),
+        (0x08E2, 0x08E2),
+        (0x180E, 0x180E),
+        (0x200B, 0x200F),
+        (0x202A, 0x202E),
+        (0x2060, 0x2064),
+        (0x2066, 0x206F),
+        (0xFEFF, 0xFEFF),
+        (0xFFF9, 0xFFFB),
+        (0x110BD, 0x110BD),
+        (0x110CD, 0x110CD),
+        (0x13430, 0x1343F),
+        (0x1BCA0, 0x1BCA3),
+        (0x1D173, 0x1D17A),
+        (0xE0001, 0xE0001),
+        (0xE0020, 0xE007F),
+    ];
+    s.chars().any(|c| {
+        let c = u32::from(c);
+        CF.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
+    })
 }
 
 fn server_name(host: &str) -> Result<ServerName<'static>, ConfigError> {
@@ -529,7 +618,9 @@ impl fmt::Debug for Egress {
     }
 }
 
-/// Where the client is. No variant carries server text or a credential.
+/// Where the client is. No variant carries a credential; the only
+/// server-chosen text is [`State::Ready`]'s nick, which is filtered (no
+/// space, control or Unicode format character, at most 64 bytes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
     /// Connecting; `attempt` is 1 after a clean start or a stable
@@ -558,12 +649,19 @@ pub enum Disconnect {
     Tls,
     /// The server closed the connection.
     Closed,
-    /// The server sent `ERROR`.
+    /// The server sent `ERROR`. [`SERVER_ERRORS`] of these in a row,
+    /// with no registration in between, stop the client as
+    /// [`Stop::Banned`].
     ServerError,
     PingTimeout,
     RegisterTimeout,
     /// Every alternative nick was taken.
     NickInUse,
+    /// SASL is configured, but the server didn't offer PLAIN or registered
+    /// the client without it. The client never registers without SASL;
+    /// it drops the connection and tries again later, since networks drop
+    /// the capability while services are split.
+    SaslUnavailable,
     /// The kill-switch is down.
     KillSwitch,
     /// Reading or writing failed or timed out.
@@ -584,16 +682,17 @@ pub enum Stop {
     Refused(TcpRouteError),
     /// The server's certificate didn't verify.
     Certificate,
-    /// SASL login failed (902, 904, 905, 906). NickServ's answer is free
-    /// text, so a NickServ failure isn't detected; joins go ahead after
-    /// [`Timeouts::nickserv`].
+    /// SASL login failed (902, 904, 905, 906), or the server password was
+    /// wrong (464). NickServ's answer is free text, so a NickServ failure
+    /// isn't detected; joins go ahead after [`Timeouts::nickserv`].
     AuthFailed,
-    /// SASL is configured but the server doesn't offer PLAIN, refused it,
-    /// or registered the client without it.
+    /// SASL is configured and the server refused it (`CAP NAK`, or an
+    /// `ACK` without it).
     SaslUnavailable,
     /// The server refused the nick as invalid (432).
     NickRejected,
-    /// The server banned the client (465).
+    /// The server banned the client (465), or ended [`SERVER_ERRORS`]
+    /// connections in a row with `ERROR` before any registered.
     Banned,
     /// A line the client builds couldn't be encoded, or a credential was
     /// about to go out without TLS. Shouldn't happen after validation.
@@ -651,6 +750,12 @@ impl Stats {
 /// The messages the server sends, in order, except `PING`, CTCP, `CAP`,
 /// `AUTHENTICATE` and the SASL numerics (900–908), which the client
 /// handles itself. Ends when the client stops.
+///
+/// **Untrusted:** each [`Message`]'s source, parameters and tag values are
+/// the server's raw text and may hold control characters, mIRC formatting,
+/// bidi controls and zero-width characters. Strip formatting and control
+/// characters ([`line::strip_formatting`] and a control filter) before
+/// storing, logging or showing any of it.
 pub type Events = mpsc::Receiver<Message>;
 
 /// Why [`Handle`] couldn't queue a line.
@@ -865,8 +970,28 @@ async fn stop_asked(rx: &mut watch::Receiver<bool>) {
     let _ = rx.wait_for(|s| *s).await;
 }
 
+/// Counts connections in a row the server ended with `ERROR` before any
+/// registered.
+#[derive(Debug, Default)]
+pub(crate) struct ErrorStreak(u32);
+
+impl ErrorStreak {
+    /// Records how a connection ended; `true` when the client should stop
+    /// as [`Stop::Banned`]. A registration ends the streak; another kind of
+    /// failure (a connect error, a timeout) neither ends nor extends it.
+    pub(crate) fn banned(&mut self, registered: bool, why: &Disconnect) -> bool {
+        if registered {
+            self.0 = 0;
+        } else if *why == Disconnect::ServerError {
+            self.0 += 1;
+        }
+        self.0 >= SERVER_ERRORS
+    }
+}
+
 async fn run(mut ctx: Ctx) {
     let mut failures: u32 = 0;
+    let mut errors = ErrorStreak::default();
     loop {
         ctx.state.send_replace(State::Connecting {
             attempt: failures + 1,
@@ -880,6 +1005,10 @@ async fn run(mut ctx: Ctx) {
             }
             End::Retry(why) => why,
         };
+        if errors.banned(registered.is_some(), &why) {
+            ctx.state.send_replace(State::Stopped(Stop::Banned));
+            return;
+        }
         if registered.is_some_and(|t: Instant| t.elapsed() >= ctx.cfg.reconnect.stable_after) {
             failures = 0;
         }
@@ -997,7 +1126,14 @@ async fn session(ctx: &mut Ctx, registered: &mut Option<Instant>) -> End {
         }
         while proto.has_output() && bucket.take(now) {
             if let Some(line) = proto.next_line() {
-                if let Err(end) = guarded_write(&mut wr, &line, write_timeout, &mut down).await {
+                let w = guarded_write(
+                    &mut wr,
+                    &line,
+                    write_timeout,
+                    &mut down,
+                    Some(&mut *shutdown),
+                );
+                if let Err(end) = w.await {
                     return end;
                 }
                 Stats::bump(&stats.lines_out);
@@ -1019,31 +1155,42 @@ async fn session(ctx: &mut Ctx, registered: &mut Option<Instant>) -> End {
         if let Some(t) = bucket.next_token(now) {
             wake = wake.min(t);
         }
+        // `commands` comes before `read`, so a busy server can't hold back
+        // the plugin's lines; they're still paced by `can_send` (the bucket
+        // and the protocol's own lines first).
         tokio::select! {
             biased;
             _ = &mut down => return End::Retry(Disconnect::KillSwitch),
             _ = stop_asked(shutdown) => {
                 if let Ok(quit) = line::encode("QUIT", &[]) {
-                    let _ = write_line(&mut wr, &quit, Duration::from_secs(1)).await;
+                    // Best effort, at most 1 s, and never once the switch
+                    // is down.
+                    let quit_wait = Duration::from_secs(1);
+                    let _ = guarded_write(&mut wr, &quit, quit_wait, &mut down, None).await;
                 }
                 return End::Stop(Stop::Shutdown);
             }
             _ = events.closed() => return End::Stop(Stop::Shutdown),
-            r = rd.read(&mut chunk) => match r {
-                Ok(0) => return End::Retry(Disconnect::Closed),
-                Err(_) => return End::Retry(Disconnect::Io),
-                Ok(n) => {
-                    let now = Instant::now();
-                    lines.feed(&chunk[..n], |f| on_framed(f, &mut proto, now, events, stats));
-                }
-            },
             Some(line) = commands.recv(), if can_send => {
                 bucket.take(Instant::now());
-                if let Err(end) = guarded_write(&mut wr, &line, write_timeout, &mut down).await {
+                let w = guarded_write(&mut wr, &line, write_timeout, &mut down, Some(&mut *shutdown));
+                if let Err(end) = w.await {
                     return end;
                 }
                 Stats::bump(&stats.lines_out);
             }
+            r = rd.read(&mut chunk) => match r {
+                Ok(0) => return End::Retry(Disconnect::Closed),
+                Err(_) => return End::Retry(Disconnect::Io),
+                Ok(n) => {
+                    // The idle clock isn't touched here: only a complete,
+                    // parsed message moves it (`Proto::on_message`), so
+                    // over-long, malformed or never-ending lines are still
+                    // silence.
+                    let now = Instant::now();
+                    lines.feed(&chunk[..n], |f| on_framed(f, &mut proto, now, events, stats));
+                }
+            },
             _ = tokio::time::sleep_until(wake) => {}
         }
     }
@@ -1088,17 +1235,28 @@ fn on_framed(
 
 /// One line's write under the kill-switch: the switch is polled first, so
 /// nothing is written once it's down, and it races the write, so a write
-/// stuck on a full window doesn't keep the connection open.
+/// stuck on a full window doesn't keep the connection open. A shutdown
+/// (`stop`, when given) races it too, so a stalled write doesn't hold a
+/// shutdown for the whole write timeout; the write is polled before it, so
+/// a line that can go out at once still does.
 async fn guarded_write<W: AsyncWrite + Unpin>(
     wr: &mut W,
     line: &[u8],
     timeout: Duration,
     down: &mut lodestar_integrations::BoxFuture<'_, ()>,
+    stop: Option<&mut watch::Receiver<bool>>,
 ) -> Result<(), End> {
+    let stopped = async {
+        match stop {
+            Some(rx) => stop_asked(rx).await,
+            None => std::future::pending().await,
+        }
+    };
     tokio::select! {
         biased;
         _ = down => Err(End::Retry(Disconnect::KillSwitch)),
         r = write_line(wr, line, timeout) => r.map_err(|()| End::Retry(Disconnect::Io)),
+        _ = stopped => Err(End::Stop(Stop::Shutdown)),
     }
 }
 
@@ -1379,7 +1537,8 @@ impl Proto {
                 self.on_welcome(&msg, now);
                 Handled::Emit(msg)
             }
-            "433" | "436" if !self.registered() => {
+            // In use, a collision, or held by the server for a while.
+            "433" | "436" | "437" if !self.registered() => {
                 self.next_nick();
                 Handled::Emit(msg)
             }
@@ -1389,6 +1548,11 @@ impl Proto {
             }
             "465" => {
                 self.stop(Stop::Banned);
+                Handled::Emit(msg)
+            }
+            // The server password was wrong: retrying can't fix it.
+            "464" => {
+                self.stop(Stop::AuthFailed);
                 Handled::Emit(msg)
             }
             "900" | "901" | "902" | "903" | "904" | "905" | "906" | "907" | "908" => {
@@ -1437,7 +1601,9 @@ impl Proto {
                         self.phase = Phase::CapReq;
                         self.send("CAP", &["REQ", "sasl"]);
                     } else {
-                        self.stop(Stop::SaslUnavailable);
+                        // Not offered (now): never registered without it,
+                        // but tried again later.
+                        self.retry(Disconnect::SaslUnavailable);
                     }
                 }
             }
@@ -1515,8 +1681,9 @@ impl Proto {
 
     fn on_welcome(&mut self, msg: &Message, now: Instant) {
         if self.in_sasl() {
-            // Registered without the login the config asks for.
-            self.stop(Stop::SaslUnavailable);
+            // Registered without the login the config asks for: dropped at
+            // once, before any join, and tried again later.
+            self.retry(Disconnect::SaslUnavailable);
             return;
         }
         if self.phase != Phase::Registering {
@@ -1528,7 +1695,12 @@ impl Proto {
             self.nick = n.to_owned();
         }
         let cfg = Arc::clone(&self.cfg);
-        if let Auth::NickServ { account, password } = &cfg.auth {
+        if let Auth::NickServ {
+            account,
+            password,
+            service,
+        } = &cfg.auth
+        {
             if !self.tls {
                 self.stop(Stop::Internal);
                 return;
@@ -1539,7 +1711,8 @@ impl Proto {
             text.push_str(account);
             text.push(' ');
             text.push_str(pw);
-            self.send("PRIVMSG", &["NickServ", &text]);
+            let to = service.as_deref().unwrap_or(NICKSERV);
+            self.send("PRIVMSG", &[to, &text]);
             self.phase = Phase::Identifying(now + cfg.timeouts.nickserv);
         } else {
             self.join_all();
@@ -1682,6 +1855,7 @@ mod tests {
         Auth::NickServ {
             account: "acct".into(),
             password: Secret::new("pw-test"),
+            service: None,
         }
     }
 
@@ -1725,26 +1899,48 @@ mod tests {
     async fn sasl_fails_closed() {
         let now = Instant::now();
         let fresh = || Proto::new(cfg(|c| c.auth = sasl()), true, now);
-        // Not offered with PLAIN.
+        let unavailable = Some(End::Retry(Disconnect::SaslUnavailable));
+        // Not offered with PLAIN: dropped and retried, never registered.
         let mut p = fresh();
+        drain(&mut p);
         p.on_message(msg(":s CAP * LS :multi-prefix sasl=EXTERNAL"), now);
-        assert_eq!(p.end, Some(End::Stop(Stop::SaslUnavailable)));
-        // Refused.
+        assert_eq!(p.end, unavailable);
+        assert!(drain(&mut p).is_empty(), "no CAP END, no REQ");
+        // Not offered at all.
+        let mut p = fresh();
+        p.on_message(msg(":s CAP * LS :multi-prefix"), now);
+        assert_eq!(p.end, unavailable);
+        // Refused: a stop.
         let mut p = fresh();
         p.on_message(msg(":s CAP * LS :sasl"), now);
         p.on_message(msg(":s CAP * NAK :sasl"), now);
         assert_eq!(p.end, Some(End::Stop(Stop::SaslUnavailable)));
-        // A server without CAP that registers the client anyway.
+        // A server without CAP that registers the client anyway: dropped
+        // before any join, and retried.
         let mut p = fresh();
         p.on_message(msg(":s 421 * CAP :Unknown command"), now);
         p.on_message(msg(":s 001 lode :Welcome"), now);
-        assert_eq!(p.end, Some(End::Stop(Stop::SaslUnavailable)));
+        assert_eq!(p.end, unavailable);
+        assert!(!p.ready());
         assert!(!drain(&mut p).iter().any(|l| l.starts_with("JOIN")));
+        // Registered mid-login, after the credentials went out.
+        let mut p = acked(sasl(), true, now);
+        p.on_message(msg("AUTHENTICATE +"), now);
+        drain(&mut p);
+        p.on_message(msg(":s 001 lode :Welcome"), now);
+        assert_eq!(p.end, unavailable);
+        assert!(drain(&mut p).is_empty());
         // A wrong password.
         let mut p = acked(sasl(), true, now);
         p.on_message(msg("AUTHENTICATE +"), now);
         p.on_message(msg(":s 904 lode :SASL authentication failed"), now);
         assert_eq!(p.end, Some(End::Stop(Stop::AuthFailed)));
+        for code in ["902", "905", "906"] {
+            let mut p = acked(sasl(), true, now);
+            p.on_message(msg("AUTHENTICATE +"), now);
+            p.on_message(msg(&format!(":s {code} lode :no")), now);
+            assert_eq!(p.end, Some(End::Stop(Stop::AuthFailed)), "{code}");
+        }
         // An `AUTHENTICATE +` the client didn't ask for gets nothing.
         let mut p = fresh();
         drain(&mut p);
@@ -1808,6 +2004,114 @@ mod tests {
         assert_eq!(drain(&mut p), ["JOIN #announce", "JOIN #pre"]);
     }
 
+    /// `IDENTIFY` goes to the configured services target, never to a bare
+    /// `NickServ` when one is set.
+    #[tokio::test]
+    async fn nickserv_identify_goes_to_the_configured_target() {
+        let now = Instant::now();
+        let auth = Auth::NickServ {
+            account: "acct".into(),
+            password: Secret::new("pw-test"),
+            service: Some("NickServ@services.example.test".into()),
+        };
+        let c = cfg(|c| c.auth = auth);
+        assert_eq!(c.validate(), Ok(()));
+        let mut p = Proto::new(c, true, now);
+        drain(&mut p);
+        p.on_message(msg(":s 001 lode :Welcome"), now);
+        assert_eq!(
+            drain(&mut p),
+            ["PRIVMSG NickServ@services.example.test :IDENTIFY acct pw-test"]
+        );
+    }
+
+    #[test]
+    fn nickserv_targets_are_validated() {
+        let with = |service: &str| {
+            let mut c = (*cfg(|_| {})).clone();
+            c.auth = Auth::NickServ {
+                account: "acct".into(),
+                password: Secret::new("pw-test"),
+                service: Some(service.into()),
+            };
+            c.validate()
+        };
+        for ok in [
+            "NickServ",
+            "NickServ@services.example.test",
+            "NS",
+            "Nick-Serv",
+        ] {
+            assert_eq!(with(ok), Ok(()), "{ok}");
+        }
+        for bad in [
+            "",
+            "#channel",
+            "&local",
+            "NickServ,#leak",
+            "Nick Serv",
+            ":NickServ",
+            "NickServ\r\nQUIT",
+            "Nick\u{7}Serv",
+            "Nick\u{200b}Serv",
+            "NickServ@",
+            "NickServ@services example.test",
+            "NickServ@.test",
+            "NickServ@services.test.",
+            "NickServ@a@b",
+            "$*.test",
+            "Nick*",
+            "@services.example.test",
+        ] {
+            assert_eq!(
+                with(bad),
+                Err(ConfigError::Invalid("NickServ target")),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// A nick the server chooses is shown in `State`, so control and
+    /// Unicode format characters (bidi controls, zero-width) are refused.
+    #[test]
+    fn server_nicks_refuse_control_and_format_characters() {
+        for ok in ["lode", "lode_", "ŁódźBot", "a".repeat(64).as_str()] {
+            assert!(valid_server_nick(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "a b",
+            "a!b",
+            "a@b",
+            "a\u{7}",
+            "a\u{1b}[31m",
+            "a\u{85}",
+            "\u{202e}edol",
+            "lo\u{200b}de",
+            "lo\u{200d}de",
+            "lo\u{200e}de",
+            "lo\u{2066}de",
+            "lo\u{2069}de",
+            "lo\u{2060}de",
+            "\u{feff}lode",
+            "lo\u{ad}de",
+            "lo\u{61c}de",
+            "lo\u{e0041}",
+            "a".repeat(65).as_str(),
+        ] {
+            assert!(!valid_server_nick(bad), "{bad:?}");
+        }
+        // A NICK to one of them is ignored; the client keeps its own.
+        let now = Instant::now();
+        let mut p = Proto::new(cfg(|_| {}), true, now);
+        p.on_message(msg(":s 001 lode :Welcome"), now);
+        p.on_message(msg(":lode!u@h NICK :\u{202e}edol"), now);
+        assert_eq!(p.nick, "lode");
+        let mut p = Proto::new(cfg(|_| {}), true, now);
+        p.on_message(msg(":s 001 lo\u{200b}de :Welcome"), now);
+        assert_eq!(p.nick, "lode");
+    }
+
     #[tokio::test]
     async fn pings_ctcp_invites_and_membership() {
         let now = Instant::now();
@@ -1859,6 +2163,33 @@ mod tests {
         }
         p.on_message(msg(in_use), now);
         assert_eq!(p.end, Some(End::Retry(Disconnect::NickInUse)));
+
+        // 437 (held for a while) is treated like 433 and 436.
+        let mut p = Proto::new(cfg(|_| {}), true, now);
+        drain(&mut p);
+        p.on_message(
+            msg(":s 437 * lode :Nick/channel is temporarily unavailable"),
+            now,
+        );
+        assert_eq!(drain(&mut p), ["NICK lode_"]);
+        p.on_message(msg(":s 436 * lode_ :Nickname collision"), now);
+        assert_eq!(drain(&mut p), ["NICK lode__"]);
+        assert_eq!(p.end, None);
+        // Once registered, a 437 (about a channel) changes nothing.
+        p.on_message(msg(":s 001 lode__ :Welcome"), now);
+        drain(&mut p);
+        p.on_message(
+            msg(":s 437 lode__ #pre :Channel is temporarily unavailable"),
+            now,
+        );
+        assert!(drain(&mut p).is_empty());
+        assert_eq!(p.nick, "lode__");
+
+        // A wrong server password (464) stops for good.
+        let pass = cfg(|c| c.server_password = Some(Secret::new("pw-test")));
+        let mut p = Proto::new(pass, true, now);
+        p.on_message(msg(":s 464 * :Password incorrect"), now);
+        assert_eq!(p.end, Some(End::Stop(Stop::AuthFailed)));
 
         let mut p = Proto::new(cfg(|_| {}), true, now);
         p.on_message(msg(":s 432 * lode :Erroneous nickname"), now);
@@ -1936,14 +2267,135 @@ mod tests {
     #[tokio::test]
     async fn no_write_once_the_kill_switch_is_down() {
         let mut out = Vec::new();
+        let (_tx, mut stop) = watch::channel(true);
         let mut down: lodestar_integrations::BoxFuture<'_, ()> = Box::pin(async {});
-        let r = guarded_write(&mut out, b"PONG :x\r\n", Duration::from_secs(1), &mut down).await;
+        let s = Duration::from_secs(1);
+        let r = guarded_write(&mut out, b"PONG :x\r\n", s, &mut down, Some(&mut stop)).await;
         assert_eq!(r, Err(End::Retry(Disconnect::KillSwitch)));
         assert!(out.is_empty());
+        // A write that can go out at once does, even with a shutdown asked.
         let mut up: lodestar_integrations::BoxFuture<'_, ()> = Box::pin(std::future::pending());
-        let r = guarded_write(&mut out, b"PONG :x\r\n", Duration::from_secs(1), &mut up).await;
+        let r = guarded_write(&mut out, b"PONG :x\r\n", s, &mut up, Some(&mut stop)).await;
         assert_eq!(r, Ok(()));
         assert_eq!(out, b"PONG :x\r\n");
+    }
+
+    /// A shutdown ends a stalled write at once instead of after the whole
+    /// write timeout.
+    #[tokio::test]
+    async fn a_shutdown_ends_a_stalled_write() {
+        // A pipe with one byte of room, never read: the write stalls.
+        let (mut wr, _peer) = tokio::io::duplex(1);
+        let mut up: lodestar_integrations::BoxFuture<'_, ()> = Box::pin(std::future::pending());
+        let (tx, mut stop) = watch::channel(false);
+        let long = Duration::from_secs(3600);
+        let started = Instant::now();
+        let write = guarded_write(
+            &mut wr,
+            b"PRIVMSG #a :x\r\n",
+            long,
+            &mut up,
+            Some(&mut stop),
+        );
+        let ask = async {
+            tokio::task::yield_now().await;
+            tx.send_replace(true);
+            std::future::pending::<()>().await
+        };
+        let r = tokio::select! {
+            r = write => r,
+            () = ask => unreachable!(),
+        };
+        assert_eq!(r, Err(End::Stop(Stop::Shutdown)));
+        assert!(started.elapsed() < Duration::from_secs(10));
+        // With no shutdown to race, the same write waits for its timeout.
+        let (mut wr, _peer) = tokio::io::duplex(1);
+        let short = Duration::from_millis(50);
+        let r = guarded_write(&mut wr, b"PRIVMSG #a :x\r\n", short, &mut up, None).await;
+        assert_eq!(r, Err(End::Retry(Disconnect::Io)));
+    }
+
+    /// After the welcome, only over-long lines, malformed lines and a line
+    /// that never ends arrive: that is still silence, so the client sends
+    /// `PING` on time and then gives up. Driven through the session's own
+    /// framing (`LineBuffer` and `on_framed`).
+    #[tokio::test]
+    async fn garbage_is_still_silence() {
+        let now = Instant::now();
+        let t = Timeouts::default();
+        let mut p = Proto::new(cfg(|_| {}), true, now);
+        p.on_message(msg(":s 001 lode :Welcome"), now);
+        drain(&mut p);
+        let (events, mut rx) = mpsc::channel(EVENT_QUEUE);
+        let stats = Stats::default();
+        let mut lines = LineBuffer::new();
+        let mut overlong = vec![b'x'; line::MAX_LINE_BYTES + 1];
+        overlong.push(b'\n');
+        let mut feed = |p: &mut Proto, at: Instant| {
+            for bytes in [
+                &overlong[..],
+                b"PRIVMSG #a :bad\0byte\r\n",
+                b"PI1NG :bad command\r\n",
+                b":n!u@h PRIVMSG #a :never ends",
+            ] {
+                lines.feed(bytes, |f| on_framed(f, p, at, &events, &stats));
+            }
+        };
+        let s = Duration::from_secs;
+        let mut at = now;
+        let mut rounds = 0;
+        while at + s(1) < now + t.ping_after {
+            at += s(1);
+            feed(&mut p, at);
+            p.on_tick(at);
+            rounds += 1;
+            assert!(
+                drain(&mut p).is_empty(),
+                "no PING before {:?}",
+                t.ping_after
+            );
+            assert_eq!(p.end, None);
+        }
+        p.on_tick(now + t.ping_after);
+        assert_eq!(drain(&mut p), ["PING lodestar"]);
+        let mut at = now + t.ping_after;
+        while at + s(1) < now + t.ping_after + t.ping_timeout {
+            at += s(1);
+            feed(&mut p, at);
+            p.on_tick(at);
+            rounds += 1;
+            assert_eq!(p.end, None);
+        }
+        p.on_tick(now + t.ping_after + t.ping_timeout);
+        assert_eq!(p.end, Some(End::Retry(Disconnect::PingTimeout)));
+        let seen = stats.snapshot();
+        assert_eq!(seen.overlong, rounds);
+        assert_eq!(seen.malformed, 2 * rounds);
+        assert_eq!(seen.lines_in, 0);
+        assert!(lines.pending() > 0, "the last line never ended");
+        assert!(rx.try_recv().is_err(), "nothing reached the plugin");
+    }
+
+    #[test]
+    fn repeated_server_errors_before_registering_are_a_ban() {
+        let mut e = ErrorStreak::default();
+        let err = Disconnect::ServerError;
+        assert!(!e.banned(false, &err));
+        assert!(!e.banned(false, &err));
+        // Other failures in between neither end nor extend the streak.
+        assert!(!e.banned(false, &Disconnect::Closed));
+        assert!(!e.banned(false, &Disconnect::PingTimeout));
+        assert!(e.banned(false, &err));
+
+        // A registration in between ends it.
+        let mut e = ErrorStreak::default();
+        assert!(!e.banned(false, &err));
+        assert!(!e.banned(false, &err));
+        assert!(!e.banned(true, &err), "registered, then ERROR");
+        assert!(!e.banned(false, &err));
+        assert!(!e.banned(false, &err));
+        assert!(e.banned(false, &err));
+        assert_eq!(SERVER_ERRORS, 3);
     }
 
     #[test]

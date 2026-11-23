@@ -12,7 +12,12 @@
 //!   [`Framed::Overlong`] and discarded up to its `LF`, never accumulated.
 //! - **Tags** are capped at [`MAX_TAGS`]; later ones are ignored, as are
 //!   tags whose key isn't a valid IRCv3 key. A repeated key keeps the last
-//!   value (IRCv3).
+//!   value (IRCv3). At most twice [`MAX_TAGS`] `;` items are examined per
+//!   line, so the work per line is bounded too.
+//! - **Content is untrusted:** a parsed [`Message`]'s source, parameters
+//!   and tag values are the server's raw text, which may hold control and
+//!   mIRC formatting characters. Strip them ([`strip_formatting`], and a
+//!   control-character filter) before storing, logging or showing any.
 //! - **Parameters** are capped at [`MAX_PARAMS`]: as RFC 2812 says, the
 //!   fifteenth takes the rest of the line, so a long line can't make more.
 //! - **Text** is UTF-8 when the tags section (and, separately, the body)
@@ -48,6 +53,12 @@ pub struct Tag {
 }
 
 /// A parsed IRC message.
+///
+/// **Untrusted:** the source, every parameter and every tag value are the
+/// server's raw text. Only `NUL`, `CR` and `LF` are excluded; other control
+/// characters, mIRC formatting codes, bidi controls and zero-width
+/// characters can all be present. A consumer strips formatting and control
+/// characters before it stores, logs or shows any of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub tags: Vec<Tag>,
@@ -244,16 +255,23 @@ fn valid_command(c: &str) -> bool {
         || (b.len() <= MAX_COMMAND && b.iter().all(u8::is_ascii_alphabetic))
 }
 
+/// The most `;` items of a tags section examined; later ones are ignored
+/// unread, so a section of thousands of tiny items costs no more than this
+/// many key checks (each against at most [`MAX_TAGS`] kept keys).
+const MAX_TAG_ITEMS: usize = 2 * MAX_TAGS;
+
 fn parse_tags(raw: &str) -> Vec<Tag> {
     let mut tags: Vec<Tag> = Vec::new();
-    for item in raw.split(';') {
+    for item in raw.split(';').take(MAX_TAG_ITEMS) {
         let (key, value) = match item.split_once('=') {
-            Some((k, v)) => (k, Some(unescape_tag(v))),
+            Some((k, v)) => (k, Some(v)),
             None => (item, None),
         };
+        // The key is checked before any value is unescaped.
         if !valid_tag_key(key) {
             continue;
         }
+        let value = value.map(unescape_tag);
         if let Some(t) = tags.iter_mut().find(|t| t.key == key) {
             t.value = value;
         } else if tags.len() < MAX_TAGS {
@@ -672,6 +690,55 @@ mod tests {
         assert_eq!(parse(tags.as_bytes()), Err(ParseError::TagsTooLong));
     }
 
+    /// The exact edges of both limits: one byte under is parsed, one byte
+    /// over is refused.
+    #[test]
+    fn limits_hold_to_the_byte() {
+        // A tags section (`@`, the tags and one space) of 8,191 bytes.
+        let tags = |section: usize| format!("@k={} PING", "v".repeat(section - 4));
+        let at = tags(MAX_TAGS_BYTES);
+        assert_eq!(at.find(' '), Some(MAX_TAGS_BYTES - 1));
+        let m = p(&at);
+        assert_eq!(m.tag("k").map(str::len), Some(MAX_TAGS_BYTES - 4));
+        assert_eq!(m.command, "PING");
+        let over = tags(MAX_TAGS_BYTES + 1);
+        assert_eq!(parse(over.as_bytes()), Err(ParseError::TagsTooLong));
+
+        // A body of 510 bytes, then CR (the LF is the framer's).
+        let body = |len: usize| format!("PRIVMSG #c :{}\r", "x".repeat(len - 12));
+        let at = body(MAX_BODY_BYTES - 2);
+        assert_eq!(at.len(), MAX_BODY_BYTES - 1);
+        assert_eq!(p(&at).params[1].len(), MAX_BODY_BYTES - 2 - 12);
+        let over = body(MAX_BODY_BYTES - 1);
+        assert_eq!(parse(over.as_bytes()), Err(ParseError::TooLong));
+        // Without the CR the body limit is the same.
+        assert_eq!(
+            parse(over.trim_end_matches('\r').as_bytes()),
+            Err(ParseError::TooLong)
+        );
+
+        // Both at once: the longest line the framer passes on parses.
+        let line = format!(
+            "@k={} PRIVMSG #c :{}\r\n",
+            "v".repeat(MAX_TAGS_BYTES - 4),
+            "x".repeat(MAX_BODY_BYTES - 2 - 12)
+        );
+        assert_eq!(line.len(), MAX_LINE_BYTES);
+        let frame = |bytes: &[u8]| {
+            let mut out = Vec::new();
+            LineBuffer::new().feed(bytes, |f| {
+                out.push(match f {
+                    Framed::Line(l) => Some(parse(l).map(|m| m.is_some())),
+                    Framed::Overlong => None,
+                });
+            });
+            out
+        };
+        assert_eq!(frame(line.as_bytes()), [Some(Ok(true))]);
+        // One byte more and the framer drops it unread.
+        assert_eq!(frame(format!("@{}", &line[..]).as_bytes()), [None]);
+    }
+
     #[test]
     fn tags_are_capped_deduplicated_and_validated() {
         let many: Vec<String> = (0..200).map(|i| format!("k{i}=v")).collect();
@@ -682,6 +749,34 @@ mod tests {
         assert_eq!(m.tag("a"), Some("2"));
         assert_eq!(m.tags.len(), 2);
         assert_eq!(m.tag("v.example/k"), Some(""));
+    }
+
+    /// A section of thousands of tiny items still parses, keeps the cap,
+    /// and stops examining items after the first `2 × MAX_TAGS`.
+    #[test]
+    fn tag_items_past_the_bound_are_not_examined() {
+        // 100 distinct keys, then thousands of one-letter items.
+        let many: Vec<String> = (0..3000)
+            .map(|i| if i < 100 { format!("k{i}") } else { "z".into() })
+            .collect();
+        let line = format!("@{} PING", many.join(";"));
+        assert!(line.len() < MAX_TAGS_BYTES);
+        let m = p(&line);
+        assert_eq!(m.tags.len(), MAX_TAGS);
+        assert_eq!(m.command, "PING");
+        // Invalid items count towards the bound: a valid key after
+        // `2 × MAX_TAGS` items is never read.
+        let mut items = vec!["!"; 2 * MAX_TAGS - 1];
+        items.push("last=1");
+        items.push("late=2");
+        let m = p(&format!("@{} PING", items.join(";")));
+        assert_eq!(m.tag("last"), Some("1"));
+        assert_eq!(m.tag("late"), None);
+        // A repeated key within the bound still keeps its last value.
+        let mut items = vec!["a=1"; 2 * MAX_TAGS - 1];
+        items.push("a=2");
+        items.push("a=3");
+        assert_eq!(p(&format!("@{} PING", items.join(";"))).tag("a"), Some("2"));
     }
 
     #[test]

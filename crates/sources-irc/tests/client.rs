@@ -356,6 +356,7 @@ async fn credentials_are_refused_on_plaintext() {
     c.auth = Auth::NickServ {
         account: "acct".into(),
         password: Secret::new("pw-test"),
+        service: None,
     };
     assert_eq!(
         spawn(c, egress()).map(|_| ()),
@@ -521,4 +522,81 @@ async fn silence_sends_a_ping_then_reconnects() {
     let mut again = srv.accept().await;
     again.register().await;
     ready(&h).await;
+}
+
+/// After the welcome the server sends only garbage, over and over: lines
+/// over the limit, malformed lines, and a line that never ends. None of it
+/// counts as traffic, so the client still sends `PING` on time and then
+/// reconnects.
+#[tokio::test]
+async fn garbage_is_still_silence() {
+    let mut srv = Server::start(false).await;
+    let mut c = config(srv.port, false);
+    c.timeouts.ping_after = Duration::from_secs(1);
+    c.timeouts.ping_timeout = Duration::from_secs(1);
+    c.reconnect.base = Duration::from_secs(3);
+    c.reconnect.cap = Duration::from_secs(3);
+    let (h, _ev) = spawn(c, egress()).unwrap();
+    let mut conn = srv.accept().await;
+    conn.register().await;
+    let Conn { mut r, mut w } = conn;
+    // A writer paced well inside the 1 s idle limit, until the client
+    // hangs up.
+    tokio::spawn(async move {
+        let mut overlong = vec![b'x'; 9000];
+        overlong.push(b'\n');
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        loop {
+            tick.tick().await;
+            for bytes in [
+                &overlong[..],
+                b"PRIVMSG #a :bad\0byte\r\n",
+                b":n!u@h PRIVMSG #a :never ends",
+            ] {
+                if w.write_all(bytes).await.is_err() || w.flush().await.is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    let mut line = String::new();
+    tokio::time::timeout(WAIT, r.read_line(&mut line))
+        .await
+        .expect("no PING within the deadline")
+        .unwrap();
+    assert_eq!(line.trim_end(), "PING lodestar");
+    state(&h, "Waiting", |s| {
+        matches!(
+            s,
+            State::Waiting {
+                after: Disconnect::PingTimeout,
+                ..
+            }
+        )
+    })
+    .await;
+    let stats = h.stats();
+    assert!(stats.overlong > 0 && stats.malformed > 0, "{stats:?}");
+}
+
+/// A server that ends every connection with `ERROR` before registering
+/// (a K-line) stops the client after three, instead of being retried
+/// forever.
+#[tokio::test]
+async fn repeated_errors_before_registering_stop_the_client() {
+    let mut srv = Server::start(false).await;
+    let (h, _ev) = spawn(config(srv.port, false), egress()).unwrap();
+    for _ in 0..3 {
+        let mut conn = srv.accept().await;
+        conn.expect("NICK lode").await;
+        conn.send("ERROR :Closing Link: lode (K-lined)").await;
+        conn.closed().await;
+    }
+    state(&h, "Stopped", |s| *s == State::Stopped(Stop::Banned)).await;
+    let deadline = Instant::now() + WAIT;
+    while h.privmsg("#a", "x") != Err(SendError::Closed) {
+        assert!(Instant::now() < deadline, "the client kept running");
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(srv.accepted(), 3);
 }
