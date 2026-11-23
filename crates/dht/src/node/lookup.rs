@@ -25,6 +25,10 @@ const CAP: usize = 64;
 enum State {
     Fresh,
     InFlight,
+    /// CR-SOFT-TIMEOUT: asked, unanswered past the soft timeout. Its query
+    /// is still out (a late answer settles it), but it holds no
+    /// [`ALPHA`] lane and doesn't block the leg's end, as if it had failed.
+    Slow,
     Responded,
     Failed,
 }
@@ -46,6 +50,8 @@ pub(crate) struct Lookup {
     pub family: usize,
     candidates: Vec<Candidate>,
     in_flight: usize,
+    /// CR-SOFT-TIMEOUT: candidates [`State::Slow`], at most [`ALPHA`].
+    slow: usize,
     /// The leg's values, shared out by source ([`Values`]).
     pub peers: Values,
     /// Queries sent outside the candidate list (e.g. to bootstrap
@@ -77,6 +83,7 @@ impl Lookup {
             family,
             candidates: Vec::new(),
             in_flight: 0,
+            slow: 0,
             peers: Values::default(),
             extra_in_flight: 0,
             info_hash: None,
@@ -107,12 +114,13 @@ impl Lookup {
                 blooms: None,
             },
         );
-        // Drop the farthest candidates that aren't in flight.
+        // Drop the farthest candidates whose queries aren't out, so a
+        // late answer still finds its candidate.
         while self.candidates.len() > CAP {
             match self
                 .candidates
                 .iter()
-                .rposition(|c| c.state != State::InFlight)
+                .rposition(|c| !matches!(c.state, State::InFlight | State::Slow))
             {
                 Some(i) => {
                     self.candidates.remove(i);
@@ -129,7 +137,7 @@ impl Lookup {
     fn slot_filter(scrape: bool) -> impl FnMut(&Candidate) -> bool {
         let mut skipped = 0;
         move |c: &Candidate| {
-            if c.state == State::Failed {
+            if matches!(c.state, State::Failed | State::Slow) {
                 return false;
             }
             if scrape && c.state == State::Responded && c.blooms.is_none() && skipped < K {
@@ -167,19 +175,57 @@ impl Lookup {
         out
     }
 
+    /// Settles the query out to `id`, once: in flight, or (CR-SOFT-TIMEOUT)
+    /// slow, whose lane was already freed.
     fn settle(&mut self, id: &NodeId, state: State) -> bool {
+        match self
+            .candidates
+            .iter_mut()
+            .find(|c| c.info.id == *id && matches!(c.state, State::InFlight | State::Slow))
+        {
+            Some(c) => {
+                if c.state == State::Slow {
+                    self.slow -= 1;
+                } else {
+                    self.in_flight -= 1;
+                }
+                c.state = state;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// CR-SOFT-TIMEOUT: the query out to `id` has gone unanswered past the
+    /// soft timeout. It stops holding an [`ALPHA`] lane and the leg's end;
+    /// its answer, if one comes before the query timeout, still settles it.
+    /// Refused (false) when `id` has no query in flight, or when the leg
+    /// already holds [`ALPHA`] slow queries, so a leg never has more than
+    /// `2 · ALPHA` queries out.
+    pub fn soft_expire(&mut self, id: &NodeId) -> bool {
+        if self.slow >= ALPHA {
+            return false;
+        }
         match self
             .candidates
             .iter_mut()
             .find(|c| c.info.id == *id && c.state == State::InFlight)
         {
             Some(c) => {
-                c.state = state;
+                c.state = State::Slow;
                 self.in_flight -= 1;
+                self.slow += 1;
                 true
             }
             None => false,
         }
+    }
+
+    /// CR-SOFT-TIMEOUT: queries out past the soft timeout, still awaiting
+    /// an answer.
+    #[cfg(test)]
+    pub fn slow(&self) -> usize {
+        self.slow
     }
 
     /// A queried node answered from `from`. Returns whether it was one
@@ -267,7 +313,8 @@ impl Lookup {
     }
 
     /// Done when nothing is in flight and the K closest live candidates
-    /// have all answered.
+    /// have all answered. A slow candidate (CR-SOFT-TIMEOUT) is neither in
+    /// flight nor live.
     pub fn is_done(&self) -> bool {
         if self.in_flight > 0 || self.extra_in_flight > 0 {
             return false;
@@ -304,7 +351,7 @@ impl Lookup {
         for c in self
             .candidates
             .iter()
-            .filter(|c| c.state != State::Failed)
+            .filter(|c| !matches!(c.state, State::Failed | State::Slow))
             .take(K)
         {
             if c.state != State::Responded {
@@ -495,6 +542,145 @@ mod tests {
         l.next();
         l.on_response(&NodeId([1; 20]), FROM, std::iter::empty(), &values(1, 100));
         assert_eq!(l.peers.len(), MAX_VALUES);
+    }
+
+    /// CR-SOFT-TIMEOUT: a soft-expired query frees its lane and stops
+    /// holding the end, at most ALPHA per leg; its late answer settles it
+    /// once, and a repeat or a failure after that does nothing.
+    #[test]
+    fn a_slow_candidate_frees_its_lane_and_settles_once() {
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        for b in 1..=6 {
+            l.add(spread(b));
+        }
+        let first = l.next();
+        assert_eq!(first.len(), 3);
+        assert!(l.next().is_empty(), "alpha in flight");
+        assert!(l.soft_expire(&first[0].id));
+        assert!(!l.soft_expire(&first[0].id), "already slow");
+        assert_eq!(l.next().len(), 1, "a lane freed");
+        assert!(l.soft_expire(&first[1].id) && l.soft_expire(&first[2].id));
+        assert_eq!(l.slow(), 3);
+        let more = l.next();
+        assert_eq!(more.len(), 2);
+        assert!(!l.soft_expire(&more[0].id), "at most ALPHA slow");
+        // The late answer settles once; a repeat and a failure don't.
+        assert!(l.on_response(&first[0].id, FROM, std::iter::empty(), &[]));
+        assert_eq!(l.slow(), 2);
+        assert!(!l.on_response(&first[0].id, FROM, std::iter::empty(), &[]));
+        l.on_failure(&first[0].id);
+        assert_eq!(l.slow(), 2);
+        // A slow one that times out fails once.
+        l.on_failure(&first[1].id);
+        assert_eq!(l.slow(), 1);
+        l.on_failure(&first[1].id);
+        assert_eq!(l.slow(), 1);
+    }
+
+    /// CR-SOFT-TIMEOUT: a slow candidate doesn't hold the end, in either
+    /// end test; answering late, it counts again.
+    #[test]
+    fn a_slow_candidate_does_not_hold_the_end() {
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        for b in 1..=3 {
+            l.add(spread(b));
+        }
+        let q = l.next();
+        l.on_response(&q[1].id, FROM, std::iter::empty(), &[]);
+        l.on_response(&q[2].id, FROM, std::iter::empty(), &[]);
+        assert!(!l.is_done() && !l.closest_answered(2));
+        assert!(l.soft_expire(&q[0].id));
+        assert!(l.is_done() && l.closest_answered(2));
+        l.on_response(&q[0].id, FROM, std::iter::empty(), &[]);
+        assert!(l.is_done());
+        let closest: Vec<u8> = l.closest().map(|i| i.id.0[0]).collect();
+        assert_eq!(closest, [1, 2, 3], "counts again once answered");
+    }
+
+    /// CR-SOFT-TIMEOUT: crowding by closer candidates never drops a slow
+    /// one, so its late answer still finds it.
+    #[test]
+    fn crowding_keeps_slow_candidates() {
+        let mut l = Lookup::new(NodeId([0; 20]), 0);
+        let far = NodeInfo {
+            id: NodeId([0xff; 20]),
+            addr: SocketAddr::from(([10, 3, 0, 1], 1)),
+        };
+        l.add(far);
+        let q = l.next();
+        assert!(l.soft_expire(&q[0].id));
+        for b in 0..=255u8 {
+            let mut id = [b; 20];
+            id[0] = 0;
+            l.add(NodeInfo {
+                id: NodeId(id),
+                addr: SocketAddr::from(([10, 4, 0, b], 1)),
+            });
+        }
+        assert!(l.candidates.len() <= CAP + 1);
+        assert!(l.on_response(&far.id, FROM, std::iter::empty(), &[]));
+        assert_eq!(l.slow(), 0);
+    }
+
+    #[derive(Debug, Clone)]
+    enum Op {
+        Add(u8),
+        Next(usize),
+        Soft(usize),
+        Answer(usize, Vec<u8>),
+        Fail(usize),
+        Retry(usize),
+    }
+
+    fn op() -> impl proptest::strategy::Strategy<Value = Op> {
+        use proptest::prelude::*;
+        prop_oneof![
+            any::<u8>().prop_map(Op::Add),
+            (0usize..4).prop_map(Op::Next),
+            any::<usize>().prop_map(Op::Soft),
+            (any::<usize>(), prop::collection::vec(any::<u8>(), 0..8))
+                .prop_map(|(i, n)| Op::Answer(i, n)),
+            any::<usize>().prop_map(Op::Fail),
+            any::<usize>().prop_map(Op::Retry),
+        ]
+    }
+
+    proptest::proptest! {
+        /// CR-SOFT-TIMEOUT: under any sequence of adds, sends, soft
+        /// expiries, answers (repeated ones included), failures and
+        /// retries, the counters match the states, at most ALPHA are in
+        /// flight and ALPHA slow, the list stays bounded, and every id
+        /// settles at most once per send.
+        #[test]
+        fn counters_match_states_under_any_sequence(ops in proptest::collection::vec(op(), 1..200)) {
+            let mut l = Lookup::new(NodeId([0; 20]), 0);
+            let mut sent: Vec<NodeId> = Vec::new();
+            for op in ops {
+                match op {
+                    Op::Add(b) => l.add(spread(b)),
+                    Op::Next(n) => sent.extend(l.next_limit(n).iter().map(|i| i.id)),
+                    Op::Soft(i) if !sent.is_empty() => {
+                        l.soft_expire(&sent[i % sent.len()]);
+                    }
+                    Op::Answer(i, nodes) if !sent.is_empty() => {
+                        let id = sent[i % sent.len()];
+                        let was_out = l.candidates.iter().any(|c| {
+                            c.info.id == id && matches!(c.state, State::InFlight | State::Slow)
+                        });
+                        let ours = l.on_response(&id, FROM, nodes.into_iter().map(spread), &[]);
+                        proptest::prop_assert_eq!(ours, was_out);
+                    }
+                    Op::Fail(i) if !sent.is_empty() => l.on_failure(&sent[i % sent.len()]),
+                    Op::Retry(i) if !sent.is_empty() => l.retry_later(&sent[i % sent.len()]),
+                    _ => {}
+                }
+                let count = |s: State| l.candidates.iter().filter(|c| c.state == s).count();
+                proptest::prop_assert_eq!(l.in_flight, count(State::InFlight));
+                proptest::prop_assert_eq!(l.slow, count(State::Slow));
+                proptest::prop_assert!(l.in_flight <= ALPHA && l.slow <= ALPHA);
+                proptest::prop_assert!(l.candidates.len() <= CAP + 2 * ALPHA);
+            }
+        }
     }
 
     #[test]

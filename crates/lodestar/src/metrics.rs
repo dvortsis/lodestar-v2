@@ -617,6 +617,20 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Lookup legs terminated by deadline.",
             d.lookup_deadlines,
         );
+        // CR-SOFT-TIMEOUT (docs/metrics.md, "Soft timeout"): 0 with
+        // `dht.soft_timeout` off.
+        o.one(
+            "dht_soft_timeouts_total",
+            "counter",
+            "Lookup queries that stopped holding their leg after the soft timeout.",
+            d.soft_timeouts,
+        );
+        o.one(
+            "dht_soft_timeout_late_replies_total",
+            "counter",
+            "Soft-timed-out lookup queries answered before the query timeout.",
+            d.soft_timeout_late,
+        );
         o.one(
             "dht_sample_frontier",
             "gauge",

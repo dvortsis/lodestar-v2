@@ -206,6 +206,19 @@ pub struct Config {
     /// starts at once instead of on the next tick. Off, lookups end and
     /// start exactly as before.
     pub lookup_end: bool,
+    /// CR-SOFT-TIMEOUT (`dht.soft_timeout`): an owned peer lookup's query
+    /// unanswered for 1 s (on the maintenance tick, so 1–2 s) stops holding
+    /// its leg: it frees its lane and no longer blocks the closest-set end,
+    /// at most 3 such queries per leg. It stays out, and counted against
+    /// the outstanding cap, until it's answered (a late answer still
+    /// settles it) or reaches `query_timeout`. Off, lookups wait exactly as
+    /// before and nothing is allocated.
+    pub soft_timeout: bool,
+    /// CR-SOFT-TIMEOUT: how long a query waits before it goes soft,
+    /// [`SOFT_TIMEOUT`] by default and never more than `query_timeout`.
+    /// Only the simulator's screen changes it (its 2 s variant); the app
+    /// always runs the default.
+    pub soft_timeout_after: Duration,
     /// CR-1c (`dht.preset_slots`): the actor runs or queues up to
     /// [`Intensity::peer_slots`] owned peer requests for the intensity it
     /// starts with, instead of [`PEER_REQUEST_CAPACITY`]. The count is
@@ -325,6 +338,8 @@ impl Default for Config {
             responder_hints: false,
             hint_first: false,
             lookup_end: false,
+            soft_timeout: false,
+            soft_timeout_after: SOFT_TIMEOUT,
             preset_slots: false,
             target_prefixes: false,
             utp: None,
@@ -409,6 +424,11 @@ pub struct Stats {
     pub peer_queued: AtomicU64,
     pub lookup_scheduled: AtomicU64,
     pub lookup_deadlines: AtomicU64,
+    /// CR-SOFT-TIMEOUT: lookup queries that went soft, and those of them
+    /// answered afterwards, before `query_timeout`
+    /// (`dht_soft_timeouts_total`, `dht_soft_timeout_late_replies_total`).
+    pub soft_timeouts: AtomicU64,
+    pub soft_timeout_late: AtomicU64,
     pub sample_frontier: AtomicU64,
     pub sample_suppression_seconds: AtomicU64,
     /// Gauge: why this run is or isn't sampling yet, as an index into
@@ -545,6 +565,8 @@ impl Stats {
             peer_queued: g(&self.peer_queued),
             lookup_scheduled: g(&self.lookup_scheduled),
             lookup_deadlines: g(&self.lookup_deadlines),
+            soft_timeouts: g(&self.soft_timeouts),
+            soft_timeout_late: g(&self.soft_timeout_late),
             sample_frontier: g(&self.sample_frontier),
             sample_suppression_seconds: g(&self.sample_suppression_seconds),
             sample_suppression_reason: crate::restart::Reason::ALL
@@ -957,6 +979,8 @@ pub struct StatsSnapshot {
     pub peer_queued: u64,
     pub lookup_scheduled: u64,
     pub lookup_deadlines: u64,
+    pub soft_timeouts: u64,
+    pub soft_timeout_late: u64,
     pub sample_frontier: u64,
     pub sample_suppression_seconds: u64,
     pub sample_suppression_reason: crate::restart::Reason,
@@ -1091,6 +1115,15 @@ pub type PeerPermit = tokio::sync::OwnedSemaphorePermit;
 /// Owned peer requests the actor runs or queues at once, across families:
 /// one slot per logical request, however many family legs it runs.
 pub const PEER_REQUEST_CAPACITY: usize = 32;
+
+/// CR-SOFT-TIMEOUT (`dht.soft_timeout`): an owned peer lookup's query
+/// unanswered this long stops holding its leg: it frees its lane and no
+/// longer blocks the closest-set end, while staying out, and counted
+/// against the outstanding cap, until it's answered or reaches
+/// `query_timeout`. Checked on the maintenance tick, so with the default
+/// 1 s tick the wait is 1–2 s. See
+/// docs/decisions/2026-11-23-CR-SOFT-TIMEOUT.md.
+pub const SOFT_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// A DHT swarm estimate (BEP 33) from the nodes closest to a hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

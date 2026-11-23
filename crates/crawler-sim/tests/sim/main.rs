@@ -1114,6 +1114,131 @@ fn hint_first_screen() {
     }
 }
 
+/// CR-SOFT-TIMEOUT runs deterministically on the calibrated scenario, and
+/// with the switch on queries go soft and some soft ones answer late. Off,
+/// nothing goes soft.
+#[test]
+fn soft_timeout_runs_deterministically() {
+    let on = Scenario {
+        switches: Switches {
+            soft_timeout: Some(1),
+            ..Switches::default()
+        },
+        ..scenario::live_lookup()
+    };
+    let (a, b) = (simulate(&on), simulate(&on));
+    assert_eq!(a.text, b.text, "same seed, same run");
+    assert!(a.text.contains("soft_timeout=true(after=1s)"));
+    assert!(a.dht.soft_timeouts > 0, "queries went soft");
+    assert!(a.dht.soft_timeout_late > 0, "the 3 s replies answered late");
+    assert!(a.dht.soft_timeout_late <= a.dht.soft_timeouts);
+    let off = simulate(&scenario::live_lookup());
+    assert_eq!((off.dht.soft_timeouts, off.dht.soft_timeout_late), (0, 0));
+}
+
+/// The CR-SOFT-TIMEOUT screen: the calibrated `live-lookup` scenario, the
+/// switch off against on at 1 s and at 2 s, over `SCREEN_SEEDS`, with
+/// `dht.lookup_end` off and then on in every arm. Reports `W`, `q`, `y`,
+/// stored per minute, stored per slot-second and stored per DHT query,
+/// and late ÷ soft (soft-expired queries answered before the query
+/// timeout). An arm is kept only if stored per slot-second and stored per
+/// query both rise (build-plan §0.5's standing rule); 1 s is chosen over
+/// 2 s only if it passes and its late ÷ soft isn't much worse (runner,
+/// 2026-11-23).
+/// `cargo test -p lodestar-crawler-sim --test sim soft_timeout_screen -- --ignored --nocapture`
+#[test]
+#[ignore = "measurement: several minutes of wall time"]
+fn soft_timeout_screen() {
+    let per_slot_s = |l: &run::Ledger| l.stored_per_min / 60.0 / l.slots.max(1e-9);
+    let per_query = |l: &run::Ledger| l.stored_per_min / 60.0 / l.queries_per_s.max(1e-9);
+    let late =
+        |r: &run::Report| r.dht.soft_timeout_late as f64 / (r.dht.soft_timeouts.max(1) as f64);
+    for lookup_end in [false, true] {
+        let arm = |soft_timeout| Scenario {
+            switches: Switches {
+                lookup_end,
+                soft_timeout,
+                ..Switches::default()
+            },
+            ..scenario::live_lookup()
+        };
+        let off = over_seeds(&arm(None));
+        for secs in [1, 2] {
+            let on = over_seeds(&arm(Some(secs)));
+            println!("\n## lookup_end={lookup_end}, soft_timeout off against on (after={secs}s)");
+            println!(
+                "seed | arm | L | W_little s | W s | q | y | stored/min | stored/slot-s | stored/query | unanswered | soft/lookup | late/soft"
+            );
+            let mut sums = [[0.0f64; 11]; 2];
+            for (seed, pair) in SCREEN_SEEDS.zip(off.iter().zip(&on)) {
+                for (i, r) in [pair.0, pair.1].into_iter().enumerate() {
+                    let l = &r.ledger;
+                    let ended: u64 = r.dht.ledger.ended.iter().sum();
+                    let row = [
+                        l.slots,
+                        l.w,
+                        l.w_residence,
+                        l.q,
+                        l.y,
+                        l.stored_per_min,
+                        per_slot_s(l),
+                        per_query(l),
+                        l.unanswered,
+                        r.dht.soft_timeouts as f64 / (ended.max(1) as f64),
+                        late(r),
+                    ];
+                    for (s, x) in sums[i].iter_mut().zip(row) {
+                        *s += x;
+                    }
+                    println!(
+                        "{seed} | {} | {:.2} | {:.2} | {:.2} | {:.1} | {:.3} | {:.2} | {:.5} | {:.6} | {:.3} | {:.2} | {:.3}",
+                        ["off", "on"][i],
+                        row[0],
+                        row[1],
+                        row[2],
+                        row[3],
+                        row[4],
+                        row[5],
+                        row[6],
+                        row[7],
+                        row[8],
+                        row[9],
+                        row[10],
+                    );
+                }
+            }
+            let n = off.len() as f64;
+            for (i, s) in sums.iter().enumerate() {
+                println!(
+                    "mean | {} | {}",
+                    ["off", "on"][i],
+                    s.iter()
+                        .map(|x| format!("{:.4}", x / n))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                );
+            }
+            let rises = |f: &dyn Fn(&run::Ledger) -> f64| {
+                off.iter()
+                    .zip(&on)
+                    .filter(|(a, b)| f(&b.ledger) > f(&a.ledger))
+                    .count()
+            };
+            let diffs: Vec<f64> = off
+                .iter()
+                .zip(&on)
+                .map(|(a, b)| b.steady_stored - a.steady_stored)
+                .collect();
+            println!(
+                "stored/min diffs {diffs:?}: {:?}; stored/slot-s rose on {}/8 seeds, stored/query on {}/8",
+                sign_test(&diffs),
+                rises(&per_slot_s),
+                rises(&per_query),
+            );
+        }
+    }
+}
+
 /// The CR-LOOKUP-END screen: the calibrated `live-lookup` scenario, the
 /// switch off against on, over `SCREEN_SEEDS`. Reports `W`, `q` and `y`
 /// beside stored per minute, and the two figures the change is kept on:
