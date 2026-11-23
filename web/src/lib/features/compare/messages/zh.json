@@ -72,5 +72,9 @@
 	"compare_attr_alt": "其他标题",
 	"compare_attr_bitrate": "比特率",
 	"compare_attr_flags": "标记",
-	"compare_open_torrent": "打开种子"
+	"compare_open_torrent": "打开种子",
+	"compare_differences_only": "仅显示差异",
+	"compare_same_hidden_one": "已隐藏 1 行相同内容",
+	"compare_same_hidden_many": "已隐藏 {count} 行相同内容",
+	"compare_all_same": "这些种子的每一行都相同。关闭“仅显示差异”即可查看。"
 }

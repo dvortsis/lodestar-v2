@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attributeKeys, buildRows, compositionView, diffSections } from './model';
+import { attributeKeys, buildRows, compositionView, diffSections, isSame, type Row } from './model';
 import { fileList, response, torrent } from './testing';
 
 describe('attributeKeys', () => {
@@ -157,5 +157,29 @@ describe('diffSections', () => {
 		const common = diffSections(data).at(-1)!;
 		expect(common.list.count).toBe(12345);
 		expect(common.list.truncated).toBe(true);
+	});
+});
+
+describe('isSame (Differences only)', () => {
+	const row = (...texts: (string | null)[]): Row => ({
+		id: 'x',
+		label: 'X',
+		differs: false,
+		cells: texts.map((text, i) => ({ testid: `x-${i}`, text }))
+	});
+	it('two nulls are the same', () => expect(isSame(row(null, null))).toBe(true));
+	it('a null against a value differs', () => expect(isSame(row(null, '1080p'))).toBe(false));
+	it('"—" against "—" is the same', () => expect(isSame(row('—', '—'))).toBe(true));
+	it('values that format alike are the same', () =>
+		expect(isSame(row('1.0 GB', '1.0 GB', '1.0 GB'))).toBe(true));
+	it('one odd value out differs', () => expect(isSame(row('a', 'a', 'b'))).toBe(false));
+	it('compares composition by its summary', () => {
+		const comp = (summary: string): Row['cells'][number] => ({
+			testid: summary,
+			text: null,
+			composition: { segments: [], summary, dominant: summary }
+		});
+		expect(isSame({ ...row(), cells: [comp('80% video'), comp('80% video')] })).toBe(true);
+		expect(isSame({ ...row(), cells: [comp('80% video'), comp('70% video')] })).toBe(false);
 	});
 });

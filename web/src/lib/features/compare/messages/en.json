@@ -72,5 +72,9 @@
 	"compare_attr_alt": "Alternative titles",
 	"compare_attr_bitrate": "Bitrate",
 	"compare_attr_flags": "Flags",
-	"compare_open_torrent": "Open the torrent"
+	"compare_open_torrent": "Open the torrent",
+	"compare_differences_only": "Differences only",
+	"compare_same_hidden_one": "1 row hidden because it's the same",
+	"compare_same_hidden_many": "{count} rows hidden because they're the same",
+	"compare_all_same": "These torrents match in every row. Turn off Differences only to see them."
 }
