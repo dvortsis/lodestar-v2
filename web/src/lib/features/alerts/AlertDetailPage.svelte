@@ -434,14 +434,14 @@
 		overflow: hidden;
 	}
 	.al-divider {
-		/* Pinned, so the list can be sized from its rows: one line, cut by the row cell. */
-		margin: 0;
+		/* Pinned, so the list can be sized from its rows: one line, cut with an ellipsis. */
 		block-size: calc(var(--spacing) * 10);
 		padding-inline: calc(var(--spacing) * 4);
+		overflow: hidden;
 		white-space: nowrap;
-		color: var(--color-base-content);
+		text-overflow: ellipsis;
 		font-size: var(--text-small);
-		line-height: calc(var(--spacing) * 10);
+		line-height: calc(var(--spacing) * 9);
 		font-weight: var(--font-weight-medium);
 		background: var(--color-selected);
 		border-block: var(--border) solid var(--color-primary);

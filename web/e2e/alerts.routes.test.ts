@@ -693,6 +693,15 @@ test.describe('X-narrow-states-2: no blank card', () => {
 					expect(m.blank).toBeGreaterThanOrEqual(0);
 					expect(m.blank).toBeLessThan(24);
 					expect(m.scrollHeight).toBe(m.clientHeight);
+					// A "since you last looked" mark that doesn't fit is cut with an ellipsis, never mid-word.
+					const mark = page.getByTestId('alert-divider');
+					if (await mark.count()) {
+						const css = await mark.evaluate((el) => {
+							const c = getComputedStyle(el);
+							return [c.textOverflow, c.overflow, c.whiteSpace];
+						});
+						expect(css).toEqual(['ellipsis', 'hidden', 'nowrap']);
+					}
 					expect(await shifts(page)).toEqual([]);
 				});
 			}
