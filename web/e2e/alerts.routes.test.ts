@@ -6,6 +6,7 @@ import type { components } from '../src/lib/api/schema';
 import { expectNoA11yViolations } from './a11y';
 import { dialogSettled } from './support/dialog';
 import { liveEvents } from './support/events-server';
+import { shifts, watchShifts } from './support/layout-shift';
 import { expect, test } from './support/test';
 import type { OpenApiMock } from './mock/openapi-mock';
 
@@ -643,5 +644,27 @@ test.describe('under a coarse pointer', () => {
 		await go('/alerts');
 		const box = (await page.getByTestId('alerts-name-1').boundingBox())!;
 		expect(box.height).toBeGreaterThanOrEqual(44);
+	});
+});
+
+test.describe('X-narrow-states-2: no blank card', () => {
+	test.use({ viewport: { width: 390, height: 844 } });
+	test('two matches end the list where the rows end, with no layout shift', async ({
+		page,
+		go,
+		mock
+	}) => {
+		await watchShifts(page, '.al-list');
+		detailMocks(mock, { ...LANTERN, unread: 0 }, [row(2, true), row(1, true)]);
+		await go('/alerts/1');
+		await expect(page.getByTestId('alert-row-2')).toBeVisible();
+		const m = await page.evaluate(() => {
+			const list = document.querySelector('.al-list')!.getBoundingClientRect();
+			const last = document.querySelector('[data-testid="alert-row-1"]')!.getBoundingClientRect();
+			return { blank: list.bottom - last.bottom };
+		});
+		// Below the last row there is only the card's own border and the row's padding, not a band.
+		expect(m.blank).toBeLessThan(24);
+		expect(await shifts(page)).toEqual([]);
 	});
 });

@@ -361,3 +361,39 @@ for (const mode of ['light', 'dark'] as const) {
 		});
 	});
 }
+
+// X-narrow-states-2: the rail fills its sheet; only the in-flow rail is held to 264 px.
+const widths = (page: Page) =>
+	page.evaluate(() => {
+		const rail = document.querySelector('[data-testid="facet-rail"]')!.getBoundingClientRect();
+		const sheet = document.querySelector('[role="dialog"]')?.getBoundingClientRect();
+		return { rail: rail.width, sheet: sheet?.width ?? null };
+	});
+
+for (const [name, width] of [
+	['small (390 px)', 390],
+	['large (800 px)', 800]
+] as const) {
+	test(`${name}: the rail fills its sheet`, async ({ page, go, mock }) => {
+		await page.setViewportSize({ width, height: 900 });
+		serve(mock);
+		await go('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		await page.getByTestId('facet-open').click();
+		await expect(rail(page)).toBeVisible();
+		const w = await widths(page);
+		expect(w.sheet).not.toBeNull();
+		// The sheet's own padding is 16 px a side: the rail takes the rest.
+		expect(w.rail).toBeGreaterThanOrEqual(w.sheet! - 48);
+		expect(w.rail).toBeGreaterThan(264 - 1);
+	});
+}
+
+test('x-large: the in-flow rail stays 264 px wide', async ({ page, go, mock }) => {
+	await page.setViewportSize({ width: 1366, height: 1000 });
+	serve(mock);
+	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible();
+	await expect(rail(page)).toBeVisible();
+	expect((await widths(page)).rail).toBeLessThanOrEqual(264);
+});

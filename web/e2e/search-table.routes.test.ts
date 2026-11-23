@@ -4,6 +4,7 @@ import type { Page } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
 import { body, expect, hits, resultsCalls, server } from './search-results.fixtures';
 import { test } from './support/test';
+import { shifts, watchShifts } from './support/layout-shift';
 
 const tableRow = (page: Page, n: number) => page.getByTestId(`table-row-${n}`);
 const sortOf = (page: Page) => new URL(page.url()).searchParams.get('sort');
@@ -201,4 +202,21 @@ test.describe('under a coarse pointer', () => {
 			expect(box.height).toBeGreaterThanOrEqual(44);
 		}
 	});
+});
+
+test('X-narrow-states-2: 5 rows end the table where its rows end, with no layout shift', async ({
+	page,
+	go
+}) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await watchShifts(page, '.rt');
+	await go('/search?q=lantern&view=table');
+	await expect(tableRow(page, 5)).toBeVisible();
+	const blank = await page.evaluate(() => {
+		const wrap = document.querySelector('.rt-scroll')!.getBoundingClientRect();
+		const last = document.querySelector('[data-testid="table-row-5"]')!.getBoundingClientRect();
+		return wrap.bottom - last.bottom;
+	});
+	expect(blank).toBeLessThan(16);
+	expect(await shifts(page)).toEqual([]);
 });

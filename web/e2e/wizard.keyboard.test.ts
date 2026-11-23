@@ -242,6 +242,27 @@ test.describe('first-run wizard', () => {
 			() => document.documentElement.scrollWidth - document.documentElement.clientWidth
 		);
 		expect(overflow).toBeLessThanOrEqual(0);
+		// The step list is compact on a phone: numbered marks in about two lines, with the current
+		// step named in full; every step keeps its name and status for a screen reader.
+		const list = page.getByTestId('wizard-progress');
+		expect((await list.boundingBox())!.height).toBeLessThan(110);
+		await expect(page.getByTestId('wizard-step-network')).toContainText('4. Network check');
+		await expect(page.getByTestId('wizard-step-how')).toContainText('5. How it works · Not yet');
+		await expect(
+			page.getByTestId('wizard-step-how').getByText('. How it works')
+		).not.toBeInViewport();
+		expect((await page.getByTestId('wizard-step-how').boundingBox())!.width).toBeLessThan(60);
 		await expectNoA11yViolations(page);
+	});
+
+	test('from 640 px the step list reads in full, numbered 1 to 12', async ({ page, go }) => {
+		await page.setViewportSize({ width: 1024, height: 800 });
+		await go('/welcome');
+		await expect(h2(page, 'Network check')).toBeVisible();
+		await expect(page.getByTestId('wizard-progress').locator('li').first()).toContainText(
+			'1. Legal Notice · Done'
+		);
+		await expect(page.getByTestId('wizard-step-how')).toContainText('5. How it works · Not yet');
+		await expect(page.getByText('12. Done · Not yet')).toBeVisible();
 	});
 });

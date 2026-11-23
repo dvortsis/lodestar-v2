@@ -80,6 +80,15 @@
 		if (d.mark) out.splice(d.mark.before, 0, { kind: 'mark', key: 'mark', at: d.mark.at });
 		return out;
 	});
+
+	// A short list ends where its rows end (no blank card); a list with more to load keeps the full
+	// height. A mark row is as tall as `.al-divider`'s `min-block-size` (10 spacing steps).
+	const MARK_PX = 40;
+	const listHeight = $derived(
+		d.hasMore
+			? undefined
+			: items.reduce((h, it) => h + (it.kind === 'mark' ? MARK_PX : rowHeight), 0)
+	);
 	let active = $state(0);
 
 	function open(_: number, item: Item) {
@@ -293,7 +302,7 @@
 						{d.search.paused ? m.alerts_empty_detail_paused() : m.alerts_empty_detail()}
 					</p>
 				{:else}
-					<div class="al-list" bind:this={listEl}>
+					<div class="al-list" bind:this={listEl} style:--al-rows={listHeight && `${listHeight}px`}>
 						<VirtualList
 							{items}
 							role="grid"
@@ -411,7 +420,10 @@
 		color: var(--color-muted-text);
 	}
 	.al-list {
-		block-size: max(calc(var(--row-height-comfortable) * 6), calc(100dvh - var(--spacing) * 64));
+		block-size: min(
+			calc(var(--al-rows, 100dvh) + var(--border) * 2),
+			max(calc(var(--row-height-comfortable) * 6), calc(100dvh - var(--spacing) * 64))
+		);
 		border: var(--border) solid var(--color-base-300);
 		border-radius: var(--radius-box);
 		background: var(--color-base-100);

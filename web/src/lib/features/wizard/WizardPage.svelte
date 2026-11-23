@@ -43,21 +43,21 @@
 	};
 
 	const titles: Record<StepId, () => string> = {
-		network: () => m.wizard_step_network(),
-		how: () => m.wizard_step_how(),
-		intensity: () => m.wizard_step_intensity(),
-		storage: () => m.wizard_step_storage(),
-		download: () => m.wizard_step_download(),
-		packs: () => m.wizard_step_packs(),
-		blocklists: () => m.blocklists_wizard_title(),
-		updates: () => m.wizard_step_updates(),
-		done: () => m.wizard_step_done()
+		network: m.wizard_step_network,
+		how: m.wizard_step_how,
+		intensity: m.wizard_step_intensity,
+		storage: m.wizard_step_storage,
+		download: m.wizard_step_download,
+		packs: m.wizard_step_packs,
+		blocklists: m.blocklists_wizard_title,
+		updates: m.wizard_step_updates,
+		done: m.wizard_step_done
 	};
 
 	const pastTitles: Record<(typeof SETUP_STEPS)[number], () => string> = {
-		legal: () => m.wizard_step_legal(),
-		token: () => m.auth_setup_step_token(),
-		password: () => m.auth_setup_step_password()
+		legal: m.wizard_step_legal,
+		token: m.auth_setup_step_token,
+		password: m.auth_setup_step_password
 	};
 
 	let progress = $state<Progress>(readProgress());
@@ -123,12 +123,17 @@
 					? 'done'
 					: 'later';
 	const statusText = {
-		done: () => m.wizard_status_done(),
-		skipped: () => m.wizard_status_skipped(),
-		current: () => m.wizard_status_current(),
-		later: () => m.wizard_status_later()
+		done: m.wizard_status_done,
+		skipped: m.wizard_status_skipped,
+		current: m.wizard_status_current,
+		later: m.wizard_status_later
 	};
 	const statusIcon = { done: IconCheck, skipped: IconSkip, current: IconHere, later: IconLater };
+	// /setup's steps first (always done), then this wizard's, numbered on from them.
+	const rows = $derived<{ id: string; title: string; s: ReturnType<typeof status> }[]>([
+		...SETUP_STEPS.map((id) => ({ id, title: pastTitles[id](), s: 'done' as const })),
+		...STEPS.map((step) => ({ id: step.id, title: titles[step.id](), s: status(step.id) }))
+	]);
 	const primary = $derived(
 		progress.step === 'network' || progress.step === 'how'
 			? m.wizard_continue()
@@ -146,27 +151,22 @@
 
 	<nav aria-label={m.wizard_progress()}>
 		<ol class="flex flex-wrap gap-4 text-small" data-testid="wizard-progress">
-			{#each SETUP_STEPS.map((id) => pastTitles[id]()) as past (past)}
-				<li class="flex items-center gap-1 text-muted-text">
-					<IconCheck aria-hidden="true" class="text-success" />
-					<span>{past}</span>
-					<span class="sr-only">{statusText.done()}</span>
-				</li>
-			{/each}
-			{#each STEPS as step, i (step.id)}
-				{@const s = status(step.id)}
-				{@const Icon = statusIcon[s]}
+			{#each rows as r, i (r.id)}
+				{@const Icon = statusIcon[r.s]}
+				{@const now = r.s === 'current'}
+				{@const quiet = now ? undefined : 'wz-x'}
 				<li
-					class="flex items-center gap-1 {s === 'current'
+					class="flex items-center gap-1 {now
 						? 'font-semibold text-base-content'
 						: 'text-muted-text'}"
-					aria-current={s === 'current' ? 'step' : undefined}
-					data-testid="wizard-step-{step.id}"
-					data-state={s}
+					aria-current={now ? 'step' : undefined}
+					data-testid="wizard-step-{r.id}"
+					data-state={r.s}
 				>
 					<Icon aria-hidden="true" />
-					<span>{formatCount(i + SETUP_STEPS.length + 1)}. {titles[step.id]()}</span>
-					<span class="text-muted-text">· {statusText[s]()}</span>
+					<span
+						>{formatCount(i + 1)}<span class={quiet}>. {r.title} · {statusText[r.s]()}</span></span
+					>
 				</li>
 			{/each}
 		</ol>
@@ -212,6 +212,20 @@
 </div>
 
 <style>
+	/* Below 640 px: numbered marks, with the name and status for screen readers only, except the
+	   current step, which reads in full on its own line. From 640 px the list reads in full. */
+	@media (width < 40rem) {
+		.wz-x {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip-path: inset(50%);
+		}
+		[aria-current] {
+			flex-basis: 100%;
+		}
+	}
 	/* The step heading takes focus on each step; the ring hugs its text, like the page heading. */
 	#wizard-heading:focus-visible {
 		outline: var(--focus-ring-width) solid var(--color-primary);

@@ -152,7 +152,10 @@
 	const sections = $derived(
 		allSections.flatMap((s) =>
 			s.group !== null &&
-			!(s.group.status === 'unavailable' && s.group.reason?.startsWith('needs_'))
+			!(
+				s.group.status === 'unavailable' &&
+				(s.group.reason === null || s.group.reason.startsWith('needs_'))
+			)
 				? [{ ...s, group: s.group }]
 				: []
 		)
