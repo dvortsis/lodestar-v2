@@ -13,7 +13,7 @@
 //!   protocol state machine before any is written.
 //! - **SASL PLAIN** is negotiated with `CAP LS 302`; a server that doesn't
 //!   offer it, refuses it or registers the client without it stops the
-//!   client (fail closed). A failed login stops it too, instead of retrying
+//!   client (fail closed). A failed SASL login stops it too, instead of retrying
 //!   into an account lock.
 //! - **Bounded everywhere:** one line's worth of read buffer
 //!   ([`LineBuffer`]), [`EVENT_QUEUE`] messages waiting for the plugin
@@ -175,6 +175,10 @@ pub struct Reconnect {
 impl Reconnect {
     pub const MIN_BASE: Duration = Duration::from_secs(1);
     pub const MAX_CAP: Duration = Duration::from_secs(3600);
+    /// A connection must stay up at least this long to reset the count, so
+    /// a server that registers the client and then drops it keeps the
+    /// back-off growing.
+    pub const MIN_STABLE: Duration = Duration::from_secs(60);
 }
 
 impl Default for Reconnect {
@@ -334,7 +338,11 @@ impl Config {
             return Err(Invalid("flood control"));
         }
         let r = self.reconnect;
-        if r.base < Reconnect::MIN_BASE || r.cap < r.base || r.cap > Reconnect::MAX_CAP {
+        if r.base < Reconnect::MIN_BASE
+            || r.cap < r.base
+            || r.cap > Reconnect::MAX_CAP
+            || r.stable_after < Reconnect::MIN_STABLE
+        {
             return Err(Invalid("reconnect"));
         }
         let t = self.timeouts;
@@ -425,6 +433,12 @@ fn valid_nick(n: &str) -> bool {
             .all(|&c| c.is_ascii_alphanumeric() || special(c) || c == b'-')
 }
 
+/// A nick the server assigns: its NICKLEN may be over 30, so only the
+/// characters a nick can't have are refused, up to 64 bytes.
+fn valid_server_nick(n: &str) -> bool {
+    (1..=64).contains(&n.len()) && !n.contains([' ', '!', '@', ':', ',']) && !has_control(n)
+}
+
 /// A channel name: a `#`, `&`, `+` or `!` prefix, 2 to 50 bytes, and none
 /// of space, comma, `:`, or a control character (BEL included).
 pub fn valid_channel(c: &str) -> bool {
@@ -487,18 +501,21 @@ pub struct Egress {
 }
 
 impl Egress {
-    pub fn new(resolver: Arc<dyn Resolve>, policy: NetPolicy, route: Route) -> Egress {
+    /// The kill-switch is a required argument so a plugin can't leave it
+    /// out by accident: pass the plugin's switch (§18.4), or `None` only
+    /// for an egress that has none configured.
+    pub fn new(
+        resolver: Arc<dyn Resolve>,
+        policy: NetPolicy,
+        route: Route,
+        kill: Option<Arc<dyn KillSwitch>>,
+    ) -> Egress {
         Egress {
             resolver,
             policy,
             route,
-            kill: None,
+            kill,
         }
-    }
-
-    pub fn with_kill_switch(mut self, kill: Arc<dyn KillSwitch>) -> Egress {
-        self.kill = Some(kill);
-        self
     }
 }
 
@@ -567,7 +584,9 @@ pub enum Stop {
     Refused(TcpRouteError),
     /// The server's certificate didn't verify.
     Certificate,
-    /// SASL or NickServ login failed.
+    /// SASL login failed (902, 904, 905, 906). NickServ's answer is free
+    /// text, so a NickServ failure isn't detected; joins go ahead after
+    /// [`Timeouts::nickserv`].
     AuthFailed,
     /// SASL is configured but the server doesn't offer PLAIN, refused it,
     /// or registered the client without it.
@@ -641,7 +660,7 @@ pub enum SendError {
     BadTarget,
     /// The text has a CTCP marker (`\x01`).
     Ctcp,
-    /// A channel key on a plaintext connection.
+    /// A channel key or other secret on a plaintext connection.
     KeyNeedsTls,
     /// The line can't be encoded.
     Encode(EncodeError),
@@ -656,7 +675,7 @@ impl fmt::Display for SendError {
         match self {
             SendError::BadTarget => f.write_str("the target isn't a valid nick or channel"),
             SendError::Ctcp => f.write_str("CTCP isn't sent"),
-            SendError::KeyNeedsTls => f.write_str("channel keys are only sent over TLS"),
+            SendError::KeyNeedsTls => f.write_str("keys and other secrets are only sent over TLS"),
             SendError::Encode(e) => e.fmt(f),
             SendError::Full => f.write_str("too many lines are waiting to be sent"),
             SendError::Closed => f.write_str("the IRC client has stopped"),
@@ -696,6 +715,25 @@ impl Handle {
             return Err(SendError::Ctcp);
         }
         self.queue(line::encode("PRIVMSG", &[target, text]).map_err(SendError::Encode)?)
+    }
+
+    /// Queues `PRIVMSG <target> :<prefix><secret>`, for a command that
+    /// carries a credential (a tracker bot's invite command with the
+    /// user's IRC key). Refused on a plaintext connection, like a channel
+    /// key; the line is built in a buffer wiped on drop.
+    pub fn privmsg_secret(
+        &self,
+        target: &str,
+        prefix: &str,
+        secret: &Secret,
+    ) -> Result<(), SendError> {
+        if !self.tls {
+            return Err(SendError::KeyNeedsTls);
+        }
+        let mut text = Zeroizing::new(String::with_capacity(prefix.len() + secret.expose().len()));
+        text.push_str(prefix);
+        text.push_str(secret.expose());
+        self.privmsg(target, &text)
     }
 
     /// Queues `JOIN <channel> [<key>]`. A key goes out only on a TLS
@@ -959,8 +997,8 @@ async fn session(ctx: &mut Ctx, registered: &mut Option<Instant>) -> End {
         }
         while proto.has_output() && bucket.take(now) {
             if let Some(line) = proto.next_line() {
-                if write_line(&mut wr, &line, write_timeout).await.is_err() {
-                    return End::Retry(Disconnect::Io);
+                if let Err(end) = guarded_write(&mut wr, &line, write_timeout, &mut down).await {
+                    return end;
                 }
                 Stats::bump(&stats.lines_out);
             }
@@ -1001,8 +1039,8 @@ async fn session(ctx: &mut Ctx, registered: &mut Option<Instant>) -> End {
             },
             Some(line) = commands.recv(), if can_send => {
                 bucket.take(Instant::now());
-                if write_line(&mut wr, &line, write_timeout).await.is_err() {
-                    return End::Retry(Disconnect::Io);
+                if let Err(end) = guarded_write(&mut wr, &line, write_timeout, &mut down).await {
+                    return end;
                 }
                 Stats::bump(&stats.lines_out);
             }
@@ -1045,6 +1083,22 @@ fn on_framed(
         }
         Handled::Ctcp => Stats::bump(&stats.ctcp_ignored),
         Handled::Internal => {}
+    }
+}
+
+/// One line's write under the kill-switch: the switch is polled first, so
+/// nothing is written once it's down, and it races the write, so a write
+/// stuck on a full window doesn't keep the connection open.
+async fn guarded_write<W: AsyncWrite + Unpin>(
+    wr: &mut W,
+    line: &[u8],
+    timeout: Duration,
+    down: &mut lodestar_integrations::BoxFuture<'_, ()>,
+) -> Result<(), End> {
+    tokio::select! {
+        biased;
+        _ = down => Err(End::Retry(Disconnect::KillSwitch)),
+        r = write_line(wr, line, timeout) => r.map_err(|()| End::Retry(Disconnect::Io)),
     }
 }
 
@@ -1469,7 +1523,7 @@ impl Proto {
             return;
         }
         if let Some(n) = msg.param(0)
-            && valid_nick(n)
+            && valid_server_nick(n)
         {
             self.nick = n.to_owned();
         }
@@ -1479,7 +1533,12 @@ impl Proto {
                 self.stop(Stop::Internal);
                 return;
             }
-            let text = Zeroizing::new(format!("IDENTIFY {account} {}", password.expose()));
+            let pw = password.expose();
+            let mut text = Zeroizing::new(String::with_capacity(10 + account.len() + pw.len()));
+            text.push_str("IDENTIFY ");
+            text.push_str(account);
+            text.push(' ');
+            text.push_str(pw);
             self.send("PRIVMSG", &["NickServ", &text]);
             self.phase = Phase::Identifying(now + cfg.timeouts.nickserv);
         } else {
@@ -1562,7 +1621,7 @@ impl Proto {
             }
             "NICK" if self.is_me(msg.nick()) => {
                 if let Some(n) = msg.param(0)
-                    && valid_nick(n)
+                    && valid_server_nick(n)
                 {
                     self.nick = n.to_owned();
                 }
@@ -1872,6 +1931,21 @@ mod tests {
         assert!(!b.take(idle));
     }
 
+    /// Once the switch is down, nothing more is written, even a line that
+    /// was already queued.
+    #[tokio::test]
+    async fn no_write_once_the_kill_switch_is_down() {
+        let mut out = Vec::new();
+        let mut down: lodestar_integrations::BoxFuture<'_, ()> = Box::pin(async {});
+        let r = guarded_write(&mut out, b"PONG :x\r\n", Duration::from_secs(1), &mut down).await;
+        assert_eq!(r, Err(End::Retry(Disconnect::KillSwitch)));
+        assert!(out.is_empty());
+        let mut up: lodestar_integrations::BoxFuture<'_, ()> = Box::pin(std::future::pending());
+        let r = guarded_write(&mut out, b"PONG :x\r\n", Duration::from_secs(1), &mut up).await;
+        assert_eq!(r, Ok(()));
+        assert_eq!(out, b"PONG :x\r\n");
+    }
+
     #[test]
     fn backoff_doubles_jitters_and_caps() {
         let r = Reconnect::default();
@@ -1959,6 +2033,8 @@ mod tests {
         assert_eq!(check(burst), invalid("flood control"));
         let eager = |c: &mut Config| c.reconnect.base = Duration::from_millis(10);
         assert_eq!(check(eager), invalid("reconnect"));
+        let unstable = |c: &mut Config| c.reconnect.stable_after = Duration::ZERO;
+        assert_eq!(check(unstable), invalid("reconnect"));
         let ping = |c: &mut Config| c.timeouts.ping_after = Duration::ZERO;
         assert_eq!(check(ping), invalid("timeouts"));
         let spaced = |c: &mut Config| {

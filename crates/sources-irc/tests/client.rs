@@ -175,6 +175,16 @@ fn egress() -> Egress {
         Arc::new(Loopback),
         NetPolicy::download_client(),
         Route::Direct,
+        None,
+    )
+}
+
+fn egress_with(kill: Arc<dyn KillSwitch>) -> Egress {
+    Egress::new(
+        Arc::new(Loopback),
+        NetPolicy::download_client(),
+        Route::Direct,
+        Some(kill),
     )
 }
 
@@ -242,6 +252,10 @@ async fn registers_joins_answers_pings_and_streams_messages() {
     // A channel key never goes out on plaintext.
     let key = Secret::new("chan-key");
     assert_eq!(h.join("#k", Some(&key)), Err(SendError::KeyNeedsTls));
+    assert_eq!(
+        h.privmsg_secret("Bot", "!invite ", &key),
+        Err(SendError::KeyNeedsTls)
+    );
     let stats = h.stats();
     assert_eq!(stats.ctcp_ignored, 1);
     assert_eq!(stats.connections, 1);
@@ -284,6 +298,9 @@ async fn sasl_plain_over_tls() {
     conn.send(":irc.test 001 lode :Welcome").await;
     conn.expect("JOIN #private chan-key").await;
     ready(&h).await;
+    h.privmsg_secret("Bot", "!invite ", &Secret::new("irc-key-test"))
+        .unwrap();
+    conn.expect("PRIVMSG Bot :!invite irc-key-test").await;
 }
 
 #[tokio::test]
@@ -355,6 +372,7 @@ async fn the_egress_guard_refuses_a_blocked_destination() {
         Arc::new(Loopback),
         NetPolicy::notification(false),
         Route::Direct,
+        None,
     );
     let (h, _ev) = spawn(c, public).unwrap();
     let s = state(&h, "Stopped", |s| matches!(s, State::Stopped(_))).await;
@@ -419,7 +437,7 @@ async fn the_kill_switch_drops_the_connection_and_holds_reconnects() {
     let mut srv = Server::start(false).await;
     let (up, rx) = watch::channel(true);
     let kill: Arc<dyn KillSwitch> = Arc::new(rx);
-    let (h, _ev) = spawn(config(srv.port, false), egress().with_kill_switch(kill)).unwrap();
+    let (h, _ev) = spawn(config(srv.port, false), egress_with(kill)).unwrap();
     let mut conn = srv.accept().await;
     conn.register().await;
     ready(&h).await;
@@ -451,10 +469,11 @@ async fn flood_control_paces_lines() {
     c.flood.burst = 2;
     c.flood.interval = Duration::from_millis(500);
     c.channels = vec![Channel::new("#announce")];
+    // Before the client exists, so before its bucket starts.
+    let first = Instant::now();
     let (h, _ev) = spawn(c, egress()).unwrap();
     let mut conn = srv.accept().await;
     conn.expect("NICK lode").await;
-    let first = Instant::now();
     conn.expect("USER lodestar 0 * Lodestar").await;
     conn.send(":irc.test 001 lode :Welcome").await;
     ready(&h).await;
@@ -466,9 +485,9 @@ async fn flood_control_paces_lines() {
         conn.expect(&format!("PRIVMSG #announce :line {i}")).await;
     }
     // Two lines in the burst, then one per 500 ms: the fifth paced line
-    // can't come before 2.5 s, less the first line's delivery time.
+    // can't be sent before 2.5 s after the session started.
     assert!(
-        first.elapsed() >= Duration::from_secs(2),
+        first.elapsed() >= Duration::from_millis(2500),
         "{:?}",
         first.elapsed()
     );
@@ -480,6 +499,9 @@ async fn silence_sends_a_ping_then_reconnects() {
     let mut c = config(srv.port, false);
     c.timeouts.ping_after = Duration::from_secs(1);
     c.timeouts.ping_timeout = Duration::from_secs(1);
+    // A long wait, so the short-lived Waiting state can't be missed.
+    c.reconnect.base = Duration::from_secs(3);
+    c.reconnect.cap = Duration::from_secs(3);
     let (h, _ev) = spawn(c, egress()).unwrap();
     let mut conn = srv.accept().await;
     conn.register().await;

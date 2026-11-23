@@ -15,8 +15,9 @@
 //!   value (IRCv3).
 //! - **Parameters** are capped at [`MAX_PARAMS`]: as RFC 2812 says, the
 //!   fifteenth takes the rest of the line, so a long line can't make more.
-//! - **Text** is UTF-8 when the whole line is valid UTF-8 and Latin-1
-//!   otherwise, so every byte maps to a character and nothing is lost.
+//! - **Text** is UTF-8 when the tags section (and, separately, the body)
+//!   is valid UTF-8, and Latin-1 otherwise, so every byte maps to a
+//!   character and nothing is lost.
 //!   `NUL`, and `CR` anywhere but before the `LF`, make the line invalid.
 
 use std::fmt;
