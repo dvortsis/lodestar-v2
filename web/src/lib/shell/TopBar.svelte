@@ -7,6 +7,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { isMacPlatform } from '$lib/keys/combo';
+	import { formatCombo } from '$lib/keys/display';
 	import { m } from '$lib/paraglide/messages.js';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import Compass from './Compass.svelte';
@@ -14,6 +15,11 @@
 	import { DESTINATIONS, isActive, withDensity, type Route } from './nav';
 	import { shell } from './shell-state.svelte';
 	import { statusRef } from './status-ref.svelte';
+
+	// The palette button: the keys it answers to on a keyboard, a magnifier on touch (no ⌘ there).
+	// Decided once, before the first frame, so the bar never changes size.
+	const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+	const keys = formatCombo('mod+k');
 
 	let navOpen = $state(false);
 	afterNavigate(() => (navOpen = false));
@@ -118,13 +124,14 @@
 			{/if}
 			<button
 				type="button"
-				class="btn btn-ghost btn-square {FOCUS_RING} {TARGET_MIN}"
-				aria-label={m.shell_palette_open()}
+				class="btn btn-ghost {touch ? 'btn-square' : 'px-2 text-small'} {FOCUS_RING} {TARGET_MIN}"
+				aria-label={touch ? m.shell_palette_open() : `${m.shell_palette_open()} ${keys}`}
 				aria-keyshortcuts={isMacPlatform() ? 'Meta+K' : 'Control+K'}
 				data-testid="palette-button"
 				onclick={() => (shell.paletteOpen = true)}
 			>
-				<Glyph name="command" />
+				{#if touch}<Glyph name="magnifying-glass" />{:else}<span aria-hidden="true">{keys}</span
+					>{/if}
 			</button>
 			{#if More}
 				<More openNow {hrefFor} />

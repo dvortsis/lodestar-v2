@@ -231,7 +231,7 @@ describe('StatusPill progress states', () => {
 		expect(link.getAttribute('data-state')).toBe('stalled');
 		expect(link.getAttribute('href')).toBe('/insights');
 		expect(link.className).toContain('text-warning');
-		expect(screen.getByTestId('status-pill-text').textContent).toBe('Stalled');
+		expect(screen.getByTestId('status-pill-text').textContent).toBe('Needs attention');
 		expect(link.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
 		expect(screen.getByTestId('status-pill-announce').textContent).toContain('Open Insights');
 	});
