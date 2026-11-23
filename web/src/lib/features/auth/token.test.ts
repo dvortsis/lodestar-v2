@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { parseToken } from './token';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, onSessionOk } from '$lib/api/client';
+import { checkSetupToken, parseToken } from './token';
 
 const T = 'AB12-CD34-EF56-7890';
 const CANONICAL = /^[0-9A-F]{4}(-[0-9A-F]{4}){3}$/;
@@ -71,5 +72,60 @@ describe('parseToken', () => {
 			const out = parseToken(input);
 			if (out !== null) expect(out, input).toMatch(CANONICAL);
 		}
+	});
+});
+
+describe('checkSetupToken (X-setup-token-boot)', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const reply = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+		vi.fn(
+			async () =>
+				new Response(JSON.stringify(body), {
+					status,
+					headers: { 'Content-Type': 'application/json', ...headers }
+				})
+		);
+
+	it('posts the token alone as same-origin JSON and resolves when it is right', async () => {
+		const fetch = reply(200, { ok: true });
+		vi.stubGlobal('fetch', fetch);
+		await expect(checkSetupToken(T)).resolves.toBeUndefined();
+		const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toBe('/api/v1/setup/token');
+		expect(init.method).toBe('POST');
+		expect(init.credentials).toBe('same-origin');
+		expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+		expect(JSON.parse(init.body as string)).toEqual({ token: T });
+	});
+
+	it('is no proof of a session: a right token runs no session listener', async () => {
+		vi.stubGlobal('fetch', reply(200, { ok: true }));
+		const seen = vi.fn();
+		const off = onSessionOk(seen);
+		await checkSetupToken(T);
+		off();
+		expect(seen).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		[401, 'bad_token', {}],
+		[409, 'setup_done', {}],
+		[429, 'rate_limited', { 'Retry-After': '12' }]
+	])('throws the %i %s the forms classify', async (status, code, headers) => {
+		vi.stubGlobal('fetch', reply(status, { error: { code, message: 'x' } }, headers));
+		const e = await checkSetupToken(T).catch((x: unknown) => x);
+		expect(e).toBeInstanceOf(ApiError);
+		expect((e as ApiError).status).toBe(status);
+		expect((e as ApiError).code).toBe(code);
+		if (status === 429) expect((e as ApiError).retryAfter).toBe(12);
+	});
+
+	it('throws a network error when the server is unreachable', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(() => Promise.reject(new TypeError('offline')))
+		);
+		const e = await checkSetupToken(T).catch((x: unknown) => x);
+		expect((e as ApiError).code).toBe('network');
 	});
 });

@@ -2,6 +2,8 @@
 // log grouped as XXXX-XXXX-XXXX-XXXX. People copy it out of a terminal, the Unraid log window or
 // a log file, so the parser accepts whatever comes along with it and returns the canonical form
 // the server compares against (it only trims and upper-cases).
+import { ApiError } from '$lib/api/client';
+import type { components } from '$lib/api/schema';
 
 export const TOKEN_HINT = 'XXXX-XXXX-XXXX-XXXX';
 
@@ -26,4 +28,39 @@ export function parseToken(input: string): string | null {
 	if (HEX.test(bare)) return group(bare);
 	const found = new Set([...text.matchAll(GROUPED)].map((m) => m.slice(1, 5).join('-')));
 	return found.size === 1 ? [...found][0]! : null;
+}
+
+type TokenCheck = components['schemas']['SetupTokenRequest'];
+
+/**
+ * Asks the server whether `token` is the pending setup token (`POST /setup/token`), so the setup
+ * form can say a wrong one is wrong on Continue, before it asks for a password. Resolves when it
+ * is; otherwise throws the `ApiError` (`bad_token`, `setup_done`, a 429 with its wait, `network`)
+ * that `classify` reads. The server takes one of setup's own attempts per check.
+ *
+ * A plain `fetch`, not `api.post`: the client counts any success as proof of a live session
+ * (`sessionOk`), which a right token is not.
+ */
+export async function checkSetupToken(token: string): Promise<void> {
+	const body: TokenCheck = { token };
+	let res: Response;
+	try {
+		res = await fetch('/api/v1/setup/token', {
+			method: 'POST',
+			headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+			credentials: 'same-origin'
+		});
+	} catch {
+		throw new ApiError(0, 'network', 'network error');
+	}
+	if (res.ok) return;
+	// Only the code and the wait are read (`classify`), never the server's text. Not the client's
+	// `errorFromResponse`: importing it here would grow the client chunk's exports on every page.
+	const reply: { error?: { code?: unknown } } | null = await res.json().catch(() => null);
+	const code = reply?.error?.code;
+	const wait = Number(res.headers.get('Retry-After'));
+	throw new ApiError(res.status, typeof code == 'string' ? code : `http_${res.status}`, '', {
+		retryAfter: wait > 0 ? wait : undefined
+	});
 }

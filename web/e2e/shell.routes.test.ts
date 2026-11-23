@@ -425,6 +425,11 @@ test.describe('full-page states', () => {
 });
 
 test.describe('401 hand-off', () => {
+	// The layout's boot check (GET /auth on the first load) fails once, so the page loads and the
+	// stream's 401 makes the hand-off, as when that check fails, times out or the session ends later.
+	// The setup and sign-in screens' own GET /auth get the mock's answer.
+	const bootCheckFails = (page: import('@playwright/test').Page) =>
+		page.route('**/api/v1/auth', (route) => route.fulfill({ status: 503 }), { times: 1 });
 	const unauthorized = (setup: boolean) => ({
 		status: 401,
 		contentType: 'application/json',
@@ -438,6 +443,7 @@ test.describe('401 hand-off', () => {
 		// The setup screen checks GET /auth itself and goes back to /login if no setup is needed.
 		mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: true });
 		await page.route('**/api/v1/events*', (route) => route.fulfill(unauthorized(true)));
+		await bootCheckFails(page);
 		await page.goto('/search');
 		await engage(page);
 		await expect(page).toHaveURL(/\/setup$/);
@@ -452,6 +458,7 @@ test.describe('401 hand-off', () => {
 		mock.on('getAuthStatus', { logged_in: false, notice_required: false, setup_required: false });
 		mock.error('listSavedSearches', 401, 'login_required');
 		await page.route('**/api/v1/events*', (route) => route.fulfill(unauthorized(false)));
+		await bootCheckFails(page);
 		await page.goto('/alerts?x=1');
 		await engage(page);
 		const signIn = /\/login\?next=%2Falerts%3Fx%3D1$/;

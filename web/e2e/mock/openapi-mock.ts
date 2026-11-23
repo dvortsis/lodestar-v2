@@ -175,8 +175,8 @@ export class OpenApiMock {
 		// open, so by default it is left pending (the status pill reads "Connecting"); a test that
 		// needs events overrides `getEvents` (see e2e/support/events-server.ts, used by shell.routes.test.ts).
 		if (op.id === 'getEvents' && override === undefined) return new Promise<void>(() => {});
-		// The search page checks `GET /auth` after mount and sends a fresh instance, a signed-out
-		// visitor or a pending Legal Notice to setup or sign-in (X-first-run-search-gate). By default
+		// Every first load checks `GET /auth` before its page renders and sends a fresh instance, a
+		// signed-out visitor or a pending Legal Notice to setup or sign-in (X-setup-token-boot). By default
 		// the visitor is signed in, as most specs assume; tests that need another state override it.
 		if (op.id === 'getAuthStatus' && override === undefined) {
 			return route.fulfill({

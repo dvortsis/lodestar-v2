@@ -1,4 +1,5 @@
-//! The auth endpoints (`/auth`, `/setup`, `/login`, `/logout` and
+//! The auth endpoints (`/auth`, `/setup`, `/setup/token`, `/login`,
+//! `/logout` and
 //! `/legal/notice` open; `/legal/accept` behind a session only;
 //! `/password`, `/auth/proxy` and `/sessions/revoke-others` behind a
 //! session and the Legal Notice gate) and the session guard every
@@ -23,7 +24,7 @@ use super::{
 use crate::ApiState;
 use crate::dto::auth::{
     AuthStatus, ConfirmRequest, LoginRequest, OkResponse, PasswordRequest, ProxySettings,
-    ProxyUpdate, SetupRequest,
+    ProxyUpdate, SetupRequest, SetupTokenRequest,
 };
 use crate::error::{ApiError, ApiResult, internal, wrong_method};
 use crate::extract::{ClientIp, Json, peer_ip, same_origin_json};
@@ -33,6 +34,7 @@ use crate::extract::{ClientIp, Json, peer_ip, same_origin_json};
 #[openapi(paths(
     auth_status,
     setup,
+    check_setup_token,
     login,
     logout,
     change_password,
@@ -48,6 +50,7 @@ pub fn routes() -> Router<ApiState> {
     let open = Router::new()
         .route("/auth", get(auth_status))
         .route("/setup", post(setup))
+        .route("/setup/token", post(check_setup_token))
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/legal/notice", get(crate::legal::get_notice));
@@ -288,6 +291,38 @@ pub(crate) async fn setup(
     .map_err(internal)?
     .map_err(|e| auth_error(e, "password"))?;
     Ok(with_cookie(cookie))
+}
+
+/// Checks the setup token alone, so the first-run form can say it's
+/// wrong before asking for a password. It takes an attempt from the same
+/// per-address limit as `/setup` and `/login`, and answers as `/setup`
+/// does for the token: 401 `bad_token`, 409 `setup_done`, 429
+/// `rate_limited`. Nothing is claimed or spent; `/setup` checks the token
+/// again.
+#[utoipa::path(
+    operation_id = "checkSetupToken",
+    post,
+    path = "/setup/token",
+    tag = "auth",
+    request_body = SetupTokenRequest,
+    responses((
+        status = 200,
+        body = OkResponse,
+        description = "The token is right.",
+        example = json!({ "ok": true })
+    ))
+)]
+pub(crate) async fn check_setup_token(
+    State(s): State<ApiState>,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+    Json(body): Json<SetupTokenRequest>,
+) -> ApiResult<axum::Json<OkResponse>> {
+    same_origin_json(&headers)?;
+    s.auth
+        .check_setup_token(ip, &body.token)
+        .map_err(|e| auth_error(e, "password"))?;
+    Ok(axum::Json(OkResponse::OK))
 }
 
 /// Logs in; rate-limited per address.
