@@ -13,15 +13,19 @@
 
 	interface Props {
 		banner: Kind;
-		/** Null when `/search/state` failed: a live rebuild still shows. */
-		state: IndexState | null;
+		/** Null when `/search/state` failed: a live rebuild still shows. Before it answers, the
+		 *  remembered figures (`index-memory.ts`). */
+		state: Pick<IndexState, 'searchable_torrents' | 'growth_per_hour'> | null;
 		full?: boolean;
+		/** Rows are on screen: the growing line may not get longer (it could wrap and move them). */
+		hold?: boolean;
 		focusBar: () => void;
 	}
-	let { banner, state, full, focusBar }: Props = $props();
+	// `state` is read as `figures`: a local named `state` would make `$state` a store read.
+	let { banner, state: figures, full, hold, focusBar }: Props = $props();
 	const locale = $derived(currentLocale());
 	// A rate under 1/h would show as "+0/h": leave it out, and a missing one too.
-	const per = $derived(state?.growth_per_hour ?? 0);
+	const per = $derived(figures?.growth_per_hour ?? 0);
 	const rate = $derived(per >= 1 ? per : null);
 	const unavailable = $derived(
 		banner?.kind === 'rebuild'
@@ -35,6 +39,14 @@
 					rate: formatRate(rate, locale)
 				})
 			: m.search_state_growing({ count: formatCount(count, locale) });
+	// X-index-banner-late: while rows are on screen the line keeps its text (a longer or shorter one
+	// could wrap or unwrap and move them); new figures show at the next moment without rows.
+	const text = $derived(growing(figures?.searchable_torrents ?? 0));
+	let last = ''; // what the line showed last: a plain variable, so the rule below reads it untracked
+	const line = $derived.by(() => {
+		if (!hold || !last) last = text;
+		return last;
+	});
 </script>
 
 {#if banner?.kind === 'rebuild'}
@@ -52,15 +64,15 @@
 		{/if}
 	</Banner>
 {/if}
-{#if full && state}
+{#if full && figures}
 	<EmptyState
 		title={m.search_state_cold_title()}
 		text={rate !== null
 			? m.search_state_cold_body_rate({
-					count: formatCount(state.searchable_torrents, locale),
+					count: formatCount(figures.searchable_torrents, locale),
 					rate: formatRate(rate, locale)
 				})
-			: m.search_state_cold_body({ count: formatCount(state.searchable_torrents, locale) })}
+			: m.search_state_cold_body({ count: formatCount(figures.searchable_torrents, locale) })}
 		data-testid="results-cold-page"
 		textTestid="results-cold-start"
 	>
@@ -71,6 +83,6 @@
 	</EmptyState>
 {:else if banner?.kind === 'growing' && results.status !== 'empty'}
 	<Banner kind="info" class="rp-banner rp-growing">
-		<span data-testid="results-cold-start">{growing(state?.searchable_torrents ?? 0)}</span>
+		<span data-testid="results-cold-start">{line}</span>
 	</Banner>
 {/if}
