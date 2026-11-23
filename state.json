@@ -10685,17 +10685,18 @@
         "slice": "CR-SOFT-TIMEOUT",
         "role": "core",
         "agent": "session_01MMjhnCtuh4cDvCQfwQaNEM",
-        "model": "sonnet",
+        "model": "opus",
         "since": "2026-11-23T02:34:31Z",
         "doing": "A-window rebuild + screen (runner call 04:50Z)"
       },
       {
         "slot": 2,
         "slice": "X-detail-depth-compare",
-        "role": "slice",
+        "role": "build",
         "agent": "session_01MMjhn9cZMDErsMAqoMyqqR",
         "doing": "step 0",
-        "since": "2026-11-23T04:51Z"
+        "since": "2026-11-23T04:51Z",
+        "model": "sonnet"
       },
       {
         "slot": 3,
