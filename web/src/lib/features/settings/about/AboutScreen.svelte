@@ -4,6 +4,7 @@
 	// reads GET /updates (the full screen is Settings → Updates). The diagnostics and the licence
 	// list are their own parts, loaded when opened.
 	import { onMount, type Component } from 'svelte';
+	import ExternalIcon from './ExternalIcon.svelte';
 	import { resolve } from '$app/paths';
 	import { api, isAbort } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
@@ -20,6 +21,7 @@
 	import {
 		httpsUrl,
 		isStale,
+		showUiBuild,
 		links,
 		shortCommit,
 		UI_BUILD as uiBuild,
@@ -158,7 +160,13 @@
 {#snippet ext(href: string, label: string)}
 	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- an external https link to the build's repository (logic.repoBase) -->
 	<a class="underline" {href} target="_blank" rel="noopener noreferrer"
-		>{label}<span class="sr-only"> {m.settings_about_new_tab()}</span></a
+		>{label}<ExternalIcon /><span class="sr-only"> {m.settings_about_new_tab()}</span></a
+	>
+{/snippet}
+<!-- A time you can read without hovering: the relative time, then the date (the screen reader has it already, from RelativeTime). -->
+{#snippet when(seconds: number, zone?: string)}
+	<RelativeTime {seconds} timeZone={zone} /><span class="text-muted-text" aria-hidden="true">
+		· {formatDateTime(seconds, locale, { timeZone: zone })}</span
 	>
 {/snippet}
 {#snippet row(label: string, value: string | number | null | undefined)}
@@ -184,7 +192,8 @@
 			style="width: {logo.width}px"
 		/>
 	</picture>
-	<p class="text-body-lg">{m.settings_about_tagline()}</p>
+	<!-- The lockup above already prints the tagline; it stays for screen readers only. -->
+	<p class="sr-only">{m.settings_about_tagline()}</p>
 	<p class="text-muted-text">{m.settings_about_what()}</p>
 </header>
 
@@ -237,7 +246,7 @@
 			)}
 			{@render row(m.settings_about_target(), b.target)}
 			{@render row(m.settings_about_rust(), b.rustc)}
-			{@render row(m.settings_about_ui_build(), b.ui_build_id ?? uiBuild)}
+			{@render row(m.settings_about_ui_build(), showUiBuild(b.ui_build_id ?? uiBuild, info))}
 		</dl>
 		<div class="flex flex-wrap items-center gap-3">
 			<Button onclick={copyVersion}>{m.settings_about_copy_version()}</Button>
@@ -296,7 +305,7 @@
 			<div class="flex flex-wrap gap-2">
 				<dt class="text-muted-text">{m.settings_about_started()}</dt>
 				<dd>
-					<RelativeTime seconds={info.started_at} timeZone={info.host.time_zone ?? undefined} />
+					{@render when(info.started_at, info.host.time_zone ?? undefined)}
 				</dd>
 			</div>
 			{@render row(m.settings_about_data_dir(), info.data.dir)}
@@ -347,7 +356,7 @@
 						)}{/if}
 				{:else if updates.status.checked_at}
 					{m.settings_about_updates_latest()}
-					<RelativeTime seconds={updates.status.checked_at} />
+					{@render when(updates.status.checked_at)}
 				{:else}
 					{m.settings_about_updates_never()}
 				{/if}
@@ -398,7 +407,7 @@
 						· {m.settings_about_conn_count({
 							count: formatCount(c.count, locale)
 						})}{/if}{#if c.last_checked_at !== null}
-						· {m.settings_about_conn_checked()}<RelativeTime seconds={c.last_checked_at} />{/if}
+						· {m.settings_about_conn_checked()}{@render when(c.last_checked_at)}{/if}
 				</li>
 			{/each}
 		</ul>
