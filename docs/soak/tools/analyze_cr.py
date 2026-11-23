@@ -1170,6 +1170,8 @@ def judge_block(reports, treatment, winners=None, design=None, aa=False):
     `design` (X-fleet-baab) is the block's recorded order, "abba" or "baab": the order the
     switches give must match it. With `aa` the block is labelled A/A: all four segments'
     switches must be identical, and the arms are the design's labels."""
+    if (aa or design is not None) and design not in DESIGNS:
+        raise ValueError("an A/A block needs its design (abba or baab)" if aa else "a design is abba or baab")
     own = collect.TREATMENT_SWITCHES[treatment]
     segs = [segment_view(r) for r in reports]
     problems = []

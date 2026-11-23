@@ -234,7 +234,7 @@ An **A/A block** runs the stage's **control in both arms**: the treatment's swit
 - **Write it in the rules:** add `"purpose": "aa"`, with no mode (ABBA) or with `"mode": "baab"`. Keep `treatment`, and `winners` for a stacked stage: they name the control it measures.
 - **What's refused:** `"purpose": "aa"` with `"mode": "on"` (`purpose_needs_ab_mode`).
 - **What the VM gets:** `block.env` gains `PURPOSE=aa`, and start-block's answer adds a `purpose_aa` line. `vm-status` still reports the order (`block_mode_abba 1` or `block_mode_baab 1`).
-- **In the evidence:** copy-off adds `"purpose": "aa"` to the document; no other block carries it. Analyse it with `--aa` and the blocks' designs:
+- **In the evidence:** copy-off adds `"purpose": "aa"` to the document; no other block carries it. Analyse it with `--aa` and the blocks' designs, with `--winners` for a stacked stage (§3.3.1):
   ```bash
   python3 docs/soak/tools/analyze_cr.py effect --treatment adm --aa \
     --block s1.json s2.json s3.json s4.json --design abba

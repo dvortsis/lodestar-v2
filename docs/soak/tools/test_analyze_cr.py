@@ -943,6 +943,25 @@ class DesignTests(unittest.TestCase):
         out = analyze_cr.analyze_effect("utp", self.aa_blocks()[:1], designs=["baab"], aa=True)
         self.assertEqual((out["valid_blocks"], out["noise_floor"]["df"]), (1, 1))
 
+    def test_a_stacked_aa_run(self):
+        """lc on the winners (adm): both arms the stacked control, judged against --winners."""
+        def stacked(means, start):
+            out = block("AAAA", means, start=start, others={"coordinated_admission": True})
+            for s in out:
+                s.update(treatment="lc", winners=["coordinated_admission"])
+            return out
+        blocks = [stacked([100, 103, 98, 101], 0), stacked([99, 101, 102, 100], 12)]
+        out = analyze_cr.analyze_effect("lc", blocks, winners=["coordinated_admission"], designs=["abba", "baab"],
+                                        aa=True)
+        self.assertEqual((out["analysis"], out["valid_blocks"], out["winners"]),
+                         ("noise_floor", 2, ["coordinated_admission"]))
+        self.assertEqual([b["control_switches"] for b in out["blocks"]],
+                         [["coordinated_admission", "safe_restart"]] * 2)
+        self.assertEqual(out["noise_floor"]["df"], 3)
+        other = analyze_cr.analyze_effect("lc", blocks, winners=["utp"], designs=["abba", "baab"], aa=True)
+        self.assertEqual(other["valid_blocks"], 0)
+        self.assertIn("control_not_the_stacked_winners", other["blocks"][0]["problems"])
+
     def test_aa_needs_identical_switches(self):
         blocks = self.aa_blocks()
         blocks[0][2]["identity"]["switches"]["utp"] = True  # one segment ran the treatment
@@ -962,7 +981,7 @@ class DesignTests(unittest.TestCase):
         on = block("BBBB", [100, 103, 98, 101])
         self.assertEqual(analyze_cr.judge_block(on, "utp", design="abba", aa=True)["problems"], ["aa_treatment_on"])
         # A low B-labelled mean is noise, never a loss.
-        low = self.aa_blocks(means=((100, 0.0001, 98, 101),))[0]
+        low = self.aa_blocks(means=((100, 0, 98, 101),))[0]  # a B-labelled net of 0: a loss outside A/A
         self.assertFalse(analyze_cr.judge_block(low, "utp", design="abba", aa=True)["loss_without_fit"])
 
     def test_design_arguments_are_checked(self):
@@ -972,6 +991,9 @@ class DesignTests(unittest.TestCase):
             with self.subTest(designs=designs, aa=aa):
                 with self.assertRaises(ValueError):
                     analyze_cr.analyze_effect("utp", blocks, designs=designs, aa=aa)
+        for design, aa in ((None, True), ("ab", True), ("ABBA", False)):  # judge_block called directly
+            with self.subTest(design=design, aa=aa), self.assertRaises(ValueError):
+                analyze_cr.judge_block(blocks[0], "utp", design=design, aa=aa)
 
     def test_checkpoint1_and_gate_refuse_a_noise_floor(self):
         out = analyze_cr.analyze_effect("utp", self.aa_blocks(), designs=["abba", "baab"], aa=True)
