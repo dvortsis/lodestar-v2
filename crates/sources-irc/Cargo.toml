@@ -1,0 +1,29 @@
+[package]
+name = "lodestar-sources-irc"
+description = "A small IRC client for the IRC sources: bounded line parser, TLS, SASL, reconnect and flood control, over the plugin's egress"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The guarded, routed TCP connect (NOS-2a) and `Secret`: every connection
+# goes through the plugin's egress, never a socket of this crate's own.
+lodestar-integrations.workspace = true
+# TLS: rustls on ring with the platform verifier, as integrations and
+# sources-importers use them (approved for IRC-0 in the v0.7 plan). All
+# are already in the lock file.
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "=0.7.1"
+tokio = { version = "1.54.1", features = ["rt", "net", "sync", "time", "io-util", "macros"] }
+tokio-rustls = { version = "=0.26.6", default-features = false }
+zeroize = "=1.9.1"
+
+[dev-dependencies]
+proptest = "1.11.0"
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+
+[lints]
+workspace = true
