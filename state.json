@@ -11627,6 +11627,26 @@
       "updated": "2026-11-16T07:48Z",
       "lifted": "2026-11-20T05:54Z",
       "lifted_by": "owner, in chat 2026-11-20 (usage reset): work through the revised plan (#970, r5/r5.1)"
+    },
+    {
+      "requested_at": "2026-11-09T05:54Z",
+      "by": "owner (in chat, runner session)",
+      "instruction": "Once the active sessions complete, pause the runner. No further sessions unless explicitly commanded.",
+      "state": "resumed",
+      "active": [],
+      "no_follow_on": [],
+      "watchdog": "trig_0172BngAUoA4NRaRWBYiRWVf disabled so it can't start a replacement runner",
+      "merged_during_drain": [
+        "#652 OP-3a merged 5da6eb15 at 2026-11-09T06:28:12Z",
+        "#651 X-win-restart-followups-2 merged 161c2a1f at 2026-11-09T08:09:30Z",
+        "#644 PK-win-upd-3 merged f44df6a8 at 2026-11-09T09:55:07Z",
+        "#653 CMP-5g-2 merged 29fd001d at 2026-11-09T12:03:06Z"
+      ],
+      "paused_at": "2026-11-09T12:03:06Z",
+      "heartbeat": "trig_01U8KNWyDovQ9omwvZi8cuLW disabled at pause",
+      "resume": "only on the owner's explicit command: re-enable watchdog trig_0172BngAUoA4NRaRWBYiRWVf and heartbeat trig_01U8KNWyDovQ9omwvZi8cuLW, record the pause in owner-decisions, then the pending runner PR",
+      "resumed_at": "2026-11-11T04:06Z",
+      "resumed_by": "owner, 2026-11-11: \"We reset credit. Continue with up to 8 sessions in one time,\""
     }
   ],
   "size_file_holder": {
