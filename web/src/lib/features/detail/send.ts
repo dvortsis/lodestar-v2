@@ -27,6 +27,10 @@ function registerKey() {
 }
 
 let known: Promise<string | null> | undefined;
+let unreadable = false;
+
+/** The last settings read failed (offline, signed out): "no client" can't be told from that. */
+export const clientUnreadable = () => unreadable;
 
 /** The default client's name (else the first's), or null when none is saved or it can't be read. */
 export function clientName(fresh = false): Promise<string | null> {
@@ -34,6 +38,7 @@ export function clientName(fresh = false): Promise<string | null> {
 	known ??= api
 		.get('/settings/{section}', { path: { section: 'integrations' } })
 		.then((res) => {
+			unreadable = false;
 			const f = res.fields as Record<string, { value?: unknown } | undefined>;
 			const list = Array.isArray(f.clients?.value) ? (f.clients.value as unknown[]) : [];
 			const clients = list.filter(
@@ -44,6 +49,7 @@ export function clientName(fresh = false): Promise<string | null> {
 			return name || null;
 		})
 		.catch(() => {
+			unreadable = true;
 			known = undefined; // offline or signed out: the next ask tries again
 			return null;
 		})
