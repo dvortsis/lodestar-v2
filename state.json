@@ -10684,7 +10684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T09:38:52Z",
+    "updated": "2026-11-23T10:07:23Z",
     "items": [
       {
         "slot": 1,
@@ -10692,7 +10692,7 @@
         "slice": "RX-1",
         "role": "build",
         "agent": "session_01MMjhn911SUimiUBvzWMwkb (opus)",
-        "doing": "RX-1-fixes: the #1082 review fixes, taken over from the API lane at its cost stop",
+        "doing": "RX-1-fixes: ready 100048ff; delta and security reviews running",
         "since": "2026-11-23T08:31:45Z"
       },
       {
