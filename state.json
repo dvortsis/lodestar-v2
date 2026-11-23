@@ -9016,6 +9016,11 @@
       "id": "X-signout-clear-order",
       "note": "clearRecent() runs after logout() including toLogin(); if the redirect throws after the server signed out, recent searches stay. Move it before toLogin in auth/session.svelte.ts. From rv1088 (X-shell-home #1088). Rides the next auth slice.",
       "added": "2026-11-23T03:24Z"
+    },
+    {
+      "id": "X-fleet-baab-tails",
+      "note": "From #1089: an analyze_cr golden case for stacked and rehearsal blocks; a copy-off.sh run on a BAAB block; docs/soak/tools/linux/README.md to mention --design and --aa. Rides the next fleet or analyze_cr slice.",
+      "added": "2026-11-23T03:45Z"
     }
   ],
   "main_health": [
@@ -10668,7 +10673,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T03:39:07Z",
+    "updated": "2026-11-23T03:45:58Z",
     "items": [
       {
         "slot": 1,
@@ -10690,12 +10695,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-fleet-baab",
+        "slice": "X-host-ab-runsheet",
         "role": "helper",
-        "agent": "session_01MMjhnBgVHySe1NFVBPiukH",
+        "agent": "session_01MMjhn9VTxPkX2Nb1gvZg4z",
         "model": "sonnet",
-        "since": "2026-11-23T02:49:41Z",
-        "doing": "#1089 approved; delta 6c5ffd5f checked; CI watch then merge"
+        "since": "2026-11-23T03:45:58Z",
+        "doing": "step 0 (brief 2349c607); #1089 X-fleet-baab merged 96e76a2b, that session archived"
       },
       {
         "slot": 4,
