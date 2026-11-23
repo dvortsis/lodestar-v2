@@ -10673,7 +10673,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T03:45:58Z",
+    "updated": "2026-11-23T04:03:50Z",
     "items": [
       {
         "slot": 1,
@@ -10682,7 +10682,7 @@
         "agent": "session_01MMjhnCtuh4cDvCQfwQaNEM",
         "model": "sonnet",
         "since": "2026-11-23T02:34:31Z",
-        "doing": "building; 3/4-cap headroom rule added 03:0xZ (r15 review)"
+        "doing": "#1091 ready 5c6bffbd; rv1091 review + security running"
       },
       {
         "slot": 2,
@@ -10691,7 +10691,7 @@
         "agent": "session_01MMjhnCUfvFAhDBHWuB237x",
         "model": "opus",
         "since": "2026-11-22T23:21:00Z",
-        "doing": "#1085 delta round 3 (barrier tests, CONTROL drift guard) after rv1085b CHANGES"
+        "doing": "#1085 bd2595a6 delta checked; CI watch then merge"
       },
       {
         "slot": 3,
@@ -10700,16 +10700,16 @@
         "agent": "session_01MMjhn9VTxPkX2Nb1gvZg4z",
         "model": "sonnet",
         "since": "2026-11-23T03:45:58Z",
-        "doing": "step 0 (brief 2349c607); #1089 X-fleet-baab merged 96e76a2b, that session archived"
+        "doing": "#1090 fix round after rv1090 CHANGES (claim step, restore order, rulings on missed backup/parity, mover -> owner)"
       },
       {
         "slot": 4,
-        "slice": "X-shell-home",
+        "slice": "X-retry-typed-flake",
         "role": "build",
-        "agent": "session_01MMjhn9bmyCJJen821FeiDs",
-        "model": "sonnet",
-        "since": "2026-11-22T22:38:32Z",
-        "doing": "#1088 last round: pin zero-results Filters test (no isVisible branch)"
+        "agent": "session_01MMjhn8bBUtJUmZftUciuWc",
+        "model": "opus",
+        "since": "2026-11-23T04:03:50Z",
+        "doing": "step 0 (brief e9807b2a); #1088 X-shell-home merged 1cec2e30, that session archived"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -11615,9 +11615,8 @@
     ],
     "after": {
       "ENR-13b": "ENR-terms-api merged",
-      "GS-4": "X-detail-depth PR 1 and its Compare PR 2 merged",
+      "GS-4": "X-detail-depth-compare merged (it follows X-size-own-modules, which holds web/.size-limit.mjs from 2026-11-23T04:0xZ)",
       "X-cmp-egress-ui": "X-gluetun-hostfile-ui merged",
-      "X-size-own-modules": ".size-limit.mjs handed to it by the runner (after X-detail-depth, then X-shell-home)",
       "X-capacity-rejection-source": "CR-SOFT-TIMEOUT merged (both own actor.rs, mod.rs, metrics.rs, docs/metrics.md)",
       "X-sampler-streak-metrics": "CR-SOFT-TIMEOUT merged (both own crates/lodestar/src/metrics.rs and docs/metrics.md)"
     }
@@ -11632,5 +11631,11 @@
       "lifted": "2026-11-20T05:54Z",
       "lifted_by": "owner, in chat 2026-11-20 (usage reset): work through the revised plan (#970, r5/r5.1)"
     }
-  ]
+  ],
+  "size_file_holder": {
+    "path": "web/.size-limit.mjs",
+    "holder": "X-size-own-modules (API lane)",
+    "since": "2026-11-23T04:03:50Z",
+    "next": "X-detail-depth-compare"
+  }
 }
