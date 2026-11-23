@@ -617,20 +617,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
             "Lookup legs terminated by deadline.",
             d.lookup_deadlines,
         );
-        // CR-SOFT-TIMEOUT (docs/metrics.md, "Soft timeout"): 0 with
-        // `dht.soft_timeout` off.
-        o.one(
-            "dht_soft_timeouts_total",
-            "counter",
-            "Lookup queries that stopped holding their leg after the soft timeout.",
-            d.soft_timeouts,
-        );
-        o.one(
-            "dht_soft_timeout_late_replies_total",
-            "counter",
-            "Soft-timed-out lookup queries answered before the query timeout.",
-            d.soft_timeout_late,
-        );
+        render_soft_timeout(&mut o, d);
         o.one(
             "dht_sample_frontier",
             "gauge",
@@ -1353,6 +1340,23 @@ fn render_permit_returns(o: &mut Out, d: &StatsSnapshot) {
             d.peer_permit_returns[i],
         );
     }
+}
+
+/// CR-SOFT-TIMEOUT's two counters (docs/metrics.md, "Soft timeout"): 0
+/// with `dht.soft_timeout` off.
+fn render_soft_timeout(o: &mut Out, d: &StatsSnapshot) {
+    o.one(
+        "dht_soft_timeouts_total",
+        "counter",
+        "Lookup queries that stopped holding their leg after the soft timeout.",
+        d.soft_timeouts,
+    );
+    o.one(
+        "dht_soft_timeout_late_replies_total",
+        "counter",
+        "Soft-timed-out lookup queries answered before the query timeout.",
+        d.soft_timeout_late,
+    );
 }
 
 /// CR-LEDGER's lookup ledger (docs/metrics.md, "Lookup ledger").
@@ -2235,6 +2239,37 @@ mod tests {
                 .count(),
             7
         );
+    }
+
+    /// CR-SOFT-TIMEOUT: both counters render with their values, as
+    /// counters, and each has its row in docs/metrics.md.
+    #[test]
+    fn the_soft_timeout_counters_render_and_are_documented() {
+        let d = StatsSnapshot {
+            soft_timeouts: 5,
+            soft_timeout_late: 2,
+            ..Default::default()
+        };
+        let mut o = Out(String::new());
+        render_soft_timeout(&mut o, &d);
+        for line in [
+            "# TYPE lodestar_dht_soft_timeouts_total counter",
+            "lodestar_dht_soft_timeouts_total 5",
+            "# TYPE lodestar_dht_soft_timeout_late_replies_total counter",
+            "lodestar_dht_soft_timeout_late_replies_total 2",
+        ] {
+            assert!(o.0.lines().any(|l| l == line), "{line} missing:\n{}", o.0);
+        }
+        let doc = include_str!("../../../docs/metrics.md");
+        for name in [
+            "dht_soft_timeouts_total",
+            "dht_soft_timeout_late_replies_total",
+        ] {
+            assert!(
+                doc.lines().any(|l| l.starts_with(&format!("| `{name}` |"))),
+                "{name} has no row in docs/metrics.md"
+            );
+        }
     }
 
     #[test]

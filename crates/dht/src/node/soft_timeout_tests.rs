@@ -665,6 +665,20 @@ async fn a_detached_answer_never_reaches_a_reused_lookup() {
     check(&a);
     assert_eq!((a.peer_requests[&owner].inflight, out(&a)), before);
     assert_eq!(a.stats.snapshot().soft_timeout_late, 1);
+    // The same reply again: it settles nothing a second time.
+    let answered = a.stats.snapshot().answered;
+    reply_as(
+        &mut a,
+        &s,
+        late,
+        nodes[0].addr,
+        nodes[0].id,
+        &spread(0x80, 3),
+    );
+    check(&a);
+    assert_eq!(a.stats.snapshot().answered, answered, "repeat dropped");
+    assert_eq!(a.stats.snapshot().soft_timeout_late, 1);
+    assert_eq!((a.peer_requests[&owner].inflight, out(&a)), before);
 }
 
 /// A leg whose only candidates left have gone slow doesn't end on them:

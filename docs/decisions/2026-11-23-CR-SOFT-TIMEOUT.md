@@ -49,8 +49,9 @@ CR-0's ledger shows a lookup holding its slot for about 24 s of the 25 s `LOOKUP
   - the 64-query per-request cap (every send counts, soft or not);
   - `LOOKUP_DEADLINE`, `query_timeout`, the query rate and the outstanding cap.
   - A freed lane's next query goes through `try_query` like any other, so it waits when the rate or the cap is spent.
-- **Slow and spoofed peers gain nothing.** A silent node only loses its hold on the leg sooner.
-  - A slow candidate never counts as answered, so fake unreachable ids listed next to the target can't end a leg. `dht.lookup_end`'s two-network rule still applies to the candidates that did answer.
+- **S8-08 (low): a slow honest closest node no longer anchors the closest set.** With it slow, ids that answer at once near the target can end a leg sooner than they could with the switch off.
+  - **Accepted, because** lookups already accept fast answers under CR-LOOKUP-END, whose threat model this stays inside, and the 64-query cap and the query rate still bound what is sent.
+  - A slow candidate never counts as answered, and while one is out a leg needs `K` answers to end, so unreachable ids alone can't end a leg. `dht.lookup_end`'s two-network rule still applies to the candidates that did answer.
   - The most such ids can cost is one soft-expired query each, within the 64-query cap, the rate, and the 3-slow bound.
   - A candidate whose query is out (in flight or slow) is never dropped when closer candidates crowd the list, so a late answer always finds it. The list stays within `CAP + 2 · ALPHA`.
 - **Memory:** at most 3 extra pending entries per leg beyond today's, plus one counter per lookup and one entry in the actor's soft-query set per soft query. Detached entries are bounded by the outstanding cap and expire at `query_timeout`.
