@@ -10684,7 +10684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T10:07:23Z",
+    "updated": "2026-11-23T10:37:54Z",
     "items": [
       {
         "slot": 1,
@@ -10698,7 +10698,11 @@
       {
         "slot": 2,
         "model": "sonnet",
-        "status": "idle"
+        "slice": "X-collector-ntp",
+        "role": "build",
+        "agent": "session_01MMjhn8SXL3Yusq6VdzQ8tt (opus)",
+        "doing": "step 0: the collector reads NTP inside its container (X-test-vm blocker: every stage-1 segment fails D1a)",
+        "since": "2026-11-23T10:37:54Z"
       },
       {
         "slot": 3,
