@@ -878,7 +878,8 @@ def soft_timeout(window, switches):
                 absent.add(k)
             else:
                 sums[k] += d
-    parts = {k: (None if k in absent else v) for k, v in sums.items()}
+    # No sampling minute means nothing was observed: null counts, never zeros.
+    parts = {k: (None if k in absent or not sampling else v) for k, v in sums.items()}
     soft, late, queries = parts["soft"], parts["late"], parts["peer_lookup_queries"]
     hours = sampling / 60
     return {"on": bool(switches.get("soft_timeout")), "sampling_minutes": round(sampling, 3),
@@ -1376,7 +1377,8 @@ def analyze_effect(treatment, block_reports, winners=None, designs=None, aa=Fals
             out["warnings"] = [SPLIT_NOT_EXERCISED]
     if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair per arm, over sampling minutes; never decided on
         out["soft_timeout_by_arm"] = stage3_by_arm(valid, "soft_timeout",
-                                                   ("sampling_minutes", "stalled_minutes", "soft_per_hour",
+                                                   ("sampling_minutes", "stalled_minutes", "soft", "late",
+                                                    "soft_per_hour",
                                                     "late_per_hour", "late_per_soft", "soft_per_peer_query",
                                                     "absent"))
     if len(controls) > 1:

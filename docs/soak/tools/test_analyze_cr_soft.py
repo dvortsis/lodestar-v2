@@ -119,6 +119,12 @@ class SoftReportTests(Base):
         self.assertAlmostEqual(soft["soft_per_hour"], SOFT_RATE * 3600, delta=SOFT_RATE * 3600 * 0.02)
         self.assertAlmostEqual(soft["late_per_soft"], LATE_RATE / SOFT_RATE, delta=0.0005)
 
+    def test_a_segment_stalled_throughout_has_no_counts(self):
+        soft = self.run_sim(SoftSim(stall=(0, 10 ** 9)))["soft_timeout"]
+        self.assertEqual(soft["sampling_minutes"], 0)
+        self.assertEqual((soft["soft"], soft["late"], soft["peer_lookup_queries"]), (None, None, None))
+        self.assertIsNone(soft["soft_per_hour"])
+
     def test_the_control_arm_reports_zeros_and_no_ratio(self):
         soft = self.run_sim(SoftSim(on=False))["soft_timeout"]
         self.assertFalse(soft["on"])
