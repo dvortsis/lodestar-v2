@@ -3,6 +3,7 @@
 	// what to type, whether it is working, and the person's recent searches (kept in this browser
 	// only). Its own chunk, loaded with the results panel, so it is there in the first frame.
 	// Everything that arrives late (saved searches) is last, so nothing moves.
+	import { resolve } from '$app/paths';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -25,7 +26,12 @@
 	const locale = $derived(currentLocale());
 	let recent = $state(loadRecent());
 
+	let title = $state<HTMLElement>();
 	const kind = $derived(shellStatus.pill.kind);
+	// Working and ready are good news; the rest says where to look.
+	const healthLinks = $derived(
+		kind === 'paused' || kind === 'stalled' || kind === 'failed' || kind === 'restart'
+	);
 	const health = $derived(
 		kind === 'crawling'
 			? m.search_home_health_working()
@@ -40,14 +46,19 @@
 </script>
 
 <div class="rp-empty" data-home="" data-testid="results-empty">
-	<p class="rp-empty-title" data-testid="results-empty-title">
+	<p class="rp-empty-title" data-testid="results-empty-title" tabindex="-1" bind:this={title}>
 		{count !== null
 			? m.search_home_title({ count: formatCount(count, locale) })
 			: m.search_home_title_unknown()}
 	</p>
 	<p>{m.search_home_lead()}</p>
 	<!-- Always there, at its own height: the status arrives after the first frame. -->
-	<p class="rp-health" data-testid="home-health">{health}</p>
+	<p class="rp-health" data-testid="home-health">
+		{#if health && healthLinks}<a
+				class="rp-link"
+				href={resolve(kind === 'restart' ? '/settings' : '/insights')}>{health}</a
+			>{:else}{health}{/if}
+	</p>
 	<ul class="rp-examples">
 		{#each EXAMPLES.slice(0, 3) as ex (ex.query)}
 			<li>
@@ -65,7 +76,7 @@
 		<ul class="rp-examples" data-testid="home-recent">
 			{#each recent as q (q)}
 				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- searchHref() resolves -->
-				<li><a class="rp-link" href={searchHref(q)}>{q}</a></li>
+				<li><a class="rp-link wrap-anywhere" href={searchHref(q)}>{q}</a></li>
 			{/each}
 		</ul>
 		<p class="rp-empty-note">
@@ -73,7 +84,8 @@
 			<Button
 				variant="quiet"
 				data-testid="home-recent-clear"
-				onclick={() => (clearRecent(), (recent = []))}>{m.search_home_recent_clear()}</Button
+				onclick={() => (clearRecent(), (recent = []), title?.focus())}
+				>{m.search_home_recent_clear()}</Button
 			>
 		</p>
 	{/if}

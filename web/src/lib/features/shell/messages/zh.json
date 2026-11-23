@@ -17,8 +17,6 @@
 	"shell_more_syntax": "语法指南",
 	"shell_more_about": "关于",
 	"shell_palette_open": "搜索和命令",
-	"shell_palette_keys_mac": "⌘K",
-	"shell_palette_keys_other": "Ctrl K",
 	"shell_palette_title": "命令面板",
 	"shell_palette_input": "输入命令",
 	"shell_palette_empty": "没有匹配“{query}”的命令。清除文字可查看全部命令。",

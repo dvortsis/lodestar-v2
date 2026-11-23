@@ -17,8 +17,6 @@
 	"shell_more_syntax": "Syntax guide",
 	"shell_more_about": "About",
 	"shell_palette_open": "Search and commands",
-	"shell_palette_keys_mac": "⌘K",
-	"shell_palette_keys_other": "Ctrl K",
 	"shell_palette_title": "Command palette",
 	"shell_palette_input": "Type a command",
 	"shell_palette_empty": "No command matches “{query}”. Clear the text to see them all.",

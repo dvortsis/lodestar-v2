@@ -7,6 +7,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { isMacPlatform } from '$lib/keys/combo';
+	import { formatCombo } from '$lib/keys/display';
 	import { m } from '$lib/paraglide/messages.js';
 	import { FOCUS_RING, TARGET_MIN } from '$lib/ui/classes';
 	import Compass from './Compass.svelte';
@@ -18,7 +19,7 @@
 	// The palette button: the keys it answers to on a keyboard, a magnifier on touch (no ⌘ there).
 	// Decided once, before the first frame, so the bar never changes size.
 	const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
-	const keys = isMacPlatform() ? m.shell_palette_keys_mac() : m.shell_palette_keys_other();
+	const keys = formatCombo('mod+k');
 
 	let navOpen = $state(false);
 	afterNavigate(() => (navOpen = false));

@@ -2,6 +2,7 @@
 // searches kept in this browser) and the top bar's words, with no layout shift at 1440 and 390 px.
 import { expectNoA11yViolations } from './a11y';
 import { indexState } from './search-results.fixtures';
+import { crawlerEvent, liveEvents } from './support/events-server';
 import { interact } from './support/interact';
 import { expect, test } from './support/test';
 import type { OpenApiMock } from './mock/openapi-mock';
@@ -91,3 +92,38 @@ test('the overflow menu leaves the page scrollable, and closes with Esc or a cli
 	await page.mouse.click(700, 600);
 	await expect(page.getByRole('menu')).toHaveCount(0);
 });
+
+// The health line arrives with the stream and changes with the crawler (working, then paused, which
+// wraps on a phone): neither may move anything below it.
+for (const width of [1440, 390]) {
+	test(`the health line changes state without a layout shift at ${width} px`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		await page.setViewportSize({ width, height: 900 });
+		bare(mock);
+		await page.addInitScript(() => {
+			const w = window as unknown as { __cls: number };
+			w.__cls = 0;
+			new PerformanceObserver((list) => {
+				for (const e of list.getEntries() as unknown as {
+					value: number;
+					hadRecentInput: boolean;
+				}[]) {
+					if (!e.hadRecentInput) w.__cls += e.value;
+				}
+			}).observe({ type: 'layout-shift', buffered: true });
+		});
+		const events = await liveEvents(page);
+		await go('/search');
+		await interact(page);
+		const health = page.getByTestId('home-health');
+		await expect(health).toContainText('Lodestar is working');
+		await events.send('crawler', crawlerEvent({ paused: true }));
+		await expect(health).toContainText('paused');
+		await expect(health.getByRole('link')).toHaveAttribute('href', '/insights');
+		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
+		expect(cls).toBeLessThan(0.001);
+	});
+}
