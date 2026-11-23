@@ -225,7 +225,7 @@ test('a 2,000-row truncated list opens, scrolls to its last row and links to the
 test.describe('Differences only', () => {
 	for (const [name, size, n] of [
 		['390', { width: 390, height: 800 }, 2],
-		['1440', { width: 1440, height: 900 }, 2]
+		['1440', { width: 1440, height: 500 }, 2]
 	] as const) {
 		test(`at ${name}: keyboard toggle hides same rows, keeps focus and scroll`, async ({
 			page,
@@ -246,7 +246,10 @@ test.describe('Differences only', () => {
 			await expect(toggle).toBeFocused();
 			await expect(page.getByTestId('compare-row-attr-year')).toHaveCount(0);
 			await expect(page.getByTestId('compare-row-attr-res')).toHaveCount(1);
-			await expect(page.getByTestId('compare-hidden-count')).toContainText('rows hidden because');
+			await expect(page.getByTestId('compare-hidden-count')).toHaveText(
+				/^\d+ rows hidden because they're the same$/
+			);
+			await expectNoA11yViolations(page);
 			// The page may get too short to scroll as far; the browser clamps, we never move it.
 			const left = await page.evaluate(
 				() => document.documentElement.scrollHeight - window.innerHeight
@@ -274,6 +277,8 @@ test.describe('Differences only', () => {
 		await page.keyboard.press('Space');
 		await expect(page.getByTestId('compare-all-same')).toBeVisible();
 		await expect(toggle).toBeFocused();
+		await expect(page.getByTestId('compare-column-0')).toBeVisible();
+		await expect(page.getByRole('button', { name: /Copy magnet/ }).first()).toBeVisible();
 		await page.keyboard.press('Space');
 		await expect(page.getByTestId('compare-table')).toBeVisible();
 	});

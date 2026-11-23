@@ -39,6 +39,51 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+describe('Differences only', () => {
+	async function turnOn(n: number, patch?: (r: ReturnType<typeof response>) => void) {
+		const r = response(n);
+		patch?.(r);
+		mocks.post.mockResolvedValue(r);
+		open(n);
+		render(Compare);
+		const sw = await screen.findByRole('switch', { name: 'Differences only' });
+		expect((sw as HTMLInputElement).checked).toBe(false);
+		await fireEvent.click(sw);
+		return screen.getByTestId('compare-hidden-count');
+	}
+	it('counts the hidden rows and keeps the Actions row', async () => {
+		const count = await turnOn(2);
+		// Same in the fixture: type, title, year, files? No: files differ. type, title, year, trackers.
+		await waitFor(() =>
+			expect(count.textContent?.trim()).toMatch(/^\d+ rows hidden because they're the same$/)
+		);
+		expect(screen.queryByTestId('compare-row-attr-year')).toBeNull();
+		expect(screen.getByTestId('compare-row-attr-res')).toBeTruthy();
+		expect(screen.getByText('Actions')).toBeTruthy();
+	});
+	it('says "1 row hidden" in the singular', async () => {
+		const count = await turnOn(2, (r) => {
+			// Make every row differ but one: the type.
+			r.torrents[1]!.title = 'Other';
+			r.torrents[1]!.attributes = { title: 'x', year: '2020', res: '1', group: 'G' };
+			r.torrents[1]!.trackers_reporting = 1;
+			r.torrents[1]!.composition = [
+				{ group: 'video', bytes: 1, files: 1, pct_bytes: 100, pct_files: 100 }
+			];
+		});
+		await waitFor(() =>
+			expect(count.textContent?.trim()).toBe("1 row hidden because it's the same")
+		);
+	});
+	it('says nothing when the switch is off', async () => {
+		mocks.post.mockResolvedValue(response(2));
+		open(2);
+		render(Compare);
+		await screen.findByRole('switch', { name: 'Differences only' });
+		expect(screen.getByTestId('compare-hidden-count').textContent?.trim()).toBe('');
+	});
+});
+
 describe('choose state', () => {
 	it('sends no request below two torrents and offers Search', async () => {
 		open(1);
