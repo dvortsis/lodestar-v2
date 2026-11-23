@@ -1284,51 +1284,54 @@ mod tests {
         let (_, l) = live(LiveConfig::default());
         let id = l.register(1, &q("/movie/"), false, 0, 0).unwrap().id;
         let key = l.lock().regs.iter().find(|r| r.id == id).unwrap().key;
-        let wait = |l: &LiveQueries| {
-            let st = l.lock();
-            let r = st.regs.iter().find(|r| r.key == key).unwrap();
-            let w = r.regex_wait.unwrap();
-            assert!(w.until.saturating_duration_since(Instant::now()) <= w.wait());
-            w.wait()
-        };
         let step = REGEX_BACKOFF.0;
         let cut = |l: &LiveQueries| l.regex_ran(&[], &[key], &[]);
         let stop = |l: &LiveQueries| l.regex_ran(&[key], &[], &[]);
         let ran = |l: &LiveQueries| l.regex_ran(&[], &[], &[key]);
+        // Runs `f` and checks the real time it may run again: `expected`
+        // from when it ran.
+        let waits = |l: &LiveQueries, f: &dyn Fn(&LiveQueries), expected: Duration| {
+            let t0 = Instant::now();
+            f(l);
+            let t1 = Instant::now();
+            let until = l
+                .lock()
+                .regs
+                .iter()
+                .find(|r| r.key == key)
+                .unwrap()
+                .regex_wait
+                .unwrap()
+                .until;
+            assert!(
+                t0 + expected <= until && until <= t1 + expected,
+                "expected a wait of {expected:?}"
+            );
+        };
         // Cuts in a row: 1, 2, then 4 steps.
-        cut(&l);
-        assert_eq!(wait(&l), step);
-        cut(&l);
-        assert_eq!(wait(&l), step * 2);
-        cut(&l);
-        assert_eq!(wait(&l), step * 4);
+        waits(&l, &cut, step);
+        waits(&l, &cut, step * 2);
+        waits(&l, &cut, step * 4);
         // A whole run resets it all: the next cut waits one step again,
         // and so does the first own stop after it.
         ran(&l);
         assert!(l.lock().regs.iter().all(|r| r.regex_wait.is_none()));
-        cut(&l);
-        assert_eq!(wait(&l), step);
-        stop(&l);
-        assert_eq!(wait(&l), step);
-        stop(&l);
-        assert_eq!(wait(&l), step * 2);
+        waits(&l, &cut, step);
+        waits(&l, &stop, step);
+        waits(&l, &stop, step * 2);
         // A single cut between stops neither lengthens nor resets them.
-        cut(&l);
-        assert_eq!(wait(&l), step);
-        stop(&l);
-        assert_eq!(wait(&l), step * 4);
+        waits(&l, &cut, step);
+        waits(&l, &stop, step * 4);
         // A second cut in a row doubles on from the stops' step.
         cut(&l);
-        cut(&l);
-        assert_eq!(wait(&l), step * 8);
+        waits(&l, &cut, step * 8);
         // Capped.
         for _ in 0..10 {
             stop(&l);
         }
-        assert_eq!(wait(&l), REGEX_BACKOFF.1);
+        waits(&l, &stop, REGEX_BACKOFF.1);
         cut(&l);
-        cut(&l);
-        assert_eq!(wait(&l), REGEX_BACKOFF.1);
+        waits(&l, &cut, REGEX_BACKOFF.1);
     }
 
     /// Fresh entries with a `/…/` term go after plain ones, so a plain
@@ -1413,6 +1416,14 @@ mod tests {
         let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true).unwrap();
         assert_eq!((run.ran, run.more), (0, false));
         assert_eq!(matched(&l, &done), 0);
+        // One that ran to the end of its range, then one cut.
+        let (l, run_token) = setup();
+        let plain = l.register(1, &q("movie"), false, 0, 0).unwrap().id;
+        l.register(1, &q("/movie/"), false, 0, 0).unwrap();
+        lodestar_search::regex_verify::cancel_at_seal_on_this_thread(run_token.clone(), 1);
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true).unwrap();
+        assert_eq!((run.ran, run.more), (1, false));
+        assert_eq!(matched(&l, &plain), 2);
     }
 
     /// Export (and Torznab) refuse a lease whose `/…/` term ran out of
@@ -1440,6 +1451,19 @@ mod tests {
         spent.regex_deadline(Duration::ZERO);
         let e = crate::export::whole(lease(&spent)).err().unwrap();
         assert_eq!(e.code(), "regex_stopped");
+        // The lease export's query branch reads goes through it.
+        let export = |token: &CancelToken| {
+            crate::export::query_lease(
+                index.clone(),
+                &q("/movie/"),
+                lodestar_search::Sort::Relevance,
+                token,
+            )
+        };
+        assert_eq!(export(&CancelToken::new()).unwrap().total().value, 3);
+        let spent = CancelToken::new();
+        spent.regex_deadline(Duration::ZERO);
+        assert_eq!(export(&spent).err().unwrap().code(), "regex_stopped");
         assert_eq!(
             e.body()["error"]["message"],
             "This search took too long to check every /regex/ match. Narrow it and try again."

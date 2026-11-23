@@ -715,8 +715,9 @@ const REGEX_FIELD: &str = "name:/";
 
 /// The regex literal whose opening `/` is at byte `open`: everything up
 /// to the next `/` not escaped by a backslash, which the pattern can't
-/// hold otherwise (`\/` becomes `/`; any other escape stays, for the
-/// regex parser). Returns the pattern and the byte after the closing `/`.
+/// hold otherwise (`\/` becomes `/` and `\"` a quote; any other escape
+/// stays, for the regex parser). Returns the pattern and the byte after
+/// the closing `/`.
 ///
 /// `None` when the slashes don't delimit a pattern, and the text is plain
 /// words instead (`tv / movies / 1080p`, `/usr/bin`, `/usr`, a lone `/`):
@@ -725,7 +726,10 @@ const REGEX_FIELD: &str = "name:/";
 /// quote, `|`, the end); or there's no closing one. The rule: a plain word
 /// never renders as a pattern, so a pattern starts and ends exactly where
 /// a word could (`/or/` before `(` would otherwise come back as one). A
-/// literal that delimits but is empty (`//`) is an error.
+/// bare `"` before the closing `/` makes it words too: a phrase's text is
+/// rewritten when rendered (its whitespace becomes single spaces), so a
+/// slash inside one could otherwise close a pattern only after a round
+/// trip. A literal that delimits but is empty (`//`) is an error.
 fn regex_literal(q: &str, open: usize) -> Result<Option<(String, usize)>, ParseError> {
     // What ends a word, as the lexer splits them (whitespace is ASCII
     // only): a pattern starts and ends exactly where a word could.
@@ -755,8 +759,13 @@ fn regex_literal(q: &str, open: usize) -> Result<Option<(String, usize)>, ParseE
                 }
                 return Ok(Some((pattern, end)));
             }
+            // A quote is written `\"` in a pattern: a bare one ends the
+            // scan, so a slash before a phrase stays a word whatever the
+            // phrase holds (its text is rewritten when rendered).
+            '"' => return Ok(None),
             '\\' => match chars.next() {
                 Some((_, '/')) => pattern.push('/'),
+                Some((_, '"')) => pattern.push('"'),
                 Some((_, next)) => {
                     pattern.push('\\');
                     pattern.push(next);
@@ -1935,16 +1944,18 @@ impl Node {
             Node::Word { field, word } => {
                 let _ = write!(out, "{}{word}", text_field(*field));
             }
-            // `/` escaped again, as the lexer reads it.
-            // The parser never yields a pattern ending in an unpaired `\`
-            // (it would escape the closing `/`), and compile refuses one,
-            // so a stored node holding one is the only text that doesn't
-            // round-trip.
+            // `/` and `"` escaped again, as the lexer reads them. Every
+            // pattern the parser yields renders back to itself. A node it
+            // didn't make may not: one ending in an unpaired `\` (it would
+            // escape the closing `/`; compile refuses it), or one that
+            // can't start or end where a word could (`Regex(" x")` renders
+            // `/ x/`, which reads back as words; `Regex(")x")` renders text
+            // that doesn't parse).
             Node::Regex { pattern } => {
                 out.push('/');
                 let mut escaped = false;
                 for c in pattern.chars() {
-                    if c == '/' && !escaped {
+                    if matches!(c, '/' | '"') && !escaped {
                         out.push('\\');
                     }
                     escaped = c == '\\' && !escaped;

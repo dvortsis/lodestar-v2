@@ -268,6 +268,30 @@ fn slashes_delimit_a_regex_only_where_a_pattern_can_start_and_end() {
     let n = parse("/or/(krk:ipfs) x").unwrap();
     assert_eq!(parse(&n.to_query()).unwrap(), n);
     assert!(n.has_regex());
+    // Fuzz find: a phrase's text is rewritten when rendered (`\x0b`
+    // becomes a space), so a bare `"` ends the scan: a slash before a
+    // phrase stays a word, whatever the phrase holds.
+    let q = "/a\"b\x0b\x0b/\x0bc\" d";
+    let n = parse(q).unwrap();
+    assert!(!n.has_regex());
+    assert_eq!(parse(&n.to_query()).unwrap(), n);
+    let crash = "/\0C&C\"4wn\0\0!\0teccco5 -sig| s0g44bb1 -s\x0b\x0b\x0b/\x0b\0C\"Ane8";
+    let n = parse(crash).unwrap();
+    assert_eq!(parse(&n.to_query()).unwrap(), n);
+    assert!(words("/a\"b/\" c"));
+    // A quote in a pattern is written `\"`, and renders back so.
+    let n = parse(r#"/say \"hi\"/"#).unwrap();
+    assert_eq!(
+        n,
+        Node::Regex {
+            pattern: r#"say "hi""#.into()
+        }
+    );
+    assert_eq!(n.to_query(), r#"/say \"hi\"/"#);
+    let stored = Node::Regex {
+        pattern: r#"a\\"b/c"#.into(),
+    };
+    assert_eq!(parse(&stored.to_query()).unwrap(), stored);
     // A lone `/` is a word, at the end too.
     assert!(words("x /"));
     assert!(words("/ "));
@@ -277,7 +301,15 @@ fn slashes_delimit_a_regex_only_where_a_pattern_can_start_and_end() {
     let n = parse("(x /) y/").unwrap();
     assert_eq!(parse(&n.to_query()).unwrap(), n);
     // Unclosed, it's plain words too, and the word renders back as itself.
-    for q in ["/abc", "x /abc", "/usr", "movies /2023", "/a/b/c"] {
+    for q in [
+        "/abc",
+        "x /abc",
+        "/usr",
+        "movies /2023",
+        "/a/b/c",
+        "name:/usr/bin",
+        "name:/usr",
+    ] {
         let n = parse(q).unwrap();
         assert!(!n.has_regex(), "{q}");
         assert_eq!(parse(&n.to_query()).unwrap(), n, "{q}");
@@ -517,7 +549,7 @@ proptest! {
         text in prop::collection::vec(
             prop::sample::select(vec![
                 "/", "a", "or", "(", ")", " ", "\"", "|", "\\", "name:", "x:", "-", "\0", "2023",
-                "/2023", "/usr",
+                "/2023", "/usr", "\x0b", "\t", "\u{a0}", "\u{3000}",
             ]),
             0..16,
         )

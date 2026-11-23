@@ -493,13 +493,10 @@ async fn resolve(
         let shown = search::base_query(&ast, Visibility { hidden, adult }).query();
         let cancel = CancelToken::new();
         let _guard = cancel.cancel_on_drop();
-        let lease = tokio::task::spawn_blocking(move || {
-            Lease::new(index.index(), &shown, crate::unix_now(), sort, &cancel)
-        })
-        .await
-        .map_err(internal)?
-        .map_err(search::search_error)?;
-        let lease = whole(lease)?;
+        let lease =
+            tokio::task::spawn_blocking(move || query_lease(index.index(), &shown, sort, &cancel))
+                .await
+                .map_err(internal)??;
         let total = lease.total();
         (
             Source::Query {
@@ -511,6 +508,19 @@ async fn resolve(
             total.approx,
         )
     })
+}
+
+/// The lease an export of `shown` reads, refused whole when a `/…/`
+/// term ran out of time ([`whole`]).
+pub(crate) fn query_lease(
+    index: Arc<lodestar_search::SearchIndex>,
+    shown: &lodestar_search::Node,
+    sort: lodestar_search::Sort,
+    cancel: &CancelToken,
+) -> ApiResult<Lease> {
+    let lease =
+        Lease::new(index, shown, crate::unix_now(), sort, cancel).map_err(search::search_error)?;
+    whole(lease)
 }
 
 /// `lease`, unless a `/…/` term ran out of its time budget: the file

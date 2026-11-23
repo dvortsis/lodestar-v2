@@ -1730,19 +1730,39 @@ mod tests {
         assert!(!seen.regex_waiting(3, 0));
     }
 
-    /// A saved search deleted, or saved again without a `/…/` term, is
-    /// forgotten by the regex waits and warnings on the next run.
+    /// A saved search deleted, saved again without a `/…/` term, or
+    /// paused, is forgotten by the regex waits and warnings on the next
+    /// run (a resumed one runs at once).
     #[test]
     fn regex_waits_are_forgotten_for_searches_gone_or_without_a_regex() {
         let mut s = setup(4);
         let gone = save(&mut s.store, "gone", "/show/", 0);
         let plain = save(&mut s.store, "plain", "/show/", 0);
         let kept = save(&mut s.store, "kept", "/show/", 0);
+        let paused = save(&mut s.store, "paused", "/show/", 0);
         let mut seen = Seen::default();
-        for id in [gone, plain, kept] {
+        for id in [gone, plain, kept, paused] {
             seen.regex_stopped(id, NOW);
         }
         s.store.delete_saved_search(gone).unwrap();
+        let p = s.store.saved_search(paused).unwrap().unwrap();
+        s.store
+            .update_saved_search(
+                paused,
+                &SavedSearchInput {
+                    name: &p.name,
+                    query: &p.query,
+                    ast: &p.ast,
+                    sort: None,
+                    alert: p.alert,
+                    rss: p.rss,
+                    channels: 0,
+                    paused: true,
+                },
+                0,
+                0,
+            )
+            .unwrap();
         let p = s.store.saved_search(plain).unwrap().unwrap();
         let ast = serde_json::to_string(&parse("show").unwrap()).unwrap();
         s.store

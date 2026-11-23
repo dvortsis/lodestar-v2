@@ -339,7 +339,6 @@ fn results(body: String) -> Response {
     document(StatusCode::OK, "application/rss+xml; charset=utf-8", body)
 }
 
-/// A search that failed while running (already logged, if internal).
 /// A search's error as a Torznab document. A `/…/` term that ran out of
 /// time is a 503 the client retries, never a short feed.
 fn error_of(e: crate::ApiError) -> Response {
@@ -353,6 +352,7 @@ fn error_of(e: crate::ApiError) -> Response {
     failed(e.into_response().status())
 }
 
+/// A search that failed while running (already logged, if internal).
 fn failed(status: StatusCode) -> Response {
     error_document(status, code::UNKNOWN, "Unknown error")
 }
