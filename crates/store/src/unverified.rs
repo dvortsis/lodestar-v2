@@ -1522,7 +1522,9 @@ fn cap_network(tx: &Transaction<'_>, network: Network, cap: u64) -> Result<usize
 /// `network`'s unverified items, from V16's `unverified_counts`, which
 /// its triggers keep in step with every insert, delete and network
 /// change. No row is no items. A negative count could only come from a
-/// write the triggers missed: it reads as 0, so it can never evict.
+/// write the triggers missed: it reads as 0, so it evicts nothing. (A
+/// count too high would evict below the cap; nothing writes the table
+/// in a way the triggers miss, and the tests hold the count to the rows.)
 fn stored_count(conn: &Connection, network: Network) -> Result<u64> {
     let n: Option<i64> = conn
         .prepare_cached("SELECT n FROM unverified_counts WHERE network = ?1")?
