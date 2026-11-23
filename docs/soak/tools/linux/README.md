@@ -295,6 +295,13 @@ python3 collect.py --mode docker --container lodestar --cgroup-root /host/cgroup
 - `--proc-root /host/proc` (mount the host's `/proc` read-only): the network
   counters. Without it they're reported as not available.
 - `--stop` on every A/B segment: an arm switch must be a clean stop.
+- **Clock (D1a, `ntp_start` and `ntp_end` in `run.json`).** The collector tries
+  `chronyc`, then `timedatectl`, then the kernel's own NTP state. On any host
+  without either tool, on 64-bit x86_64 and aarch64, it reads the kernel's state
+  with the `adjtimex` system call, read-only, and then with glibc's `ntp_adjtime`.
+  Don't give the collector the `SYS_TIME` capability, a looser security profile
+  or the chrony socket: it should need none of them. `source: unavailable` means
+  both calls failed, and analyze_cr then judges the segment invalid.
 - The comparator: `--run-kind comparator --container bitmagnet
   --postgres-container bitmagnet-postgres`. It counts `SELECT count(*) FROM
   torrents` in a read-only session at every scrape. **Order matters** for the

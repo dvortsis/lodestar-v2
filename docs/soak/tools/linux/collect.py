@@ -15,6 +15,8 @@ Anything this host cannot provide is left out of the row, never invented.
 """
 
 import argparse
+import ctypes
+import ctypes.util
 import hashlib
 import http.client
 import ipaddress
@@ -113,6 +115,8 @@ LABELLED = {
     "fetch_attempts_total": _TRANSPORT,
     "fetch_success_total": _TRANSPORT,
     "fetch_connect_timeouts_total": _TRANSPORT,
+    # X-fetch-first-window: large dicts whose first window missed its 4 s bound (also timed_out).
+    "fetch_first_window_timeouts_total": _TRANSPORT,
     "fetch_family_attempts_total": _FAMILY,
     "fetch_family_success_total": _FAMILY,
     "fetch_no_route_total": _FAMILY,
@@ -1267,32 +1271,62 @@ def ntp_status(run_command):
     return kernel_ntp_status()
 
 
-def kernel_ntp_status():
-    """ntp_adjtime(2) read-only: STA_UNSYNC and the estimated error."""
-    try:
-        import ctypes
-        import ctypes.util
+# adjtimex(2)'s number where a 64-bit kernel takes the struct below. The raw syscall comes first
+# (X-collector-ntp): glibc builds ntp_adjtime on clock_adjtime. In the fleet's collector container
+# the kernel source read unavailable; that clock_adjtime was refused there is a hypothesis
+# (Docker's default seccomp profile has allowed it since moby 20.10), pending X-test-vm's probe.
+# adjtimex goes first either way. modes stays 0, so neither call can set the clock.
+ADJTIMEX_SYSCALL = {"x86_64": 159, "aarch64": 171}
+NTP_UNAVAILABLE = {"source": "unavailable", "synchronized": None, "offset_seconds": None}
 
-        class Timex(ctypes.Structure):
-            _fields_ = [("modes", ctypes.c_uint), ("offset", ctypes.c_long), ("freq", ctypes.c_long),
-                        ("maxerror", ctypes.c_long), ("esterror", ctypes.c_long), ("status", ctypes.c_int),
-                        ("constant", ctypes.c_long), ("precision", ctypes.c_long),
-                        ("tolerance", ctypes.c_long), ("time_sec", ctypes.c_long),
-                        ("time_usec", ctypes.c_long), ("tick", ctypes.c_long),
-                        ("pad", ctypes.c_byte * 256)]
-        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
-        timex = Timex()
-        state = libc.ntp_adjtime(ctypes.byref(timex))
-    except (OSError, AttributeError, ImportError):
-        return {"source": "unavailable", "synchronized": None, "offset_seconds": None}
-    if state < 0:
-        return {"source": "unavailable", "synchronized": None, "offset_seconds": None}
-    unsync = bool(timex.status & 0x0040) or state == 5  # STA_UNSYNC, TIME_ERROR
+
+class Timex(ctypes.Structure):
+    """struct timex as a 64-bit kernel and glibc take it; the pad covers the fields after tick."""
+    _fields_ = [("modes", ctypes.c_uint), ("offset", ctypes.c_long), ("freq", ctypes.c_long),
+                ("maxerror", ctypes.c_long), ("esterror", ctypes.c_long), ("status", ctypes.c_int),
+                ("constant", ctypes.c_long), ("precision", ctypes.c_long),
+                ("tolerance", ctypes.c_long), ("time_sec", ctypes.c_long),
+                ("time_usec", ctypes.c_long), ("tick", ctypes.c_long),
+                ("pad", ctypes.c_byte * 256)]
+
+
+def timex_calls(libc, machine):
+    """The read-only timex calls, in order: the raw adjtimex syscall where its number is known
+    on a 64-bit build, then glibc's ntp_adjtime. Each takes a zeroed Timex and returns the state."""
+    number = ADJTIMEX_SYSCALL.get(machine)
+    calls = []
+    if number is not None and ctypes.sizeof(ctypes.c_long) == 8:
+        calls.append(lambda t: libc.syscall(ctypes.c_long(number), ctypes.byref(t)))
+    calls.append(lambda t: libc.ntp_adjtime(ctypes.byref(t)))
+    return calls
+
+
+def kernel_ntp_status(libc=None, machine=None):
+    """The kernel's NTP state, read-only: adjtimex(2) by syscall, then glibc's ntp_adjtime."""
+    if libc is None:
+        try:
+            libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        except OSError:
+            return dict(NTP_UNAVAILABLE)
+    for call in timex_calls(libc, machine if machine is not None else platform.machine()):
+        timex = Timex()  # zeroed: modes 0 reads and never sets
+        try:
+            state = call(timex)
+        except (OSError, AttributeError):
+            continue
+        if state >= 0:
+            return parse_timex(state, timex.status, timex.offset, timex.esterror)
+    return dict(NTP_UNAVAILABLE)
+
+
+def parse_timex(state, status, offset, esterror):
+    """D1a's fields from a timex read: STA_UNSYNC and the estimated error."""
+    unsync = bool(status & 0x0040) or state == 5  # STA_UNSYNC, TIME_ERROR
     # The PLL's offset (ns with STA_NANO, else µs), or the estimated error if that's larger:
     # ntpd puts jitter in esterror and timesyncd leaves it 0, so the offset alone could pass unmeasured.
-    offset = abs(timex.offset) / (1e9 if timex.status & 0x2000 else 1e6)
+    offset = abs(offset) / (1e9 if status & 0x2000 else 1e6)
     return {"source": "kernel", "synchronized": not unsync,
-            "offset_seconds": None if unsync else max(offset, max(timex.esterror, 0) / 1e6)}
+            "offset_seconds": None if unsync else max(offset, max(esterror, 0) / 1e6)}
 
 
 def subprocess_output(argv, timeout=5):
