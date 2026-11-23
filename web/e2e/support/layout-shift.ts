@@ -31,3 +31,17 @@ export async function watchShifts(page: Page, selector: string) {
 }
 
 export const shifts = (page: Page) => page.evaluate(() => window.__shifts ?? []);
+
+/**
+ * The height of `selector`'s box before and after a few frames and the web fonts settling. Layout
+ * shifts are not reported for a `transform` (the virtual lists place rows that way), so a region
+ * that changes size after the first paint is checked here instead.
+ */
+export const heightAfterSettling = (page: Page, selector: string) =>
+	page.evaluate(async (sel) => {
+		const h = () => document.querySelector(sel)!.getBoundingClientRect().height;
+		const before = h();
+		await document.fonts.ready;
+		for (let i = 0; i < 5; i++) await new Promise((r) => requestAnimationFrame(r));
+		return { before, after: h() };
+	}, selector);

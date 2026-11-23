@@ -4,7 +4,7 @@ import type { Page } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
 import { body, expect, hits, resultsCalls, server } from './search-results.fixtures';
 import { test } from './support/test';
-import { shifts, watchShifts } from './support/layout-shift';
+import { heightAfterSettling, shifts, watchShifts } from './support/layout-shift';
 
 const tableRow = (page: Page, n: number) => page.getByTestId(`table-row-${n}`);
 const sortOf = (page: Page) => new URL(page.url()).searchParams.get('sort');
@@ -217,6 +217,9 @@ test('X-narrow-states-2: 5 rows end the table where its rows end, with no layout
 		const last = document.querySelector('[data-testid="table-row-5"]')!.getBoundingClientRect();
 		return wrap.bottom - last.bottom;
 	});
+	expect(blank).toBeGreaterThanOrEqual(0);
 	expect(blank).toBeLessThan(16);
+	const sized = await heightAfterSettling(page, '.rt');
+	expect(sized.after).toBe(sized.before);
 	expect(await shifts(page)).toEqual([]);
 });

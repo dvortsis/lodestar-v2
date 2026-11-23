@@ -82,12 +82,12 @@
 	});
 
 	// A short list ends where its rows end (no blank card); a list with more to load keeps the full
-	// height. A mark row is as tall as `.al-divider`'s `min-block-size` (10 spacing steps).
-	const MARK_PX = 40;
+	// height. A mark row is pinned to 10 spacing steps (`.al-divider`), so the sum scales with the
+	// root font size like the mark does.
 	const listHeight = $derived(
 		d.hasMore
 			? undefined
-			: items.reduce((h, it) => h + (it.kind === 'mark' ? MARK_PX : rowHeight), 0)
+			: `calc(${items.filter((it) => it.kind !== 'mark').length * rowHeight}px + ${items.filter((it) => it.kind === 'mark').length} * var(--spacing) * 10)`
 	);
 	let active = $state(0);
 
@@ -302,7 +302,7 @@
 						{d.search.paused ? m.alerts_empty_detail_paused() : m.alerts_empty_detail()}
 					</p>
 				{:else}
-					<div class="al-list" bind:this={listEl} style:--al-rows={listHeight && `${listHeight}px`}>
+					<div class="al-list" bind:this={listEl} style:--al-rows={listHeight}>
 						<VirtualList
 							{items}
 							role="grid"
@@ -430,14 +430,16 @@
 		overflow: hidden;
 	}
 	.al-divider {
-		display: flex;
-		align-items: center;
+		/* Pinned, so the list can be sized from its rows: one line, cut with an ellipsis. */
 		margin: 0;
-		min-block-size: calc(var(--spacing) * 10);
+		block-size: calc(var(--spacing) * 10);
 		padding-inline: calc(var(--spacing) * 4);
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
 		color: var(--color-base-content);
 		font-size: var(--text-small);
-		line-height: var(--text-small--line-height);
+		line-height: calc(var(--spacing) * 10);
 		font-weight: var(--font-weight-medium);
 		background: var(--color-selected);
 		border-block: var(--border) solid var(--color-primary);

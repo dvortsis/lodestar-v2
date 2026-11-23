@@ -6,7 +6,7 @@ import type { components } from '../src/lib/api/schema';
 import { expectNoA11yViolations } from './a11y';
 import { dialogSettled } from './support/dialog';
 import { liveEvents } from './support/events-server';
-import { shifts, watchShifts } from './support/layout-shift';
+import { heightAfterSettling, shifts, watchShifts } from './support/layout-shift';
 import { expect, test } from './support/test';
 import type { OpenApiMock } from './mock/openapi-mock';
 
@@ -649,22 +649,37 @@ test.describe('under a coarse pointer', () => {
 
 test.describe('X-narrow-states-2: no blank card', () => {
 	test.use({ viewport: { width: 390, height: 844 } });
-	test('two matches end the list where the rows end, with no layout shift', async ({
-		page,
-		go,
-		mock
-	}) => {
-		await watchShifts(page, '.al-list');
-		detailMocks(mock, { ...LANTERN, unread: 0 }, [row(2, true), row(1, true)]);
-		await go('/alerts/1');
-		await expect(page.getByTestId('alert-row-2')).toBeVisible();
-		const m = await page.evaluate(() => {
-			const list = document.querySelector('.al-list')!.getBoundingClientRect();
-			const last = document.querySelector('[data-testid="alert-row-1"]')!.getBoundingClientRect();
-			return { blank: list.bottom - last.bottom };
+	for (const [name, rows, query] of [
+		['two matches', [row(2, true), row(1, true)], ''],
+		['unread matches (a mark row)', [row(2, false), row(1, true)], ''],
+		['compact density', [row(2, false), row(1, true)], '?density=compact']
+	] as const) {
+		test(`${name} end the list where the rows end, with no layout shift`, async ({
+			page,
+			go,
+			mock
+		}) => {
+			await watchShifts(page, '.al-list');
+			detailMocks(mock, { ...LANTERN, unread: 0 }, [...rows]);
+			await go(`/alerts/1${query}`);
+			await expect(page.getByTestId('alert-row-2')).toBeVisible();
+			const sized = await heightAfterSettling(page, '.al-list');
+			expect(sized.after).toBe(sized.before);
+			const m = await page.evaluate(() => {
+				const list = document.querySelector('.al-list')!.getBoundingClientRect();
+				const last = document.querySelector('[data-testid="alert-row-1"]')!.getBoundingClientRect();
+				const grid = document.querySelector('.al-list [role="grid"]') as HTMLElement | null;
+				return {
+					blank: list.bottom - last.bottom,
+					clipped: grid ? grid.scrollHeight - grid.clientHeight : 0
+				};
+			});
+			// Only the card's border and the row's own padding sit below the last row: not a band, and
+			// never a clipped row (a negative gap).
+			expect(m.blank).toBeGreaterThanOrEqual(0);
+			expect(m.blank).toBeLessThan(24);
+			expect(m.clipped).toBeLessThanOrEqual(0);
+			expect(await shifts(page)).toEqual([]);
 		});
-		// Below the last row there is only the card's own border and the row's padding, not a band.
-		expect(m.blank).toBeLessThan(24);
-		expect(await shifts(page)).toEqual([]);
-	});
+	}
 });

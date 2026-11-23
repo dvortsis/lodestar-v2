@@ -248,9 +248,10 @@ test.describe('first-run wizard', () => {
 		expect((await list.boundingBox())!.height).toBeLessThan(110);
 		await expect(page.getByTestId('wizard-step-network')).toContainText('4. Network check');
 		await expect(page.getByTestId('wizard-step-how')).toContainText('5. How it works · Not yet');
-		await expect(
-			page.getByTestId('wizard-step-how').getByText('. How it works')
-		).not.toBeInViewport();
+		// The name is visually hidden on a phone (1 px box), not just off screen.
+		expect(
+			(await page.getByTestId('wizard-step-how').locator('span span').boundingBox())!.width
+		).toBeLessThanOrEqual(1);
 		expect((await page.getByTestId('wizard-step-how').boundingBox())!.width).toBeLessThan(60);
 		await expectNoA11yViolations(page);
 	});

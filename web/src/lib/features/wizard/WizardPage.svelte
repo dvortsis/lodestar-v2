@@ -154,7 +154,7 @@
 			{#each rows as r, i (r.id)}
 				{@const Icon = statusIcon[r.s]}
 				{@const now = r.s === 'current'}
-				{@const quiet = now ? undefined : 'wz-x'}
+				{@const quiet = now ? '' : 'wz-x'}
 				<li
 					class="flex items-center gap-1 {now
 						? 'font-semibold text-base-content'
@@ -221,6 +221,7 @@
 			height: 1px;
 			overflow: hidden;
 			clip-path: inset(50%);
+			white-space: nowrap;
 		}
 		[aria-current] {
 			flex-basis: 100%;
