@@ -103,7 +103,7 @@ for (const cpu of [1, 4]) {
 			await setUp(page, width, cpu);
 			// An earlier visit saw a growing index of 80,000.
 			await seed(page, 80_000, 2104.5);
-			server(mock, () => body(hits(3), { total: 3 }));
+			rowsUnlessNothing(mock);
 			const release = lateState(mock, 84_210);
 			await go('/search?q=lantern');
 			await expect(row(page, 1)).toBeVisible({ timeout: 30_000 });
@@ -114,15 +114,23 @@ for (const cpu of [1, 4]) {
 			const tall = (await page.locator('.rp-growing').boundingBox())!.height;
 			await resetShift(page);
 			release();
-			// The live figures fill in place: same line height, the rows stay put.
-			await expect(line).toContainText('84,210', { timeout: 30_000 });
+			// The answer has landed (the browser keeps it); over painted rows the line keeps its text.
+			await expect
+				.poll(async () => JSON.parse((await kept(page)) ?? '{}').searchable_torrents, {
+					timeout: 30_000
+				})
+				.toBe(84_210);
 			await frames(page);
+			await expect(line).toContainText('80,000');
 			expect((await page.locator('.rp-growing').boundingBox())!.height).toBe(tall);
 			expect((await row(page, 1).boundingBox())!.y).toBe(before);
 			const { cls, mine } = await shift(page);
 			expect(mine).toBe(0);
 			expect(cls).toBeLessThan(1e-9);
-			expect(JSON.parse((await kept(page))!)).toMatchObject({ searchable_torrents: 84_210 });
+			// No rows: the live figures show.
+			await query(page, 'nothing');
+			await expect(page.getByTestId('results-none')).toBeVisible({ timeout: 30_000 });
+			await expect(line).toContainText('84,210');
 		});
 
 		test(`a first visit holds a late "still growing" until no rows show at ${width} px, CPU ${cpu}x`, async ({
@@ -232,4 +240,47 @@ test('a longer live line waits for a moment without rows at 360 px', async ({ pa
 	await expect(page.getByTestId('results-none')).toBeVisible({ timeout: 30_000 });
 	await expect(line).toContainText('84,210');
 	await expect(line).toContainText('/h');
+});
+
+test('a shorter live line never shrinks a two-line banner over the rows (320 px, 20 px root font)', async ({
+	page,
+	go,
+	mock
+}) => {
+	await setUp(page, 320, 1);
+	await page.addInitScript(() =>
+		document.addEventListener('DOMContentLoaded', () => {
+			document.documentElement.style.fontSize = '20px';
+		})
+	);
+	// Remembered with a rate; the live answer (a paused crawler) has none: a shorter line.
+	await seed(page, 84_210, 2104.5);
+	rowsUnlessNothing(mock);
+	const release = lateState(mock, 84_215, indexState(84_215, { growing: true }));
+	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible({ timeout: 30_000 });
+	const line = page.getByTestId('results-cold-start');
+	await expect(line).toContainText('/h');
+	const before = (await row(page, 1).boundingBox())!.y;
+	const tall = (await page.locator('.rp-growing').boundingBox())!.height;
+	// The remembered line wraps: two line boxes.
+	expect(await line.evaluate((el) => el.getClientRects().length)).toBe(2);
+	await resetShift(page);
+	release();
+	await expect
+		.poll(async () => JSON.parse((await kept(page)) ?? '{}').searchable_torrents, {
+			timeout: 30_000
+		})
+		.toBe(84_215);
+	await frames(page);
+	await expect(line).toContainText('/h');
+	expect((await page.locator('.rp-growing').boundingBox())!.height).toBe(tall);
+	expect((await row(page, 1).boundingBox())!.y).toBe(before);
+	const { cls, mine } = await shift(page);
+	expect(mine).toBe(0);
+	expect(cls).toBeLessThan(1e-9);
+	await query(page, 'nothing');
+	await expect(page.getByTestId('results-none')).toBeVisible({ timeout: 30_000 });
+	await expect(line).toContainText('84,215');
+	await expect(line).not.toContainText('/h');
 });

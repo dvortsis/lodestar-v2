@@ -39,12 +39,12 @@
 					rate: formatRate(rate, locale)
 				})
 			: m.search_state_growing({ count: formatCount(count, locale) });
-	// X-index-banner-late: new figures fill the line in place, unless the text gets longer while rows
-	// are on screen (a rate appearing, a digit more); that waits for the next moment without rows.
+	// X-index-banner-late: while rows are on screen the line keeps its text (a longer or shorter one
+	// could wrap or unwrap and move them); new figures show at the next moment without rows.
 	const text = $derived(growing(figures?.searchable_torrents ?? 0));
 	let last = ''; // what the line showed last: a plain variable, so the rule below reads it untracked
 	const line = $derived.by(() => {
-		if (!hold || !last || text.length <= last.length) last = text;
+		if (!hold || !last) last = text;
 		return last;
 	});
 </script>

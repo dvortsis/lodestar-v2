@@ -40,3 +40,12 @@ export function remember({ growing, searchable_torrents, growth_per_hour }: Reme
 		// private mode, a full quota or blocked site data: the next visit just waits as before
 	}
 }
+
+/** Drops the remembered answer (a failed /search/state), so a stale banner lasts one visit. */
+export function forget() {
+	try {
+		localStorage.removeItem(KEY);
+	} catch {
+		// nothing to drop where storage is blocked
+	}
+}

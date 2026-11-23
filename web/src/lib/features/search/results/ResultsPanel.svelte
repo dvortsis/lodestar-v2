@@ -29,7 +29,7 @@
 	} from '../query/clauses';
 	import { ensureSearchPath } from '../query/path';
 	import { appearanceHref } from './links';
-	import { recall, remember } from './index-memory';
+	import { forget, recall, remember } from './index-memory';
 	import { bannerFor, type Banner as Kind, type IndexState } from './recover';
 	import { results, type ResultsQuery } from './results.svelte';
 	import ResultRow, { type Density, type SearchHit } from './ResultRow.svelte';
@@ -128,13 +128,17 @@
 	// X-index-banner-late: "still growing" shows or goes only while no rows are on screen, so it never
 	// moves a painted row. The rows paint with the live answer, else the remembered one; a later answer
 	// that disagrees waits for the next moment without rows (an empty, loading or error state, or the
-	// next visit). Its figures fill in place. A rebuild stays live: see the decisions file.
+	// next visit), and so do its figures. A rebuild stays live: see the decisions file.
 	// Read once per mount, deliberately: later answers come through `figures`. A held banner whose
 	// live answer says "not growing" (or failed) keeps the remembered figures on its line.
 	const memory = recall();
 	// A failed /search/state drops a remembered banner at the next moment without rows, as on main.
+	// The memory applies only once the wait is over, so no banner shows over the blank wait that a
+	// fast live answer could then take away.
 	let stateFailed = $state(false);
-	const want = $derived(figures ? figures.growing : !stateFailed && (memory?.growing ?? false));
+	const want = $derived(
+		figures ? figures.growing : figuresKnown && !stateFailed && (memory?.growing ?? false)
+	);
 	let growingShown = $state(false);
 	const banner = $derived<Kind>(
 		live?.kind === 'rebuild' ? live : growingShown ? { kind: 'growing' } : null
@@ -170,7 +174,9 @@
 	const rowsUp = $derived(!waiting && results.status === 'ready' && results.hits.length > 0);
 	let painted = false; // rows were on screen at the last DOM update
 	$effect.pre(() => {
-		const next = want;
+		// A failed chunk keeps the banner off until a moment without rows: a retry that lands later
+		// would otherwise add it over painted rows.
+		const next = want && (!!Index || !indexFailed);
 		if (!rowsUp || !painted) growingShown = next;
 	});
 	$effect(() => {
@@ -184,8 +190,9 @@
 			// The rows wait for this (at most FIGURES_WAIT_MS), so the banner never pushes them down.
 			if (bannerFor(figures, shellStatus.rebuild) || figures.cold_start) await ensureIndex();
 		} catch {
-			// the page works without it
+			// the page works without it; a stale memory lasts at most this visit
 			stateFailed = true;
+			forget();
 		} finally {
 			figuresKnown = true;
 		}
@@ -230,6 +237,7 @@
 		// Headline figures and the cold-start line; saved searches for the empty state. Failures leave
 		// them out: the page works without them.
 		const giveUp = setTimeout(() => (figuresKnown = true), FIGURES_WAIT_MS);
+		if (memory?.growing) void ensureIndex(); // ready for the rows' first frame if the wait runs out
 		void loadState().finally(() => clearTimeout(giveUp));
 		void api.get('/saved-searches').then(
 			(s) => (saved = s.slice(0, 5)),

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { recall, remember } from './index-memory';
+import { forget, recall, remember } from './index-memory';
 
 const KEY = 'lodestar.indexState';
 const answer = { growing: true, searchable_torrents: 84_210, growth_per_hour: 2104.5 };
@@ -19,6 +19,12 @@ describe('index memory', () => {
 			searchable_torrents: 5_000_000,
 			growth_per_hour: null
 		});
+	});
+
+	it('forgets', () => {
+		remember(answer);
+		forget();
+		expect(recall()).toBeNull();
 	});
 
 	it('reads a missing key as nothing remembered', () => {
@@ -59,7 +65,11 @@ describe('index memory', () => {
 		vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
 			throw new DOMException('full', 'QuotaExceededError');
 		});
+		vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+			throw new DOMException('denied', 'SecurityError');
+		});
 		expect(() => remember(answer)).not.toThrow();
+		expect(() => forget()).not.toThrow();
 		expect(recall()).toBeNull();
 	});
 });
