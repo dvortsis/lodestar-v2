@@ -1246,7 +1246,14 @@ proptest! {
             let end = start + w.chars().count();
             let in_chip = n.read.iter().any(|r| r.0 < end && start < r.1);
             let trimmed = w.trim_matches(|c: char| "[]{},.;:!?'".contains(c));
-            let kept = n.text.iter().any(|t| t == w || t == trimmed);
+            // Slashes that don't make a regex (`/a flac/naruto`, RX-1)
+            // leave the phrase as query text: a word is kept when the
+            // query still holds it as written.
+            let symbols = phrase.contains('/')
+                && w
+                    .split_whitespace()
+                    .all(|p| n.canonical.split_whitespace().any(|t| t == p));
+            let kept = symbols || n.text.iter().any(|t| t == w || t == trimmed);
             // Slashes can join words into a `/…/` regex (`/b flac/`),
             // kept in the query as written (RX-1): only a word inside
             // one is excused.
