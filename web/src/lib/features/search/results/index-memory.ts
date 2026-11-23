@@ -11,6 +11,7 @@ const KEY = 'lodestar.indexState';
 const VERSION = 1;
 
 const count = (v: unknown) => typeof v === 'number' && v >= 0 && v < Infinity;
+const whole = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
 
 /** The remembered answer; null when there's none, it's malformed or storage can't be read. */
 export function recall(): Remembered | null {
@@ -19,7 +20,7 @@ export function recall(): Remembered | null {
 		const rate = v?.growth_per_hour;
 		return v?.v === VERSION &&
 			typeof v.growing === 'boolean' &&
-			count(v.searchable_torrents) &&
+			whole(v.searchable_torrents) &&
 			(rate === null || count(rate))
 			? (v as Remembered)
 			: null;

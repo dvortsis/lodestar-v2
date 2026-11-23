@@ -36,6 +36,7 @@ describe('index memory', () => {
 		for (const bad of [
 			{ v: 1, growing: 'yes', searchable_torrents: 1, growth_per_hour: null },
 			{ v: 1, growing: true, searchable_torrents: -1, growth_per_hour: null },
+			{ v: 1, growing: true, searchable_torrents: 1.5, growth_per_hour: null },
 			{ v: 1, growing: true, searchable_torrents: 1, growth_per_hour: 'fast' },
 			{ v: 1, growing: true, growth_per_hour: null }
 		]) {

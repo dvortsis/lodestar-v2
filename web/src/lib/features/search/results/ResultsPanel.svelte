@@ -129,8 +129,12 @@
 	// moves a painted row. The rows paint with the live answer, else the remembered one; a later answer
 	// that disagrees waits for the next moment without rows (an empty, loading or error state, or the
 	// next visit). Its figures fill in place. A rebuild stays live: see the decisions file.
+	// Read once per mount, deliberately: later answers come through `figures`. A held banner whose
+	// live answer says "not growing" (or failed) keeps the remembered figures on its line.
 	const memory = recall();
-	const want = $derived(figures ? figures.growing : (memory?.growing ?? false));
+	// A failed /search/state drops a remembered banner at the next moment without rows, as on main.
+	let stateFailed = $state(false);
+	const want = $derived(figures ? figures.growing : !stateFailed && (memory?.growing ?? false));
 	let growingShown = $state(false);
 	const banner = $derived<Kind>(
 		live?.kind === 'rebuild' ? live : growingShown ? { kind: 'growing' } : null
@@ -181,6 +185,7 @@
 			if (bannerFor(figures, shellStatus.rebuild) || figures.cold_start) await ensureIndex();
 		} catch {
 			// the page works without it
+			stateFailed = true;
 		} finally {
 			figuresKnown = true;
 		}
@@ -448,7 +453,8 @@
 
 	{#if Index && (banner || fullCold)}<Index
 			{banner}
-			state={figures ?? memory}
+			state={figures?.growing || !memory ? figures : memory}
+			hold={rowsUp}
 			full={fullCold}
 			{focusBar}
 		/>{/if}

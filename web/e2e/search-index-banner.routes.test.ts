@@ -45,15 +45,44 @@ const frames = (page: Page) =>
 const kept = (page: Page) => page.evaluate(() => localStorage.getItem('lodestar.indexState'));
 
 /** /search/state answers only when `release` runs: after the rows, past the panel's wait for it. */
-function lateState(mock: Parameters<typeof server>[0], searchable: number) {
+function lateState(
+	mock: Parameters<typeof server>[0],
+	searchable: number,
+	answer: unknown = indexState(searchable, { growing: true, growth_per_hour: 2104.5 })
+) {
 	let release!: () => void;
 	const late = new Promise<void>((r) => (release = r));
 	mock.on('searchIndexState', (async () => {
 		await late;
-		return indexState(searchable, { growing: true, growth_per_hour: 2104.5 });
+		return answer;
 	}) as never);
 	return () => release();
 }
+
+/** An earlier visit's answer, as `index-memory.ts` keeps it. */
+const seed = (page: Page, searchable: number, rate: number | null) =>
+	page.addInitScript(
+		([searchable_torrents, growth_per_hour]) =>
+			localStorage.setItem(
+				'lodestar.indexState',
+				JSON.stringify({ v: 1, growing: true, searchable_torrents, growth_per_hour })
+			),
+		[searchable, rate] as const
+	);
+
+/** Runs a query from the bar (a query in place, as a user types one). */
+async function query(page: Page, text: string) {
+	await page.getByRole('combobox', { name: 'Search torrents' }).click();
+	await page.keyboard.press('ControlOrMeta+a');
+	await page.keyboard.type(text);
+	await page.keyboard.press('Enter');
+}
+
+/** Rows (3) for any query but one with "nothing" in it, which matches none. */
+const rowsUnlessNothing = (mock: Parameters<typeof server>[0]) =>
+	server(mock, (sent) =>
+		JSON.stringify(sent.ast).includes('nothing') ? body([]) : body(hits(3), { total: 3 })
+	);
 
 async function setUp(page: Page, width: number, cpu: number) {
 	await page.setViewportSize({ width, height: 900 });
@@ -73,17 +102,7 @@ for (const cpu of [1, 4]) {
 		}) => {
 			await setUp(page, width, cpu);
 			// An earlier visit saw a growing index of 80,000.
-			await page.addInitScript(() =>
-				localStorage.setItem(
-					'lodestar.indexState',
-					JSON.stringify({
-						v: 1,
-						growing: true,
-						searchable_torrents: 80_000,
-						growth_per_hour: 2000
-					})
-				)
-			);
+			await seed(page, 80_000, 2104.5);
 			server(mock, () => body(hits(3), { total: 3 }));
 			const release = lateState(mock, 84_210);
 			await go('/search?q=lantern');
@@ -114,12 +133,12 @@ for (const cpu of [1, 4]) {
 			await setUp(page, width, cpu);
 			let open!: () => void;
 			const gate = new Promise<void>((r) => (open = r));
-			server(mock, async (sent) => {
+			server(mock, (async (sent: { ast: unknown }) => {
 				const text = JSON.stringify(sent.ast);
 				if (text.includes('nothing')) return body([]);
 				if (text.includes('slow')) await gate;
 				return body(hits(3), { total: 3 });
-			});
+			}) as never);
 			const release = lateState(mock, 84_210);
 			await go('/search?q=lantern');
 			await expect(row(page, 1)).toBeVisible({ timeout: 30_000 });
@@ -135,18 +154,11 @@ for (const cpu of [1, 4]) {
 			expect(mine).toBe(0);
 			expect(cls).toBeLessThan(1e-9);
 			// A query with no matches: no rows, so the banner shows now.
-			const bar = page.getByRole('combobox', { name: 'Search torrents' });
-			await bar.click();
-			await page.keyboard.press('ControlOrMeta+a');
-			await page.keyboard.type('nothing');
-			await page.keyboard.press('Enter');
+			await query(page, 'nothing');
 			await expect(page.getByTestId('results-none')).toBeVisible({ timeout: 30_000 });
 			await expect(page.getByTestId('results-cold-start')).toContainText('84,210');
 			// And the next query's first load keeps it above its skeletons, where its rows will land.
-			await bar.click();
-			await page.keyboard.press('ControlOrMeta+a');
-			await page.keyboard.type('slow');
-			await page.keyboard.press('Enter');
+			await query(page, 'slow');
 			await expect(page.getByTestId('results-loading')).toBeVisible({ timeout: 30_000 });
 			await expect(page.getByTestId('results-cold-start')).toBeVisible();
 			open();
@@ -155,3 +167,69 @@ for (const cpu of [1, 4]) {
 		});
 	}
 }
+
+for (const [name, answer] of [
+	['says "not growing"', indexState(5_000_000)],
+	['fails', { status: 500, body: { error: { code: 'internal', message: 'down' } } }]
+] as const) {
+	test(`a remembered banner stays over the rows when a late answer ${name}, then goes`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		await setUp(page, 390, 1);
+		await seed(page, 80_000, 2104.5);
+		rowsUnlessNothing(mock);
+		const release = lateState(mock, 0, answer);
+		await go('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible({ timeout: 30_000 });
+		await expect(page.getByTestId('results-cold-start')).toContainText('80,000');
+		const before = (await row(page, 1).boundingBox())!.y;
+		await resetShift(page);
+		const answered = page.waitForResponse((r) => r.url().includes('/search/state'));
+		release();
+		await answered;
+		await frames(page);
+		await expect(page.getByTestId('results-cold-start')).toContainText('80,000');
+		expect((await row(page, 1).boundingBox())!.y).toBe(before);
+		const { cls, mine } = await shift(page);
+		expect(mine).toBe(0);
+		expect(cls).toBeLessThan(1e-9);
+		// No rows: the banner goes.
+		await query(page, 'nothing');
+		await expect(page.getByTestId('results-none')).toBeVisible({ timeout: 30_000 });
+		await expect(page.getByTestId('results-cold-start')).toHaveCount(0);
+	});
+}
+
+test('a longer live line waits for a moment without rows at 360 px', async ({ page, go, mock }) => {
+	await setUp(page, 360, 1);
+	// Remembered without a rate; the live answer has one (and a digit more): a longer line.
+	await seed(page, 9_800, null);
+	rowsUnlessNothing(mock);
+	const release = lateState(mock, 84_210);
+	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible({ timeout: 30_000 });
+	const line = page.getByTestId('results-cold-start');
+	await expect(line).toContainText('9,800');
+	const before = (await row(page, 1).boundingBox())!.y;
+	const tall = (await page.locator('.rp-growing').boundingBox())!.height;
+	await resetShift(page);
+	release();
+	await expect
+		.poll(async () => JSON.parse((await kept(page)) ?? '{}').searchable_torrents, {
+			timeout: 30_000
+		})
+		.toBe(84_210);
+	await frames(page);
+	await expect(line).toContainText('9,800');
+	expect((await page.locator('.rp-growing').boundingBox())!.height).toBe(tall);
+	expect((await row(page, 1).boundingBox())!.y).toBe(before);
+	const { cls, mine } = await shift(page);
+	expect(mine).toBe(0);
+	expect(cls).toBeLessThan(1e-9);
+	await query(page, 'nothing');
+	await expect(page.getByTestId('results-none')).toBeVisible({ timeout: 30_000 });
+	await expect(line).toContainText('84,210');
+	await expect(line).toContainText('/h');
+});
