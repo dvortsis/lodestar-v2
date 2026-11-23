@@ -67,7 +67,7 @@ thread_local! {
 }
 
 thread_local! {
-    static CANCEL_AT_SEAL: std::cell::RefCell<Option<CancelToken>> =
+    static CANCEL_AT_SEAL: std::cell::RefCell<Option<(CancelToken, usize)>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -75,21 +75,22 @@ thread_local! {
     static STOP_AT_SEAL: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
-/// For tests only: after `skip` more [`seal`]s on this thread, the next
-/// one finds its budget spent, as a search's last pass would after its
-/// earlier ones used it up: what it would verify stays unverified, and
-/// its clauses stop. Clauses already verified (shared ones) are kept.
+/// For tests only: with `Some(skip)`, after `skip` more [`seal`]s on
+/// this thread, the next one finds its budget spent, as a search's last
+/// pass would after its earlier ones used it up: what it would verify
+/// stays unverified, and its clauses stop. Clauses already verified
+/// (shared ones) are kept. `None` disarms it.
 #[doc(hidden)]
-pub fn stop_at_seal_on_this_thread(skip: usize) {
-    STOP_AT_SEAL.with(|c| c.set(Some(skip)));
+pub fn stop_at_seal_on_this_thread(skip: Option<usize>) {
+    STOP_AT_SEAL.with(|c| c.set(skip));
 }
 
-/// For tests only: cancel `token` when the next [`seal`] on this thread
-/// starts, as a run's budget running out mid-verify would (`api`'s live
-/// queries).
+/// For tests only: after `skip` more [`seal`]s on this thread, cancel
+/// `token` as the next one starts, as a run's budget running out
+/// mid-verify would (`api`'s live queries).
 #[doc(hidden)]
-pub fn cancel_at_next_seal_on_this_thread(token: CancelToken) {
-    CANCEL_AT_SEAL.with(|t| *t.borrow_mut() = Some(token));
+pub fn cancel_at_seal_on_this_thread(token: CancelToken, skip: usize) {
+    CANCEL_AT_SEAL.with(|t| *t.borrow_mut() = Some((token, skip)));
 }
 
 /// For tests only (no production caller), here and in the crates that
@@ -590,7 +591,7 @@ impl DenseDocSet {
             rest: 0,
             doc: TERMINATED,
         };
-        d.from_bucket(0);
+        d.seek_bucket(0);
         d
     }
 
@@ -602,7 +603,7 @@ impl DenseDocSet {
     }
 
     /// Moves to the first document in bucket `from` or later.
-    fn from_bucket(&mut self, from: u32) {
+    fn seek_bucket(&mut self, from: u32) {
         let next = self.bits().and_then(|bits| {
             let buckets = bits.max_value().div_ceil(64);
             if from >= buckets {
@@ -624,7 +625,7 @@ impl DenseDocSet {
     /// The lowest document left in the current bucket, else the next.
     fn pop(&mut self) {
         if self.rest == 0 {
-            self.from_bucket(self.bucket + 1);
+            self.seek_bucket(self.bucket + 1);
             return;
         }
         let low = self.rest.trailing_zeros();
@@ -643,7 +644,7 @@ impl DocSet for DenseDocSet {
 
     fn seek(&mut self, target: DocId) -> DocId {
         if self.doc != TERMINATED && self.doc < target && target / 64 > self.bucket {
-            self.from_bucket(target / 64);
+            self.seek_bucket(target / 64);
         }
         while self.doc < target {
             self.advance();
@@ -768,9 +769,14 @@ pub(crate) fn seal_where(
     cancel: &CancelToken,
     only: &dyn Fn(&SegmentReader) -> bool,
 ) -> crate::index::Result<()> {
-    if let Some(token) = CANCEL_AT_SEAL.with(|t| t.borrow_mut().take()) {
-        token.cancel();
-    }
+    CANCEL_AT_SEAL.with(|t| {
+        let mut t = t.borrow_mut();
+        match t.take() {
+            Some((token, 0)) => token.cancel(),
+            Some((token, n)) => *t = Some((token, n - 1)),
+            None => {}
+        }
+    });
     let out_of_budget = STOP_AT_SEAL.with(|c| match c.get() {
         Some(0) => {
             c.set(None);

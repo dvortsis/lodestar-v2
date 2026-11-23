@@ -139,9 +139,33 @@ struct Reg {
     /// When it's released, while its session has no `/events`
     /// connection; `None` while it has one.
     expires: Option<Instant>,
-    /// After its `/…/` verify ran out of time: when it may run again, and
-    /// the wait that set ([`REGEX_BACKOFF`]).
-    regex_wait: Option<(Instant, Duration)>,
+    /// After its `/…/` verify ran out of time: when it may run again
+    /// ([`RegexWait`]).
+    regex_wait: Option<RegexWait>,
+}
+
+/// A live query's wait after its `/…/` verify ran out of time.
+#[derive(Debug, Clone, Copy)]
+struct RegexWait {
+    /// When it may run again.
+    until: Instant,
+    /// The doubling step its stops (and repeated cuts) have reached;
+    /// `None` while only a single cut has happened.
+    step: Option<Duration>,
+    /// Cuts by the run's budget in a row.
+    cuts: u32,
+}
+
+#[cfg(test)]
+impl RegexWait {
+    /// The wait that set `until`.
+    fn wait(&self) -> Duration {
+        if self.cuts == 1 {
+            REGEX_BACKOFF.0
+        } else {
+            self.step.unwrap_or(REGEX_BACKOFF.0)
+        }
+    }
 }
 
 /// How long a live query whose `/…/` verify ran out of time sits out:
@@ -355,20 +379,20 @@ impl LiveQueries {
             .map(|s| s.changed.subscribe())
     }
 
-    /// The registrations to run, most behind first; those whose pattern
-    /// has run out of time before go after the rest, so they never hold
-    /// a plain one back.
+    /// The registrations to run, most behind first; those with a `/…/`
+    /// term go after plain ones, and those whose pattern has run out of
+    /// time before after those, so a pattern never holds a plain one back.
     pub fn due(&self) -> Vec<LiveDue> {
         let st = self.screened(self.adult.shown());
         let now = Instant::now();
-        let mut due: Vec<(bool, LiveDue)> = st
+        let mut due: Vec<((bool, bool), LiveDue)> = st
             .regs
             .iter()
             // Waiting after a regex stop: it sits this pass out.
-            .filter(|r| r.regex_wait.is_none_or(|(until, _)| now >= until))
+            .filter(|r| r.regex_wait.is_none_or(|w| now >= w.until))
             .map(|r| {
                 (
-                    r.regex_wait.is_some(),
+                    (r.regex_wait.is_some(), r.query.has_regex()),
                     LiveDue {
                         key: r.key,
                         watermark: r.watermark,
@@ -412,23 +436,41 @@ impl LiveQueries {
     }
 
     /// Live queries `stopped` (keys) ran out of their own regex time: each
-    /// waits, longer each time (see [`REGEX_BACKOFF`]). Those `cut` by
-    /// the run's budget mid-verify wait the first step only, never
-    /// longer, since how much budget the run had left says nothing of
-    /// the pattern. Those in `ran` ran whole, and their wait ends.
+    /// waits, longer each time (see [`REGEX_BACKOFF`]). One `cut` by the
+    /// run's budget mid-verify waits the first step, leaving the doubling
+    /// alone, since one cut says little of the pattern; cut again and
+    /// again (as on a busy node, where live entries get only what saved
+    /// searches left), it doubles too, from the second cut. Those in
+    /// `ran` ran whole, and everything resets.
     fn regex_ran(&self, stopped: &[i64], cut: &[i64], ran: &[i64]) {
+        let (first, last) = REGEX_BACKOFF;
+        let double =
+            |step: Option<Duration>, from: Duration| step.map_or(from, |w| (w * 2).min(last));
         let mut st = self.lock();
         let now = Instant::now();
         for r in st.regs.iter_mut() {
+            let prev = r.regex_wait;
+            let (step, cuts) = prev.map_or((None, 0), |w| (w.step, w.cuts));
             if stopped.contains(&r.key) {
-                let wait = r
-                    .regex_wait
-                    .map_or(REGEX_BACKOFF.0, |(_, w)| (w * 2).min(REGEX_BACKOFF.1));
-                r.regex_wait = Some((now + wait, wait));
+                let wait = double(step, first);
+                r.regex_wait = Some(RegexWait {
+                    until: now + wait,
+                    step: Some(wait),
+                    cuts: 0,
+                });
             } else if cut.contains(&r.key) {
-                // The doubling stays where its own stops left it.
-                let wait = r.regex_wait.map_or(REGEX_BACKOFF.0, |(_, w)| w);
-                r.regex_wait = Some((now + REGEX_BACKOFF.0, wait));
+                let cuts = cuts + 1;
+                let (wait, step) = if cuts == 1 {
+                    (first, step)
+                } else {
+                    let w = double(step, (first * 2).min(last));
+                    (w, Some(w))
+                };
+                r.regex_wait = Some(RegexWait {
+                    until: now + wait,
+                    step,
+                    cuts,
+                });
             } else if ran.contains(&r.key) {
                 r.regex_wait = None;
             }
@@ -1150,9 +1192,9 @@ mod tests {
         {
             let mut st = l.lock();
             let r = st.regs.iter_mut().find(|r| r.id == slow).unwrap();
-            let (until, wait) = r.regex_wait.unwrap();
-            assert_eq!(wait, REGEX_BACKOFF.0);
-            r.regex_wait = Some((until - wait, wait));
+            let w = r.regex_wait.as_mut().unwrap();
+            assert_eq!(w.wait(), REGEX_BACKOFF.0);
+            w.until -= w.wait();
         }
         let run = percolate_live(&index, &l, 5, LIMITS, 0, &CancelToken::new(), false).unwrap();
         assert_eq!((run.ran, run.more), (1, false));
@@ -1175,7 +1217,7 @@ mod tests {
         let slow = l.register(1, &q("/movie/"), false, 0, 0).unwrap().id;
         // The run's token stops as the pattern starts verifying.
         let run_token = CancelToken::new();
-        lodestar_search::regex_verify::cancel_at_next_seal_on_this_thread(run_token.clone());
+        lodestar_search::regex_verify::cancel_at_seal_on_this_thread(run_token.clone(), 0);
         let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true).unwrap();
         assert_eq!((run.ran, run.more), (0, false));
         assert_eq!(matched(&l, &slow), 0);
@@ -1203,26 +1245,28 @@ mod tests {
             .map(|_| l.register(1, &q("/movie/"), false, 0, 0).unwrap().id)
             .collect();
         let plain = l.register(1, &q("movie"), false, 0, 0).unwrap().id;
+        // The plain one goes first; the run's budget runs out as the
+        // first pattern verifies.
         let run_token = CancelToken::new();
-        lodestar_search::regex_verify::cancel_at_next_seal_on_this_thread(run_token.clone());
+        lodestar_search::regex_verify::cancel_at_seal_on_this_thread(run_token.clone(), 1);
         let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true).unwrap();
         assert_eq!(
             (run.ran, run.more),
-            (0, true),
-            "the plain one is still to run"
+            (1, true),
+            "the other patterns are still to run"
         );
+        assert_eq!(matched(&l, &plain), 2);
         // The rerun at once: the cut one waits, the rest run.
         let run = percolate_live(&index, &l, 5, LIMITS, 0, &CancelToken::new(), true).unwrap();
-        assert_eq!((run.ran, run.more), (3, false));
-        assert_eq!(matched(&l, &plain), 2);
+        assert_eq!((run.ran, run.more), (2, false));
         assert_eq!(matched(&l, &heavy[0]), 0);
+        assert_eq!(matched(&l, &heavy[1]), 2);
         // Once its wait is over, one that stopped before runs after the
         // plain ones, even at a lower watermark.
         {
             let mut st = l.lock();
             let r = st.regs.iter_mut().find(|r| r.id == heavy[0]).unwrap();
-            let (until, wait) = r.regex_wait.unwrap();
-            r.regex_wait = Some((until - REGEX_BACKOFF.0, wait));
+            r.regex_wait.as_mut().unwrap().until -= REGEX_BACKOFF.0;
         }
         let plain_key = l.lock().regs.iter().find(|r| r.id == plain).unwrap().key;
         let late = |l: &LiveQueries| l.lock().regs.iter().find(|r| r.id == heavy[0]).unwrap().key;
@@ -1231,39 +1275,144 @@ mod tests {
         assert!(order.contains(&plain_key));
     }
 
-    /// A stop at the pattern's own deadline doubles its wait; a cut by
-    /// the run's budget always waits the first step only.
+    /// A stop at the pattern's own deadline doubles its wait. One cut by
+    /// the run's budget waits the first step and leaves the doubling
+    /// alone; cuts in a row double from the second; a whole run resets
+    /// everything.
     #[test]
-    fn only_the_patterns_own_stops_lengthen_its_wait() {
+    fn live_retry_pacing_follows_stops_and_repeated_cuts() {
         let (_, l) = live(LiveConfig::default());
         let id = l.register(1, &q("/movie/"), false, 0, 0).unwrap().id;
         let key = l.lock().regs.iter().find(|r| r.id == id).unwrap().key;
         let wait = |l: &LiveQueries| {
             let st = l.lock();
             let r = st.regs.iter().find(|r| r.key == key).unwrap();
-            let (until, w) = r.regex_wait.unwrap();
-            (until.saturating_duration_since(Instant::now()), w)
+            let w = r.regex_wait.unwrap();
+            assert!(w.until.saturating_duration_since(Instant::now()) <= w.wait());
+            w.wait()
         };
         let step = REGEX_BACKOFF.0;
-        for _ in 0..3 {
-            l.regex_ran(&[], &[key], &[]);
-            let (left, w) = wait(&l);
-            assert!(
-                left <= step && w == step,
-                "a cut waits one step: {left:?} {w:?}"
-            );
+        let cut = |l: &LiveQueries| l.regex_ran(&[], &[key], &[]);
+        let stop = |l: &LiveQueries| l.regex_ran(&[key], &[], &[]);
+        let ran = |l: &LiveQueries| l.regex_ran(&[], &[], &[key]);
+        // Cuts in a row: 1, 2, then 4 steps.
+        cut(&l);
+        assert_eq!(wait(&l), step);
+        cut(&l);
+        assert_eq!(wait(&l), step * 2);
+        cut(&l);
+        assert_eq!(wait(&l), step * 4);
+        // A whole run resets it all: the next cut waits one step again,
+        // and so does the first own stop after it.
+        ran(&l);
+        assert!(l.lock().regs.iter().all(|r| r.regex_wait.is_none()));
+        cut(&l);
+        assert_eq!(wait(&l), step);
+        stop(&l);
+        assert_eq!(wait(&l), step);
+        stop(&l);
+        assert_eq!(wait(&l), step * 2);
+        // A single cut between stops neither lengthens nor resets them.
+        cut(&l);
+        assert_eq!(wait(&l), step);
+        stop(&l);
+        assert_eq!(wait(&l), step * 4);
+        // A second cut in a row doubles on from the stops' step.
+        cut(&l);
+        cut(&l);
+        assert_eq!(wait(&l), step * 8);
+        // Capped.
+        for _ in 0..10 {
+            stop(&l);
         }
-        l.regex_ran(&[key], &[], &[]);
-        assert_eq!(wait(&l).1, step * 2);
-        l.regex_ran(&[key], &[], &[]);
-        assert_eq!(wait(&l).1, step * 4);
-        // A cut in between neither lengthens nor resets it.
-        l.regex_ran(&[], &[key], &[]);
-        let (left, w) = wait(&l);
-        assert!(left <= step);
-        assert_eq!(w, step * 4);
-        l.regex_ran(&[key], &[], &[]);
-        assert_eq!(wait(&l).1, step * 8);
+        assert_eq!(wait(&l), REGEX_BACKOFF.1);
+        cut(&l);
+        cut(&l);
+        assert_eq!(wait(&l), REGEX_BACKOFF.1);
+    }
+
+    /// Fresh entries with a `/…/` term go after plain ones, so a plain
+    /// entry counts on the first pass even when patterns registered
+    /// before it are cut.
+    #[test]
+    fn a_plain_live_query_runs_before_fresh_patterns() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = corpus(dir.path());
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+        let (_, l) = live(LiveConfig::default());
+        for _ in 0..3 {
+            l.register(1, &q("/movie/"), false, 0, 0).unwrap();
+        }
+        let plain = l.register(1, &q("movie"), false, 0, 0).unwrap().id;
+        let plain_key = l.lock().regs.iter().find(|r| r.id == plain).unwrap().key;
+        assert_eq!(l.due().first().map(|d| d.key), Some(plain_key));
+        let run_token = CancelToken::new();
+        // The run's budget runs out at the second verify.
+        lodestar_search::regex_verify::cancel_at_seal_on_this_thread(run_token.clone(), 1);
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true).unwrap();
+        assert_eq!((run.ran, run.more), (1, true));
+        assert_eq!(matched(&l, &plain), 2);
+    }
+
+    /// `more` after a stop counts only entries with work that neither
+    /// ran nor settled: one stopped at its own deadline, one that
+    /// failed, and one already caught up don't keep the pass going.
+    #[test]
+    fn settled_and_caught_up_entries_dont_ask_for_more() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = corpus(dir.path());
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+        let setup = || {
+            let (_, l) = live(LiveConfig::default());
+            (l, CancelToken::new())
+        };
+        // Its own deadline, then the next one cut.
+        let (l, run_token) = setup();
+        let own = l.register(1, &q("/movie/"), false, 0, 0).unwrap().id;
+        let cut = l.register(1, &q("/movie/"), false, 0, 0).unwrap().id;
+        lodestar_search::regex_verify::stop_at_seal_on_this_thread(Some(0));
+        lodestar_search::regex_verify::cancel_at_seal_on_this_thread(run_token.clone(), 1);
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true);
+        lodestar_search::regex_verify::stop_at_seal_on_this_thread(None);
+        let run = run.unwrap();
+        assert_eq!((run.ran, run.more), (0, false));
+        let waits = |l: &LiveQueries, id: &str| {
+            l.lock()
+                .regs
+                .iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .regex_wait
+                .map(|w| w.cuts)
+        };
+        assert_eq!((waits(&l, &own), waits(&l, &cut)), (Some(0), Some(1)));
+        // One that failed (over the clause cap: a stored node the parser
+        // didn't make), then one cut.
+        let (l, run_token) = setup();
+        let five = Node::And {
+            of: (0..=lodestar_search::MAX_REGEX_CLAUSES)
+                .map(|_| q("/movie/"))
+                .collect(),
+        };
+        l.register(1, &five, false, 0, 0).unwrap();
+        l.register(1, &q("/movie/"), false, 0, 0).unwrap();
+        lodestar_search::regex_verify::cancel_at_seal_on_this_thread(run_token.clone(), 0);
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true).unwrap();
+        assert_eq!((run.ran, run.more), (0, false));
+        // One caught up already, then one cut.
+        let (l, run_token) = setup();
+        let done = l.register(1, &q("movie"), false, 0, 5).unwrap().id;
+        l.register(1, &q("/movie/"), false, 0, 0).unwrap();
+        lodestar_search::regex_verify::cancel_at_seal_on_this_thread(run_token.clone(), 0);
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true).unwrap();
+        assert_eq!((run.ran, run.more), (0, false));
+        assert_eq!(matched(&l, &done), 0);
     }
 
     /// Export (and Torznab) refuse a lease whose `/…/` term ran out of

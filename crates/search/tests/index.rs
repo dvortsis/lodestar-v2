@@ -623,7 +623,7 @@ fn a_leases_stem_fallback_keeps_the_exact_passes_regex_matches() {
     let node = lodestar_search::parse("knights -/zzz/").unwrap();
     // The exact pass verifies; the next seal, the wide pass's, finds the
     // budget spent.
-    lodestar_search::regex_verify::stop_at_seal_on_this_thread(1);
+    lodestar_search::regex_verify::stop_at_seal_on_this_thread(Some(1));
     let lease = lodestar_search::Lease::new(
         index,
         &node,
@@ -631,7 +631,7 @@ fn a_leases_stem_fallback_keeps_the_exact_passes_regex_matches() {
         Sort::Relevance,
         &lodestar_search::CancelToken::new(),
     );
-    lodestar_search::regex_verify::stop_at_seal_on_this_thread(usize::MAX);
+    lodestar_search::regex_verify::stop_at_seal_on_this_thread(None);
     let lease = lease.unwrap();
     assert!(lease.stemmed());
     assert_eq!(lease.total().value, 2);
