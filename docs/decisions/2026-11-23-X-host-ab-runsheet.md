@@ -1,4 +1,4 @@
-# X-host-ab-runsheet decisions (PR number to follow)
+# X-host-ab-runsheet decisions (#1090)
 
 Slice session, 2026-11-23Z. It adds `docs/soak/runsheets/host-stage1-ab-runsheet.md`: the operator's step-by-step sheet for the experiment host's stage 1 (CR-AB-ADM, then CR-AB-4's uTP arm). Docs only. Nothing touched the host. The runner confirmed the choices below before the sheet was written.
 
@@ -11,6 +11,6 @@ Slice session, 2026-11-23Z. It adds `docs/soak/runsheets/host-stage1-ab-runsheet
 - **Route backoff** runs only on the runner's word after `route-baseline`; the default expectation is a recorded skip.
 - **Placeholders only.** The sheet carries no host address, share, user name or credential. The image digest, commits and hashes are filled in at run time.
 - **Runner-owned:** outcomes, Checkpoint 1, extra block pairs and the route decision. Not changed: any CR-SPEC number, `cloud-fleet-runbook.md`, `docs/soak/tools/**`.
-- **Auto-update plugin (CR-SPEC rule 6.5).** The collector needs `auto_update=excluded`. §2.68 doesn't let a test change that setting, so the sheet requires the container to be excluded already and stops to ask the runner if it isn't. Asked of the runner, not decided here.
-- **The pause is held across all of stage 1** (about six host-days), restored at the end or at once on any stop. This is the runner's reading of §2.68 to confirm.
+- **Exclusions (runner, 2026-11-23Z).** The collector needs `auto_update=excluded` and `backup=excluded`. Excluding a container is a settings change, which §2.68 doesn't cover. The sheet requires both exclusions to be in place already and stops to ask the owner if not. A test only pauses and restores.
+- **The pause is per block (runner, 2026-11-23Z).** Pause at a block's start, restore at its end or at once on any stop. A due or overdue backup or scheduled parity check runs and finishes between blocks, before the next starts. Six days without backups is too long.
 - **Mover** isn't pausable under §2.68 and invalidates a segment; the sheet checks its schedule before a start.

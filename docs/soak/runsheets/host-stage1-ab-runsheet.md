@@ -31,8 +31,8 @@ Developer and operator doc. Follow it top to bottom, one step at a time. The ope
 | 4 | CR-AB-4 uTP, block 2, BAAB | same | same |
 | 5 | **Route backoff arm: only if** the baseline shows `fetch_no_route_total{family="ipv6"}` above 0 | | `dht.route_backoff` on |
 
-- The two treatments run **back to back**, with no gap (r5.1 A3). Start step 3 as soon as step 2's last segment closes. Block 2 of each treatment should start about 12 h out of phase with block 1 (CR-SPEC rule 6.1): if the next block would start about 10 h out of phase, shift it by waiting, and write the wait in the run record.
-- **The pause (section 4.1) is held for the whole of stage 1** (about six host-days), not restored between blocks. No Appdata Backup or parity check runs in that time. The restore runs when stage 1 ends, or at once on any failure or stop. See section 4.1.
+- The two treatments run **back to back** (r5.1 A3), apart from the wait in the next bullet when a backup or parity check is due. Start step 3 as soon as step 2's last segment closes. Block 2 of each treatment should start about 12 h out of phase with block 1 (CR-SPEC rule 6.1): if the next block would start about 10 h out of phase, shift it by waiting, and write the wait in the run record.
+- **The pause (section 4.1) is per block:** pause at a block's start, restore at its end, or at once on any stop. Between blocks, a backup or scheduled parity check that is due or overdue runs and finishes before the next block starts. See section 4.1.
 - **Stage 1 keeps the shipped-default control** for both treatments. There is no `--winners` file in stage 1 (r5.1 A2).
 - **Every other crawler switch stays at its shipped default (off)** in every block. The one exception is `dht.safe_restart`, which is `true` in every segment of a block, in both arms (spec rule 2.3).
 - **Step 5 is decided from data, not from this sheet.** After both treatments' blocks are in, run `analyze_cr.py route-baseline` on **every stage-1 segment report** (all CR-AB-ADM segments, both arms, and all CR-AB-4 segments). The analyzer picks the segments with `dht.route_backoff` and `dht.utp` both off (the spec's rule 5.3); leaving any report out can only lower the sum. If the ipv6 no-route sum is 0, route backoff is a **recorded skip** (the runner writes a decisions file). On the default IPv4-only bind, 0 is the expected result. Don't run step 5 unless the runner says so.
@@ -94,7 +94,7 @@ Do these when the owner says the box is back, **before** the first start. Record
 4. **Network is unchanged** (owner-decisions §2.51). The DHT UDP port is **not** forwarded, UPnP stays off, and the router, the LAN and the public IP are the same as for the last comparator run. If any of them changed, stop and tell the runner: the comparator is re-run before the next run.
 4a. **Clock.** The host clock must be synchronised (NTP) to within 1 s, or every segment fails (CR-SPEC D1a). Check it in the Unraid UI and note "synced".
 4b. **Mover.** A mover run counts as an `array_operation` and invalidates a segment, and §2.68 doesn't let you pause it. Look at the mover schedule: if it falls inside a block, **don't start; ask the runner**, who asks the owner.
-4c. **The auto-update plugin must already exclude the Lodestar container,** and you note its next scheduled run. §2.68 doesn't let you change that setting for this run. If the container isn't excluded, **stop and ask the runner**.
+4c. **Both the auto-update plugin and Appdata Backup must already exclude the Lodestar container,** and you note each one's next scheduled run. Excluding a container is a settings change, which §2.68 doesn't cover: a test only pauses and restores. If the container isn't excluded from either, **stop and ask the owner** (through the runner).
 4d. **The admin password file.** The collector needs one (`--password-file`). Create it with the container's admin password, `chmod 600`, outside the data and evidence directories. Never send or commit it (section 9.3).
 5. **Nothing else crawls from this box or this public IP.** No bitmagnet, no other Lodestar, no import. Runs never overlap a soak on the same box.
 6. **Disk and memory room** (section 4.3). Check them now.
@@ -108,14 +108,19 @@ Pause only these two, and only for the run:
 
 | Pause | How to restore |
 |---|---|
-| Appdata Backup: exclude the Lodestar container, **then** pause the schedule | put the schedule back; remove the exclusion |
+| Appdata Backup: pause the schedule. The Lodestar container must **already** be excluded from it (4c) | put the schedule back |
 | Scheduled parity check (correcting or not) | put the schedule back |
 
 For each, write down **before** the pause: the setting as it was, and its next scheduled run in UTC. The collector takes the **backup** and **auto-update** next-run times (`--next-run`); the parity time is for your own restore record only.
 
-**Hold the pause for all of stage 1** (about six host-days): no backup or parity check runs in that time. Restore when stage 1 ends, or at once if a run fails, is stopped, or you stop for any reason.
+**The pause is per block, not for the whole stage** (six days without backups is too long for the owner's data):
 
-**The restore always runs**: when a block finishes, when it fails, when you stop it, when you're out of time. It is not optional and doesn't wait for analysis.
+- Pause at the start of each block and restore at its end, or at once on any stop.
+- **Between blocks**, if a backup or a scheduled parity check is due or overdue, let it run and finish **before** the next block starts. Never start a block while one runs (4.2). Record what ran and when.
+- Log every pause and restore per block (section 12).
+- This means the CR-AB-4 block may start later than the ADM block's end; the no-idle aim (r5.1 A3) gives way to this rule.
+
+**The restore always runs**: when a block finishes (not only when stage 1 ends), when it fails, when you stop it, when you're out of time. It is not optional and doesn't wait for analysis.
 
 ### 4.2 Start gates
 
@@ -162,7 +167,7 @@ Do this once per block. Steps 5.1 and 5.2 happen once; 5.3 to 5.5 repeat for eac
 ### 5.1 Set up the block
 
 1. Do section 3 and the start gates (4.2).
-2. **Pause** backup and the parity schedule as in 4.1. Note the time and the next-run times.
+2. **Pause** the backup and parity schedules as in 4.1 (if a backup or parity check is due or overdue, let it finish first). Note the time and the next-run times.
 3. Make a **new, empty** data directory: `<appdata>/lodestar-<treatment>-b<n>-a<attempt>/data`. `<attempt>` is 1 for the first try and rises for each re-run of that block, so a re-run never resumes an old directory. Never reuse one.
 4. Make a **new, empty** witness directory outside it: `<appdata>/lodestar-<treatment>-b<n>-a<attempt>/witness`.
 5. Decide the order: block 1 is **ABBA**, block 2 is **BAAB**. Write it in the run record. The recorded order is passed to the analyzer later.
@@ -225,7 +230,7 @@ After segment 4, don't start another. Go to 5.6.
 
 1. Check that the collector for segment 4 finished and wrote `result.json`.
 2. Run the analysis (section 8) for each segment, one by one, then the block's effect once all four exist.
-3. **The pause stays on between blocks of stage 1** (section 4.1). Run the restore when stage 1 ends, or at once if you stop.
+3. **Run the restore (4.1) now**, at the block's end, before anything else.
 4. Check the restore worked: look at the schedules in the Unraid UI and confirm they are back. If you can't confirm, that is a failed restore: **Rule 0 applies.**
 
 ## 6. During a segment
@@ -336,7 +341,7 @@ Tick each one. Write the time (UTC) beside it.
 - [ ] No other crawler or import is running on the box
 - [ ] Network unchanged: port not forwarded, UPnP off, public IP the same
 - [ ] I noted the backup and parity settings and their next runs (UTC)
-- [ ] Container excluded from Appdata Backup; backup schedule paused
+- [ ] Container already excluded from Appdata Backup (next run noted); backup schedule paused
 - [ ] Parity check schedule paused
 - [ ] Free disk is at least 50 GiB; clock synced; no mover inside the block
 - [ ] Auto-update plugin already excludes the container (next run noted)
