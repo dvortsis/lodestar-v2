@@ -47,7 +47,7 @@
 			if (!bare && (mac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 'k') {
 				e.preventDefault();
 				shell.paletteOpen = true;
-				return;
+				return void early.push(e);
 			}
 			if (e.target instanceof HTMLElement && !typing(e.target) && early.push(e) > 32) early.shift();
 		};

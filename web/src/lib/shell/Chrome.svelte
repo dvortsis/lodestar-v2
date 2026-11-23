@@ -46,6 +46,34 @@
 	const START_AFTER_MS = 30_000;
 	/** A key press kept longer than this before the listener attached is not replayed. */
 	const STALE_KEY_MS = 5_000;
+	/** Where Enter or Space already does something: the registry's own CONTROL list
+	 *  (`$lib/keys/registry.svelte.ts`), kept the same here. Exporting it would add bytes to every page
+	 *  that loads the registry, Insights included, which is at its limit. */
+	const CONTROL = [
+		'a[href]',
+		'button',
+		'summary',
+		'select',
+		...['checkbox', 'radio', 'submit', 'button', 'reset', 'image', 'file', 'range', 'color'].map(
+			(t) => `input[type="${t}"]`
+		),
+		...[
+			'button',
+			'link',
+			'menuitem',
+			'menuitemcheckbox',
+			'menuitemradio',
+			'option',
+			'tab',
+			'checkbox',
+			'radio',
+			'switch',
+			'slider',
+			'spinbutton',
+			'treeitem',
+			'gridcell'
+		].map((r) => `[role="${r}"]`)
+	].join(', ');
 
 	/** Runs `cb` once: on the first interaction, or after START_AFTER_MS. Returns the cancel. */
 	function whenEngaged(cb: () => void): () => void {
@@ -77,6 +105,17 @@
 		// The 401 redirect is installed by Shell.svelte, before the chrome loads.
 		// The rest is not needed to read the page and counts against the load (§10.1): the key
 		// shortcuts, the stream and the pill start with the first interaction, or 30 s after load.
+		// A click, a tap or a focus move (an assistive technology's cursor too) after a kept key press
+		// changes what that press meant: the replay leaves out every press before the latest one.
+		// One between the shell's first key and this mount isn't seen (it would cost the first load).
+		let moved = 0;
+		const move = (e: Event) => (moved = e.timeStamp);
+		const unmove = () => {
+			removeEventListener('pointerdown', move, true);
+			removeEventListener('focusin', move, true);
+		};
+		addEventListener('pointerdown', move, true);
+		addEventListener('focusin', move, true);
 		const stopWaiting = whenEngaged(() => {
 			void Promise.all([
 				import('$lib/keys'),
@@ -86,42 +125,61 @@
 				import('./status.svelte'),
 				import('./StatusPill.svelte'),
 				import('./ConnectionView.svelte')
-			]).then(([keysModule, commands, shortcutsBoot, appearanceBoot, status, pill, connection]) => {
-				if (disposed) return;
-				detachKeys = keysModule.keys.attach(window);
-				offCommands = commands.registerShellCommands();
-				offShortcuts = shortcutsBoot.startShortcuts();
-				offAppearance = appearanceBoot.startAppearance();
-				statusRef.Pill = pill.default;
-				statusRef.Connection = connection.default;
-				statusRef.current = status.shellStatus;
-				onkeys?.();
-				// The presses made while this loaded, the one that woke us first, now find their shortcuts,
-				// in order. They go to the registry only: the page has already seen the real events, and
-				// handing it second ones would act twice. Left out:
-				// - a press the browser acted on (Tab, Enter or Space on a link or button, or one the page
-				//   handled), and every press before it: replayed now, they would undo it;
-				// - a plain key once focus is in a field (after a replayed `/`): it was meant as typing;
-				// - one kept too long (a stalled load), so a late burst of shortcuts never fires.
-				const kept = early.splice(0);
-				let from = 0;
-				kept.forEach((e, i) => {
-					const t = e.target as HTMLElement;
-					if (
-						e.defaultPrevented ||
-						e.key === 'Tab' ||
-						((e.key === 'Enter' || e.key === ' ') && t.closest('a[href],button,summary'))
-					)
-						from = i + 1;
+			])
+				.then(([keysModule, commands, shortcutsBoot, appearanceBoot, status, pill, connection]) => {
+					if (disposed) return;
+					detachKeys = keysModule.keys.attach(window);
+					offCommands = commands.registerShellCommands();
+					offShortcuts = shortcutsBoot.startShortcuts();
+					offAppearance = appearanceBoot.startAppearance();
+					statusRef.Pill = pill.default;
+					statusRef.Connection = connection.default;
+					statusRef.current = status.shellStatus;
+					onkeys?.();
+					unmove();
+					// The presses made while this loaded, the one that woke us first, now find their shortcuts,
+					// in order. They go to the registry only: the page has already seen the real events, and
+					// handing it second ones would act twice. Left out:
+					// - a press the browser or the page acted on (Tab, Enter or Space on a control, anything
+					//   default-prevented), or one before a click or focus move, and every press before it:
+					//   replayed now, they would undo it;
+					// - the Ctrl/Cmd+K the shell took for the palette, and every press after it: those were
+					//   meant for the palette (all of them while it is open);
+					// - a press in a field (the text is there), and a plain key once focus is in one (after a
+					//   replayed `/`): it was meant as typing;
+					// - one kept too long (a stalled load), so a late burst of shortcuts never fires.
+					const kept = shell.paletteOpen ? [] : early.splice(0);
+					early.length = 0;
+					let from = 0;
+					let to = kept.length;
+					kept.forEach((e, i) => {
+						if (i >= to) return;
+						if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k' && e.defaultPrevented)
+							to = i;
+						else if (
+							e.defaultPrevented ||
+							e.timeStamp < moved ||
+							e.key === 'Tab' ||
+							((e.key === 'Enter' || e.key === ' ') && (e.target as Element).closest(CONTROL))
+						)
+							from = i + 1;
+					});
+					for (const e of kept.slice(from, to))
+						if (
+							(e.target as Node).isConnected &&
+							performance.now() - e.timeStamp < STALE_KEY_MS &&
+							!keysModule.isEditable(e.target) &&
+							(e.ctrlKey || e.metaKey || e.altKey || !keysModule.isEditable(document.activeElement))
+						)
+							keysModule.keys.handle(e);
+				})
+				// A chunk that can't load (a stale build, the server gone): no shortcuts, so the shell stops
+				// keeping presses and taking Ctrl/Cmd+K, and nothing is replayed.
+				.catch(() => {
+					unmove();
+					early.length = 0;
+					onkeys?.();
 				});
-				for (const e of kept.slice(from))
-					if (
-						(e.target as Node).isConnected &&
-						performance.now() - e.timeStamp < STALE_KEY_MS &&
-						(e.ctrlKey || e.metaKey || e.altKey || !keysModule.isEditable(document.activeElement))
-					)
-						keysModule.keys.handle(e);
-			});
 			// Fetched now, while the server is up: an error toast and the error screen have to work
 			// when it is down.
 			loadToaster();
@@ -138,6 +196,7 @@
 					.catch(() => {});
 		});
 		return () => {
+			unmove();
 			disposed = true;
 			stopWaiting();
 			offStale?.();

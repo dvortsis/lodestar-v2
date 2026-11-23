@@ -3,7 +3,7 @@
 import type { Page } from '@playwright/test';
 import { body, expect, hits, row, rowOf, server } from './search-results.fixtures';
 import { interact } from './support/interact';
-import type { KeyboardOnly } from './support/keyboard';
+import { KeyboardOnly } from './support/keyboard';
 import { test } from './support/test';
 
 test.beforeEach(({ mock }) => server(mock, () => body(hits(5))));
@@ -76,14 +76,19 @@ test('at 390 px with no rows, Skip to results moves focus to the results region'
 // attaches (it waits on the chrome's lazy chunks) are kept and handed to the shortcuts in order,
 // never twice. The chunk that starts the shortcuts is held until the test lets it go, so the keys
 // land in that window every time.
-async function holdShortcuts(page: Page) {
+/** The chunk that starts the shortcuts. The chrome's own chunk names `startShortcuts` too (it calls
+ *  it), so the defaults' `help.shortcuts` tells the two apart: the chrome mounts, its shortcuts wait. */
+const shortcutsBoot = (text: string) =>
+	text.includes('startShortcuts') && text.includes('help.shortcuts');
+
+async function holdShortcuts(page: Page, also?: string) {
 	let release!: () => void;
 	const gate = new Promise<void>((resolve) => (release = resolve));
 	let held = 0;
 	await page.route('**/_app/immutable/**/*.js', async (route) => {
 		const response = await route.fetch();
 		const text = await response.text();
-		if (text.includes('startShortcuts')) {
+		if (shortcutsBoot(text) || (also !== undefined && text.includes(also))) {
 			held += 1;
 			await gate;
 		}
@@ -92,8 +97,9 @@ async function holdShortcuts(page: Page) {
 	return { release, held: () => held };
 }
 
-/** The status pill appears in the same step that attaches the listener and replays the kept keys. */
-const attached = (page: Page) => expect(page.getByTestId('status-pill')).toBeAttached();
+/** The real status pill (not the bar's "Connecting" stand-in) arrives in the same step that attaches
+ *  the listener and replays the kept keys; only it has the live announcement. */
+const attached = (page: Page) => expect(page.getByTestId('status-pill-announce')).toBeAttached();
 
 const focused = (page: Page) =>
 	page.evaluate(() => document.activeElement?.outerHTML.slice(0, 120) ?? '');
@@ -102,14 +108,18 @@ test.describe('keys pressed before the key listener attaches', () => {
 	// The held route's handlers may still be fetching when the page closes.
 	test.afterEach(({ page }) => page.unrouteAll({ behavior: 'ignoreErrors' }));
 
-	async function skipToRows(page: Page, kbd: KeyboardOnly, hold: { held: () => number }) {
+	async function skipToRows(
+		page: Page,
+		kbd: Pick<KeyboardOnly, 'tabTo' | 'press'>,
+		hold: { held: () => number }
+	) {
 		await page.setViewportSize({ width: 1366, height: 900 });
 		await expect(rowOf(page, 1)).toBeVisible();
 		await kbd.tabTo(page.getByRole('link', { name: 'Skip to results' }));
 		// The first key started the chrome, whose shortcuts are now held; the list's own keys are in.
 		await expect.poll(hold.held).toBeGreaterThan(0);
 		await expect(page.locator('[data-keys-ready]')).toBeAttached();
-		await expect(page.getByTestId('status-pill')).toHaveCount(0);
+		await expect(page.getByTestId('status-pill-announce')).toHaveCount(0);
 		await kbd.press('Enter');
 		await expect(rowOf(page, 1)).toBeFocused();
 	}
@@ -239,5 +249,113 @@ test.describe('keys pressed before the key listener attaches', () => {
 		await expect.poll(hold.held).toBeGreaterThan(0);
 		hold.release();
 		await expect(page.getByRole('combobox', { name: 'Search torrents' })).toBeFocused();
+	});
+	test('x before a key the list handled is not replayed over it', async ({ page, go, kbd }) => {
+		const hold = await holdShortcuts(page);
+		await go('/search?q=lantern');
+		await skipToRows(page, kbd, hold);
+		// Home on the first row is the list's own (default-prevented) and leaves focus where it is.
+		await kbd.press('x');
+		await kbd.press('Home');
+		hold.release();
+		await attached(page);
+		// A live x selects the row once if the kept x stayed dropped, none if it had been replayed.
+		await kbd.press('x');
+		await expect(page.getByTestId('bulk-count')).toContainText('1');
+	});
+
+	test('x before Enter on a button is not replayed over it', async ({ page, go, kbd }) => {
+		const hold = await holdShortcuts(page);
+		await page.setViewportSize({ width: 1366, height: 900 });
+		await go('/search?q=lantern&view=table');
+		await expect(page.getByTestId('results-table')).toBeVisible();
+		const columns = page.getByTestId('table-columns');
+		await kbd.tabTo(columns);
+		await expect.poll(hold.held).toBeGreaterThan(0);
+		await kbd.press('x');
+		await kbd.press('Enter');
+		await expect(page.getByTestId('table-chooser')).toBeVisible();
+		hold.release();
+		await attached(page);
+		await kbd.press('Escape');
+		await expect(columns).toBeFocused();
+		await kbd.press('x');
+		await expect(page.getByTestId('bulk-count')).toContainText('1');
+	});
+
+	test('keys after Ctrl/Cmd+K were for the palette, not the rows', async ({ page, go, kbd }) => {
+		// The palette's own chunk is held too, so x lands on the row, not in the palette's field.
+		const hold = await holdShortcuts(page, 'palette-input');
+		await go('/search?q=lantern');
+		await skipToRows(page, kbd, hold);
+		await kbd.press('ControlOrMeta+k');
+		await kbd.press('x');
+		hold.release();
+		await attached(page);
+		await expect(page.getByTestId('palette-input')).toBeFocused();
+		await kbd.press('Escape');
+		await expect(page.getByTestId('palette-input')).toHaveCount(0);
+		await kbd.press('x');
+		await expect(page.getByTestId('bulk-count')).toContainText('1');
+	});
+
+	test('a key before a click is not replayed over it', async ({ page, go }) => {
+		// Pointer test: the keyboard-only guard is left out, the keys go through the same helper.
+		const keys = new KeyboardOnly(page);
+		const hold = await holdShortcuts(page);
+		await go('/search?q=lantern');
+		await skipToRows(page, keys, hold);
+		await keys.press('x');
+		await page.getByTestId('results-count').click();
+		hold.release();
+		await attached(page);
+		await keys.press('x');
+		await expect(page.getByTestId('bulk-count')).toContainText('1');
+	});
+
+	test('the latest 32 presses are kept', async ({ page, go, kbd }) => {
+		const hold = await holdShortcuts(page);
+		await go('/search?q=lantern');
+		await skipToRows(page, kbd, hold);
+		// F2 does nothing here; 33 of them, then j, keep j only if the newest presses are kept.
+		for (let i = 0; i < 33; i++) await kbd.press('F2');
+		await kbd.press('j');
+		hold.release();
+		await expect(rowOf(page, 2)).toBeFocused();
+	});
+
+	test('a shortcuts chunk that fails to load stops the shell keeping presses', async ({
+		page,
+		go,
+		kbd
+	}) => {
+		let failed = 0;
+		await page.route('**/_app/immutable/**/*.js', async (route) => {
+			const response = await route.fetch();
+			const text = await response.text();
+			if (shortcutsBoot(text)) {
+				failed += 1;
+				return route.abort();
+			}
+			await route.fulfill({ response, body: text });
+		});
+		await go('/search?q=lantern');
+		await expect(rowOf(page, 1)).toBeVisible();
+		await kbd.press('Tab');
+		await expect.poll(() => failed).toBeGreaterThan(0);
+		// Until then the shell takes Ctrl/Cmd+K from the browser; afterwards it lets it through.
+		const taken = () =>
+			page.evaluate(() => {
+				const e = new KeyboardEvent('keydown', {
+					key: 'k',
+					ctrlKey: true,
+					metaKey: true,
+					bubbles: true,
+					cancelable: true
+				});
+				document.body.dispatchEvent(e);
+				return e.defaultPrevented;
+			});
+		await expect.poll(taken).toBe(false);
 	});
 });
