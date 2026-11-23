@@ -25,8 +25,8 @@
 	<p class="cmp-note" data-testid="compare-no-attributes">{m.compare_no_attributes()}</p>
 {/if}
 <div class="cmp-toolbar">
-	<label class="cmp-switch {TARGET_MIN}">
-		<!-- A checkbox with the switch role: space toggles it, the state is announced as on/off. -->
+	<label class="inline-flex cursor-pointer items-center gap-2 text-body {TARGET_MIN}">
+		<!-- Same markup as ui/fields/Toggle.svelte, which isn't reused: its bind:checked costs 1.3 kB here (33.06 kB with it). -->
 		<input
 			type="checkbox"
 			role="switch"
@@ -63,20 +63,13 @@
 		gap: calc(var(--spacing) * 3);
 		margin-bottom: calc(var(--spacing) * 3);
 	}
-	.cmp-switch {
-		display: inline-flex;
-		align-items: center;
-		gap: calc(var(--spacing) * 2);
-		cursor: pointer;
-		font-size: var(--text-body);
-		line-height: var(--text-body--line-height);
-	}
 	.cmp-hidden {
 		font-size: var(--text-body);
 		line-height: var(--text-body--line-height);
 		color: var(--color-muted-text);
 	}
 	.cmp-note {
+		margin-top: calc(var(--spacing) * 3);
 		margin-bottom: calc(var(--spacing) * 3);
 		font-size: var(--text-body);
 		line-height: var(--text-body--line-height);

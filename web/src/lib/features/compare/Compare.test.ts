@@ -46,17 +46,19 @@ describe('Differences only', () => {
 		mocks.post.mockResolvedValue(r);
 		open(n);
 		render(Compare);
-		const sw = await screen.findByRole('switch', { name: 'Differences only' });
+		const sw = await screen.findByRole('switch', { name: 'Differences only' }, { timeout: 10_000 });
 		expect((sw as HTMLInputElement).checked).toBe(false);
 		await fireEvent.click(sw);
 		return screen.getByTestId('compare-hidden-count');
 	}
 	it('counts the hidden rows and keeps the Actions row', async () => {
 		const count = await turnOn(2);
-		// Same in the fixture: type, title, year, files? No: files differ. type, title, year, trackers.
-		await waitFor(() =>
-			expect(count.textContent?.trim()).toMatch(/^\d+ rows hidden because they're the same$/)
+		await waitFor(
+			() => expect(count.textContent?.trim()).toBe("5 rows hidden because they're the same"),
+			{ timeout: 10_000 }
 		);
+		// "GRP" against "—" differs, in either order.
+		expect(screen.getByTestId('compare-row-attr-group')).toBeTruthy();
 		expect(screen.queryByTestId('compare-row-attr-year')).toBeNull();
 		expect(screen.getByTestId('compare-row-attr-res')).toBeTruthy();
 		expect(screen.getByText('Actions')).toBeTruthy();
@@ -71,15 +73,16 @@ describe('Differences only', () => {
 				{ group: 'video', bytes: 1, files: 1, pct_bytes: 100, pct_files: 100 }
 			];
 		});
-		await waitFor(() =>
-			expect(count.textContent?.trim()).toBe("1 row hidden because it's the same")
+		await waitFor(
+			() => expect(count.textContent?.trim()).toBe("1 row hidden because it's the same"),
+			{ timeout: 10_000 }
 		);
 	});
 	it('says nothing when the switch is off', async () => {
 		mocks.post.mockResolvedValue(response(2));
 		open(2);
 		render(Compare);
-		await screen.findByRole('switch', { name: 'Differences only' });
+		await screen.findByRole('switch', { name: 'Differences only' }, { timeout: 10_000 });
 		expect(screen.getByTestId('compare-hidden-count').textContent?.trim()).toBe('');
 	});
 });

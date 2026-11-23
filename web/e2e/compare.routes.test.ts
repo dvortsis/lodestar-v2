@@ -247,8 +247,13 @@ test.describe('Differences only', () => {
 			await expect(page.getByTestId('compare-row-attr-year')).toHaveCount(0);
 			await expect(page.getByTestId('compare-row-attr-res')).toHaveCount(1);
 			await expect(page.getByTestId('compare-hidden-count')).toHaveText(
-				/^\d+ rows hidden because they're the same$/
+				"5 rows hidden because they're the same"
 			);
+			// "GRP" against "—" differs, so that row stays.
+			await expect(page.getByTestId('compare-row-attr-group')).toHaveCount(1);
+			// The knob has moved (the grid columns animate, so wait for the end), then back.
+			const columns = () => toggle.evaluate((el) => getComputedStyle(el).gridTemplateColumns);
+			await expect.poll(columns, { timeout: 10_000 }).toMatch(/^[1-9]\d*(\.\d+)?px /);
 			await expectNoA11yViolations(page);
 			// The page may get too short to scroll as far; the browser clamps, we never move it.
 			const left = await page.evaluate(
@@ -257,6 +262,7 @@ test.describe('Differences only', () => {
 			expect(await page.evaluate(() => window.scrollY)).toBe(Math.min(y, left));
 			await page.keyboard.press('Space');
 			await expect(page.getByTestId('compare-row-attr-year')).toHaveCount(1);
+			await expect.poll(columns, { timeout: 10_000 }).toMatch(/^0px /);
 		});
 	}
 

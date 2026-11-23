@@ -168,7 +168,10 @@ describe('isSame (Differences only)', () => {
 		cells: texts.map((text, i) => ({ testid: `x-${i}`, text }))
 	});
 	it('two nulls are the same', () => expect(isSame(row(null, null))).toBe(true));
-	it('a null against a value differs', () => expect(isSame(row(null, '1080p'))).toBe(false));
+	it('a null against a value differs, in either order', () => {
+		expect(isSame(row(null, '1080p'))).toBe(false);
+		expect(isSame(row('1080p', null))).toBe(false);
+	});
 	it('"—" against "—" is the same', () => expect(isSame(row('—', '—'))).toBe(true));
 	it('values that format alike are the same', () =>
 		expect(isSame(row('1.0 GB', '1.0 GB', '1.0 GB'))).toBe(true));

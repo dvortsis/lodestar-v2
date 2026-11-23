@@ -1407,7 +1407,7 @@ export default [
 	// after #139 and #154 regrouped the shared chunks it pulls in (Button, Badge, transitions,
 	// messages). Limit: measured + 10%.
 	// runner §2.26, X-detail-depth-compare: the "Differences only" switch, its count line and the
-	// equality check (measured 31.78 KB, limit rounded up; the four messages in both languages are most of it).
+	// equality check (measured 31,790 B; the four messages in both languages are most of it).
 	entry('Compare route (own JS + CSS)', own('/compare'), '31.79 KB'),
 	// Measured 42.8 KB: over the 15 KB target because the screen is a virtualised list (12 KB with
 	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
