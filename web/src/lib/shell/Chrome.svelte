@@ -13,11 +13,15 @@
 
 	let {
 		bare,
-		replay,
+		early = [],
+		onkeys,
 		engaged = false
 	}: {
 		bare: boolean;
-		replay?: { event: KeyboardEvent; target: HTMLElement };
+		/** Key presses from before the key listener attached, oldest first (Shell.svelte). */
+		early?: KeyboardEvent[];
+		/** Called once the key listener is attached: the shell stops keeping presses. */
+		onkeys?: () => void;
 		/** Mounted because of an interaction (or the shell's timeout): start the deferred parts now. */
 		engaged?: boolean;
 	} = $props();
@@ -40,6 +44,8 @@
 
 	const ENGAGED = ['pointerdown', 'keydown', 'touchstart', 'focusin'] as const;
 	const START_AFTER_MS = 30_000;
+	/** A key press kept longer than this before the listener attached is not replayed. */
+	const STALE_KEY_MS = 5_000;
 
 	/** Runs `cb` once: on the first interaction, or after START_AFTER_MS. Returns the cancel. */
 	function whenEngaged(cb: () => void): () => void {
@@ -89,10 +95,25 @@
 				statusRef.Pill = pill.default;
 				statusRef.Connection = connection.default;
 				statusRef.current = status.shellStatus;
-				// The key press that woke us now finds its shortcut. It goes to the registry only: the page
-				// has already seen the real event, and handing it a second one would act twice.
-				if (replay?.target.isConnected && !replay.event.defaultPrevented)
-					keysModule.keys.handle(replay.event);
+				onkeys?.();
+				// The presses made while this loaded, the one that woke us first, now find their shortcuts,
+				// in order. They go to the registry only: the page has already seen the real events, and
+				// handing it second ones would act twice. So the ones the browser acted on are left out
+				// (Tab, and Enter or Space on a link or button), and so is one kept too long (a stalled
+				// load), so a late burst of shortcuts never fires.
+				for (const e of early.splice(0)) {
+					const t = e.target as HTMLElement | null;
+					const native =
+						e.key === 'Tab' ||
+						((e.key === 'Enter' || e.key === ' ') && !!t?.closest('a[href],button,summary'));
+					if (
+						t?.isConnected &&
+						!native &&
+						!e.defaultPrevented &&
+						performance.now() - e.timeStamp < STALE_KEY_MS
+					)
+						keysModule.keys.handle(e);
+				}
 			});
 			// Fetched now, while the server is up: an error toast and the error screen have to work
 			// when it is down.

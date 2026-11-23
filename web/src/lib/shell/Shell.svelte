@@ -24,8 +24,11 @@
 	// moved in here when the app mounts, and the rest of #boot goes, in the same task: one frame,
 	// no shift. The chrome replaces it with the full bar a moment later.
 	let slot = $state<HTMLElement>();
-	// The first key press, kept for the chrome to replay once its shortcuts exist (typing is not).
-	let replay = $state<{ event: KeyboardEvent; target: HTMLElement }>();
+	// Key presses before the chrome's key listener attaches, kept (up to 32) for it to hand to the
+	// registry in order once its shortcuts exist (X-skip-results-flake). Typing is not kept: the text
+	// is there. The chrome leaves out the other keys the browser has already acted on.
+	const early: KeyboardEvent[] = [];
+	let attached = false;
 	const typing = (el: HTMLElement) =>
 		el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
 	onMount(() => {
@@ -36,18 +39,17 @@
 				?.platform ?? navigator.platform
 		);
 		const first = (e: KeyboardEvent) => {
-			// Holding Ctrl or Shift is the start of a combo, not the key to replay.
+			if (attached) return removeEventListener('keydown', first, true);
+			// Holding Ctrl or Shift is the start of a combo, not a key to replay.
 			if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(e.key)) return;
-			removeEventListener('keydown', first, true);
-			// The palette key is taken here, not left to the registry that loads on this very press:
-			// by then the browser has already used Ctrl/Cmd+K itself (the address bar).
+			// The palette key is taken here, not left to the registry that is still loading: by then
+			// the browser has already used Ctrl/Cmd+K itself (the address bar).
 			if (!bare && (mac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 'k') {
 				e.preventDefault();
 				shell.paletteOpen = true;
 				return;
 			}
-			if (e.target instanceof HTMLElement && !typing(e.target))
-				replay = { event: e, target: e.target };
+			if (early.length < 32 && e.target instanceof HTMLElement && !typing(e.target)) early.push(e);
 		};
 		addEventListener('keydown', first, { capture: true });
 		return () => removeEventListener('keydown', first, true);
@@ -157,7 +159,7 @@
 		>{m.shell_skip_to_content()}</a
 	>
 	{#if Chrome}
-		<Chrome {bare} {replay} engaged />
+		<Chrome {bare} {early} onkeys={() => (attached = true)} engaged />
 	{:else if !bare}
 		<!-- Holds the top bar's place (1 px border + 56 px) until it arrives. -->
 		<div bind:this={slot}>
