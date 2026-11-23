@@ -17,7 +17,6 @@
 .rt-scroll {
 	position: relative;
 	max-height: calc(100dvh - var(--query-bar-height) * 4);
-	min-height: calc(var(--row-height-comfortable) * 6);
 	overflow: auto;
 	border: 1px solid var(--color-base-300);
 	border-radius: var(--radius-box);
