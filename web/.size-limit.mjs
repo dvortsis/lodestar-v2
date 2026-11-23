@@ -1076,6 +1076,20 @@ const resultsFirst = [
 	)
 ];
 const resultsKeysLazy = resultsLazy.filter((f) => !resultsFirst.includes(f));
+// The search home (X-shell-home, runner r14): the empty state, its own chunk. The page loads it in the
+// same Promise.all as the panel and hands it to the panel, so it is in the first frame and every entry
+// that loads later counts it as already loaded (`resultsLoaded`). It is not in RESULTS, so it does not
+// grow 'Search results (lazy)'; adding it to the "already loaded" lists is a partition fix, and
+// 'Search index-state banners' goes back under its limit with no raise.
+const homeLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/home/Home.svelte', [], false, [
+			...engagedSearch,
+			...resultsLazy
+		])
+	)
+];
+const resultsLoaded = [...resultsLazy, ...homeLazy];
 // The facet rail (S-search-2b): its host loads with the results, and the rail with it where the
 // rail shows (x-large); below that, on the first Filters press, which also brings the sheet (on
 // demand). Measured beyond the engaged view and the results panel it loads with.
@@ -1089,7 +1103,7 @@ const recoverLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/results/Recover.svelte', [], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
@@ -1097,7 +1111,7 @@ const settleLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/results/settle.ts', [], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
@@ -1105,14 +1119,14 @@ const indexStateLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/results/IndexState.svelte', [], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
 const facetsOnDemand = [/ui\/overlays\/Sheet\.svelte$/];
 const facetsLazy = [
 	...new Set(
-		FACETS.flatMap((k) => ownChunk(k, facetsOnDemand, false, [...engagedSearch, ...resultsLazy]))
+		FACETS.flatMap((k) => ownChunk(k, facetsOnDemand, false, [...engagedSearch, ...resultsLoaded]))
 	)
 ];
 // The results toolbar (S-search-3): loads with the results and shows once there is a query.
@@ -1127,7 +1141,9 @@ const saveLoader = [/features\/search\/toolbar\/save-dialog\.ts$/];
 const toolbarOnDemand = [/features\/alerts\/SaveSearchDialog\.svelte$/, ...saveLoader];
 const toolbarLazy = [
 	...new Set(
-		TOOLBAR.flatMap((k) => ownChunk(k, toolbarOnDemand, false, [...engagedSearch, ...resultsLazy]))
+		TOOLBAR.flatMap((k) =>
+			ownChunk(k, toolbarOnDemand, false, [...engagedSearch, ...resultsLoaded])
+		)
 	)
 ];
 
@@ -1139,7 +1155,7 @@ const tableLazy = [
 			'src/lib/features/search/table/ResultsTable.svelte',
 			[/search\/table\/ColumnChooser\.svelte$/],
 			false,
-			[...engagedSearch, ...resultsLazy]
+			[...engagedSearch, ...resultsLoaded]
 		)
 	)
 ];
@@ -1147,7 +1163,7 @@ const chooserLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/table/ColumnChooser.svelte', [], false, [
 			...engagedSearch,
-			...resultsLazy,
+			...resultsLoaded,
 			...tableLazy
 		])
 	)
@@ -1156,7 +1172,7 @@ const pickLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/bulk/RowPick.svelte', [], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
@@ -1164,7 +1180,7 @@ const bulkLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/bulk/BulkBar.svelte', [/^chunk:magnet$/], false, [
 			...engagedSearch,
-			...resultsLazy
+			...resultsLoaded
 		])
 	)
 ];
@@ -1194,7 +1210,7 @@ const liveLazy = [
 		[
 			'src/lib/features/search/live/live.svelte.ts',
 			'src/lib/features/search/live/LiveHost.svelte'
-		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLazy]))
+		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLoaded]))
 	)
 ];
 const cardsLazy = [
@@ -1205,7 +1221,7 @@ const cardsLazy = [
 			'src/lib/features/search/cards/Card.svelte',
 			'src/lib/features/search/cards/cards.ts',
 			'src/lib/features/search/cards/cards.css'
-		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLazy]))
+		].flatMap((k) => ownChunk(k, [], false, [...engagedSearch, ...resultsLoaded]))
 	)
 ];
 
@@ -1654,7 +1670,7 @@ export default [
 				'src/lib/features/search/toolbar/save-dialog.ts',
 				[/features\/alerts\/SaveSearchDialog\.svelte$/],
 				false,
-				[...engagedSearch, ...resultsLazy, ...toolbarLazy]
+				[...engagedSearch, ...resultsLoaded, ...toolbarLazy]
 			)
 		),
 		'0.55 KB' // measured 0.49 KB + 10%
@@ -1687,6 +1703,8 @@ export default [
 	// catalogue's `common_just_now`, about 19 B in each chunk that uses it.
 	// +0.01 kB: hashed chunk-name compression noise (X-hit-resolution: a renamed table chunk costs Results 3 B; no code moved). Runner, r14.
 	entry('Search results (lazy)', resultsFirst, '40.86 KB'),
+	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
+	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.

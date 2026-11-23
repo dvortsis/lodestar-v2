@@ -169,7 +169,7 @@ test.describe('responsive navigation', () => {
 		await liveEvents(page);
 		await page.setViewportSize({ width: 390, height: 800 });
 		await go('/search');
-		const pill = page.getByRole('link', { name: /Crawling/ });
+		const pill = page.getByRole('link', { name: /Working/ });
 		await expect(pill).toBeVisible();
 		await expect(pill).toContainText('Crawler status. Open Insights.');
 		// Visually hidden: clipped to a pixel, still in the accessibility tree.
@@ -187,7 +187,7 @@ test.describe('status pill', () => {
 		await go('/search');
 		const pill = page.getByTestId('status-pill');
 		await expect(pill).toHaveAttribute('data-state', 'crawling');
-		await expect(page.getByTestId('status-pill-text')).toHaveText('Crawling');
+		await expect(page.getByTestId('status-pill-text')).toHaveText('Working');
 		await expect(page.getByTestId('status-pill-count')).toHaveText('· 1.2M torrents');
 		await expect(pill).toHaveAttribute('href', '/insights');
 
@@ -220,7 +220,7 @@ test.describe('status pill', () => {
 		await go('/search');
 		await engage(page);
 		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'connecting');
-		await expect(page.getByTestId('status-pill-text')).toHaveText('Connecting');
+		await expect(page.getByTestId('status-pill-text')).toHaveText('Connecting…');
 	});
 
 	test('the banner and the unreachable page need no lazy chunk, so they show when the server is gone', async ({

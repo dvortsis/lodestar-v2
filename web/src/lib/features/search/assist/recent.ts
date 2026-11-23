@@ -28,3 +28,12 @@ export function addRecent(q: string): void {
 		// blocked or full: nothing to keep
 	}
 }
+
+/** Forgets every recent query (Sign out, and "Clear recent searches" on the home screen). */
+export function clearRecent(): void {
+	try {
+		localStorage.removeItem(KEY);
+	} catch {
+		// blocked: nothing to forget
+	}
+}

@@ -26,6 +26,7 @@ vi.mock('$lib/keys', () => ({ keys: { register: () => () => {} } }));
 vi.mock('$lib/features/detail/commands', () => ({ registerDetailCommands: async () => {} }));
 
 const { default: ResultsPanel } = await import('./ResultsPanel.svelte');
+const { default: Home } = await import('../home/Home.svelte');
 const { visit } = await import('../query/testing.svelte');
 const { setRebuild } = await import('./testing.svelte');
 
@@ -63,7 +64,7 @@ beforeEach(() => {
 describe('ResultsPanel, the bare page', () => {
 	it('says how many torrents there are, with examples and up to five saved searches', async () => {
 		serve(figures(2_400_000), [1, 2, 3, 4, 5, 6].map(saved));
-		render(ResultsPanel, { focusBar: () => {} });
+		render(ResultsPanel, { focusBar: () => {}, Home });
 		await waitFor(() =>
 			expect(screen.getByTestId('results-empty-title').textContent?.trim()).toBe(
 				'Search 2,400,000 torrents'
@@ -79,7 +80,7 @@ describe('ResultsPanel, the bare page', () => {
 
 	it('does without the figures when they fail to load', async () => {
 		get.mockRejectedValue(new Error('down'));
-		render(ResultsPanel, { focusBar: () => {} });
+		render(ResultsPanel, { focusBar: () => {}, Home });
 		await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
 		await waitFor(() =>
 			expect(screen.getByTestId('results-empty-title').textContent?.trim()).toBe('Search torrents')
@@ -88,7 +89,7 @@ describe('ResultsPanel, the bare page', () => {
 
 	it('shows a rebuild in progress, and hides it once done', async () => {
 		serve(figures(10));
-		render(ResultsPanel, { focusBar: () => {} });
+		render(ResultsPanel, { focusBar: () => {}, Home });
 		const event = { done: 1200, total: 4000, error: null, from: 'a', to: 'b', unavailable: [] };
 		setRebuild({ ...event, phase: 'building' });
 		await waitFor(() =>
@@ -101,7 +102,7 @@ describe('ResultsPanel, the bare page', () => {
 	it('reads /search/state once per visit, and again when a rebuild changes phase', async () => {
 		serve(figures(10));
 		const reads = () => get.mock.calls.filter(([path]) => path === '/search/state').length;
-		render(ResultsPanel, { focusBar: () => {} });
+		render(ResultsPanel, { focusBar: () => {}, Home });
 		await waitFor(() => expect(reads()).toBe(1));
 		const event = { done: 1, total: 4, error: null, from: 'a', to: 'b', unavailable: [] };
 		setRebuild({ ...event, phase: 'building' });
@@ -113,14 +114,14 @@ describe('ResultsPanel, the bare page', () => {
 
 	it('shows the full-page state on a cold start', async () => {
 		serve(figures(120, { cold_start: true, growing: true }));
-		render(ResultsPanel, { focusBar: () => {} });
+		render(ResultsPanel, { focusBar: () => {}, Home });
 		await waitFor(() => expect(screen.getByTestId('results-cold-page')).toBeTruthy());
 	});
 
 	it('calls the bar on “Start typing”', async () => {
 		serve(figures(null));
 		const focusBar = vi.fn();
-		render(ResultsPanel, { focusBar });
+		render(ResultsPanel, { focusBar, Home });
 		(await screen.findByRole('button', { name: 'Start typing' })).click();
 		expect(focusBar).toHaveBeenCalled();
 	});

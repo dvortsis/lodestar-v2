@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # start-block (OP-3b; docs/plan/2026-11-08-cloud-test-plan.md Lane L and the
-# cloud screen): one ABBA block at a rules commit, from a fresh data directory,
-# or with MODE=on (X-block-on-only-mode) one with the treatment on in every
-# segment, for a screen that needs no control (PURPOSE=screen; block-lib.sh
-# mode_check).
+# cloud screen): one ABBA block at a rules commit, from a fresh data directory;
+# with MODE=baab (X-fleet-baab) the BAAB block CR-SPEC runs second; with
+# PURPOSE=aa either one as an A/A block, both arms the stage's control; or with
+# MODE=on (X-block-on-only-mode) one with the treatment on in every segment, for
+# a screen that needs no control (PURPOSE=screen; block-lib.sh mode_check).
 # It returns once segment 1's collector is running; the collectors and the
 # outage watcher run detached.
 #
@@ -52,8 +53,8 @@ while IFS='=' read -r k v; do
     ROLE) [[ $v =~ ^(main|worker)$ ]] ;;
     NOTICE_VERSION) [[ $v =~ ^[1-9][0-9]{0,5}$ ]] ;;
     BLOCK_ID) [[ $v =~ ^[0-9]{1,20}-[0-9]{1,6}$ ]] ;;
-    MODE) [[ $v =~ ^(abba|on)$ ]] ;;
-    PURPOSE) [[ $v == screen ]] ;;
+    MODE) [[ $v =~ ^(abba|baab|on)$ ]] ;;
+    PURPOSE) [[ $v =~ ^(screen|aa)$ ]] ;;
     *) false ;;
   esac || fail args_valid
   printf -v "$k" '%s' "$v"
@@ -69,14 +70,17 @@ done
 if ! why=$(stacking "$TREATMENT" "${WINNERS:-}"); then
   echo "fail stacking_$why"; fail args_valid
 fi
-# On-only has no control arm: refused for a stage that needs one, here as on
-# the control side (rules.py), before anything starts.
+# On-only has no control arm: refused for a stage that needs one, and A/A only
+# with a control order, here as on the control side (rules.py), before anything
+# starts.
 if ! why=$(mode_check "${MODE:-}" "${PURPOSE:-}" "${WINNERS:-}"); then
   echo "fail $why"; fail args_valid
 fi
 [[ ${MODE:-} == abba ]] && MODE=""  # abba is the default: its block.env is as before
 echo "ok args_valid"
 [[ ${MODE:-} == on ]] && echo "ok mode_on"  # every segment runs the treatment
+[[ ${MODE:-} == baab ]] && echo "ok mode_baab"  # treatment, control, control, treatment
+[[ ${PURPOSE:-} == aa ]] && echo "ok purpose_aa"  # both arms the control: the noise floor
 for tool in docker systemctl iptables flock; do
   command -v "$tool" >/dev/null 2>&1 || fail "tool_missing_${tool//-/_}"
 done

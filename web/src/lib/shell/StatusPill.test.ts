@@ -11,7 +11,7 @@ describe('StatusPill', () => {
 		pill({ kind: 'crawling', ...none, torrents: 1_234_567 });
 		const link = screen.getByTestId('status-pill');
 		expect(link.getAttribute('href')).toBe('/insights');
-		expect(link.textContent).toContain('Crawling');
+		expect(link.textContent).toContain('Working');
 		expect(link.textContent).toContain('Crawler status. Open Insights.');
 		expect(link.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
 	});
@@ -47,8 +47,8 @@ describe('StatusPill', () => {
 	});
 
 	it.each([
-		['unknown', 'Status unknown'],
-		['connecting', 'Connecting'],
+		['unknown', 'Connecting…'],
+		['connecting', 'Connecting…'],
 		['reconnecting', 'Reconnecting'],
 		['busy', 'Server busy'],
 		['failed', 'Index rebuild failed']

@@ -3,6 +3,7 @@
 // leaves the session as it was and says why in the shell's toast.
 import { m } from '$lib/paraglide/messages.js';
 import { toast } from '$lib/ui/feedback/toasts.svelte';
+import { clearRecent } from '$lib/features/search/assist/recent';
 import { logout } from './session.svelte';
 
 let pending: Promise<boolean> | undefined;
@@ -14,7 +15,7 @@ let pending: Promise<boolean> | undefined;
 export function signOut(): Promise<boolean> {
 	pending ??= logout()
 		.then(
-			() => true,
+			() => (clearRecent(), true),
 			() => {
 				toast.push({ kind: 'error', text: m.auth_logout_failed() });
 				return false;
