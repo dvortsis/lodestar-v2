@@ -64,3 +64,30 @@ test('recent searches can be cleared, and stay cleared', async ({ page, go, mock
 	await expect(page.getByTestId('home-recent')).toHaveCount(0);
 	expect(await page.evaluate((k) => localStorage.getItem(k), RECENT_KEY)).toBeNull();
 });
+
+// A dropdown menu is not modal: it must not lock the page's scroll, or a classic scrollbar vanishes
+// and the page moves by its width (UI review P5). Esc and an outside click still close it.
+test('the overflow menu leaves the page scrollable, and closes with Esc or a click outside', async ({
+	page,
+	go,
+	mock
+}) => {
+	bare(mock);
+	await go('/search');
+	await interact(page);
+	const more = page.getByTestId('more-button');
+	const overflow = () => page.evaluate(() => getComputedStyle(document.body).overflow);
+	const brandX = () => page.getByTestId('brand').evaluate((el) => el.getBoundingClientRect().x);
+	const before = await brandX();
+	await more.click();
+	await expect(page.getByRole('menu')).toBeVisible();
+	expect(await overflow()).not.toBe('hidden');
+	expect(await brandX()).toBe(before);
+	await page.keyboard.press('Escape');
+	await expect(page.getByRole('menu')).toHaveCount(0);
+	await expect(more).toBeFocused();
+	await more.click();
+	await expect(page.getByRole('menu')).toBeVisible();
+	await page.mouse.click(700, 600);
+	await expect(page.getByRole('menu')).toHaveCount(0);
+});
