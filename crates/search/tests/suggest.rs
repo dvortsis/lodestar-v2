@@ -1116,7 +1116,8 @@ fn natural_refuses_valid_query_past_the_cap() {
 
 /// The char ranges of `phrase`'s `/…/` literals, as the query lexer
 /// finds them: a `/` that starts a word and isn't followed by
-/// whitespace, up to the next `/` followed by whitespace, `)` or the end.
+/// whitespace, up to the next `/` that ends a word (whitespace, a
+/// parenthesis, a quote, `|` or the end).
 /// (The phrases here have no backslashes, so nothing is escaped.)
 fn regex_spans(phrase: &str) -> Vec<(usize, usize)> {
     let cs: Vec<char> = phrase.chars().collect();
@@ -1127,11 +1128,13 @@ fn regex_spans(phrase: &str) -> Vec<(usize, usize)> {
         let starts_word = i == 0 || space(cs.get(i - 1));
         if cs[i] == '/'
             && starts_word
-            && cs.get(i + 1).is_some_and(|c| !c.is_ascii_whitespace())
+            && cs
+                .get(i + 1)
+                .is_some_and(|c| !c.is_ascii_whitespace() && *c != ')')
             && let Some(close) = (i + 1..cs.len()).find(|&j| cs[j] == '/')
         {
             let after = cs.get(close + 1);
-            if after.is_none() || space(after) || after == Some(&')') {
+            if after.is_none() || space(after) || after.is_some_and(|c| "()\"|".contains(*c)) {
                 out.push((i, close + 1));
                 i = close + 1;
                 continue;

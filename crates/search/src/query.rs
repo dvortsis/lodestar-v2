@@ -706,15 +706,25 @@ const REGEX_FIELD: &str = "name:/";
 /// regex parser). Returns the pattern and the byte after the closing `/`.
 ///
 /// `None` when the slashes don't delimit a pattern, and the text is plain
-/// words instead (`tv / movies / 1080p`, `/usr/bin`): the opening `/` is
-/// followed by whitespace, or the closing one by anything but
-/// whitespace, `)` or the end of the query. A literal that would
+/// words instead (`tv / movies / 1080p`, `/usr/bin`, a lone `/`): the
+/// opening `/` is followed by whitespace or the end, or the closing one
+/// by anything that doesn't end a word (whitespace, a parenthesis, a
+/// quote, `|`, the end). Ending exactly where a word would keeps a plain
+/// word from rendering as a pattern (`/or/` before `(` would otherwise
+/// come back as one, and a lone `/` at the end as an unclosed one). A literal that would
 /// delimit but is empty or never closed is an error.
 fn regex_literal(q: &str, open: usize) -> Result<Option<(String, usize)>, ParseError> {
-    // Whitespace as the lexer splits on it: ASCII only.
+    // What ends a word, as the lexer splits them (whitespace is ASCII
+    // only): a pattern starts and ends exactly where a word could.
+    let ends_word = |b: Option<&u8>| {
+        b.is_none_or(|n| n.is_ascii_whitespace() || matches!(n, b'(' | b')' | b'"' | b'|'))
+    };
+    // A pattern may start with `(` or `|` (`/(720|1080)p/`), not with
+    // whitespace or `)`, which no pattern can; a `/` at the very end, or
+    // closing a group (`(x /)`), is a word too.
     if q.as_bytes()
         .get(open + 1)
-        .is_some_and(u8::is_ascii_whitespace)
+        .is_none_or(|n| n.is_ascii_whitespace() || *n == b')')
     {
         return Ok(None);
     }
@@ -724,11 +734,7 @@ fn regex_literal(q: &str, open: usize) -> Result<Option<(String, usize)>, ParseE
         match c {
             '/' => {
                 let end = open + 1 + at + 1;
-                let delimited = q
-                    .as_bytes()
-                    .get(end)
-                    .is_none_or(|n| n.is_ascii_whitespace() || *n == b')');
-                if !delimited {
+                if !ends_word(q.as_bytes().get(end)) {
                     return Ok(None);
                 }
                 if pattern.is_empty() {

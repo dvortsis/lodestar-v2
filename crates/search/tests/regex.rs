@@ -256,9 +256,25 @@ fn slashes_delimit_a_regex_only_where_a_pattern_can_start_and_end() {
     assert!(words("/a/b"));
     assert!(words("x / y/"));
     // Before whitespace, `)` or the end, it closes one.
-    for q in ["/a/", "/a/ b", "(/a/)", "x (y | /a b/)", "name:/a/"] {
+    for q in [
+        "/a/",
+        "/a/ b",
+        "(/a/)",
+        "x (y | /a b/)",
+        "name:/a/",
+        "/a/(b)",
+        "/a/|b",
+    ] {
         assert!(parse(q).unwrap().has_regex(), "{q}");
     }
+    // Fuzz find: `/or/` before `(` was a word that rendered as a regex.
+    let n = parse("/or/(krk:ipfs) x").unwrap();
+    assert_eq!(parse(&n.to_query()).unwrap(), n);
+    assert!(n.has_regex());
+    // A lone `/` is a word, at the end too.
+    assert!(words("x /"));
+    assert!(words("/ "));
+    assert!(words("(x /)"));
     // Still an error when it would delimit one but is unclosed or empty.
     assert!(parse("/abc").is_err());
     assert!(parse("// x").unwrap_err().message.contains("empty"));
@@ -408,6 +424,33 @@ proptest! {
         for p in &patterns {
             let ast = Node::Regex { pattern: p.clone() };
             prop_assert_eq!(found(&ix, &ast), expected(&stored, p), "{}", p);
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 4000, ..ProptestConfig::default() })]
+
+    /// The `query` fuzz target's round trip, over text full of slashes and
+    /// what ends a word: whatever parses renders back to the same AST
+    /// under both readings of units.
+    #[test]
+    fn slashy_text_round_trips(
+        text in prop::collection::vec(
+            prop::sample::select(vec![
+                "/", "a", "or", "(", ")", " ", "\"", "|", "\\", "name:", "x:", "-", "\0",
+            ]),
+            0..16,
+        )
+        .prop_map(|parts| parts.concat()),
+    ) {
+        use lodestar_search::{Units, parse_with};
+        if let Ok(ast) = parse_with(&text, Units::Typed) {
+            let stored = ast.to_query();
+            for units in [Units::Stored, Units::Typed] {
+                let again = parse_with(&stored, units).ok();
+                prop_assert_eq!(again.as_ref(), Some(&ast), "{:?} → {:?}", text, stored);
+            }
         }
     }
 }
