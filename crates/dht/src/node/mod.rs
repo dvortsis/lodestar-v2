@@ -208,10 +208,11 @@ pub struct Config {
     pub lookup_end: bool,
     /// CR-SOFT-TIMEOUT (`dht.soft_timeout`): an owned peer lookup's query
     /// unanswered for 1 s (on the maintenance tick, so 1–2 s) stops holding
-    /// its leg's end once 8 others have answered. It keeps its lane, so the
-    /// leg asks exactly whom it would with the switch off and sends nothing
-    /// more; it stays out until it's answered (a late answer still settles
-    /// it) or reaches `query_timeout`. Off, lookups wait exactly as before
+    /// its leg's end once 8 others have answered, and gives its place among
+    /// the 8 closest up, so the next candidate is asked once a lane frees.
+    /// It keeps its lane, so a leg never has more than 3 queries out, and
+    /// stays out until it's answered (a late answer still settles it) or
+    /// reaches `query_timeout`. Off, lookups wait exactly as before
     /// and nothing is allocated.
     pub soft_timeout: bool,
     /// CR-SOFT-TIMEOUT: how long a query waits before it goes soft,
@@ -429,6 +430,11 @@ pub struct Stats {
     /// (`dht_soft_timeouts_total`, `dht_soft_timeout_late_replies_total`).
     pub soft_timeouts: AtomicU64,
     pub soft_timeout_late: AtomicU64,
+    /// The simulator's seam: each ended peer request's slot residence in
+    /// ms and when it ended, for a screen's lookup-duration percentiles.
+    /// Only with the `testing` feature; production keeps none.
+    #[cfg(feature = "testing")]
+    pub residences: std::sync::Mutex<Vec<(tokio::time::Instant, u64)>>,
     pub sample_frontier: AtomicU64,
     pub sample_suppression_seconds: AtomicU64,
     /// Gauge: why this run is or isn't sampling yet, as an index into
@@ -1117,10 +1123,10 @@ pub type PeerPermit = tokio::sync::OwnedSemaphorePermit;
 pub const PEER_REQUEST_CAPACITY: usize = 32;
 
 /// CR-SOFT-TIMEOUT (`dht.soft_timeout`): an owned peer lookup's query
-/// unanswered this long stops holding its leg's end once 8 others have
-/// answered. It keeps its lane and stays out until it's answered or
-/// reaches `query_timeout`, so the leg sends nothing more than with the
-/// switch off. Checked on the maintenance tick, so with the default
+/// unanswered this long gives its place among the 8 closest up: the next
+/// candidate is asked once a lane frees, and the leg can end once 8 others
+/// have answered. It keeps its lane and stays out until it's answered or
+/// reaches `query_timeout`, so a leg never has more than 3 out. Checked on the maintenance tick, so with the default
 /// 1 s tick the wait is 1–2 s. See
 /// docs/decisions/2026-11-23-CR-SOFT-TIMEOUT.md.
 pub const SOFT_TIMEOUT: Duration = Duration::from_secs(1);
@@ -1392,6 +1398,17 @@ impl Node {
 
     pub fn stats(&self) -> StatsSnapshot {
         self.stats.snapshot()
+    }
+
+    /// The simulator's seam: every ended peer request's (end time, slot
+    /// residence in ms) so far ([`Stats::residences`]).
+    #[cfg(feature = "testing")]
+    pub fn residences(&self) -> Vec<(tokio::time::Instant, u64)> {
+        self.stats
+            .residences
+            .lock()
+            .expect("residences lock")
+            .clone()
     }
 
     /// A handle that can outlive borrows of the node, for scrapes.

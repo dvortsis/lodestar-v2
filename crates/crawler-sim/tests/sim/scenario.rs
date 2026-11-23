@@ -23,11 +23,6 @@ pub struct Scenario {
     /// Print the capacity ledger (`W`, `q`, `y`, occupancy) in the report.
     /// Off in the baselines, whose goldens predate it.
     pub ledger: bool,
-    /// Record each owned request's time from admission to its answer
-    /// ([`crate::run::Report::lookup_ms`]), for a screen's lookup-duration
-    /// percentiles. It routes answers through one more task, so it's off
-    /// in every golden.
-    pub lookup_times: bool,
 }
 
 /// CR-SIM-restart: leg 1 starts fresh with `dht.safe_restart` on, sits out
@@ -254,7 +249,6 @@ pub fn base(name: &'static str) -> Scenario {
         switches: Switches::default(),
         restart: None,
         ledger: false,
-        lookup_times: false,
     }
 }
 

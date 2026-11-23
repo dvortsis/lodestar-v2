@@ -205,8 +205,8 @@ pub struct Dht {
     /// (docs/decisions/2026-11-20-CR-LOOKUP-END.md); not in the Settings UI.
     pub lookup_end: bool,
     /// CR-SOFT-TIMEOUT: a peer lookup stops waiting on a DHT query left
-    /// unanswered for 1–2 s once 8 others have answered, without sending
-    /// any more queries; a late answer still counts. Off by default
+    /// unanswered for 1–2 s: it moves past it once a lane frees, never with
+    /// more queries out than before, and a late answer still counts. Off by default
     /// (docs/decisions/2026-11-23-CR-SOFT-TIMEOUT.md); not in the Settings
     /// UI.
     pub soft_timeout: bool,

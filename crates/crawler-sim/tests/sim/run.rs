@@ -59,56 +59,9 @@ pub struct Report {
     /// Every `sample_infohashes` the node sent, both legs' in a restart
     /// (CR-SAMPLE-BACKOFF-ESCALATE). Not in the report text.
     pub asks: Vec<crate::net::SampleAsk>,
-    /// With `Scenario::lookup_times`: each owned request admitted after
-    /// the warmup, its milliseconds from admission to its answer. Not in
-    /// the report text.
+    /// Each peer request that ended after the warmup, its slot residence
+    /// in ms (the dht's `testing` seam). Not in the report text.
     pub lookup_ms: Vec<u64>,
-}
-
-/// Owned requests' (admitted at, milliseconds to answer), when recorded.
-pub type LookupTimes = Arc<Mutex<Vec<(Duration, u64)>>>;
-
-/// Forwards one owned request to the node and its admission and answer
-/// back to the pool, recording the time from admission to answer. A
-/// caller that goes away at either step is passed on, so the node still
-/// sees a cancel.
-fn timed_request(
-    node: &lodestar_dht::node::NodeHandle,
-    r: PeerRequest,
-    times: LookupTimes,
-    start: Instant,
-) {
-    let (tx, rx) = oneshot::channel();
-    node.request_peers_with(r.key, tx, r.permit);
-    let mut admit = r.admit;
-    tokio::spawn(async move {
-        let answer = tokio::select! {
-            a = rx => a,
-            () = admit.closed() => return,
-        };
-        let Ok(Some(mut result)) = answer else {
-            let _ = admit.send(None);
-            return;
-        };
-        let admitted = Instant::now();
-        let (ftx, frx) = oneshot::channel();
-        if admit.send(Some(frx)).is_err() {
-            return;
-        }
-        let mut ftx = ftx;
-        let peers = tokio::select! {
-            p = &mut result => p,
-            () = ftx.closed() => return,
-        };
-        if let Ok(peers) = peers {
-            let ms = u64::try_from(admitted.elapsed().as_millis()).unwrap_or(u64::MAX);
-            times
-                .lock()
-                .expect("times lock")
-                .push((admitted.duration_since(start), ms));
-            let _ = ftx.send(peers);
-        }
-    });
 }
 
 /// One minute of the sampler, from [`Minute`].
@@ -303,7 +256,6 @@ impl SessionEnd for SimEnd {
 /// The DHT plugin's loop (`DhtSource::run`), minus its stats mirror: owned
 /// peer requests go to the node; lookup harvests answer as replies and the
 /// rest are discoveries. Discovery times are virtual.
-#[allow(clippy::too_many_arguments)]
 async fn glue(
     node: lodestar_dht::node::NodeHandle,
     mut requests: mpsc::Receiver<PeerRequest>,
@@ -312,7 +264,6 @@ async fn glue(
     log: Arc<Mutex<Log>>,
     start: Instant,
     mut stop: watch::Receiver<bool>,
-    times: Option<LookupTimes>,
 ) -> u64 {
     let source = SourceId::new(1).expect("valid source id");
     let mut dropped = 0;
@@ -327,12 +278,9 @@ async fn glue(
                         drop(r.admit);
                         node.request_session(r.key, Box::new(SimSession(session)), r.permit);
                     }
-                    None => match &times {
-                        Some(t) => timed_request(&node, r, t.clone(), start),
-                        None => {
-                            node.request_peers_with(r.key, r.admit, r.permit);
-                        }
-                    },
+                    None => {
+                        node.request_peers_with(r.key, r.admit, r.permit);
+                    }
                 },
                 None => requests_open = false,
             },
@@ -419,7 +367,6 @@ impl Leg {
         log: &Arc<Mutex<Log>>,
         start: Instant,
         restore: Vec<QueuedKey>,
-        times: Option<LookupTimes>,
     ) -> Leg {
         let (harvest_tx, harvest_rx) = mpsc::channel(4096);
         let (node, port) = testing::start(dht, SocketAddr::from(ME), seeds.node, Some(harvest_tx));
@@ -459,7 +406,6 @@ impl Leg {
             log.clone(),
             start,
             stop_rx,
-            times,
         ));
         let stored = Arc::new(AtomicU64::new(0));
         let writer_task = tokio::spawn(writer(out_rx, log.clone(), stored.clone()));
@@ -618,7 +564,6 @@ pub async fn run(s: &Scenario) -> Report {
         return crate::restart::run(s, r, dht, pool_cfg, net, seeds, log, start, text).await;
     }
 
-    let times = s.lookup_times.then(LookupTimes::default);
     let leg = Leg::start(
         dht,
         pool_cfg,
@@ -628,12 +573,19 @@ pub async fn run(s: &Scenario) -> Report {
         &log,
         start,
         Vec::new(),
-        times.clone(),
     );
     let minutes = leg.minutes(start, s.minutes).await;
 
     // Measure at the boundary, then stop everything.
     let dht_final = leg.node.stats();
+    let warm = start + Duration::from_secs(WARMUP_MINUTES as u64 * 60);
+    let lookup_ms = leg
+        .node
+        .residences()
+        .into_iter()
+        .filter(|(at, _)| *at >= warm)
+        .map(|(_, ms)| ms)
+        .collect();
     let stored_at_end = leg.stored.load(Ordering::Relaxed);
     let pool_end = leg.pool_end();
     write_minutes(&mut text, &minutes);
@@ -644,17 +596,6 @@ pub async fn run(s: &Scenario) -> Report {
     let end = leg.stop().await;
     conservation(&dht_final, end.fetched, end.funnel_fetched, end.stored);
     write_net(&mut text, &end.net.stats, end.dropped, end.queued.len());
-    let warm = Duration::from_secs(WARMUP_MINUTES as u64 * 60);
-    let lookup_ms = times
-        .map(|t| {
-            t.lock()
-                .expect("times lock")
-                .iter()
-                .filter(|(at, _)| *at >= warm)
-                .map(|(_, ms)| *ms)
-                .collect()
-        })
-        .unwrap_or_default();
     Report {
         asks: end.net.asks,
         lookup_ms,

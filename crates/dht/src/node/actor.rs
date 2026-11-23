@@ -2785,6 +2785,12 @@ impl Actor {
                 self.stats
                     .ledger
                     .end(why, &entry, millis(r.started.elapsed()));
+                #[cfg(feature = "testing")]
+                self.stats
+                    .residences
+                    .lock()
+                    .expect("residences lock")
+                    .push((Instant::now(), millis(r.started.elapsed())));
                 let mut peers: Vec<_> = r.peers.iter().copied().collect();
                 peers.sort_unstable();
                 if let Some(Reply::Stream(stream)) = r.reply {
@@ -2944,12 +2950,12 @@ impl Actor {
     /// CR-SOFT-TIMEOUT: marks owned peer lookups' queries unanswered for
     /// `soft_timeout_after` ([`super::SOFT_TIMEOUT`] unless a screen sets
     /// it; never more than `query_timeout`) as soft. A soft query keeps its
-    /// lane and stays pending, so its leg asks exactly whom, and when, it
-    /// would with the switch off, and sends nothing more; it only stops
-    /// holding the leg's end once K others have answered
-    /// ([`Lookup::is_done`]). A late answer still settles it once. Returns
-    /// the lookups to drive, whose end may now have come. Nothing with the
-    /// switch off.
+    /// lane and stays pending, so a leg never has more than `ALPHA` out, but
+    /// it gives its place among the K closest up: the next candidate is
+    /// asked once a lane frees, and the leg can end once K others have
+    /// answered ([`Lookup::is_done`]). A late answer still settles it once.
+    /// Returns the lookups to drive, whose end may now have come. Nothing
+    /// with the switch off.
     fn soft_expire(&mut self, now: Instant) -> Vec<u32> {
         let mut touched = Vec::new();
         if !self.cfg.soft_timeout {

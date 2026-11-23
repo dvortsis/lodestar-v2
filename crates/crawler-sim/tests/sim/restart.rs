@@ -261,7 +261,6 @@ pub async fn run(
         &log,
         start,
         Vec::new(),
-        None,
     );
     sleep_until(start + hour).await;
     let leg1_first_hour = leg.stored.load(Ordering::Relaxed);
@@ -320,7 +319,6 @@ pub async fn run(
         &log,
         start,
         one.queued,
-        None,
     );
     let minutes = leg.minutes(start2, s.minutes).await;
     let end2 = Instant::now();

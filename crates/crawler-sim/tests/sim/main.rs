@@ -1141,7 +1141,7 @@ fn soft_timeout_runs_deterministically() {
 /// `dht.lookup_end` off and then on in every arm. Reports `W`, `q`, `y`,
 /// stored per minute, stored per slot-second and stored per DHT query,
 /// late ÷ soft (soft-expired queries answered before the query timeout),
-/// and lookup duration p50, p90 and p99 (admission to answer). A value
+/// and lookup duration p50, p90 and p99 (slot residence). A value
 /// passes only if stored per slot-second and stored per query both rise on
 /// 8/8 seeds (build-plan §0.5's standing rule) and p90 and p99 are no
 /// worse than off, meaned over the seeds (the runner's distribution rule,
@@ -1161,7 +1161,6 @@ fn soft_timeout_screen() {
                 soft_timeout,
                 ..Switches::default()
             },
-            lookup_times: true,
             ..scenario::live_lookup()
         };
         let off = over_seeds(&arm(None));
@@ -1237,8 +1236,8 @@ fn soft_timeout_screen() {
                 sign_test(&diffs),
             );
             // The runner's distribution rule (2026-11-23): lookup duration
-            // (admission to answer, after the warmup), each seed's
-            // percentiles, meaned over the seeds.
+            // (each request's slot residence, start to end, after the
+            // warmup), each seed's percentiles, meaned over the seeds.
             let mean_pct = |runs: &[run::Report], p: f64| {
                 runs.iter()
                     .map(|r| percentile(&r.lookup_ms, p))
