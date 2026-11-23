@@ -1406,7 +1406,9 @@ export default [
 	// Svelte runtime only this route uses since #132 moved it out of /search's first load); 28.06 KB
 	// after #139 and #154 regrouped the shared chunks it pulls in (Button, Badge, transitions,
 	// messages). Limit: measured + 10%.
-	entry('Compare route (own JS + CSS)', own('/compare'), '31.14 KB'),
+	// runner §2.26, X-detail-depth-compare: the "Differences only" switch, its count line and the
+	// equality check (measured 31,790 B; the four messages in both languages are most of it).
+	entry('Compare route (own JS + CSS)', own('/compare'), '31.79 KB'),
 	// Measured 42.8 KB: over the 15 KB target because the screen is a virtualised list (12 KB with
 	// the Svelte runtime only lazy routes use), an 11 KB page with both languages' messages, the key
 	// registry, the API client and the formatters. Limit: the §10.1 cap for route JS.

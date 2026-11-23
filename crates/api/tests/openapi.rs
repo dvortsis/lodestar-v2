@@ -18,6 +18,7 @@ use tower::ServiceExt;
 const ROUTES: &[(&str, &str)] = &[
     ("GET", "/auth"),
     ("POST", "/setup"),
+    ("POST", "/setup/token"),
     ("POST", "/login"),
     ("POST", "/logout"),
     ("POST", "/password"),
@@ -176,9 +177,10 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST", "/companions/{id}/guided/forget"),
     ("GET", "/openapi.json"),
 ];
-const OPEN: [&str; 6] = [
+const OPEN: [&str; 7] = [
     "/auth",
     "/setup",
+    "/setup/token",
     "/login",
     "/logout",
     "/legal/notice",

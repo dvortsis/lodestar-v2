@@ -2114,6 +2114,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/setup/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Checks the setup token alone, so the first-run form can say it's
+         *     wrong before asking for a password. It takes an attempt from the same
+         *     per-address limit as `/setup` and `/login`, and answers as `/setup`
+         *     does for the token: 401 `bad_token`, 409 `setup_done`, 429
+         *     `rate_limited`. Nothing is claimed or spent; `/setup` checks the token
+         *     again.
+         */
+        post: operations["checkSetupToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sources": {
         parameters: {
             query?: never;
@@ -9516,6 +9540,17 @@ export interface components {
              */
             token: string;
         };
+        /**
+         * @description `POST /setup/token`: checks the setup token before the password is
+         *     asked for. `Debug` redacts the token.
+         */
+        SetupTokenRequest: {
+            /**
+             * @description The one-time token printed to the logs (`XXXX-XXXX-XXXX-XXXX`, any
+             *     case).
+             */
+            token: string;
+        };
         /** @enum {string} */
         Severity: "warning" | "error";
         /**
@@ -16564,6 +16599,36 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    checkSetupToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The token is right. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "ok": true
+                     *     }
+                     */
                     "application/json": components["schemas"]["OkResponse"];
                 };
             };

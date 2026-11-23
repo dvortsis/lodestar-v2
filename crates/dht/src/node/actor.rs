@@ -136,6 +136,11 @@ enum Purpose {
     Ping,
     Lookup(u32),
     Sample,
+    /// CR-SOFT-TIMEOUT: a soft-expired lookup query that outlived its
+    /// lookup. It keeps its place against the outstanding cap until it's
+    /// answered (only the routing table hears of it) or times out. It no
+    /// longer names the lookup, whose id may be reused.
+    Detached,
 }
 
 #[derive(Debug)]
@@ -524,6 +529,15 @@ struct Actor {
     verify_rate: TokenBucket,
     /// Those pings still awaiting an answer.
     verify_tids: Set<u64>,
+    /// CR-SOFT-TIMEOUT: pending lookup queries past the soft timeout. They
+    /// keep their lanes; a lookup that ends with them out detaches them
+    /// rather than dropping them. Empty, and never allocated, with
+    /// `dht.soft_timeout` off.
+    soft_tids: Set<u64>,
+    /// Tests only: each finished leg's answers among its K closest live
+    /// candidates, and its slow queries still out, at its end.
+    #[cfg(test)]
+    legs_ended: Vec<(usize, usize)>,
     stats: Arc<Stats>,
     rng: StdRng,
     epoch: Instant,
@@ -835,6 +849,9 @@ impl Actor {
             answered: Answered::new(ANSWERED_TABLE, now),
             verify_rate: verify_bucket(cfg.intensity, now),
             verify_tids: Set::default(),
+            soft_tids: Set::default(),
+            #[cfg(test)]
+            legs_ended: Vec::new(),
             families,
             ids,
             external: ExternalIp {
@@ -1360,6 +1377,8 @@ impl Actor {
         match purpose {
             Purpose::Ping => QueryPurpose::Ping,
             Purpose::Sample => QueryPurpose::Sample,
+            // Never sent as such: only a sent query is detached.
+            Purpose::Detached => QueryPurpose::PeerLookup,
             Purpose::Lookup(_) if hinted => QueryPurpose::Hint,
             Purpose::Lookup(lid) => match self.lookups.get(&lid) {
                 Some(l) if l.scrape => QueryPurpose::Scrape,
@@ -1377,6 +1396,7 @@ impl Actor {
             self.end_seed_round_if_done();
         }
         self.verify_tids.remove(&tid);
+        self.soft_tids.remove(&tid);
         if let Purpose::Lookup(lid) = p.purpose
             && let Some(r) = self
                 .lookups
@@ -1756,6 +1776,9 @@ impl Actor {
             self.seed_answered = true;
             self.seed_warned = false;
         }
+        if self.soft_tids.contains(&tid) {
+            Stats::inc(&self.stats.soft_timeout_late);
+        }
         let pending = self.take_pending(tid);
         // Matched to a query still awaiting it, from the address asked: the
         // query resolves here, once; `maintain` counts the rest as timeouts.
@@ -1818,7 +1841,7 @@ impl Actor {
                     .get(&lid)
                     .is_some_and(|l| l.explore)
                     .then_some(TargetKind::Explore),
-                Purpose::Ping => None,
+                Purpose::Ping | Purpose::Detached => None,
             };
             for n in nodes.iter().take(NODES_PER_REPLY) {
                 if endpoint_allowed(&self.cfg, n.addr)
@@ -2680,6 +2703,25 @@ impl Actor {
             })
             .collect();
         for t in tids {
+            // CR-SOFT-TIMEOUT: a soft-expired query stays out, against the
+            // outstanding cap, until it's answered or times out. It leaves
+            // its request's in-flight count now, as a dropped query does,
+            // so a request's other family leg keeps its lanes; detached, it
+            // never touches the request again.
+            if self.soft_tids.contains(&t)
+                && let Some(p) = self.pending.get_mut(&t)
+            {
+                p.purpose = Purpose::Detached;
+                if let Some(r) = self
+                    .lookups
+                    .get(&lid)
+                    .and_then(|l| l.owner)
+                    .and_then(|o| self.peer_requests.get_mut(&o))
+                {
+                    r.inflight = r.inflight.saturating_sub(1);
+                }
+                continue;
+            }
             if self.take_pending(t).hinted {
                 self.stats.ledger.hint(HintOutcome::Unanswered);
             }
@@ -2688,6 +2730,8 @@ impl Actor {
         let Some(done) = self.lookups.remove(&lid) else {
             return;
         };
+        #[cfg(test)]
+        self.legs_ended.push((done.answered_live(), done.slow()));
         if done.bootstrap {
             let f = done.family;
             let found = !self.families[f].table.is_empty();
@@ -2752,6 +2796,12 @@ impl Actor {
                 self.stats
                     .ledger
                     .end(why, &entry, millis(r.started.elapsed()));
+                #[cfg(feature = "testing")]
+                self.stats
+                    .residences
+                    .lock()
+                    .expect("residences lock")
+                    .push((Instant::now(), millis(r.started.elapsed())));
                 let mut peers: Vec<_> = r.peers.iter().copied().collect();
                 peers.sort_unstable();
                 if let Some(Reply::Stream(stream)) = r.reply {
@@ -2908,6 +2958,53 @@ impl Actor {
         );
     }
 
+    /// CR-SOFT-TIMEOUT: marks owned peer lookups' queries unanswered for
+    /// `soft_timeout_after` ([`super::SOFT_TIMEOUT`] unless a screen sets
+    /// it; never more than `query_timeout`) as soft. A soft query keeps its
+    /// lane and stays pending, so a leg never has more than `ALPHA` out, but
+    /// it gives its place among the K closest up: the next candidate is
+    /// asked once a lane frees, and the leg can end once K others have
+    /// answered ([`Lookup::is_done`]). A late answer still settles it once.
+    /// Returns the lookups to drive, whose end may now have come. Nothing
+    /// with the switch off.
+    fn soft_expire(&mut self, now: Instant) -> Vec<u32> {
+        let mut touched = Vec::new();
+        if !self.cfg.soft_timeout {
+            return touched;
+        }
+        let soft = self.cfg.soft_timeout_after.min(self.cfg.query_timeout);
+        let timeout = self.cfg.query_timeout;
+        let mut due: Vec<(u64, u32, NodeId)> = self
+            .pending
+            .iter()
+            .filter(|(tid, p)| !p.hinted && !self.soft_tids.contains(tid))
+            .filter(|(_, p)| {
+                let waited = now.duration_since(p.sent);
+                waited >= soft && waited < timeout
+            })
+            .filter_map(|(tid, p)| match (p.purpose, p.id) {
+                (Purpose::Lookup(lid), Some(id)) => Some((*tid, lid, id)),
+                _ => None,
+            })
+            .collect();
+        // In tid order, so a run repeats whatever the map's order.
+        due.sort_unstable_by_key(|(tid, _, _)| *tid);
+        for (tid, lid, id) in due {
+            let Some(l) = self.lookups.get_mut(&lid) else {
+                continue;
+            };
+            if l.owner.is_none() || l.scrape || !l.soft_expire(&id) {
+                continue;
+            }
+            self.soft_tids.insert(tid);
+            Stats::inc(&self.stats.soft_timeouts);
+            if !touched.contains(&lid) {
+                touched.push(lid);
+            }
+        }
+        touched
+    }
+
     fn maintain(&mut self, sockets: &[SendSocket]) {
         let now_i = Instant::now();
         let now = self.now_secs();
@@ -2947,6 +3044,10 @@ impl Actor {
             }
         }
         for lid in touched {
+            self.drive_lookup(sockets, lid);
+        }
+        // CR-SOFT-TIMEOUT: after the timeouts and their drives.
+        for lid in self.soft_expire(now_i) {
             self.drive_lookup(sockets, lid);
         }
 
@@ -5378,6 +5479,10 @@ mod ledger_tests;
 #[cfg(test)]
 #[path = "lookup_end_tests.rs"]
 mod lookup_end_tests;
+
+#[cfg(test)]
+#[path = "soft_timeout_tests.rs"]
+mod soft_timeout_tests;
 
 #[cfg(test)]
 #[path = "preset_slots_tests.rs"]

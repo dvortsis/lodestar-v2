@@ -26,9 +26,10 @@ pub const PREFIX: &str = "/api/v1";
 /// The session cookie's security scheme.
 const SESSION: &str = "session";
 /// Paths that need no session.
-const OPEN: [&str; 6] = [
+const OPEN: [&str; 7] = [
     "/auth",
     "/setup",
+    "/setup/token",
     "/login",
     "/logout",
     "/legal/notice",

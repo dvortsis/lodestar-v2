@@ -59,6 +59,9 @@ pub struct Report {
     /// Every `sample_infohashes` the node sent, both legs' in a restart
     /// (CR-SAMPLE-BACKOFF-ESCALATE). Not in the report text.
     pub asks: Vec<crate::net::SampleAsk>,
+    /// Each peer request that ended after the warmup, its slot residence
+    /// in ms (the dht's `testing` seam). Not in the report text.
+    pub lookup_ms: Vec<u64>,
 }
 
 /// One minute of the sampler, from [`Minute`].
@@ -575,6 +578,14 @@ pub async fn run(s: &Scenario) -> Report {
 
     // Measure at the boundary, then stop everything.
     let dht_final = leg.node.stats();
+    let warm = start + Duration::from_secs(WARMUP_MINUTES as u64 * 60);
+    let lookup_ms = leg
+        .node
+        .residences()
+        .into_iter()
+        .filter(|(at, _)| *at >= warm)
+        .map(|(_, ms)| ms)
+        .collect();
     let stored_at_end = leg.stored.load(Ordering::Relaxed);
     let pool_end = leg.pool_end();
     write_minutes(&mut text, &minutes);
@@ -587,6 +598,7 @@ pub async fn run(s: &Scenario) -> Report {
     write_net(&mut text, &end.net.stats, end.dropped, end.queued.len());
     Report {
         asks: end.net.asks,
+        lookup_ms,
         ..finish(
             text,
             &log,
@@ -634,6 +646,7 @@ pub fn finish(
             })
             .collect(),
         asks: Vec::new(),
+        lookup_ms: Vec::new(),
     }
 }
 
