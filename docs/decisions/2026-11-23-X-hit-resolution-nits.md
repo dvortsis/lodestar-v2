@@ -1,0 +1,9 @@
+# X-hit-resolution-nits decisions
+
+rv1079's optional findings on X-hit-resolution (#1079), placed by `2026-11-23-runner-records-r14.md`.
+
+- **`SearchHit.resolution`'s schema is built from the parser's list, not copied.** `#[schema(schema_with = resolution_schema)]` builds `type: [string, null]` with `enum` = `Resolution::ALL` (each `as_str()`) plus `null`. The wire type stays `Option<String>` and the field stays `required`. The web client's generated type narrows from `string | null` to the eight literals or `null`; no web code needed a change (fixtures use `null`; the results table still shows an em dash for `null`). Reason: one source for the canonical values (runner's brief).
+- **CI already holds the committed document to the parser.** The `openapi.json drift` job (inside `ci-ok`) regenerates the document and fails on any diff, and `web.yml` does the same for `schema.d.ts`. So a new `Resolution` variant fails CI until both are regenerated and committed. `tests/openapi.rs` adds `a_hits_resolution_lists_the_canonical_values`: the enum equals `Resolution::ALL` plus `null`, the description survives, and every example hit in the document carries a resolution from the list. Reason: the runner asked for a non-tautological check; the drift job is that check, and the new test covers what the derive could silently drop.
+- **`schema_with` replaces the derived schema whole,** doc comment and `example` included, so the description (unchanged text) and the `1080p` example are written in `resolution_schema()`. The field's doc comment now points there.
+- **`example_hit()` shows `"resolution": "1080p"`,** matching its `…1080p…` name, so both examples that embed it (`/user-items`, `/collections`) show what the field holds.
+- **`api` depends on `lodestar-release-parser` directly.** It was already built through `search`, `classify` and `filter`, so nothing new is compiled.

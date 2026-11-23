@@ -643,3 +643,49 @@ fn nullability_follows_the_field_contract() {
         assert!(!nullable(&body, f), "ErrorBody.{f}");
     }
 }
+
+/// Every value a hit's `resolution` may hold is listed: the parser's
+/// canonical forms plus null, so the web client's type is that union. The
+/// committed `openapi.json` is held to this document by CI's drift check.
+/// Every example hit's resolution is one of them.
+#[test]
+fn a_hits_resolution_lists_the_canonical_values() {
+    use lodestar_release_parser::Resolution;
+    let doc = doc();
+    let field = &doc["components"]["schemas"]["SearchHit"]["properties"]["resolution"];
+    let allowed: Vec<Value> = Resolution::ALL
+        .iter()
+        .map(|r| Value::from(r.as_str()))
+        .chain([Value::Null])
+        .collect();
+    assert_eq!(field["enum"].as_array(), Some(&allowed));
+    assert!(
+        field["description"]
+            .as_str()
+            .is_some_and(|d| d.contains("4320p"))
+    );
+    assert!(allowed.contains(&field["example"]));
+    // Hits in operation examples: any object carrying the hit's own keys.
+    fn hits<'a>(v: &'a Value, out: &mut Vec<&'a Value>) {
+        match v {
+            Value::Object(m) => {
+                if m.contains_key("piece_len") && m.contains_key("resolved_via") {
+                    out.push(v);
+                }
+                m.values().for_each(|c| hits(c, out));
+            }
+            Value::Array(a) => a.iter().for_each(|c| hits(c, out)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    hits(&doc["paths"], &mut found);
+    assert!(!found.is_empty(), "no example hits found");
+    for hit in found {
+        let r = &hit["resolution"];
+        assert!(
+            r.is_string() && allowed.contains(r),
+            "example hit resolution {r}"
+        );
+    }
+}
