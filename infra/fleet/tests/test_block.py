@@ -1770,7 +1770,9 @@ class Scrubber(unittest.TestCase):
         a stage-1 treatment gets none, as analyze_cr requires."""
         for treatment, winners, names in (("lc", "adm-utp", ["coordinated_admission", "utp"]),
                                           ("hint", "lc", ["lookup_end", "preset_slots"]),
-                                          ("split", "", []), ("adm", "", None)):
+                                          ("split", "", []), ("adm", "", None),
+                                          # X-soft-key: soft is stacked, on CR-ADM or alone.
+                                          ("soft", "adm", ["coordinated_admission"]), ("soft", "", [])):
             with self.subTest(treatment=treatment, winners=winners):
                 tmp = Path(tempfile.mkdtemp())
                 self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
@@ -1794,6 +1796,7 @@ class Scrubber(unittest.TestCase):
                 doc = scrub.collect(block, out, run=run)
                 argv = seen[0]
                 self.assertEqual(doc["segments"][0]["report"]["verdict"], "valid")
+                self.assertEqual(scrub.scrub(doc)["treatment"], treatment)  # survives the control-plane pass
                 if names is None:
                     self.assertNotIn("--winners", argv)
                 else:
@@ -1805,12 +1808,13 @@ class Scrubber(unittest.TestCase):
         report = raw_report()
         report["identity"]["switches"] = {"lookup_end": True, "preset_slots": True, "hint_first": False,
                                           "sampler_cooldown_split": False, "sample_backoff_escalate": False,
-                                          "made_up_switch": True}
+                                          "soft_timeout": True, "made_up_switch": True}
         doc = {**self.doc(), "segments": [{"segment": 1, "arm": "control", "result": raw_result(),
                                            "report": report}]}
         switches = scrub.scrub(doc)["segments"][0]["report"]["identity"]["switches"]
         self.assertEqual(switches, {"lookup_end": True, "preset_slots": True, "hint_first": False,
-                                    "sampler_cooldown_split": False, "sample_backoff_escalate": False})
+                                    "sampler_cooldown_split": False, "sample_backoff_escalate": False,
+                                    "soft_timeout": True})
 
     def test_only_allow_listed_fields_and_shapes_survive(self):
         out = scrub.scrub(self.doc())
