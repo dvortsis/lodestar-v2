@@ -61,4 +61,21 @@ describe('Search home', () => {
 		setPill('stalled');
 		await waitFor(() => expect(line.textContent).toContain('needs attention'));
 	});
+
+	it('links each state that needs a look to the page that helps, in words that match', async () => {
+		render(Home, props);
+		const line = screen.getByTestId('home-health');
+		for (const [kind, text, href] of [
+			['restart', 'Open Settings', '/settings'],
+			['stalled', 'Open Insights', '/insights'],
+			['paused', 'Open Insights', '/insights']
+		] as const) {
+			setPill(kind);
+			await waitFor(() => expect(line.textContent).toContain(text));
+			expect(line.querySelector('a')!.getAttribute('href')).toBe(href);
+		}
+		setPill('idle');
+		await waitFor(() => expect(line.textContent).toContain('ready'));
+		expect(line.querySelector('a')).toBeNull();
+	});
 });

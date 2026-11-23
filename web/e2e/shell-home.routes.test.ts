@@ -93,10 +93,11 @@ test('the overflow menu leaves the page scrollable, and closes with Esc or a cli
 	await expect(page.getByRole('menu')).toHaveCount(0);
 });
 
-// The health line arrives with the stream and changes with the crawler (working, then paused, which
-// wraps on a phone): neither may move anything below it.
+// The health line arrives with the stream and changes with the crawler. The stream is silent at
+// first (the line is empty), then says "working", then "paused" (which wraps on a phone): none of it
+// may move anything below the line, however late it arrives.
 for (const width of [1440, 390]) {
-	test(`the health line changes state without a layout shift at ${width} px`, async ({
+	test(`the health line arriving and changing does not shift the page at ${width} px`, async ({
 		page,
 		go,
 		mock
@@ -115,14 +116,22 @@ for (const width of [1440, 390]) {
 				}
 			}).observe({ type: 'layout-shift', buffered: true });
 		});
-		const events = await liveEvents(page);
+		const events = await liveEvents(page, null);
 		await go('/search');
 		await interact(page);
+		await expect(page.getByTestId('results-empty-title')).toBeVisible();
 		const health = page.getByTestId('home-health');
+		await expect(health).toHaveText('');
+		const examples = page.locator('.rp-examples').first();
+		const y = async () => (await examples.boundingBox())!.y;
+		const before = await y();
+		await events.send('crawler', crawlerEvent());
 		await expect(health).toContainText('Lodestar is working');
+		expect(await y()).toBe(before);
 		await events.send('crawler', crawlerEvent({ paused: true }));
 		await expect(health).toContainText('paused');
 		await expect(health.getByRole('link')).toHaveAttribute('href', '/insights');
+		expect(await y()).toBe(before);
 		const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
 		expect(cls).toBeLessThan(0.001);
 	});

@@ -39,9 +39,11 @@
 				? m.search_home_health_ready()
 				: kind === 'paused'
 					? m.search_home_health_paused()
-					: kind === 'stalled' || kind === 'failed' || kind === 'restart'
-						? m.search_home_health_attention()
-						: ''
+					: kind === 'restart'
+						? m.search_home_health_restart()
+						: kind === 'stalled' || kind === 'failed'
+							? m.search_home_health_attention()
+							: ''
 	);
 </script>
 

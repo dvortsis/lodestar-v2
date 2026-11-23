@@ -428,6 +428,22 @@ test.describe('the Filters button at 390 px never covers other content', () => {
 		await expect(page.getByTestId('facet-open')).toBeHidden();
 	});
 
+	test('with no results for a real query, the Filters button does not cover the empty state', async ({
+		page,
+		mock
+	}) => {
+		server(mock, () => body([], { total: 0 }));
+		await page.goto('/search?q=nothingmatchesthis');
+		const none = page.getByText('No torrents match').first();
+		await expect(none).toBeVisible();
+		const filters = page.getByTestId('facet-open');
+		if (await filters.isVisible()) {
+			expect(overlaps((await filters.boundingBox())!, (await none.boundingBox())!)).toBe(false);
+		} else {
+			await expect(filters).toBeHidden();
+		}
+	});
+
 	test('on a results page the Filters button does not cover the count', async ({ page, mock }) => {
 		server(mock, () => body(hits(3), { total: 3 }));
 		await page.goto('/search?q=lantern');

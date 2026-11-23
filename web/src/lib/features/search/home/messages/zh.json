@@ -9,5 +9,6 @@
 	"search_home_health_working": "Lodestar 正在运行，并不断发现新种子。",
 	"search_home_health_ready": "Lodestar 已就绪，正在等待新种子。",
 	"search_home_health_paused": "爬虫已暂停。打开洞察以恢复。",
+	"search_home_health_restart": "有更改需要重启。打开设置。",
 	"search_home_health_attention": "有事项需要注意。打开洞察查看详情。"
 }

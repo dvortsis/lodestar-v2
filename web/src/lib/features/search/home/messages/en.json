@@ -9,5 +9,6 @@
 	"search_home_health_working": "Lodestar is working and finding new torrents.",
 	"search_home_health_ready": "Lodestar is ready and waiting for new torrents.",
 	"search_home_health_paused": "The crawler is paused. Open Insights to resume it.",
+	"search_home_health_restart": "A change needs a restart. Open Settings.",
 	"search_home_health_attention": "Something needs attention. Open Insights to see what."
 }

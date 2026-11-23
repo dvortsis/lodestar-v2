@@ -1703,7 +1703,7 @@ export default [
 	// catalogue's `common_just_now`, about 19 B in each chunk that uses it.
 	// +0.01 kB: hashed chunk-name compression noise (X-hit-resolution: a renamed table chunk costs Results 3 B; no code moved). Runner, r14.
 	entry('Search results (lazy)', resultsFirst, '40.86 KB'),
-	// X-shell-home, runner r14: measured 2.65 KB with the health link and focus fix (the chunk, with the modules only it reaches), rounded up to 0.01 KB.
+	// X-shell-home (runner r14): measured 2.65 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.65 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
