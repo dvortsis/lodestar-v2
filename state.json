@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-23T02:38:29Z",
+  "updated_at": "2026-11-23T02:49:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10663,7 +10663,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T02:34:31Z",
+    "updated": "2026-11-23T02:49:41Z",
     "items": [
       {
         "slot": 1,
@@ -10672,7 +10672,7 @@
         "agent": "session_01MMjhnCtuh4cDvCQfwQaNEM",
         "model": "sonnet",
         "since": "2026-11-23T02:34:31Z",
-        "doing": "step 0 (brief 27a89ccb); #1081 X-detail-depth merged b8cd43f7, that session archived"
+        "doing": "go 02:4xZ (design c, 1 s soft timeout, metrics.rs approved); building"
       },
       {
         "slot": 2,
@@ -10681,16 +10681,16 @@
         "agent": "session_01MMjhnCUfvFAhDBHWuB237x",
         "model": "opus",
         "since": "2026-11-22T23:21:00Z",
-        "doing": "#1085 rv CHANGES (palette + pointer barriers, guard tests, .catch); fix round"
+        "doing": "#1085 round 2 bf22524b; delta review running"
       },
       {
         "slot": 3,
-        "slice": "X-narrow-states-2",
-        "role": "build",
-        "agent": "session_01MMjhnBkkHF4KZqpjuV2Dmn",
+        "slice": "X-fleet-baab",
+        "role": "helper",
+        "agent": "session_01MMjhnBgVHySe1NFVBPiukH",
         "model": "sonnet",
-        "since": "2026-11-23T00:12:00Z",
-        "doing": "#1086 ready ef0b3db5 (rv CHANGES fixed, delta checked); CI"
+        "since": "2026-11-23T02:49:41Z",
+        "doing": "step 0 (brief 266163db); #1086 X-narrow-states-2 merged 85d0a8cb, that session archived"
       },
       {
         "slot": 4,
