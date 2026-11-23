@@ -2,27 +2,41 @@
 
 Slice `X-skip-results-flake`, from one failure of `web/e2e/search-toolbar.keyboard.test.ts` ("Skip to results shows on focus and lands on the list's active row") on #1080 at ea5b2cd0. The runner chose the product fix (option A) under `docs/owner-decisions.md` §2.26 (UX): a user's key press must not be lost.
 
-- **The cause was a product race in the shell, not in search.** The window keydown listener that runs the shortcuts isn't on the page from the start. `Chrome.svelte` attaches it in `whenEngaged`, after the first interaction, once a `Promise.all` of 7 lazy imports resolves: keys, shell commands, shortcuts boot, appearance boot, status, StatusPill and ConnectionView. Before this change, only the key that woke the shell was replayed (`Shell.svelte`'s `first` listener removed itself after one key). Every key pressed after it and before the attach was dropped. In the test, the first Tab wakes the shell; Tab, Enter on Skip and j then follow at machine speed. On a loaded runner the chain is still loading when j arrives, so row 2 stays "inactive". A user on a slow device or connection who presses Tab, Enter and j quickly after load lost the j the same way. `data-keys-ready` (ResultsPanel) doesn't cover this: it means the results and detail commands are registered, not that the shell's listener is attached.
+- **The cause was a product race in the shell, not in search.**
+  - The window keydown listener that runs the shortcuts isn't on the page from the start. `Chrome.svelte` attaches it in `whenEngaged`, after the first interaction, once a `Promise.all` of 7 lazy imports resolves: keys, shell commands, shortcuts boot, appearance boot, status, StatusPill and ConnectionView.
+  - Before this change, only the key that woke the shell was replayed: `Shell.svelte`'s `first` listener removed itself after one key. Every key pressed after it and before the attach was dropped.
+  - In the test, the first Tab wakes the shell. Tab, Enter on Skip and j then follow at machine speed. On a loaded runner the chain is still loading when j arrives, so row 2 stays "inactive".
+  - A user on a slow device or connection who presses Tab, Enter and j quickly after load lost the j the same way.
+  - `data-keys-ready` (ResultsPanel) doesn't cover this. It means the results and detail commands are registered, not that the shell's listener is attached.
 - **Evidence (local repro, not committed).**
   - 30 runs at `--workers=8` passed: it doesn't show plainly.
   - Holding back the chunks that contain `results.previous` reproduced the CI failure exactly (`Received: inactive` at the j step). Those chunks are the results commands plus the shortcuts and keys chunks that the chrome's chain waits on.
   - Adding a wait on `[data-keys-ready]` before j still failed. Focus was on row 1 and the keys were registered, but j was dropped.
   - Waiting until the chain finished (a local check only) made j work. A log at the attach showed j had been pressed but there was no listener.
-- **The fix: every press until the attach is kept and replayed, never twice.**
-  - `Shell.svelte` keeps each keydown from the first one until the chrome reports its listener attached (`onkeys`), up to 32. It leaves out modifier-only presses and typing (an editable target, the search box included): the text is already there.
-  - It also takes Ctrl/Cmd+K for the palette on any press in that window, not only the first. Before, a later Ctrl/Cmd+K went to the browser's address bar.
-  - `Chrome.svelte` hands the kept presses to `keys.handle` in order, right after `attach`. It hands them only to the registry: the page has already seen the real events, so handing it new ones would act twice.
-  - It skips a press:
-    - whose target is gone;
-    - that is default-prevented (the list's own Enter and arrows);
-    - that the browser acted on natively: Tab, and Enter or Space on a link, button or `summary`;
-    - that is older than 5 s at the attach (`STALE_KEY_MS`), so a stalled load never fires a late burst of shortcuts.
-  - The Enter on Skip is a link press, so it isn't run again as a shortcut (it would open the detail drawer).
-  - The filters live in the lazy chrome chunk, not the shell, to keep the first load in budget. The shell keeps only the 32 cap and the typing check it already had.
+- **The fix: presses until the attach are kept, and replayed when that can't act twice or against the user.**
+  - **What the shell keeps.** `Shell.svelte` keeps each keydown from the first one until the chrome reports its listener attached (`onkeys`).
+    - It keeps the latest 32; older ones are shifted out.
+    - It leaves out modifier-only presses and typing: an editable target, the search box included, already has the text.
+    - It also takes Ctrl/Cmd+K for the palette on any press in that window, not only the first, so a later one no longer goes to the browser's address bar. In that window the key only opens the palette; it doesn't toggle it.
+  - **How the chrome replays them.** `Chrome.svelte` hands the kept presses to `keys.handle` in order, right after `attach`. It hands them to the registry only: the page has already seen the real events. It leaves out:
+    - **A press the browser or page already acted on, and every press before it.** That means Tab, Enter or Space on a link, button or `summary`, and any default-prevented press (the list's own arrows, Enter and type-ahead). Replayed afterwards, an earlier key would undo that action, for example a j pulling focus back from where the user tabbed to.
+      - The Enter on Skip is such a press. For Enter and Space this mostly marks where to start from: the registry already ignores them on controls (`onControl`), and no command is bound to Enter today. The check is defence in depth for a command that sets `onControl`.
+    - **A plain key, with no Ctrl, Alt or Meta, while focus is in an editable field at replay time.** After a replayed `/` moves focus into the search box, the letters typed after it were meant as text. They are dropped, never run as shortcuts like j, x, s, o or c.
+    - **A press whose target is gone.**
+    - **A press older than 5 s at the attach** (`STALE_KEY_MS`; `event.timeStamp` and `performance.now()` share the document's time origin), so a stalled load never fires a late burst of shortcuts.
+  - **Size.** The filters live in the lazy chrome chunk, not the shell, to keep the first load in budget.
+  - **Limit.** A replayed press finds only the commands registered by then. The search page registers j, k and x from its own mount-time chain, which normally finishes long before the chrome's (it starts at mount, not on the first interaction). If it were still loading at the attach, a kept j would find no command and be dropped, as before this change.
 - **The flaky test needs no wait.** It's unchanged. With the shortcuts chunk held 1.5 s in a local copy (j about 2.5 to 3.1 s old at the attach, under the 5 s cap), it passed 20 of 20 at `--workers=8`. Before the fix it failed every time under a hold.
-- **Tests.** The new `keys pressed before the key listener attaches` group in `search-toolbar.keyboard.test.ts` holds the chunk that starts the shortcuts (the one exporting `startShortcuts`, which only the chrome's chain loads) until the test lets it go. The waits are on conditions, never sleeps. It checks four things:
-  - j right after Skip still moves to row 2, and the Enter on Skip doesn't open the drawer. This one fails without the fix.
-  - Enter on a button (Columns) acts once: the chooser stays open.
-  - Text typed into the search box appears once.
-  - The very first key (`/`) still finds its shortcut.
+- **Tests.**
+  - **How they hold the chain.** The new `keys pressed before the key listener attaches` group in `search-toolbar.keyboard.test.ts` holds the chunk that starts the shortcuts (the one exporting `startShortcuts`, which only the chrome's chain loads) until the test lets it go.
+  - **How they wait.** Each test waits for the status pill, which appears in the same step as the attach and replay. Each then presses a live key whose result differs depending on whether a kept key was wrongly replayed, so no check passes just because the replay hasn't happened yet. Every wait is on a condition, never a sleep.
+  - **What they cover.**
+    - j right after Skip still moves to row 2. This fails without the fix.
+    - An x pressed before a Tab isn't replayed. A live x then selects one row. This fails without the "and every press before it" rule.
+    - Letters after a replayed `/` stay typing: the box keeps focus, a live key types into it, and nothing is selected. This fails without the focus rule.
+    - A press held past 5 s is dropped: a live j then reaches row 2, not row 3. This fails without the cutoff.
+    - Enter on a button acts once.
+    - Text typed into the search box appears once.
+    - The very first key (`/`) still finds its shortcut.
+- **Not this cause.** `e2e/ui-checks/chunk-load.routes.test.ts:291` (X-retry-typed-flake) fails about 1 run in 6 with this change and 1 in 3 without it. In both cases the failing runs have the same signature: Ctrl/Cmd+A in the search box didn't select the old text. Those keys and the typed text target the editable box, which the shell never keeps, and Retry is a click. So that slice stays open.
 - **Size (`npm run size:ci`).** The search route's initial JS is 44.97 kB against its 45 kB limit (44.95 kB without the change, measured the same way). A first version that filtered in the shell measured 45.02 kB, so the filters moved to the chrome. No entry is red.

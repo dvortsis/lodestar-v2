@@ -24,7 +24,7 @@
 	// moved in here when the app mounts, and the rest of #boot goes, in the same task: one frame,
 	// no shift. The chrome replaces it with the full bar a moment later.
 	let slot = $state<HTMLElement>();
-	// Key presses before the chrome's key listener attaches, kept (up to 32) for it to hand to the
+	// Key presses before the chrome's key listener attaches, kept (the latest 32) for it to hand to the
 	// registry in order once its shortcuts exist (X-skip-results-flake). Typing is not kept: the text
 	// is there. The chrome leaves out the other keys the browser has already acted on.
 	const early: KeyboardEvent[] = [];
@@ -49,7 +49,7 @@
 				shell.paletteOpen = true;
 				return;
 			}
-			if (early.length < 32 && e.target instanceof HTMLElement && !typing(e.target)) early.push(e);
+			if (e.target instanceof HTMLElement && !typing(e.target) && early.push(e) > 32) early.shift();
 		};
 		addEventListener('keydown', first, { capture: true });
 		return () => removeEventListener('keydown', first, true);

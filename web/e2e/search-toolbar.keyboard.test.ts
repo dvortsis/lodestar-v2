@@ -3,6 +3,7 @@
 import type { Page } from '@playwright/test';
 import { body, expect, hits, row, rowOf, server } from './search-results.fixtures';
 import { interact } from './support/interact';
+import type { KeyboardOnly } from './support/keyboard';
 import { test } from './support/test';
 
 test.beforeEach(({ mock }) => server(mock, () => body(hits(5))));
@@ -91,29 +92,105 @@ async function holdShortcuts(page: Page) {
 	return { release, held: () => held };
 }
 
+/** The status pill appears in the same step that attaches the listener and replays the kept keys. */
+const attached = (page: Page) => expect(page.getByTestId('status-pill')).toBeAttached();
+
+const focused = (page: Page) =>
+	page.evaluate(() => document.activeElement?.outerHTML.slice(0, 120) ?? '');
+
 test.describe('keys pressed before the key listener attaches', () => {
 	// The held route's handlers may still be fetching when the page closes.
 	test.afterEach(({ page }) => page.unrouteAll({ behavior: 'ignoreErrors' }));
 
-	test('j right after Skip to results still moves to the next row', async ({ page, go, kbd }) => {
-		const hold = await holdShortcuts(page);
+	async function skipToRows(page: Page, kbd: KeyboardOnly, hold: { held: () => number }) {
 		await page.setViewportSize({ width: 1366, height: 900 });
-		await go('/search?q=lantern');
 		await expect(rowOf(page, 1)).toBeVisible();
-		const skip = page.getByRole('link', { name: 'Skip to results' });
-		await kbd.tabTo(skip);
+		await kbd.tabTo(page.getByRole('link', { name: 'Skip to results' }));
 		// The first key started the chrome, whose shortcuts are now held; the list's own keys are in.
 		await expect.poll(hold.held).toBeGreaterThan(0);
 		await expect(page.locator('[data-keys-ready]')).toBeAttached();
+		await expect(page.getByTestId('status-pill')).toHaveCount(0);
 		await kbd.press('Enter');
 		await expect(rowOf(page, 1)).toBeFocused();
+	}
+
+	test('j right after Skip to results still moves to the next row', async ({ page, go, kbd }) => {
+		const hold = await holdShortcuts(page);
+		await go('/search?q=lantern');
+		await skipToRows(page, kbd, hold);
 		await kbd.press('j');
 		await expect(rowOf(page, 1)).toBeFocused();
 		hold.release();
 		await expect(rowOf(page, 2)).toBeFocused();
-		// The Enter on the link was the browser's; it isn't run again as a shortcut (it would open
-		// the detail drawer on the active row).
-		await expect(page.getByRole('dialog')).toHaveCount(0);
+	});
+
+	test('a key pressed before Tab is not replayed over it', async ({ page, go, kbd }) => {
+		const hold = await holdShortcuts(page);
+		await go('/search?q=lantern');
+		await skipToRows(page, kbd, hold);
+		// x selects the active row; Tab, which the browser acts on at once, comes after it.
+		await kbd.press('x');
+		await kbd.press('Tab');
+		await expect(rowOf(page, 1)).not.toBeFocused();
+		const after = await focused(page);
+		hold.release();
+		await attached(page);
+		// A live x toggles the row: selected once if the kept x stayed dropped, back to none if it
+		// had been replayed.
+		await kbd.press('x');
+		await expect(page.getByTestId('bulk-count')).toContainText('1');
+		expect(await focused(page)).toBe(after);
+	});
+
+	test('letters after a replayed / are typing, not shortcuts', async ({ page, go, kbd }) => {
+		const hold = await holdShortcuts(page);
+		await go('/search?q=lantern');
+		await expect(rowOf(page, 1)).toBeVisible();
+		const box = page.getByRole('combobox', { name: 'Search torrents' });
+		await kbd.press('/');
+		await expect.poll(hold.held).toBeGreaterThan(0);
+		// j moves through the rows and x selects one: neither may run once `/` has put focus in the box.
+		await kbd.press('j');
+		await kbd.press('x');
+		hold.release();
+		await attached(page);
+		await expect(box).toBeFocused();
+		// A live key still types into the box: a replayed j would have moved focus to the rows.
+		await kbd.press('z');
+		await expect(box).toHaveText('lanternz');
+		await expect(box).toBeFocused();
+		await expect(page.getByTestId('bulk-bar')).toHaveCount(0);
+	});
+
+	test('a key kept longer than 5 s is dropped', async ({ page, go, kbd }) => {
+		const hold = await holdShortcuts(page);
+		await go('/search?q=lantern');
+		await skipToRows(page, kbd, hold);
+		await page.evaluate(() =>
+			addEventListener(
+				'keydown',
+				(e) => ((window as { lastKey?: number } & Window).lastKey = e.timeStamp),
+				true
+			)
+		);
+		await kbd.press('j');
+		// Held until the press is older than the 5 s the chrome keeps a press for (the same clock it
+		// reads): a condition on the press's age, not a fixed wait.
+		await expect
+			.poll(
+				() =>
+					page.evaluate(
+						() =>
+							performance.now() - ((window as { lastKey?: number } & Window).lastKey ?? Infinity)
+					),
+				{ timeout: 15_000 }
+			)
+			.toBeGreaterThan(5_200);
+		hold.release();
+		await attached(page);
+		// A live j moves one row: to row 2 if the old j was dropped, to row 3 if it had run.
+		await kbd.press('j');
+		await expect(rowOf(page, 2)).toBeFocused();
 	});
 
 	test('Enter on a button acts once', async ({ page, go, kbd }) => {
@@ -127,8 +204,8 @@ test.describe('keys pressed before the key listener attaches', () => {
 		await kbd.press('Enter');
 		await expect(page.getByTestId('table-chooser')).toBeVisible();
 		hold.release();
-		// A second press would close it again: it stays open once the shortcuts arrive.
-		await expect(page.locator('[data-keys-ready]')).toBeAttached();
+		await attached(page);
+		// A second press would close it again.
 		await expect(columns).toHaveAttribute('aria-expanded', 'true');
 		await expect(page.getByTestId('table-chooser')).toBeVisible();
 	});
@@ -149,7 +226,7 @@ test.describe('keys pressed before the key listener attaches', () => {
 		await kbd.press('x');
 		await expect(box).toHaveText('jkx');
 		hold.release();
-		await expect(page.locator('[data-keys-ready]')).toBeAttached();
+		await attached(page);
 		await expect(box).toHaveText('jkx');
 		await expect(box).toBeFocused();
 	});

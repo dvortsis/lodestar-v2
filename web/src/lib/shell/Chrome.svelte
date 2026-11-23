@@ -98,22 +98,29 @@
 				onkeys?.();
 				// The presses made while this loaded, the one that woke us first, now find their shortcuts,
 				// in order. They go to the registry only: the page has already seen the real events, and
-				// handing it second ones would act twice. So the ones the browser acted on are left out
-				// (Tab, and Enter or Space on a link or button), and so is one kept too long (a stalled
-				// load), so a late burst of shortcuts never fires.
-				for (const e of early.splice(0)) {
-					const t = e.target as HTMLElement | null;
-					const native =
-						e.key === 'Tab' ||
-						((e.key === 'Enter' || e.key === ' ') && !!t?.closest('a[href],button,summary'));
+				// handing it second ones would act twice. Left out:
+				// - a press the browser acted on (Tab, Enter or Space on a link or button, or one the page
+				//   handled), and every press before it: replayed now, they would undo it;
+				// - a plain key once focus is in a field (after a replayed `/`): it was meant as typing;
+				// - one kept too long (a stalled load), so a late burst of shortcuts never fires.
+				const kept = early.splice(0);
+				let from = 0;
+				kept.forEach((e, i) => {
+					const t = e.target as HTMLElement;
 					if (
-						t?.isConnected &&
-						!native &&
-						!e.defaultPrevented &&
-						performance.now() - e.timeStamp < STALE_KEY_MS
+						e.defaultPrevented ||
+						e.key === 'Tab' ||
+						((e.key === 'Enter' || e.key === ' ') && t.closest('a[href],button,summary'))
+					)
+						from = i + 1;
+				});
+				for (const e of kept.slice(from))
+					if (
+						(e.target as Node).isConnected &&
+						performance.now() - e.timeStamp < STALE_KEY_MS &&
+						(e.ctrlKey || e.metaKey || e.altKey || !keysModule.isEditable(document.activeElement))
 					)
 						keysModule.keys.handle(e);
-				}
 			});
 			// Fetched now, while the server is up: an error toast and the error screen have to work
 			// when it is down.
