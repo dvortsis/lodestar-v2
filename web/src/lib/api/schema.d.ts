@@ -2114,6 +2114,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/setup/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Checks the setup token alone, so the first-run form can say it's
+         *     wrong before asking for a password. It takes an attempt from the same
+         *     per-address limit as `/setup` and `/login`, and answers as `/setup`
+         *     does for the token: 401 `bad_token`, 409 `setup_done`, 429
+         *     `rate_limited`. Nothing is claimed or spent; `/setup` checks the token
+         *     again.
+         */
+        post: operations["checkSetupToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sources": {
         parameters: {
             query?: never;
@@ -3962,6 +3986,7 @@ export interface components {
          *         "metadata_at": 1700000001,
          *         "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
          *         "piece_len": 65536,
+         *         "resolution": "1080p",
          *         "resolved_via": null,
          *         "score": 0,
          *         "seeders": null,
@@ -8710,8 +8735,9 @@ export interface components {
              *     or `4320p` (aliases such as `4k`, `8k` or a bare `1080` are stored
              *     in this form). Null = none in the name, or not classified.
              * @example 1080p
+             * @enum {string|null}
              */
-            resolution: string | null;
+            resolution: "480p" | "576p" | "720p" | "1080i" | "1080p" | "1440p" | "2160p" | "4320p" | null;
             /**
              * @description How the title was found when the name wasn't informative:
              *     `files`, `folder` or `structure`; null = from the name itself, or
@@ -9514,6 +9540,17 @@ export interface components {
             notice_version?: number;
             /** @description At least 10 characters. */
             password: string;
+            /**
+             * @description The one-time token printed to the logs (`XXXX-XXXX-XXXX-XXXX`, any
+             *     case).
+             */
+            token: string;
+        };
+        /**
+         * @description `POST /setup/token`: checks the setup token before the password is
+         *     asked for. `Debug` redacts the token.
+         */
+        SetupTokenRequest: {
             /**
              * @description The one-time token printed to the logs (`XXXX-XXXX-XXXX-XXXX`, any
              *     case).
@@ -11193,6 +11230,7 @@ export interface components {
          *         "metadata_at": 1700000001,
          *         "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
          *         "piece_len": 65536,
+         *         "resolution": "1080p",
          *         "resolved_via": null,
          *         "score": 0,
          *         "seeders": null,
@@ -16573,6 +16611,36 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    checkSetupToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The token is right. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "ok": true
+                     *     }
+                     */
                     "application/json": components["schemas"]["OkResponse"];
                 };
             };

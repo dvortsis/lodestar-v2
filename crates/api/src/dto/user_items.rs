@@ -26,6 +26,7 @@ pub(crate) fn example_hit() -> Value {
         "metadata_at": 1_700_000_001,
         "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
         "piece_len": 65536,
+        "resolution": "1080p",
         "resolved_via": null,
         "score": 0.0,
         "seeders": null,

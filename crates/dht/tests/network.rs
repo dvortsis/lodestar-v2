@@ -33,6 +33,8 @@ fn config(bootstrap: Vec<String>) -> Config {
         responder_hints: false,
         hint_first: false,
         lookup_end: false,
+        soft_timeout: false,
+        soft_timeout_after: lodestar_dht::node::SOFT_TIMEOUT,
         preset_slots: false,
         target_prefixes: false,
         utp: None,

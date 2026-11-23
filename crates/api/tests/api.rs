@@ -292,6 +292,36 @@ async fn setup_login_and_protection() {
     assert_eq!(cleared.as_deref(), Some("lodestar_session="));
 }
 
+/// `POST /setup/token` (X-setup-token-boot): the first-run form's Continue
+/// check. Same answers as `/setup` gives for the token, nothing claimed,
+/// JSON from the same origin only.
+#[tokio::test]
+async fn the_setup_token_check_answers_without_claiming() {
+    let f = fixture();
+    let check = |token: &str| post("/api/v1/setup/token", None, json!({ "token": token }));
+    let (status, cookie, body) = call(&f.app, check("0000-0000-0000-0000")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], json!("bad_token"));
+    assert!(cookie.is_none());
+    let token = f.auth.setup_token().unwrap();
+    let (status, cookie, body) = call(&f.app, check(&token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "ok": true }));
+    assert!(cookie.is_none(), "a token check never signs in");
+    let (_, _, body) = call(&f.app, get("/api/v1/auth", None)).await;
+    assert_eq!(body["setup_required"], json!(true));
+    let form = Request::post("/api/v1/setup/token")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("token=x"))
+        .unwrap();
+    let (status, _, _) = call(&f.app, form).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    logged_in(&f).await;
+    let (status, _, body) = call(&f.app, check(&token)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], json!("setup_done"));
+}
+
 #[tokio::test]
 async fn cross_site_writes_are_refused() {
     let f = fixture();

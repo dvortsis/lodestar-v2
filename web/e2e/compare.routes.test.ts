@@ -221,3 +221,71 @@ test('a 2,000-row truncated list opens, scrolls to its last row and links to the
 		`/t/${HASHES[0]}`
 	);
 });
+
+test.describe('Differences only', () => {
+	for (const [name, size, n] of [
+		['390', { width: 390, height: 800 }, 2],
+		['1440', { width: 1440, height: 500 }, 2]
+	] as const) {
+		test(`at ${name}: keyboard toggle hides same rows, keeps focus and scroll`, async ({
+			page,
+			go,
+			mock
+		}) => {
+			serve(mock);
+			await page.setViewportSize(size);
+			await go(url(n));
+			const toggle = page.getByRole('switch', { name: 'Differences only' });
+			await expect(toggle).not.toBeChecked();
+			await expect(page.getByTestId('compare-hidden-count')).toHaveText('');
+			await toggle.focus();
+			await page.evaluate(() => window.scrollTo(0, 40));
+			const y = await page.evaluate(() => window.scrollY);
+			await page.keyboard.press('Space');
+			await expect(toggle).toBeChecked();
+			await expect(toggle).toBeFocused();
+			await expect(page.getByTestId('compare-row-attr-year')).toHaveCount(0);
+			await expect(page.getByTestId('compare-row-attr-res')).toHaveCount(1);
+			await expect(page.getByTestId('compare-hidden-count')).toHaveText(
+				"5 rows hidden because they're the same"
+			);
+			// "GRP" against "—" differs, so that row stays.
+			await expect(page.getByTestId('compare-row-attr-group')).toHaveCount(1);
+			// The knob has moved (the grid columns animate, so wait for the end), then back.
+			const columns = () => toggle.evaluate((el) => getComputedStyle(el).gridTemplateColumns);
+			await expect.poll(columns, { timeout: 10_000 }).toMatch(/^[1-9]\d*(\.\d+)?px /);
+			await expectNoA11yViolations(page);
+			// The page may get too short to scroll as far; the browser clamps, we never move it.
+			const left = await page.evaluate(
+				() => document.documentElement.scrollHeight - window.innerHeight
+			);
+			expect(await page.evaluate(() => window.scrollY)).toBe(Math.min(y, left));
+			await page.keyboard.press('Space');
+			await expect(page.getByTestId('compare-row-attr-year')).toHaveCount(1);
+			await expect.poll(columns, { timeout: 10_000 }).toMatch(/^0px /);
+		});
+	}
+
+	test('every row the same: a plain empty state and the switch stays', async ({
+		page,
+		go,
+		mock
+	}) => {
+		serve(mock, (r) => {
+			const first = r.torrents[0]!;
+			r.torrents = r.torrents.map((t) => ({ ...first, hash: t.hash }));
+			r.differs = { title: false, year: false, res: false, group: false };
+		});
+		await page.setViewportSize(COLUMNS);
+		await go(url(2));
+		const toggle = page.getByRole('switch', { name: 'Differences only' });
+		await toggle.focus();
+		await page.keyboard.press('Space');
+		await expect(page.getByTestId('compare-all-same')).toBeVisible();
+		await expect(toggle).toBeFocused();
+		await expect(page.getByTestId('compare-column-0')).toBeVisible();
+		await expect(page.getByRole('button', { name: /Copy magnet/ }).first()).toBeVisible();
+		await page.keyboard.press('Space');
+		await expect(page.getByTestId('compare-table')).toBeVisible();
+	});
+});

@@ -20,7 +20,7 @@ test.describe('OpenAPI mock', () => {
 
 	test('answers an operation with a typed override', async ({ page, mock }) => {
 		mock.on('getAuthStatus', { logged_in: true, notice_required: false, setup_required: false });
-		// The search page checks `/auth` once itself after mount (X-first-run-search-gate).
+		// The boot check asks `/auth` once before the page renders (X-setup-token-boot).
 		await expect.poll(() => mock.calls('getAuthStatus').length).toBe(1);
 		const res = await fetchJson(page, '/api/v1/auth');
 		expect(res.status).toBe(200);

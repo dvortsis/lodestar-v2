@@ -1,10 +1,12 @@
 <script lang="ts">
 	// First-run setup (§10.10.10), the steps before a session exists (`SETUP_STEPS`): the Legal
 	// Notice with its required box (owner §2.38, the wizard's LegalStep), the setup token from the
-	// log, then the admin password. The server takes all three in one request (POST /setup), so the
-	// earlier steps only check locally: a wrong token comes back from the submit and returns to the
-	// token step, and a notice that changed meanwhile (409 notice_required) returns to the notice
-	// step with the new text and the box cleared.
+	// log, then the admin password. The server takes all three in one request (POST /setup). The
+	// token is also asked about on Continue (POST /setup/token, X-setup-token-boot), so a wrong one
+	// is said to be wrong before the password step; that check spends one of setup's own attempts,
+	// so a token already found right isn't asked about again. A token that's wrong by the submit
+	// still returns to the token step, and a notice that changed meanwhile (409 notice_required)
+	// returns to the notice step with the new text and the box cleared.
 	import { onDestroy, tick } from 'svelte';
 	import { api } from '$lib/api/client';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -21,10 +23,16 @@
 	import { toLogin, toWelcome } from './nav';
 	import { checkPassword, isBlocking, MIN_PASSWORD_CHARS } from './password';
 	import { setSession, signedIn } from './session.svelte';
-	import { parseToken, TOKEN_HINT } from './token';
+	import { checkSetupToken, parseToken, TOKEN_HINT } from './token';
 
-	const form = createAuthForm();
-	onDestroy(form.destroy);
+	// Replaced after a token check that passed: the machine ends in `success`, and the password
+	// step needs a form that can still send.
+	let form = $state.raw(createAuthForm());
+	onDestroy(() => form.destroy());
+	function freshForm() {
+		form.destroy();
+		form = createAuthForm();
+	}
 
 	type Step = SetupStepId;
 	let step = $state<Step>(SETUP_STEPS[0]);
@@ -33,6 +41,8 @@
 	/** Set when the notice step is entered, so it focuses the notice once loaded. */
 	let noticeVisit = $state(0);
 	let token = $state('');
+	/** The token the server last said is right; Continue doesn't ask again for the same one. */
+	let verified = '';
 	let password = $state('');
 	let confirm = $state('');
 	let root = $state<HTMLDivElement>();
@@ -99,10 +109,19 @@
 
 	async function continueToPassword(event: SubmitEvent) {
 		event.preventDefault();
+		if (form.busy || locked) return;
 		const parsed = parseToken(token);
 		if (!parsed) return invalid('token', 'token_invalid');
 		token = parsed;
-		form.edit();
+		if (parsed === verified) {
+			form.edit();
+			return goTo('password');
+		}
+		if (!(await form.submit(() => checkSetupToken(parsed)))) return recover();
+		freshForm();
+		// Edited while it was being checked: the field no longer holds the token that passed.
+		if (token !== parsed) return;
+		verified = parsed;
 		await goTo('password');
 	}
 
@@ -126,17 +145,23 @@
 		const body = { token, password, notice_version: notice.version };
 		const ok = await form.submit(() => api.post('/setup', { body }));
 		if (ok) {
-			token = password = confirm = '';
+			token = password = confirm = verified = '';
 			signedIn();
 			await toWelcome();
 			return;
 		}
+		await recover();
+	}
+
+	/** After a refused token check or submit: go where the failure can be put right. */
+	async function recover() {
 		const s = form.state;
 		if (s.name !== 'error') return;
 		if (s.failure.kind === 'setup_done') {
 			setSession('signed_out');
 			await toLogin();
 		} else if (s.failure.kind === 'bad_token') {
+			verified = '';
 			step = 'token';
 			await focus('token', true);
 		} else if (s.failure.kind === 'notice_required') {
@@ -221,8 +246,15 @@
 			</details>
 			<FormAlert {form} />
 			<div class="flex flex-col-reverse gap-3 medium:flex-row medium:justify-between">
-				<Button variant="quiet" onclick={back}>{m.auth_back()}</Button>
-				<Button type="submit" variant="primary">{m.auth_token_next()}</Button>
+				<Button variant="quiet" onclick={back} disabled={form.busy}>{m.auth_back()}</Button>
+				<Button
+					type="submit"
+					variant="primary"
+					loading={form.busy}
+					aria-disabled={form.busy || locked || undefined}
+				>
+					{m.auth_token_next()}
+				</Button>
 			</div>
 		</form>
 	{:else}

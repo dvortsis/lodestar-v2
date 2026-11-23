@@ -318,9 +318,10 @@ async fn a_version_bump_gates_the_session_until_accepted() {
 /// open auth routes, the notice itself and accepting it, the API's own
 /// description, and the token-authenticated webhook calls. Everything
 /// else in `/openapi.json` answers `409 notice_required`.
-const PENDING_ALLOWED: [(&str, &str); 8] = [
+const PENDING_ALLOWED: [(&str, &str); 9] = [
     ("get", "/auth"),
     ("post", "/setup"),
+    ("post", "/setup/token"),
     ("post", "/login"),
     ("post", "/logout"),
     ("get", "/legal/notice"),

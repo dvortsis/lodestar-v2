@@ -204,6 +204,12 @@ pub struct Dht {
     /// as it's admitted. Off by default
     /// (docs/decisions/2026-11-20-CR-LOOKUP-END.md); not in the Settings UI.
     pub lookup_end: bool,
+    /// CR-SOFT-TIMEOUT: a peer lookup stops waiting on a DHT query left
+    /// unanswered for 1–2 s: it moves past it once a lane frees, never with
+    /// more queries out than before, and a late answer still counts. Off by default
+    /// (docs/decisions/2026-11-23-CR-SOFT-TIMEOUT.md); not in the Settings
+    /// UI.
+    pub soft_timeout: bool,
     /// CR-1c: the DHT runs up to the intensity preset's count of peer
     /// lookups at once (32, 80 or 256 for Low, Balanced, Aggressive) instead
     /// of 32, for the intensity it starts with. Off by default
@@ -257,6 +263,7 @@ impl Default for Dht {
             responder_hints: false,
             hint_first: false,
             lookup_end: false,
+            soft_timeout: false,
             preset_slots: false,
             streaming_peers: false,
             target_prefixes: false,
@@ -835,6 +842,11 @@ impl Config {
                 .parse()
                 .map_err(|_| parse("LODESTAR_DHT_LOOKUP_END", &v))?;
         }
+        if let Some(v) = env("LODESTAR_DHT_SOFT_TIMEOUT") {
+            config.dht.soft_timeout = v
+                .parse()
+                .map_err(|_| parse("LODESTAR_DHT_SOFT_TIMEOUT", &v))?;
+        }
         if let Some(v) = env("LODESTAR_DHT_PRESET_SLOTS") {
             config.dht.preset_slots = v
                 .parse()
@@ -930,6 +942,7 @@ impl Config {
             responder_hints: self.dht.responder_hints,
             hint_first: self.dht.hint_first,
             lookup_end: self.dht.lookup_end,
+            soft_timeout: self.dht.soft_timeout,
             preset_slots: self.dht.preset_slots,
             target_prefixes: self.dht.target_prefixes,
             sampler_cooldown_split: self.dht.sampler_cooldown_split,
@@ -1646,6 +1659,32 @@ mod tests {
         assert!(
             Config::load(None, |k: &str| {
                 (k == "LODESTAR_DHT_HINT_FIRST").then(|| "maybe".to_string())
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn soft_timeout_is_off_unless_asked_for() {
+        let c = Config::load(None, no_env).unwrap();
+        assert!(!c.dht.soft_timeout);
+        assert!(!c.dht_config().soft_timeout);
+        let env = |k: &str| (k == "LODESTAR_DHT_SOFT_TIMEOUT").then(|| "true".to_string());
+        assert!(Config::load(None, env).unwrap().dht_config().soft_timeout);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nsoft_timeout = true\n").unwrap();
+        assert!(
+            Config::load(Some(&path), no_env)
+                .unwrap()
+                .dht_config()
+                .soft_timeout
+        );
+        std::fs::write(&path, "[dht]\nsoft_timeout = \"yes\"\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+        assert!(
+            Config::load(None, |k: &str| {
+                (k == "LODESTAR_DHT_SOFT_TIMEOUT").then(|| "maybe".to_string())
             })
             .is_err()
         );

@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::get;
 use hmac::{Hmac, KeyInit, Mac};
 use lodestar_classify::{Category, Composition, Record};
+use lodestar_release_parser::Resolution;
 use lodestar_search::natural::{NaturalError, natural};
 use lodestar_search::query::TagKey;
 use lodestar_search::recovery::{self, RECOVERY_BUDGET};
@@ -1409,8 +1410,14 @@ pub(crate) fn enrich(hit: &mut SearchHit, e: Option<Enriched>) {
     };
     if let Ok(r) = Record::decode(&e.data) {
         hit.title = r.release("title").map(str::to_string);
-        // The stored form is the one the `res:` tag indexes.
-        hit.resolution = r.release("res").map(str::to_string);
+        // The stored form is the one the `res:` tag indexes. Only a value
+        // the schema lists is sent: a record written by another parser
+        // version (a rollback, a newer build's snapshot) may hold one this
+        // build doesn't know, and that reads as none.
+        hit.resolution = r
+            .release("res")
+            .and_then(|v| Resolution::ALL.iter().find(|x| x.as_str() == v))
+            .map(|x| x.as_str().to_string());
         hit.resolved_via = r.resolved.map(|v| v.as_str().to_string());
         hit.content_type = Some(r.content_type.as_str().to_string());
         hit.adult_kind = r.adult_kind.map(|k| k.as_str().to_string());
@@ -2034,6 +2041,21 @@ mod tests {
                 ..e
             }),
         );
+        assert_eq!(hit.resolution, None);
+    }
+
+    #[test]
+    fn a_stored_resolution_outside_the_schema_reads_as_null() {
+        // Another build's parser may have stored a value this one doesn't
+        // list: the hit still matches `openapi.json`'s enum.
+        let name = "Some.Movie.2020.1080p.WEB-DL.x264-GRP";
+        let (mut record, e) = classified(name);
+        let res = record.release.iter_mut().find(|(k, _)| k == "res").unwrap();
+        res.1 = "240p".to_string();
+        let data = record.encode();
+        assert!(Record::decode(&data).unwrap().release("res") == Some("240p"));
+        let mut hit = bare_hit(name);
+        enrich(&mut hit, Some(Enriched { data, ..e }));
         assert_eq!(hit.resolution, None);
     }
 }

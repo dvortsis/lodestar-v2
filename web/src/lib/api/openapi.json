@@ -7781,6 +7781,44 @@
         "security": []
       }
     },
+    "/setup/token": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Checks the setup token alone, so the first-run form can say it's\nwrong before asking for a password. It takes an attempt from the same\nper-address limit as `/setup` and `/login`, and answers as `/setup`\ndoes for the token: 401 `bad_token`, 409 `setup_done`, 429\n`rate_limited`. Nothing is claimed or spent; `/setup` checks the token\nagain.",
+        "operationId": "checkSetupToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The token is right.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
     "/sources": {
       "get": {
         "tags": [
@@ -13002,6 +13040,7 @@
             "metadata_at": 1700000001,
             "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
             "piece_len": 65536,
+            "resolution": "1080p",
             "resolved_via": null,
             "score": 0.0,
             "seeders": null,
@@ -22546,6 +22585,17 @@
               "null"
             ],
             "description": "The release resolution the name gives, in the canonical form `res:`\nmatches: `480p`, `576p`, `720p`, `1080i`, `1080p`, `1440p`, `2160p`\nor `4320p` (aliases such as `4k`, `8k` or a bare `1080` are stored\nin this form). Null = none in the name, or not classified.",
+            "enum": [
+              "480p",
+              "576p",
+              "720p",
+              "1080i",
+              "1080p",
+              "1440p",
+              "2160p",
+              "4320p",
+              null
+            ],
             "example": "1080p"
           },
           "resolved_via": {
@@ -24023,6 +24073,19 @@
             "type": "string",
             "description": "At least 10 characters."
           },
+          "token": {
+            "type": "string",
+            "description": "The one-time token printed to the logs (`XXXX-XXXX-XXXX-XXXX`, any\ncase)."
+          }
+        }
+      },
+      "SetupTokenRequest": {
+        "type": "object",
+        "description": "`POST /setup/token`: checks the setup token before the password is\nasked for. `Debug` redacts the token.",
+        "required": [
+          "token"
+        ],
+        "properties": {
           "token": {
             "type": "string",
             "description": "The one-time token printed to the logs (`XXXX-XXXX-XXXX-XXXX`, any\ncase)."
@@ -27137,6 +27200,7 @@
             "metadata_at": 1700000001,
             "name": "The.Dark.Knight.2008.1080p.BluRay.x264-GRP",
             "piece_len": 65536,
+            "resolution": "1080p",
             "resolved_via": null,
             "score": 0.0,
             "seeders": null,

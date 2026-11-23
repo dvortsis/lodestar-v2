@@ -114,6 +114,13 @@ export interface Row {
 	cells: Cell[];
 }
 
+/** What a cell shows, as one comparable value: null ("—") is a value like any other. */
+const shown = (c: Cell): string | null => (c.composition ? c.composition.summary : c.text);
+
+/** True when every torrent shows the same value in this row (formatted, as displayed). */
+export const isSame = (row: Row): boolean =>
+	row.cells.every((c) => shown(c) === shown(row.cells[0]!));
+
 export function buildRows(data: CompareResponse, locale: string): Row[] {
 	const ts = data.torrents;
 	const plain = (

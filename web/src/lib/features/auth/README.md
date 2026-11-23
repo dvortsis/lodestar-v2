@@ -19,7 +19,7 @@ The sign-in and setup pages are full-page: the shell should render them without 
 
 - `machine.ts`: the forms' state machine (`idle → submitting → success | error | locked`), pure, plus `classify()` from an `ApiError` to a failure kind. The diagram is in the file.
 - `form.svelte.ts`: runs the machine for one form; ticks the rate-limit countdown.
-- `token.ts`: `parseToken()`, the paste-tolerant setup-token parser.
+- `token.ts`: `parseToken()`, the paste-tolerant setup-token parser, and `checkSetupToken()`, the Continue check (`POST /setup/token`).
 - `password.ts`: `checkPassword()`: blocks under 10 characters or over 1,024 bytes; otherwise only hints.
 - `next.ts`: `safeNext()` (same-origin relative paths only; never back to `/login` or `/setup`) and `loginUrl()`.
 - `gate.ts`, `AuthGate.svelte`: the load check (`GET /auth`) that redirects a page that doesn't apply.

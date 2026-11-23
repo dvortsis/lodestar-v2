@@ -412,7 +412,8 @@ fn migrates_a_v4_database_with_data() {
         store
             .connection()
             .execute_batch(
-                "DROP TRIGGER unverified_tombstoned; DROP TRIGGER unverified_quarantined;
+                "DROP TABLE unverified_counts;
+                 DROP TRIGGER unverified_tombstoned; DROP TRIGGER unverified_quarantined;
                  DROP TRIGGER unverified_floored; DROP TABLE source_state;
                  DROP TABLE torrent_claims; DROP TABLE unverified_items;
                  DROP TRIGGER import_candidate_tombstoned; DROP TRIGGER import_candidate_quarantined;
