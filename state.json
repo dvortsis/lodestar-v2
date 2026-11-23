@@ -10675,6 +10675,12 @@
       "by": "owner (in chat, runner session)",
       "text": "I'm going to bed. Keep 4 running sessions, with as many additional sessions for testing as needed.",
       "applied": "4 build slots; testing sessions as needed (replaces the 4-session cloud-testing cap); spend caps and other bounds unchanged; recorded as owner-decisions 2.81 in the records PR"
+    },
+    {
+      "at": "2026-11-23T06:09Z",
+      "source": "owner, runner chat",
+      "text": "finish the build slices you've got going on and then focus on supporting the cloud testing and api session. Don't start any new slices unless the cloud testing environment or api runner needs something.",
+      "effect": "No new build slices. Finish CR-SOFT-TIMEOUT (#1091), X-index-banner-late (#1093), X-detail-depth-compare (#1094), X-hit-resolution-nits (slot 4). Freed slots stay empty unless X-test-vm (cloud testing) or the API lane needs a slice. Runner records PRs continue. Queued build slices (X-shell-nav-cls, X-querybar-static-q, X-rowactions-arrowdown, X-field-layout, X-cards-raw-name, ...) wait."
     }
   ],
   "slots": {
@@ -10808,24 +10814,9 @@
   "heartbeat": "2026-11-23T03:39:07Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
-    "requested_at": "2026-11-09T05:54Z",
-    "by": "owner (in chat, runner session)",
-    "instruction": "Once the active sessions complete, pause the runner. No further sessions unless explicitly commanded.",
-    "state": "resumed",
-    "active": [],
-    "no_follow_on": [],
-    "watchdog": "trig_0172BngAUoA4NRaRWBYiRWVf disabled so it can't start a replacement runner",
-    "merged_during_drain": [
-      "#652 OP-3a merged 5da6eb15 at 2026-11-09T06:28:12Z",
-      "#651 X-win-restart-followups-2 merged 161c2a1f at 2026-11-09T08:09:30Z",
-      "#644 PK-win-upd-3 merged f44df6a8 at 2026-11-09T09:55:07Z",
-      "#653 CMP-5g-2 merged 29fd001d at 2026-11-09T12:03:06Z"
-    ],
-    "paused_at": "2026-11-09T12:03:06Z",
-    "heartbeat": "trig_01U8KNWyDovQ9omwvZi8cuLW disabled at pause",
-    "resume": "only on the owner's explicit command: re-enable watchdog trig_0172BngAUoA4NRaRWBYiRWVf and heartbeat trig_01U8KNWyDovQ9omwvZi8cuLW, record the pause in owner-decisions, then the pending runner PR",
-    "resumed_at": "2026-11-11T04:06Z",
-    "resumed_by": "owner, 2026-11-11: \"We reset credit. Continue with up to 8 sessions in one time,\""
+    "build_slices": true,
+    "since": "2026-11-23T06:09Z",
+    "reason": "owner instruction: finish running slices, then support cloud testing and the API lane only"
   },
   "owner_queue_pending": [
     {
