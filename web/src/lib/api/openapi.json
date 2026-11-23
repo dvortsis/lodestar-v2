@@ -22430,6 +22430,7 @@
           "metadata_at",
           "name",
           "piece_len",
+          "resolution",
           "resolved_via",
           "score",
           "seeders",
@@ -22571,6 +22572,14 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "resolution": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The release resolution the name gives, in the canonical form `res:`\nmatches: `480p`, `576p`, `720p`, `1080i`, `1080p`, `1440p`, `2160p`\nor `4320p` (aliases such as `4k`, `8k` or a bare `1080` are stored\nin this form). Null = none in the name, or not classified.",
+            "example": "1080p"
           },
           "resolved_via": {
             "type": [

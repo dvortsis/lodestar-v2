@@ -519,6 +519,7 @@ pub(crate) fn hit(
         metadata_at: row.metadata_at,
         name: row.name.clone(),
         piece_len: row.piece_len,
+        resolution: None,
         resolved_via: None,
         // As `json!` widened it.
         score: f64::from(score),

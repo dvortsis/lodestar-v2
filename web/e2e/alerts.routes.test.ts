@@ -61,6 +61,7 @@ const hit = (n: number, over: Partial<Hit> = {}): Hit => ({
 	metadata_at: T0,
 	name: `Lantern.Keeper.S01E0${n}.1080p.WEB-DL`,
 	piece_len: 262144,
+	resolution: null,
 	resolved_via: null,
 	score: 0,
 	seeders: 40 + n,

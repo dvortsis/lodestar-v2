@@ -1,6 +1,7 @@
 <script lang="ts">
 	// The diagnostics block and "Report a problem" (§10.10.13, §12.1): the text is shown before
 	// anything is copied or put in a link, so nothing identifying leaves without being seen.
+	import ExternalIcon from './ExternalIcon.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import { copyText } from '$lib/util/clipboard';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -50,7 +51,9 @@
 		onclick={async () => {
 			if (!url) copied = await copyText(text);
 		}}
-		>{m.settings_about_problem_open()}<span class="sr-only"> {m.settings_about_new_tab()}</span></a
+		>{m.settings_about_problem_open()}<ExternalIcon /><span class="sr-only">
+			{m.settings_about_new_tab()}</span
+		></a
 	>
 	<!-- eslint-enable svelte/no-navigation-without-resolve -->
 {/if}
