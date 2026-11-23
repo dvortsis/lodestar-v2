@@ -89,6 +89,8 @@ export function isEditable(target: EventTarget | null): boolean {
 	return /^(textbox|searchbox|combobox)$/.test(target.getAttribute('role') ?? '');
 }
 
+// Copied in `src/lib/shell/Chrome.svelte` (the replay of early key presses); `control-list.test.ts`
+// fails when the two differ.
 const CONTROL = [
 	'a[href]',
 	'button',

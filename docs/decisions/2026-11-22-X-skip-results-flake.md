@@ -21,8 +21,9 @@ Slice `X-skip-results-flake`, from one failure of `web/e2e/search-toolbar.keyboa
   - **How the chrome replays them (`Chrome.svelte`).** It hands the kept presses to `keys.handle` in order, right after `attach`. It hands them to the registry only: the page has already seen the real events. It leaves out:
     - **A press the browser or page already acted on, and every press before it.** That means Tab, Enter or Space on a control (the registry's CONTROL list, copied in Chrome), and any default-prevented press (the list's own arrows, Home, Enter and type-ahead). Replayed afterwards, an earlier key would undo that action, for example a j pulling focus back from where the user tabbed to.
       - For Enter and Space this mostly marks where to start from: the registry already ignores them on controls, and no command is bound to Enter today.
-      - CONTROL is copied rather than exported because exporting it from `$lib/keys` added 3 B to every page that loads the registry. That put "Insights overview" over its limit (65,033 of 65,030 B).
+      - CONTROL is copied rather than exported because exporting it from `$lib/keys` added 3 B to every page that loads the registry. That put "Insights overview" over its limit (65,033 of 65,030 B). A comment at the registry's list points to the copy, and `src/lib/shell/control-list.test.ts` reads both sources, expands each list and fails when they differ.
     - **Every press before the latest click, tap or focus move** (`pointerdown` or `focusin`, assistive-technology cursor moves included), seen from the chrome's mount.
+      - Any focus move, the app's own included, drops the buffer up to that point. The cost is a lost key, never one acting on the wrong thing.
       - One made between the shell's first key and the chrome's mount isn't seen: watching from the shell would cost the first load, and the runner chose not to spend that.
     - **The Ctrl/Cmd+K the shell took, and every press after it, since those were meant for the palette. If the palette is open at the attach, every kept press.**
       - These are two layers. The test fails only when both are removed.
@@ -39,12 +40,13 @@ Slice `X-skip-results-flake`, from one failure of `web/e2e/search-toolbar.keyboa
     - That chunk is the one that has both `startShortcuts` and the defaults' `help.shortcuts`. The chrome's own chunk names `startShortcuts` too, so the chrome mounts and only its shortcuts wait.
     - The palette test also holds the palette's chunk, so its keys land on the rows rather than in the palette's field.
   - **How they wait.** Each test waits for the real status pill's live region (`status-pill-announce`; the bar's "Connecting" stand-in has the same `status-pill` id). It arrives in the same step as the attach and replay. Each then presses a live key whose result differs depending on whether a kept key was wrongly replayed. Every wait is on a condition, never a sleep.
-  - **Every rule's test fails without that rule** (checked by removing each rule in turn):
+  - **Each of these tests fails when its rule is removed, and passes with it** (checked by removing each rule in turn; the pointer and focus listeners were removed one at a time):
     - j right after Skip still moves to row 2, and fails without the fix;
     - x before Tab;
     - x before Home on the list (default-prevented);
     - x before Enter on the Columns button (control);
-    - x before a click;
+    - x before a click, with the click's mousedown cancelled so focus doesn't move (pointerdown alone);
+    - x before a focus move made with `focus()`, with no key or pointer (focusin alone);
     - x after Ctrl/Cmd+K;
     - letters after a replayed `/`;
     - a press held past 5 s;

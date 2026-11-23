@@ -47,8 +47,9 @@
 	/** A key press kept longer than this before the listener attached is not replayed. */
 	const STALE_KEY_MS = 5_000;
 	/** Where Enter or Space already does something: the registry's own CONTROL list
-	 *  (`$lib/keys/registry.svelte.ts`), kept the same here. Exporting it would add bytes to every page
-	 *  that loads the registry, Insights included, which is at its limit. */
+	 *  (`$lib/keys/registry.svelte.ts`), kept the same here (`control-list.test.ts` compares them).
+	 *  Exporting it would add bytes to every page that loads the registry, Insights included, which is
+	 *  at its limit. */
 	const CONTROL = [
 		'a[href]',
 		'button',
@@ -106,8 +107,10 @@
 		// The rest is not needed to read the page and counts against the load (§10.1): the key
 		// shortcuts, the stream and the pill start with the first interaction, or 30 s after load.
 		// A click, a tap or a focus move (an assistive technology's cursor too) after a kept key press
-		// changes what that press meant: the replay leaves out every press before the latest one.
-		// One between the shell's first key and this mount isn't seen (it would cost the first load).
+		// changes what that press meant: the replay leaves out every press before the latest one. Any
+		// focus move, the app's own included, drops the presses before it: a key lost, never one acting
+		// on the wrong thing. One between the shell's first key and this mount isn't seen (it would cost
+		// the first load).
 		let moved = 0;
 		const move = (e: Event) => (moved = e.timeStamp);
 		const unmove = () => {

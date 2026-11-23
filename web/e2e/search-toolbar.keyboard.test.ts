@@ -86,7 +86,9 @@ async function holdShortcuts(page: Page, also?: string) {
 	const gate = new Promise<void>((resolve) => (release = resolve));
 	let held = 0;
 	await page.route('**/_app/immutable/**/*.js', async (route) => {
-		const response = await route.fetch();
+		// Every chunk passes through here, so under parallel load the preview server can drop one
+		// connection: that network error (ECONNRESET only) is retried, never the test.
+		const response = await route.fetch({ maxRetries: 3 });
 		const text = await response.text();
 		if (shortcutsBoot(text) || (also !== undefined && text.includes(also))) {
 			held += 1;
@@ -306,10 +308,31 @@ test.describe('keys pressed before the key listener attaches', () => {
 		await go('/search?q=lantern');
 		await skipToRows(page, keys, hold);
 		await keys.press('x');
+		// Only the pointerdown counts here: the mousedown is cancelled so the click doesn't also move
+		// focus (to <main>), which the focus test covers on its own.
+		await page.evaluate(() =>
+			addEventListener('mousedown', (e) => e.preventDefault(), { capture: true, once: true })
+		);
+		const before = await focused(page);
 		await page.getByTestId('results-count').click();
+		expect(await focused(page)).toBe(before);
 		hold.release();
 		await attached(page);
 		await keys.press('x');
+		await expect(page.getByTestId('bulk-count')).toContainText('1');
+	});
+
+	test('a key before a focus move is not replayed over it', async ({ page, go, kbd }) => {
+		const hold = await holdShortcuts(page);
+		await go('/search?q=lantern');
+		await skipToRows(page, kbd, hold);
+		await kbd.press('x');
+		// A focus move with no key or pointer (an assistive technology's cursor, or the app itself).
+		await page.locator('#main').evaluate((el) => (el as HTMLElement).focus());
+		await expect(page.locator('#main')).toBeFocused();
+		hold.release();
+		await attached(page);
+		await kbd.press('x');
 		await expect(page.getByTestId('bulk-count')).toContainText('1');
 	});
 
@@ -331,7 +354,7 @@ test.describe('keys pressed before the key listener attaches', () => {
 	}) => {
 		let failed = 0;
 		await page.route('**/_app/immutable/**/*.js', async (route) => {
-			const response = await route.fetch();
+			const response = await route.fetch({ maxRetries: 3 });
 			const text = await response.text();
 			if (shortcutsBoot(text)) {
 				failed += 1;
