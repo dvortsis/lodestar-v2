@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-23T18:38:43Z",
+  "updated_at": "2026-11-23T19:59:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10684,16 +10684,13 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T18:38:43Z",
+    "updated": "2026-11-23T19:59:39Z",
     "items": [
       {
         "slot": 1,
-        "model": "opus",
-        "slice": "RX-1",
-        "role": "build",
-        "agent": "session_01MMjhn911SUimiUBvzWMwkb (opus)",
-        "doing": "RX-1-fixes: one push due: query-parser fuzz-crash fix (bare quote ends regex scan) + round-5 review test fixes; then ready",
-        "since": "2026-11-23T08:31:45Z"
+        "status": "idle",
+        "doing": "freed: RX-1 merged as #1082; stays empty (owner 2026-11-23T06:09Z)",
+        "since": "2026-11-23T19:59:39Z"
       },
       {
         "slot": 2,
