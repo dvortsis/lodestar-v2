@@ -10673,7 +10673,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T04:03:50Z",
+    "updated": "2026-11-23T04:05:10Z",
     "items": [
       {
         "slot": 1,
@@ -10695,12 +10695,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-host-ab-runsheet",
-        "role": "helper",
-        "agent": "session_01MMjhn9VTxPkX2Nb1gvZg4z",
-        "model": "sonnet",
-        "since": "2026-11-23T03:45:58Z",
-        "doing": "#1090 fix round after rv1090 CHANGES (claim step, restore order, rulings on missed backup/parity, mover -> owner)"
+        "slice": "X-index-banner-late",
+        "role": "build",
+        "agent": "session_01MMjhn97dJhp7ywVm6pLZy2",
+        "model": "opus",
+        "since": "2026-11-23T04:05:10Z",
+        "doing": "step 0 (brief 4e81d3e4); #1090 X-host-ab-runsheet merged a6ed7bc8, that session archived"
       },
       {
         "slot": 4,
