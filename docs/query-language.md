@@ -474,7 +474,7 @@ show /s\d\de\d\d/
 ```query-fail
 /S0[1-9/ => regex_syntax
 /(?s)a/ => regex_flag_not_allowed
-/a1/ /a2/ /a3/ /a4/ /a5/ => regex_too_many
+/a1/ /a2/ /a3/ /a4/ /a5/ => at most 4 /regex/ terms
 ```
 
 ## How results are ranked
