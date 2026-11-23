@@ -659,13 +659,16 @@ fn a_hits_resolution_lists_the_canonical_values() {
         .chain([Value::Null])
         .collect();
     assert_eq!(field["enum"].as_array(), Some(&allowed));
-    assert!(
-        field["description"]
-            .as_str()
-            .is_some_and(|d| d.contains("4320p"))
-    );
+    // The description is hand-written: it must name every value.
+    let description = field["description"].as_str().unwrap();
+    for r in Resolution::ALL {
+        let v = format!("`{}`", r.as_str());
+        assert!(description.contains(&v), "description lacks {v}");
+    }
     assert!(allowed.contains(&field["example"]));
-    // Hits in operation examples: any object carrying the hit's own keys.
+    // Hits in the document's examples: any object there carrying the
+    // hit's own keys. Only `example`/`examples` values are searched, so a
+    // schema's `properties` never counts.
     fn hits<'a>(v: &'a Value, out: &mut Vec<&'a Value>) {
         match v {
             Value::Object(m) => {
@@ -678,8 +681,23 @@ fn a_hits_resolution_lists_the_canonical_values() {
             _ => {}
         }
     }
+    fn examples<'a>(v: &'a Value, out: &mut Vec<&'a Value>) {
+        match v {
+            Value::Object(m) => {
+                for (k, c) in m {
+                    if k == "example" || k == "examples" {
+                        hits(c, out);
+                    } else {
+                        examples(c, out);
+                    }
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|c| examples(c, out)),
+            _ => {}
+        }
+    }
     let mut found = Vec::new();
-    hits(&doc["paths"], &mut found);
+    examples(&doc, &mut found);
     assert!(!found.is_empty(), "no example hits found");
     for hit in found {
         let r = &hit["resolution"];

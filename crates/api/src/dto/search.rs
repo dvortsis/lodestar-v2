@@ -462,11 +462,12 @@ impl UnpopulatedField {
 }
 
 /// `SearchHit.resolution`'s schema: a string or null, the string one of
-/// `Resolution::ALL` in its canonical form. `schema_with` replaces the
-/// derived schema whole, so the field's description is written here. Built from the parser's list,
+/// `Resolution::ALL` in its canonical form. Built from the parser's list,
 /// so a new resolution reaches the document (and the web client's type)
 /// on the next `cargo run -p lodestar --bin openapi`; CI's drift check
-/// fails until it's committed.
+/// fails until it's committed. `schema_with` replaces the derived schema
+/// whole, so the field's description is written here (and
+/// `tests/openapi.rs` checks it names every value).
 fn resolution_schema() -> utoipa::openapi::Object {
     use lodestar_release_parser::Resolution;
     use utoipa::openapi::{ObjectBuilder, Type, schema::SchemaType};
@@ -474,7 +475,9 @@ fn resolution_schema() -> utoipa::openapi::Object {
         .iter()
         .map(|r| serde_json::Value::from(r.as_str()))
         .chain([serde_json::Value::Null]);
-    #[allow(deprecated)] // `example`, as the derived schemas write it.
+    // `example`, as the derived schemas write it; utoipa 5 deprecates it
+    // for OpenAPI 3.1's `examples`.
+    #[allow(deprecated)]
     ObjectBuilder::new()
         .schema_type(SchemaType::from_iter([Type::String, Type::Null]))
         .description(Some(
