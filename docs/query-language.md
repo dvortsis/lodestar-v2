@@ -467,7 +467,7 @@ show /s\d\de\d\d/
 - **Limits** keep one pattern from slowing every search: at most 512 bytes, nested at most 16 deep, repeat counts up to 100, and classes small enough to match quickly. A pattern over a limit is refused with the reason.
 - **Lodestar first narrows by the pattern's three-letter pieces**, then checks each remaining name. Patterns with no such piece (`/.+/`, `/\d/`) check every name, so they're slower: add a word beside them.
 - **A pattern that takes too long stops after 2 seconds** and shows what it found by then. The count is then a lower bound.
-- Filter rules don't run patterns: in a rule, `/…/` matches nothing.
+- Filter rules can't use patterns: a rule with `/…/` is refused when you save it.
 
 ```query-fail
 /S0[1-9/ => regex_syntax

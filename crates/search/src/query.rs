@@ -1596,7 +1596,8 @@ impl Node {
     }
 
     /// Whether any clause tests `verified:`, `source:` or `network:`, or
-    /// `sig:`: what only the search index knows, so a filter rule can't
+    /// `sig:`, or a `/…/` regex (RX-1): what only the search index knows
+    /// or runs, so a filter rule can't
     /// test it (the judge would call it no match, and negated, a match
     /// for everything).
     pub fn mentions_provenance(&self) -> bool {
@@ -1604,7 +1605,8 @@ impl Node {
             Node::Verified { .. }
             | Node::Source { .. }
             | Node::Network { .. }
-            | Node::Sig { .. } => true,
+            | Node::Sig { .. }
+            | Node::Regex { .. } => true,
             Node::And { of } | Node::Or { of } => of.iter().any(Node::mentions_provenance),
             Node::Not { of } | Node::File { of } => of.mentions_provenance(),
             _ => false,
@@ -2795,6 +2797,8 @@ mod tests {
         assert!(sig("-sig:7a9f3c12dd0e44b1").mentions_provenance());
         assert!(sig(&format!("x (y | sig:{hash})")).mentions_provenance());
         assert!(!sig(&format!("hash:{hash}")).mentions_provenance());
+        // A regex is run by the search index only (RX-1).
+        assert!(sig("x -/cam/").mentions_provenance());
         // Only the pasted-hash form resolves a reference torrent.
         let same = |q: &str| sig(q).mentions_same_payload();
         assert!(same(&format!("sig:{hash}")));
