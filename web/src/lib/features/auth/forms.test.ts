@@ -3,6 +3,7 @@
 // must be ticked at setup and accepted at the sign-in gate.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { tick } from 'svelte';
 
 const nav = vi.hoisted(() => ({
 	toSetup: vi.fn(),
@@ -450,6 +451,33 @@ describe('SetupForm', () => {
 			await fireEvent.click(cont());
 			await waitFor(() => expect(document.activeElement).toBe(newPw()));
 			expect(calls().map((c) => c[0])).toEqual(['/api/v1/setup/token']);
+		});
+
+		it('stays on the token step when the token is edited while it is checked', async () => {
+			let release!: () => void;
+			await toTokenStep();
+			fetchMock.mockImplementationOnce(
+				() =>
+					new Promise<Response>((r) => {
+						release = () => r(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+					})
+			);
+			await fireEvent.input(tokenInput(), { target: { value: 'AB12-CD34-EF56-7890' } });
+			await fireEvent.click(cont());
+			await waitFor(() => expect(cont().getAttribute('aria-disabled')).toBe('true'));
+			// The field changes while the first token is being checked: that one passing proves nothing
+			// about the new one, so the form stays and the new token is checked on its own Continue.
+			await fireEvent.input(tokenInput(), { target: { value: 'AB12-CD34-EF56-7891' } });
+			release();
+			await waitFor(() => expect(cont().getAttribute('aria-disabled')).not.toBe('true'));
+			// The Continue handler's last step runs after the form unlocks; let its update land.
+			await tick();
+			expect(current()).toContain('Setup token');
+			expect(screen.queryByLabelText(/^New admin password/)).toBeNull();
+			await fireEvent.click(cont());
+			await waitFor(() => expect(document.activeElement).toBe(newPw()));
+			expect(calls().map((c) => c[0])).toEqual(['/api/v1/setup/token', '/api/v1/setup/token']);
+			expect(sentBody(1)).toEqual({ token: 'AB12-CD34-EF56-7891' });
 		});
 	});
 
