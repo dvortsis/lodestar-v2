@@ -136,6 +136,9 @@ pub struct Switches {
     pub target_prefixes: bool,
     /// CR-LOOKUP-END: `dht.lookup_end`.
     pub lookup_end: bool,
+    /// CR-SOFT-TIMEOUT: `dht.soft_timeout`, with its wait in seconds
+    /// (`Some(1)` is the shipped 1 s; `Some(2)` the screen's variant).
+    pub soft_timeout: Option<u64>,
     /// CR-1c: `dht.preset_slots`.
     pub preset_slots: bool,
     /// X-sampler-cooldown-split: `dht.sampler_cooldown_split`.
@@ -166,10 +169,17 @@ impl Switches {
         pool.streaming_peers = self.streaming_peers;
         dht.target_prefixes = self.target_prefixes;
         dht.lookup_end = self.lookup_end;
+        if let Some(secs) = self.soft_timeout {
+            dht.soft_timeout = true;
+            dht.soft_timeout_after = std::time::Duration::from_secs(secs);
+        }
     }
 
     /// For the report header: `name=value` of every switch that's on.
     pub fn describe(&self) -> String {
+        let soft = self
+            .soft_timeout
+            .map(|s| format!("soft_timeout=true(after={s}s)"));
         let on: Vec<&str> = [
             (self.coordinated_admission, "coordinated_admission=true"),
             (self.responder_hints, "responder_hints=true"),
@@ -180,6 +190,7 @@ impl Switches {
             (self.preset_slots, "preset_slots=true"),
             (self.sampler_cooldown_split, "sampler_cooldown_split=true"),
             (self.sample_backoff_escalate, "sample_backoff_escalate=true"),
+            (soft.is_some(), soft.as_deref().unwrap_or_default()),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))

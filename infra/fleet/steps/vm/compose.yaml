@@ -82,6 +82,7 @@ services:
       - LODESTAR_DHT_HINT_FIRST
       - LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT
       - LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE
+      - LODESTAR_DHT_SOFT_TIMEOUT
     # The restart witness on the host, outside the data folder (CR-SPEC 2.3,
     # plan 0e), so a recreated container (every arm switch) is a resumed start.
     volumes:
