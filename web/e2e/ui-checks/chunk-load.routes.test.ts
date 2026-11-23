@@ -178,6 +178,7 @@ test.describe('a lazy chunk fails to load', () => {
 		return { errors, failed, gate };
 	}
 
+	// No chunk fails here: the same gate holds the editor's chunk, the race behind failSearch's wait.
 	test('Search bar: typing before its editor loads keeps exactly what was typed', async ({
 		page,
 		go,
@@ -192,18 +193,22 @@ test.describe('a lazy chunk fails to load', () => {
 		gate.blocked = false;
 		let release!: () => void;
 		gate.hold = new Promise((resolve) => (release = resolve));
-		await go('/search?q=lantern');
-		await expect.poll(() => gate.seen).toBeGreaterThan(0); // the held request has arrived
-		const box = page.getByRole('combobox', { name: 'Search torrents' });
-		await box.click();
-		await page.keyboard.press('ControlOrMeta+a');
-		await page.keyboard.type('harbor');
-		await expect(page.locator('[data-live]')).toHaveCount(0); // still the static bar
-		release();
-		await expect(page.locator('[data-live]')).toHaveCount(1);
-		// The typed text wins over the URL's query: no `lantern` in front of it, in the bar or the URL.
-		await expect(page).toHaveURL(/[?&]q=harbor(&|$)/);
-		await expect(box).toHaveText('harbor');
+		try {
+			await go('/search?q=lantern');
+			await expect.poll(() => gate.seen).toBeGreaterThan(0); // the held request has arrived
+			const box = page.getByRole('combobox', { name: 'Search torrents' });
+			await box.click();
+			await page.keyboard.press('ControlOrMeta+a');
+			await page.keyboard.type('harbor');
+			await expect(page.locator('[data-live]')).toHaveCount(0); // still the static bar
+			release();
+			await expect(page.locator('[data-live]')).toHaveCount(1);
+			// The typed text wins over the URL's query: no `lantern` in front of it, in the bar or the URL.
+			await expect(page).toHaveURL(/[?&]q=harbor(&|$)/);
+			await expect(box).toHaveText('harbor');
+		} finally {
+			release(); // never left parked on the hold if an assertion fails first
+		}
 		expect(errors).toEqual([]);
 	});
 
