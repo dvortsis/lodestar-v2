@@ -27,6 +27,7 @@ pub mod query;
 mod rebuild;
 pub mod recovery;
 pub mod regex;
+pub mod regex_verify;
 mod retry_dir;
 pub mod schema;
 mod seek_guard;
@@ -47,8 +48,8 @@ pub use count::{EXACT_UP_TO, Total};
 pub use cursor::{Cursor, LeaseId, Position};
 pub use disk::{DiskStats, space_by_field_at};
 pub use doc::{
-    DocEnrichment, DocProvenance, TitleIdentityParts, TorrentDoc, extension, flag_names,
-    title_identity_parts,
+    DocEnrichment, DocProvenance, TRIGRAM_PREFIX_BYTES, TitleIdentityParts, TorrentDoc, extension,
+    flag_names, title_identity_parts,
 };
 pub use explain::{EXPLAIN_MAX, Explained, Explanation, Parts, Priors, WEIGHTS, Weights, explain};
 pub use facets::{
@@ -65,7 +66,7 @@ pub use lease::{EXACT_BUDGET, Lease, LeaseConfig, Leases, Page, Start};
 pub use live::{CommitHook, Committed, IndexStats, LiveConfig, LiveIndexer};
 pub use percolate::{Due, Matched, PercolateLimits, Percolation, percolate};
 pub use population::{Availability, FieldAvailability, Generations};
-pub use query::{Node, ParseError, Units, parse, parse_with};
+pub use query::{MAX_REGEX_CLAUSES, Node, ParseError, REGEX_TOO_MANY, Units, parse, parse_with};
 pub use rebuild::{
     IndexVersion, Ranking, Rebuild, RebuildPhase, RebuildProgress, Serving, ServingConfig,
 };

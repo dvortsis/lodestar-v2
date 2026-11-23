@@ -25,6 +25,14 @@ pub const MAX_EXTS: usize = 1024;
 const MAX_YEARS: u16 = 50;
 const MAX_SEASONS: u16 = 100;
 const MAX_EPISODES: u16 = 500;
+/// The bytes of a name `name_trigram` covers (plan Q10 (a)): its grams
+/// come from the name's first this many bytes, cut back to a character
+/// boundary. A longer name also gets [`TRIGRAM_MARKER`], so a match past
+/// the prefix still passes every prefilter (`marker OR plan`).
+pub const TRIGRAM_PREFIX_BYTES: usize = 96;
+/// The term on every name longer than [`TRIGRAM_PREFIX_BYTES`]. It's four
+/// characters, so no gram (three) can equal it.
+pub const TRIGRAM_MARKER: &str = "\u{0}lng";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TorrentDoc {
@@ -365,8 +373,51 @@ impl TorrentDoc {
         for band in &self.group_minhash {
             d.add_u64(f.group_minhash, *band);
         }
+        if let Some(grams) = trigram_tokens(&self.name) {
+            d.add_pre_tokenized_text(f.name_trigram, grams);
+        }
         d
     }
+}
+
+/// The `name_trigram` tokens of `name` (generation 1, RX-1): the grams
+/// [`crate::schema::trigram_analyzer`] makes of its first
+/// [`TRIGRAM_PREFIX_BYTES`], plus [`TRIGRAM_MARKER`] when the name is
+/// longer. `None` for a name too short to have a gram. The regex planner
+/// (`crate::regex`) folds the same way, so a name a pattern matches
+/// within the prefix has every gram the plan asks for.
+pub fn trigram_tokens(name: &str) -> Option<PreTokenizedString> {
+    use tantivy::tokenizer::{Token, TokenStream};
+    let mut cut = name.len().min(TRIGRAM_PREFIX_BYTES);
+    while !name.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let prefix = &name[..cut];
+    let mut tokens: Vec<Token> = Vec::new();
+    // Built once per thread, not per document.
+    thread_local! {
+        static ANALYZER: std::cell::RefCell<tantivy::tokenizer::TextAnalyzer> =
+            std::cell::RefCell::new(crate::schema::trigram_analyzer());
+    }
+    ANALYZER.with_borrow_mut(|analyzer| {
+        let mut stream = analyzer.token_stream(prefix);
+        while stream.advance() {
+            tokens.push(stream.token().clone());
+        }
+    });
+    if cut < name.len() {
+        tokens.push(Token {
+            offset_from: cut,
+            offset_to: name.len(),
+            position: tokens.len(),
+            text: TRIGRAM_MARKER.to_owned(),
+            position_length: 1,
+        });
+    }
+    (!tokens.is_empty()).then(|| PreTokenizedString {
+        text: prefix.to_owned(),
+        tokens,
+    })
 }
 
 /// A torrent's title identity (B13, `docs/decisions/2026-10-22-B13.md`):

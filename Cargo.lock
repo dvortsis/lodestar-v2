@@ -1903,6 +1903,7 @@ dependencies = [
  "lodestar-release-parser",
  "lodestar-store",
  "proptest",
+ "regex",
  "regex-syntax",
  "serde",
  "serde_json",

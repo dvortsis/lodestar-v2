@@ -9,3 +9,5 @@ cc 4cbbd35e4491b9be45e5f778b79b376af00a09e111ec86767ba8002481b742c6 # shrinks to
 cc 92667be3a53a315e4e631af13dc354d488a2c44379e3d92f16f08f9697cef1a4 # shrinks to words = ["movies", "movies"]
 cc b5021598d983495cd0dfc5a5b391283d1846dc7a023a72979c6f52b5206f442c # shrinks to words = ["french"]
 cc 275f6bcbb085b637dd2e4067e0fe1f55c0e323903adade495ad1dfda5fbb82d1 # shrinks to q = "-\"e,h\"~*é0", pos = 0
+cc a127fe73604c34d4807187151b9585410c9cd4dd6cbe12c22b199ff7cfb4901f # shrinks to words = ["/", "b", "flac/naruto", "movies"]
+cc 248dea63e05de62f6ea7f5b2770cfbb1324a13424a4e786624cceab993c141ea # shrinks to words = ["4k\u{a0}movies", "/a", "flac/naruto", "flac/naruto"]

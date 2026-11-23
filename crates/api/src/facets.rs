@@ -352,6 +352,7 @@ fn response(
             distinct: t.distinct,
             other: t.other + withheld,
             partial: t.partial,
+            stopped: t.stopped,
             values,
         }
     };
@@ -409,6 +410,7 @@ fn response(
         sample_rate: got.sample_rate,
         sampled: got.sampled(),
         source_names,
+        stopped: got.stopped,
         took_ms,
         total,
         total_approx,
@@ -444,6 +446,7 @@ mod tests {
             distinct: 6,
             approx: false,
             partial: true,
+            stopped: false,
         };
         let verified = TermCounts {
             values: vec![value("yes", 9), value("no", 1)],
@@ -451,6 +454,7 @@ mod tests {
             distinct: 2,
             approx: false,
             partial: false,
+            stopped: true,
         };
         Facets {
             terms: vec![(Facet::Source, source), (Facet::Verified, verified)],
@@ -458,6 +462,7 @@ mod tests {
             sample_rate: None,
             unavailable: Vec::new(),
             matches: 10,
+            stopped: false,
         }
     }
 
@@ -479,6 +484,8 @@ mod tests {
         assert_eq!(listed(&r, "source"), ["dht", "prowlarr", "nyaa", "gone"]);
         assert_eq!(r.facets["source"].distinct, 6);
         assert!(r.facets["source"].partial && !r.facets["verified"].partial);
+        // A regex stop is its own flag, never `partial` (RX-1).
+        assert!(r.facets["verified"].stopped && !r.facets["source"].stopped);
         assert_eq!(r.source_names["dht"], "Mainline DHT");
         assert_eq!(r.source_names["prowlarr"], "Prowlarr");
         // A plugin this build doesn't run shows by its id.

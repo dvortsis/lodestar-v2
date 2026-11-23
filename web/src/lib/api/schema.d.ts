@@ -5495,6 +5495,12 @@ export interface components {
             source_names: {
                 [key: string]: string;
             };
+            /**
+             * @description A `/…/` term of the query ran out of its time budget: `total`'s
+             *     matches as counted here and the histograms are what was checked
+             *     in time. Each facet has its own `stopped`. Not shown yet (RX-2).
+             */
+            stopped: boolean;
             /** Format: double */
             took_ms: number;
             /** @description The search's result count, as `/search` reports it. */
@@ -10648,6 +10654,12 @@ export interface components {
              */
             partial: boolean;
             /**
+             * @description A `/…/` term of the query ran out of its time budget while this
+             *     facet was counted: the counts are what was checked in time. Not
+             *     shown yet (RX-2); never the same as `partial`.
+             */
+            stopped: boolean;
+            /**
              * @description The top values by count (ties by value), then any value the query
              *     selects or excludes that isn't among them. Flags list `yes` and
              *     `no`.
@@ -13711,6 +13723,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `regex_stopped`: a `/…/` term ran out of its time budget, so the file would be incomplete. Narrow the search and try again. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `too_many_jobs`: four jobs are running or paused. */
             429: {
                 headers: {
@@ -13782,6 +13803,15 @@ export interface operations {
             };
             /** @description `collection_not_found`. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `regex_stopped`: a `/…/` term ran out of its time budget, so the file would be incomplete. Narrow the search and try again. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

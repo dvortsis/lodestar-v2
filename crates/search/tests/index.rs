@@ -601,6 +601,43 @@ fn an_index_left_behind_catches_up_alone() {
     assert_eq!(ids(&index, "file:(ext:flac -zzqxnever)"), [1]);
 }
 
+/// A lease's stem fallback reuses the exact pass's verified `/…/`
+/// clauses (RX-1): a wide pass with no budget left can't replace the
+/// exact answer with a partial one.
+#[test]
+fn a_leases_stem_fallback_keeps_the_exact_passes_regex_matches() {
+    let tdk = "The.Dark.Knight.2008.1080p.BluRay.x264-GRP";
+    let kotz = "Knights.of.the.Zodiac.2023.1080p.WEB-DL.x264-GRP";
+    let mut store = store_with(&[
+        sized(tdk, &[("tdk.mkv", 10 * GB)]),
+        sized(kotz, &[("kotz.mkv", 3 * GB)]),
+    ]);
+    lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100)
+        .unwrap()
+        .unwrap();
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    let index = std::sync::Arc::new(index);
+    let node = lodestar_search::parse("knights -/zzz/").unwrap();
+    // The exact pass verifies; the next seal, the wide pass's, finds the
+    // budget spent.
+    lodestar_search::regex_verify::stop_at_seal_on_this_thread(Some(1));
+    let lease = lodestar_search::Lease::new(
+        index,
+        &node,
+        NOW,
+        Sort::Relevance,
+        &lodestar_search::CancelToken::new(),
+    );
+    lodestar_search::regex_verify::stop_at_seal_on_this_thread(None);
+    let lease = lease.unwrap();
+    assert!(lease.stemmed());
+    assert_eq!(lease.total().value, 2);
+    assert!(!lease.regex_stopped());
+}
+
 #[test]
 fn plurals_match_through_the_title_stem_as_a_fallback() {
     let tdk = "The.Dark.Knight.2008.1080p.BluRay.x264-GRP";
@@ -886,15 +923,27 @@ mod population {
             .into_iter()
             .map(|f| (f.field, f.availability))
             .collect();
-        let none = |f: &str| (f.to_owned(), Availability::NoProducer);
-        assert_eq!(un, [none("name_trigram")]);
+        // RX-1 shipped the last field without a producer (`name_trigram`).
+        assert_eq!(un, []);
         assert_eq!(index.availability("file.category"), Availability::Ready);
         assert_eq!(index.availability("file.pieces_root"), Availability::Ready);
         assert_eq!(index.availability("name"), Availability::Ready);
         // Only a complete field may be prefiltered on.
         assert!(index.availability("file.category").complete());
-        assert!(!index.availability("name_trigram").complete());
+        assert!(index.availability("name_trigram").complete());
         assert!(index.availability("name").complete());
+        let without = SearchIndex::in_memory()
+            .unwrap()
+            .with_generations(Generations::current().with("name_trigram", 0))
+            .unwrap();
+        let none = |f: &str| (f.to_owned(), Availability::NoProducer);
+        let un: Vec<(String, Availability)> = without
+            .unpopulated()
+            .into_iter()
+            .map(|f| (f.field, f.availability))
+            .collect();
+        assert_eq!(un, [none("name_trigram")]);
+        assert!(!without.availability("name_trigram").complete());
     }
 
     #[test]
@@ -1022,8 +1071,6 @@ mod population {
         for f in ["file.category", "file.pieces_root", "file.size_bucket"] {
             assert_eq!(index.availability(f), backfilling(0, 12), "{f}");
         }
-        // Fields without a producer have nothing to backfill.
-        assert_eq!(index.availability("name_trigram"), Availability::NoProducer);
         let mut w = index.writer(HEAP).unwrap();
         while w.catch_up(&mut store, 5).unwrap() > 0 {}
         w.commit().unwrap();
@@ -1036,7 +1083,8 @@ mod population {
         let tmp = tempfile::tempdir().unwrap();
         let dir = index_dir(tmp.path());
         let mut store = indexed(tmp.path(), 8);
-        let shipped = Generations::current().with("name_trigram", 1);
+        let next = Generations::current().get("name_trigram").unwrap() + 1;
+        let shipped = Generations::current().with("name_trigram", next);
         let index = SearchIndex::open(&dir)
             .unwrap()
             .with_generations(shipped.clone())
@@ -1058,7 +1106,10 @@ mod population {
             .with_generations(shipped)
             .unwrap();
         assert_eq!(index.availability("name_trigram"), Availability::Ready);
-        let index = SearchIndex::open(&dir).unwrap();
+        let index = SearchIndex::open(&dir)
+            .unwrap()
+            .with_generations(Generations::current().with("name_trigram", 0))
+            .unwrap();
         assert_eq!(index.availability("name_trigram"), Availability::NoProducer);
     }
 }

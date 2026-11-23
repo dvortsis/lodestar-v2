@@ -59,6 +59,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_search_percolate_search_failed_n,
 		m.settings_logging_ev_search_percolate_search_failed_h
 	],
+	'search.percolate_regex_stopped': [
+		m.settings_logging_ev_search_percolate_regex_stopped_n,
+		m.settings_logging_ev_search_percolate_regex_stopped_h
+	],
 	'search.rename_retry': [
 		m.settings_logging_ev_search_rename_retry_n,
 		m.settings_logging_ev_search_rename_retry_h

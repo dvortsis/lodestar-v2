@@ -341,6 +341,9 @@ fn the_worst_accepted_cases_are_cheap_and_one_more_step_is_refused() {
         row(r"[\pL~~\pN]", 13, Reason::ClassTooLarge),
         row(r"S\d\d[\W_]E\d\d[\W_]", 18, Reason::TooManyNodes),
         row(r"[\w.-]", 51, Reason::TooManyNodes),
+        // A bracket of only literals is charged exactly (X-rx0-nits N3),
+        // so the node limit holds it (rv-755).
+        row(r"[^/]", 127, Reason::TooManyNodes),
         // Perl classes stand alone unfolded; the compiled size bounds them.
         row(r"\w", 62, Reason::TooLarge),
         row(r"\W", 62, Reason::TooLarge),

@@ -528,6 +528,9 @@ pub struct Compiled {
     pub(crate) reads_hot: bool,
     /// The hot columns its swarm clauses, sorts and priors read.
     pub(crate) hot: Option<Arc<HotColumns>>,
+    /// It has a `/…/` clause, which may stop partway: its per-segment
+    /// tops aren't kept in the segment cache (`sorted`).
+    pub(crate) regex: bool,
 }
 
 impl std::fmt::Debug for Compiled {
@@ -1183,6 +1186,20 @@ impl SearchIndex {
     }
 
     /// Documents in the current searcher.
+    /// The live torrents whose name is longer than
+    /// [`crate::doc::TRIGRAM_PREFIX_BYTES`]: those carrying
+    /// [`crate::doc::TRIGRAM_MARKER`], which every `/…/` prefilter lets
+    /// through to the verifier (RX-1). `size-report` prints it, as the
+    /// share of names a regex always verifies (G-v07-scale).
+    pub fn long_names(&self) -> Result<u64> {
+        if self.fields.name_trigram == compile::ABSENT {
+            return Ok(0);
+        }
+        let term = Term::from_field_text(self.fields.name_trigram, crate::doc::TRIGRAM_MARKER);
+        let q = TermQuery::new(term, IndexRecordOption::Basic);
+        Ok(self.searcher().search(&q, &tantivy::collector::Count)? as u64)
+    }
+
     pub fn num_docs(&self) -> u64 {
         self.reader.searcher().num_docs()
     }
@@ -1384,7 +1401,52 @@ impl SearchIndex {
         cancel: &crate::CancelToken,
         snapshot: Option<u64>,
     ) -> Result<Compiled> {
+        self.compile_shared(node, now, utc_offset, stems, cancel, snapshot, None)
+    }
+
+    /// `node` compiled for `lease`'s snapshot, its `/…/` clauses reusing
+    /// the lease's where the pattern is the same: their verified matches
+    /// and their stop, with nothing verified again and no budget spent
+    /// (facet variants and recovery counts, RX-1). Counts on the lease
+    /// then agree with its own, however long after it was taken.
+    pub(crate) fn compile_on_lease(
+        &self,
+        lease: &crate::Lease,
+        node: &Node,
+        stems: bool,
+        cancel: &crate::CancelToken,
+    ) -> Result<Compiled> {
+        let shared = crate::regex_verify::Shared::of(lease.compiled().query.as_ref());
+        self.compile_shared(
+            node,
+            lease.now(),
+            lease.utc_offset(),
+            stems,
+            cancel,
+            Some(lease.searcher().generation().generation_id()),
+            Some(&shared),
+        )
+    }
+
+    /// [`SearchIndex::compile_at`], its `/…/` clauses reusing `regex_shared`'s
+    /// where the pattern is the same (see [`SearchIndex::compile_on_lease`]).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn compile_shared(
+        &self,
+        node: &Node,
+        now: i64,
+        utc_offset: i32,
+        stems: bool,
+        cancel: &crate::CancelToken,
+        snapshot: Option<u64>,
+        regex_shared: Option<&crate::regex_verify::Shared>,
+    ) -> Result<Compiled> {
         cancel.check()?;
+        // The search's regex budget starts before anything is planned,
+        // so planning and compiling its patterns count (S8-11).
+        let regexes = node.regex_clauses();
+        let regex_deadline =
+            (regexes > 0).then(|| cancel.regex_deadline(crate::regex_verify::budget()));
         // `file:(…)` clauses run on the file index first, but for what
         // the torrent index's bucket terms answer (X-search-files-5).
         let buckets = self.bucket_terms_ready(snapshot);
@@ -1464,12 +1526,28 @@ impl SearchIndex {
             utc_offset,
             buckets,
             visible: &[],
+            // Only a query with a `/…/` clause reads it.
+            trigrams: regexes > 0
+                && self.availability_at("name_trigram", snapshot) == Availability::Ready,
+            regex_deadline,
+            regex_shared,
         };
+        // The parser refuses more than `MAX_REGEX_CLAUSES`; a stored node
+        // over it isn't trusted, and matches nothing, verifying nothing
+        // (S8-10).
         let compile::Parts {
             query,
             filters,
             boosts,
-        } = compile::compile(node, &cx, now);
+        } = if regexes > crate::query::MAX_REGEX_CLAUSES {
+            compile::Parts {
+                query: Box::new(tantivy::query::EmptyQuery),
+                filters: Vec::new(),
+                boosts: None,
+            }
+        } else {
+            compile::compile(node, &cx, now)
+        };
         // Relative dates resolve against `now`, so they're part of the key,
         // and file clauses against the file index's generation.
         let mut key = format!("{node:?}");
@@ -1502,6 +1580,7 @@ impl SearchIndex {
             now,
             reads_hot: compile::reads_hot(node),
             hot: self.hot.clone(),
+            regex: regexes > 0,
         })
     }
 
@@ -1546,6 +1625,7 @@ impl SearchIndex {
             now: 0,
             reads_hot: false,
             hot: None,
+            regex: false,
         };
         Ok(self.search(&q, 1)?.hits.first().map(|h| h.id))
     }
@@ -3025,14 +3105,11 @@ mod population_tests {
                 .is_some()
         );
         // Fields complete since the index opened, or not tracked, are
-        // complete in every snapshot; one without a producer in none.
+        // complete in every snapshot (RX-1 shipped `name_trigram`, the
+        // last field without a producer).
         assert!(index.prefilter("file.category", &partial, q()).is_some());
         assert!(index.prefilter("name", &partial, q()).is_some());
-        assert!(
-            index
-                .prefilter("name_trigram", &index.searcher(), q())
-                .is_none()
-        );
+        assert!(index.prefilter("name_trigram", &partial, q()).is_some());
     }
 
     #[test]

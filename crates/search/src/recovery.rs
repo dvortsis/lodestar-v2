@@ -107,11 +107,12 @@ pub(crate) fn totals_with(
     budget: Duration,
     policy: Policy,
 ) -> Result<Vec<Option<Total>>> {
-    let deadline = cancel.with_budget(budget);
+    // Under what's left of the search's regex budget (S8-11).
+    let deadline = lease.regex_token(cancel).with_budget(budget);
     let mut out = Vec::with_capacity(queries.len());
     for q in queries {
         match total(lease, q, &deadline, policy) {
-            Ok(t) => out.push(Some(t)),
+            Ok(t) => out.push(t),
             // Out of time: this one and every later one are absent.
             Err(Error::OutOfTime) => break,
             Err(e) => return Err(e),
@@ -124,20 +125,36 @@ pub(crate) fn totals_with(
 /// One query's total, as a lease taken for it would count it. Out of
 /// time anywhere, the stem fallback's pass included, it's `OutOfTime`:
 /// a count without its fallback could be lower than the search shows.
-fn total(lease: &Lease, node: &Node, deadline: &CancelToken, policy: Policy) -> Result<Total> {
+/// `None` when a `/…/` clause stopped at the regex budget: that count
+/// isn't offered, but the next removal (perhaps of the regex) still is.
+fn total(
+    lease: &Lease,
+    node: &Node,
+    deadline: &CancelToken,
+    policy: Policy,
+) -> Result<Option<Total>> {
     let index = lease.index();
     let searcher = lease.searcher();
-    let at = Some(searcher.generation().generation_id());
-    let compile =
-        |stems| index.compile_at(node, lease.now(), lease.utc_offset(), stems, deadline, at);
-    let mut best = count::total_with(searcher, &compile(false)?, deadline, policy)?;
+    let count = |stems| -> Result<Option<Total>> {
+        // The lease's own `/…/` clauses where the pattern is the same:
+        // already verified, no budget spent again (RX-1).
+        let compiled = index.compile_on_lease(lease, node, stems, deadline)?;
+        crate::regex_verify::seal(compiled.query.as_ref(), searcher, deadline)?;
+        let total = count::total_with(searcher, &compiled, deadline, policy)?;
+        Ok((!crate::regex_verify::stopped(&compiled)).then_some(total))
+    };
+    let Some(mut best) = count(false)? else {
+        return Ok(None);
+    };
     if best.value < STEM_FALLBACK_BELOW && has_stem_alternative(node) {
-        let wider = count::total_with(searcher, &compile(true)?, deadline, policy)?;
+        let Some(wider) = count(true)? else {
+            return Ok(None);
+        };
         if wider.value > best.value {
             best = wider;
         }
     }
-    Ok(best)
+    Ok(Some(best))
 }
 
 #[cfg(test)]

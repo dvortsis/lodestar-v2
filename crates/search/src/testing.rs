@@ -64,6 +64,10 @@ pub(crate) fn append(index: &SearchIndex, ids: std::ops::Range<u64>, n: u64) {
         d.add_u64(f.id, id);
         d.add_text(f.name, &name);
         d.add_text(f.text, &name);
+        // As the real writer does, so `/…/` prefilters (RX-1).
+        if let Some(grams) = crate::doc::trigram_tokens(&name) {
+            d.add_pre_tokenized_text(f.name_trigram, grams);
+        }
         d.add_u64(f.size, 1000 + i);
         d.add_u64(f.files, 1 + i % 7);
         d.add_i64(f.discovered, 1_700_000_000 + i as i64);
@@ -122,6 +126,7 @@ pub(crate) fn slow(index: &SearchIndex, delay: Duration) -> Compiled {
         now: 0,
         reads_hot: false,
         hot: None,
+        regex: false,
     }
 }
 
@@ -146,6 +151,7 @@ pub(crate) fn tripwire(at: usize, token: &CancelToken) -> (Compiled, Arc<AtomicU
         now: 0,
         reads_hot: false,
         hot: None,
+        regex: false,
     };
     (compiled, visits)
 }

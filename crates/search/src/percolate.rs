@@ -24,6 +24,15 @@
 //!   its scans, so a run that starts one always finishes one. A search
 //!   the token stops is reported as not run; what a run didn't reach
 //!   runs next time.
+//! - **Regex** (RX-1, S8-12): each search's `/…/` clauses verify under a
+//!   regex budget of their own ([`CancelToken::regex_scope`]). A search
+//!   whose verify stopped there is left out of [`Percolation::matched`]
+//!   and listed in [`Percolation::regex_stopped`]: its watermark stays,
+//!   so the range is retried next run, and an alert is never lost to a
+//!   partial verify. It doesn't make [`Percolation::more`] true by
+//!   itself; a search the run's token cut mid-verify is also listed in
+//!   [`Percolation::regex_cut`], for callers that pace those entries
+//!   (live queries).
 //!
 //! No store writes here: the caller records the result in one
 //! transaction per range ([`lodestar_store::Store::record_percolation`]).
@@ -115,6 +124,15 @@ pub struct Percolation {
     /// Searches that failed in the index, by id. They keep their
     /// watermark and run again next time.
     pub failed: Vec<i64>,
+    /// Searches whose `/…/` verify stopped at its regex budget, by id
+    /// (S8-12). They keep their watermark and run again next time.
+    pub regex_stopped: Vec<i64>,
+    /// The search the run's token stopped while its `/…/` verify was
+    /// partial, by id: the run stopped there (`stopped`), and its regex
+    /// was part of why. A caller whose entries take only what's left of
+    /// a run's budget (live queries) treats it as [`Self::regex_stopped`],
+    /// so a heavy pattern can't be first in every run.
+    pub regex_cut: Vec<i64>,
 }
 
 impl Percolation {
@@ -163,6 +181,7 @@ pub fn percolate(
     let sig_complete = index
         .prefilter("payload_sig", &searcher, Box::new(EmptyQuery))
         .is_some();
+    let mut ran = false;
     for d in due {
         // `sig:<info hash>` resolves its reference torrent through the
         // query's own visibility clauses (`compile::SamePayload`). A saved
@@ -186,6 +205,18 @@ pub fn percolate(
         } else {
             d.query
         };
+        // Over the regex clause cap (a stored node the parser didn't
+        // make): it would compile to nothing and move its watermark past
+        // every torrent, so it fails instead, logged and kept where it is
+        // (S8-10).
+        if query.regex_clauses() > crate::query::MAX_REGEX_CLAUSES {
+            lodestar_log::log_event!(
+                crate::log_events::PERCOLATE_SEARCH_FAILED,
+                saved_search = lodestar_log::Count(d.id.unsigned_abs())
+            );
+            out.failed.push(d.id);
+            continue;
+        }
         let end = upto.min(d.watermark.saturating_add(limits.max_range.max(1)));
         if end <= d.watermark {
             continue;
@@ -197,7 +228,12 @@ pub fn percolate(
         // A search that may stop inside its scan may stop inside its
         // `file:(…)` clauses' file-index scan too, under the same token
         // and budget; the run's first stays whole unless it's stoppable.
-        let scan_cancel = (d.stoppable || !out.matched.is_empty()).then(|| cancel.clone());
+        // Each search's regex clauses get a budget of their own, not
+        // what the run's earlier searches left of one.
+        // "Ran" is any search that got this far, matched or not: one
+        // whose regex stopped took its time too (S8-12).
+        let scan_cancel = (d.stoppable || ran).then(|| cancel.regex_scope());
+        ran = true;
         let compiled = match &scan_cancel {
             Some(token) => {
                 match index.compile_cancelled(query, now, d.utc_offset, d.stems, token) {
@@ -217,6 +253,24 @@ pub fn percolate(
             Bound::Included(term(end)),
         ));
         let q = BooleanQuery::new(vec![(Occur::Must, compiled.query), (Occur::Must, range)]);
+        // A stoppable search verifies its `/…/` clauses under the run's
+        // token, on the segments its range reads; the run's first, under
+        // its regex budget only, as it's verified while collected.
+        if let Some(token) = &scan_cancel {
+            let (after, upto) = (d.watermark, end);
+            let sealed = crate::regex_verify::seal_where(&q, &searcher, token, &|seg| {
+                may_hold(seg, after, upto).unwrap_or(true)
+            });
+            if sealed.is_err() {
+                // As a failed scan: it keeps its watermark.
+                lodestar_log::log_event!(
+                    crate::log_events::PERCOLATE_SEARCH_FAILED,
+                    saved_search = lodestar_log::Count(d.id.unsigned_abs())
+                );
+                out.failed.push(d.id);
+                continue;
+            }
+        }
         let stopped = Arc::new(AtomicBool::new(false));
         let collector = PostFilter {
             ranges: &compiled.filters,
@@ -234,8 +288,18 @@ pub fn percolate(
         };
         match collect(&searcher, &q, &collector, (d.watermark, end), cancel) {
             Ok(_) if stopped.load(Ordering::Relaxed) => {
+                if crate::regex_verify::query_stopped(&q) {
+                    out.regex_cut.push(d.id);
+                }
                 out.stopped = true;
                 break;
+            }
+            // A partial verify: not recorded, so the watermark stays and
+            // the range runs again (S8-12).
+            Ok(_) if crate::regex_verify::query_stopped(&q) => {
+                // The caller logs it (`lodestar`'s percolator, at most
+                // hourly per saved search).
+                out.regex_stopped.push(d.id);
             }
             Ok((ids, truncated, count)) => {
                 if end < upto {
@@ -472,6 +536,72 @@ mod tests {
                     .any(|w| w == word)
             })
             .collect()
+    }
+
+    /// S8-12: a search whose regex verify stopped isn't recorded: it
+    /// keeps its watermark, doesn't make the run `more` (no spinning),
+    /// the run's other searches still run, and the retry matches.
+    #[test]
+    fn a_stopped_regex_verify_keeps_its_watermark_and_the_retry_matches() {
+        let (index, _) = index_with(300, 4);
+        let regex = parse(r"/\brare\b/").unwrap();
+        let word = parse("Half").unwrap();
+        let due = |id, query| Due {
+            id,
+            watermark: 0,
+            query,
+            utc_offset: 0,
+            count_only: false,
+            stems: false,
+            stoppable: false,
+            hold_unresolved: true,
+        };
+        // The regex first (compiled without the run's token) and again
+        // later (under its own regex scope).
+        let dues = [due(1, &regex), due(2, &word), due(3, &regex)];
+        let budget = crate::regex_verify::set_budget_on_this_thread;
+        budget(Some(Duration::ZERO));
+        let p = percolate(&index, &dues, 300, ALL, 0, &CancelToken::new()).unwrap();
+        budget(None);
+        assert_eq!(p.regex_stopped, [1, 3]);
+        assert!(!p.stopped && !p.more());
+        let ran: Vec<i64> = p.matched.iter().map(|m| m.id).collect();
+        assert_eq!(
+            ran,
+            [2],
+            "only what ran is recorded; 1 and 3 keep watermark 0"
+        );
+        // The retry, with time: the same range, and it matches.
+        let p = percolate(&index, &dues, 300, ALL, 0, &CancelToken::new()).unwrap();
+        assert!(p.regex_stopped.is_empty());
+        let rare = expected("rare", 300, 0, 300);
+        assert_eq!(p.matched[0].torrent_ids, rare);
+        assert_eq!(p.matched[2].torrent_ids, rare);
+    }
+
+    /// Each search's regex clauses get a budget of their own: one the
+    /// run's token already spent leaves the second regex search whole.
+    #[test]
+    fn each_search_keeps_its_own_regex_budget() {
+        let (index, _) = index_with(300, 4);
+        let regex = parse(r"/\brare\b/").unwrap();
+        let due = |id| Due {
+            id,
+            watermark: 0,
+            query: &regex,
+            utc_offset: 0,
+            count_only: false,
+            stems: false,
+            stoppable: false,
+            hold_unresolved: true,
+        };
+        let run = CancelToken::new();
+        run.regex_deadline(Duration::ZERO);
+        let p = percolate(&index, &[due(1), due(2)], 300, ALL, 0, &run).unwrap();
+        assert!(p.regex_stopped.is_empty(), "{:?}", p.regex_stopped);
+        let rare = expected("rare", 300, 0, 300);
+        assert_eq!(p.matched.len(), 2);
+        assert!(p.matched.iter().all(|m| m.torrent_ids == rare));
     }
 
     #[test]

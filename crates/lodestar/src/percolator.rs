@@ -23,7 +23,11 @@
 //!   entries on what's left of the same budget, with the same range cap
 //!   ([`lodestar_api::search_live::percolate_live`]). So they never
 //!   delay an alert; when the budget runs out first they're `more`, and
-//!   the next run (straight away) takes them.
+//!   the next run (straight away) takes them. One whose `/…/` pattern ran
+//!   out of time, or was cut by the run's budget, waits before it runs
+//!   again (a cut always one step, a stop of its own longer each time),
+//!   and runs after the plain ones; the pass is `more` only while an
+//!   entry with work that isn't waiting is left, so it can't spin.
 //! - **Promoted torrents** (SRC-2b, `docs/decisions/2026-11-02-SRC-2b.md`)
 //!   keep an id below the watermarks, so the range never reaches them.
 //!   `promote` queues each one durably ([`Store::promoted_due`]); after
@@ -159,9 +163,73 @@ pub struct Seen {
     /// already ran). Lost on a restart, when every search reruns. At most
     /// [`HELD_CAP`] rows.
     held: HashMap<i64, Vec<i64>>,
+    /// Saved searches whose `/…/` verify stopped at its budget, by id:
+    /// when (unix seconds) they may run again, and the wait that set
+    /// ([`REGEX_BACKOFF`]).
+    regex_backoff: HashMap<i64, (i64, i64)>,
+    /// When each was last logged as stopped ([`REGEX_WARN_EVERY`]).
+    regex_warned: HashMap<i64, i64>,
 }
 
+/// A saved search whose `/…/` verify keeps stopping is logged at most
+/// this often, in seconds (RX-1, S8-12): each run retries it, and a line
+/// per run would flood the log.
+const REGEX_WARN_EVERY: i64 = 3600;
+/// How long a saved search whose verify stopped waits before it runs
+/// again, in seconds: the first wait, doubled each time it stops again,
+/// up to the last. Without it, a pattern that always takes its whole
+/// budget would run first in every run (its watermark stays lowest),
+/// spend the run's budget and starve every search after it.
+const REGEX_BACKOFF: (i64, i64) = (60, 3600);
+
 impl Seen {
+    /// Saved search `id` stopped at its regex budget at `now` (unix
+    /// seconds): it waits (see [`REGEX_BACKOFF`]), and it's logged unless
+    /// it was less than [`REGEX_WARN_EVERY`] ago. Whether it logged.
+    fn regex_stopped(&mut self, id: i64, now: i64) -> bool {
+        let wait = self
+            .regex_backoff
+            .get(&id)
+            .map_or(REGEX_BACKOFF.0, |(_, w)| (w * 2).min(REGEX_BACKOFF.1));
+        self.regex_backoff
+            .insert(id, (now.saturating_add(wait), wait));
+        // Entries past the window go first, so the map holds at most the
+        // searches logged in the last hour.
+        self.regex_warned
+            .retain(|_, at| now.saturating_sub(*at) < REGEX_WARN_EVERY);
+        if self.regex_warned.contains_key(&id) {
+            return false;
+        }
+        self.regex_warned.insert(id, now);
+        lodestar_log::log_event!(
+            lodestar_search::log_events::PERCOLATE_REGEX_STOPPED,
+            saved_search = lodestar_log::Count(id.unsigned_abs())
+        );
+        true
+    }
+
+    /// Forgets the regex waits and warnings of saved searches not in
+    /// `regex` (deleted, saved again without a `/…/` term, or paused), so
+    /// the maps hold only searches that can still stop. A paused search's
+    /// wait starts over when it's resumed, which is accepted: it runs at
+    /// once, and waits again only if it stops again.
+    fn prune_regex(&mut self, regex: &HashSet<i64>) {
+        self.regex_backoff.retain(|id, _| regex.contains(id));
+        self.regex_warned.retain(|id, _| regex.contains(id));
+    }
+
+    /// Whether saved search `id` is waiting after a regex stop at `now`.
+    fn regex_waiting(&self, id: i64, now: i64) -> bool {
+        self.regex_backoff
+            .get(&id)
+            .is_some_and(|(until, _)| now < *until)
+    }
+
+    /// Saved search `id` ran whole: its wait is over.
+    fn regex_ran(&mut self, id: i64) {
+        self.regex_backoff.remove(&id);
+    }
+
     /// Remembers `held` rows' held searches, while there's room (see
     /// [`HELD_CAP`]). A row already remembered is always updated: its
     /// held set only shrinks.
@@ -185,6 +253,25 @@ pub fn run_once(
     now: i64,
     seen: &mut Seen,
 ) -> Result<Run, BoxError> {
+    // Only the searches it holds a wait or warning for are looked up.
+    let held: HashSet<i64> = seen
+        .regex_backoff
+        .keys()
+        .chain(seen.regex_warned.keys())
+        .copied()
+        .collect();
+    if !held.is_empty() {
+        let mut regex = HashSet::new();
+        for id in held {
+            let still = store.saved_search(id)?.is_some_and(|s| {
+                !s.paused && serde_json::from_str::<Node>(&s.ast).is_ok_and(|n| n.has_regex())
+            });
+            if still {
+                regex.insert(id);
+            }
+        }
+        seen.prune_regex(&regex);
+    }
     let mut due = store.percolation_due(through)?;
     due.sort_by_key(|s| (s.watermark, s.id));
     let mut run = Run::default();
@@ -211,8 +298,11 @@ pub fn run_once(
     // The AST each search ran with: one paused or edited meanwhile is
     // left alone when the run is recorded.
     let asts: HashMap<i64, &str> = due.iter().map(|s| (s.id, s.ast.as_str())).collect();
+    // A search waiting after a regex stop (see `REGEX_BACKOFF`) sits this
+    // run out, keeping its watermark.
     let due: Vec<Due<'_>> = parsed
         .iter()
+        .filter(|(id, ..)| !seen.regex_waiting(*id, now))
         .map(|(id, watermark, node)| forward_due(*id, *watermark, node))
         .collect();
     let cancel = CancelToken::new().with_budget(config.budget);
@@ -221,6 +311,13 @@ pub fn run_once(
         max_range: config.max_range,
     };
     let p = percolate(index, &due, through, limits, now, &cancel)?;
+    // Left where they were, and retried once their wait is over (S8-12).
+    for id in &p.regex_stopped {
+        seen.regex_stopped(*id, now);
+    }
+    for m in &p.matched {
+        seen.regex_ran(m.id);
+    }
     run.searches = p.matched.len();
     run.more = p.more();
     // One transaction per range end: a search capped short of `through`
@@ -369,7 +466,29 @@ fn run_promoted(
         }
         let token = if i == 0 { &first } else { cancel };
         let only = seen.held.get(&row.seq).map(Vec::as_slice);
-        match matched_promoted(index, &parsed, row, only, limits, now, token, &mut hits)? {
+        let mut regex_stopped = Vec::new();
+        // Searches waiting after a regex stop don't run: held, as if
+        // they had stopped again.
+        let waiting: HashSet<i64> = parsed
+            .iter()
+            .map(|p| p.0)
+            .filter(|id| seen.regex_waiting(*id, now))
+            .collect();
+        let matched = matched_promoted(
+            index,
+            &parsed,
+            row,
+            only,
+            limits,
+            now,
+            token,
+            &mut hits,
+            (&waiting, &mut regex_stopped),
+        )?;
+        for id in regex_stopped {
+            seen.regex_stopped(id, now);
+        }
+        match matched {
             None => {
                 stopped = true;
                 whole = false;
@@ -445,6 +564,9 @@ fn run_promoted(
 /// during the `payload_sig` backfill). One left out that reads a
 /// population-tracked field ([`Node::population_fields`]) is held: it
 /// matched nothing because it didn't run, and its row stays queued.
+/// So is one whose `/…/` verify stopped at its regex budget (S8-12,
+/// [`lodestar_search::Percolation::regex_stopped`], added to
+/// `regex_stopped` for the caller to log): what it matched isn't known.
 #[allow(clippy::too_many_arguments)]
 fn matched_promoted(
     index: &SearchIndex,
@@ -455,6 +577,7 @@ fn matched_promoted(
     now: i64,
     cancel: &CancelToken,
     hits: &mut BTreeMap<i64, Vec<i64>>,
+    (waiting, regex_stopped): (&HashSet<i64>, &mut Vec<i64>),
 ) -> Result<Option<Vec<i64>>, BoxError> {
     let due: Vec<Due<'_>> = searches
         .iter()
@@ -464,6 +587,13 @@ fn matched_promoted(
         .collect();
     if due.is_empty() || row.torrent_id <= 0 {
         return Ok(Some(Vec::new()));
+    }
+    // Waiting after a regex stop: held without running.
+    let (wait, due): (Vec<Due<'_>>, Vec<Due<'_>>) =
+        due.into_iter().partition(|d| waiting.contains(&d.id));
+    let mut held: Vec<i64> = wait.iter().map(|d| d.id).collect();
+    if due.is_empty() {
+        return Ok(Some(held));
     }
     let p = percolate(index, &due, row.torrent_id, limits, now, cancel)?;
     if p.stopped {
@@ -481,11 +611,15 @@ fn matched_promoted(
         .map(|m| m.id)
         .chain(p.failed.iter().copied())
         .collect();
-    let held = due
-        .iter()
-        .filter(|d| !ran.contains(&d.id) && !d.query.population_fields().is_empty())
-        .map(|d| d.id)
-        .collect();
+    regex_stopped.extend_from_slice(&p.regex_stopped);
+    held.extend(
+        due.iter()
+            .filter(|d| {
+                !ran.contains(&d.id)
+                    && (!d.query.population_fields().is_empty() || p.regex_stopped.contains(&d.id))
+            })
+            .map(|d| d.id),
+    );
     for m in p.matched {
         if m.torrent_ids.contains(&row.torrent_id) {
             hits.entry(m.id).or_default().push(row.torrent_id);
@@ -1567,6 +1701,175 @@ mod tests {
         assert_eq!(alert_ids(&s.store, promo), items);
     }
 
+    /// A saved search whose regex keeps running out of time is logged
+    /// once an hour, not every run, and waits longer each time (RX-1,
+    /// S8-12).
+    #[test]
+    fn a_regex_stop_is_logged_at_most_hourly_and_backs_off() {
+        let mut seen = Seen::default();
+        let hour = REGEX_WARN_EVERY;
+        assert!(seen.regex_stopped(1, 0));
+        assert!(seen.regex_waiting(1, 59) && !seen.regex_waiting(1, 60));
+        assert!(!seen.regex_stopped(1, 60));
+        // Twice the wait now.
+        assert!(seen.regex_waiting(1, 179) && !seen.regex_waiting(1, 180));
+        assert!(seen.regex_stopped(2, 60));
+        assert!(!seen.regex_stopped(1, hour - 1));
+        assert!(seen.regex_stopped(1, hour));
+        assert!(!seen.regex_stopped(2, hour));
+        // Only the last hour's are remembered.
+        assert!(!seen.regex_stopped(1, 2 * hour - 1));
+        assert_eq!(seen.regex_warned.len(), 1);
+        assert!(seen.regex_stopped(2, 2 * hour));
+        // The wait stops growing at an hour, and ends once it runs whole.
+        for _ in 0..10 {
+            seen.regex_stopped(3, 0);
+        }
+        assert_eq!(seen.regex_backoff[&3].1, REGEX_BACKOFF.1);
+        seen.regex_ran(3);
+        assert!(!seen.regex_waiting(3, 0));
+    }
+
+    /// A saved search deleted, saved again without a `/…/` term, or
+    /// paused, is forgotten by the regex waits and warnings on the next
+    /// run (a resumed one runs at once).
+    #[test]
+    fn regex_waits_are_forgotten_for_searches_gone_or_without_a_regex() {
+        let mut s = setup(4);
+        let gone = save(&mut s.store, "gone", "/show/", 0);
+        let plain = save(&mut s.store, "plain", "/show/", 0);
+        let kept = save(&mut s.store, "kept", "/show/", 0);
+        let paused = save(&mut s.store, "paused", "/show/", 0);
+        let mut seen = Seen::default();
+        for id in [gone, plain, kept, paused] {
+            seen.regex_stopped(id, NOW);
+        }
+        s.store.delete_saved_search(gone).unwrap();
+        let p = s.store.saved_search(paused).unwrap().unwrap();
+        s.store
+            .update_saved_search(
+                paused,
+                &SavedSearchInput {
+                    name: &p.name,
+                    query: &p.query,
+                    ast: &p.ast,
+                    sort: None,
+                    alert: p.alert,
+                    rss: p.rss,
+                    channels: 0,
+                    paused: true,
+                },
+                0,
+                0,
+            )
+            .unwrap();
+        let p = s.store.saved_search(plain).unwrap().unwrap();
+        let ast = serde_json::to_string(&parse("show").unwrap()).unwrap();
+        s.store
+            .update_saved_search(
+                plain,
+                &SavedSearchInput {
+                    name: &p.name,
+                    query: "show",
+                    ast: &ast,
+                    sort: None,
+                    alert: p.alert,
+                    rss: p.rss,
+                    channels: 0,
+                    paused: false,
+                },
+                0,
+                0,
+            )
+            .unwrap();
+        run_once(&s.index, &mut s.store, None, 4, &quick(), NOW, &mut seen).unwrap();
+        let mut left: Vec<i64> = seen.regex_backoff.keys().copied().collect();
+        left.sort_unstable();
+        assert_eq!(left, [kept]);
+        assert_eq!(
+            seen.regex_warned.keys().copied().collect::<Vec<_>>(),
+            [kept]
+        );
+    }
+
+    /// Runs `f` with every regex verify on this thread out of time at
+    /// once, as a pattern too slow for its budget would be.
+    fn regex_out_of_time<T>(f: impl FnOnce() -> T) -> T {
+        lodestar_search::regex_verify::set_budget_on_this_thread(Some(Duration::ZERO));
+        let out = f();
+        lodestar_search::regex_verify::set_budget_on_this_thread(None);
+        out
+    }
+
+    /// S8-12: a saved search whose regex stops never advances its
+    /// watermark, and doesn't starve the searches after it, even when it
+    /// takes the run's whole budget: it waits, they run, and it alerts on
+    /// its retry.
+    #[test]
+    fn a_stopped_regex_keeps_its_watermark_and_starves_nothing() {
+        let mut s = setup(30);
+        // Lower id, so it's first in every run.
+        let slow = save(&mut s.store, "slow", r"/even/", 0);
+        let even = save(&mut s.store, "even", "Even", 0);
+        let mut seen = Seen::default();
+        let run = |s: &mut Setup, now: i64, seen: &mut Seen| {
+            run_once(&s.index, &mut s.store, None, 30, &quick(), now, seen).unwrap()
+        };
+        // `slow`'s verify stops: not recorded, and it waits. `even`, after
+        // it in the run, still runs.
+        let r = regex_out_of_time(|| run(&mut s, NOW, &mut seen));
+        assert_eq!((r.searches, r.more), (1, false));
+        assert_eq!(alert_ids(&s.store, even), evens(1, 30));
+        assert_eq!(s.store.saved_search(slow).unwrap().unwrap().watermark, 0);
+        assert!(alert_ids(&s.store, slow).is_empty());
+        assert!(seen.regex_waiting(slow, NOW));
+        // While it waits it sits the runs out, even with time to verify
+        // (its watermark stays): a pattern that always takes the whole
+        // budget can't spend every run's, first in each, and starve the
+        // searches after it.
+        let r = run(&mut s, NOW + 1, &mut seen);
+        assert_eq!((r.searches, r.more), (0, false));
+        assert_eq!(s.store.saved_search(slow).unwrap().unwrap().watermark, 0);
+        // Its wait over, with time to verify: the same range, alerted.
+        let r = run(&mut s, NOW + REGEX_BACKOFF.0, &mut seen);
+        assert_eq!((r.searches, r.more), (1, false));
+        assert_eq!(alert_ids(&s.store, slow), evens(1, 30));
+        assert_eq!(s.store.saved_search(slow).unwrap().unwrap().watermark, 30);
+        assert!(!seen.regex_waiting(slow, NOW + REGEX_BACKOFF.0));
+    }
+
+    /// S8-12 on a promotion: a search whose regex stopped holds the row
+    /// (the others' hits are recorded at once), and it alerts once the
+    /// row is retried with time to verify.
+    #[test]
+    fn a_stopped_regex_holds_a_promoted_row_until_its_retry() {
+        let (mut s, item, promo, even) = promo_setup();
+        let w = s.index.watermark().unwrap();
+        let slow = save(&mut s.store, "slow", "/promo/", w);
+        promote(&mut s.store, item, "Promo.Even", 0);
+        index_all(&s.index, &mut s.store);
+        let mut seen = Seen::default();
+        let run = |s: &mut Setup, now: i64, seen: &mut Seen| {
+            run_once(&s.index, &mut s.store, None, w, &quick(), now, seen).unwrap()
+        };
+        let r = regex_out_of_time(|| run(&mut s, NOW, &mut seen));
+        assert_eq!((r.promoted, r.promoted_held, r.alerts), (0, 1, 2));
+        assert_eq!(alert_ids(&s.store, promo), vec![item]);
+        assert_eq!(alert_ids(&s.store, even), vec![item]);
+        assert!(alert_ids(&s.store, slow).is_empty());
+        assert_eq!(s.store.promoted_due(i64::MAX, 10).unwrap().len(), 1);
+        // Still waiting: held again without running.
+        let r = run(&mut s, NOW + 1, &mut seen);
+        assert_eq!((r.promoted, r.alerts), (0, 0));
+        // Retried after the wait: it alerts, once, and the row is done.
+        let r = run(&mut s, NOW + REGEX_BACKOFF.0, &mut seen);
+        assert_eq!((r.promoted, r.alerts), (1, 1));
+        assert_eq!(alert_ids(&s.store, slow), vec![item]);
+        assert!(s.store.promoted_due(i64::MAX, 10).unwrap().is_empty());
+        let r = run(&mut s, NOW + REGEX_BACKOFF.0, &mut seen);
+        assert_eq!(r.alerts, 0);
+    }
+
     /// `Seen::held` stops growing at `HELD_CAP`; a row it already holds
     /// is still updated, and a row it can't take just reruns every
     /// search on its retry.
@@ -1760,6 +2063,7 @@ mod tests {
                 NOW,
                 &CancelToken::new(),
                 &mut hits,
+                (&HashSet::new(), &mut Vec::new()),
             )
             .unwrap()
         };

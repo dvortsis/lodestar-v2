@@ -203,6 +203,7 @@ fn hashes_on_get() -> ApiError {
         ),
         (status = 400, body = ErrorEnvelope, description = "`repeated_parameter` (a parameter sent more than once), `bad_parameter` (a value of the wrong type), `ast_needs_post` (any `ast`; POST it), `hashes_need_post` (any `hashes`; POST them), `query_syntax`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused` or `hidden_unused` (`hidden=true` with `bitmagnet`). Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
         (status = 404, body = ErrorEnvelope, description = "`collection_not_found`."),
+        (status = 422, body = ErrorEnvelope, description = "`regex_stopped`: a `/…/` term ran out of its time budget, so the file would be incomplete. Narrow the search and try again."),
         (status = 429, body = ErrorEnvelope, description = "`too_many_jobs`: four jobs are running or paused."),
         (status = 503, body = ErrorEnvelope, description = "`search_disabled` (a query while search is off), or `shutting_down`."),
     )
@@ -245,6 +246,7 @@ pub(crate) async fn export_get(
         (status = 400, body = ErrorEnvelope, description = "`bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast`, `unknown_sort`, `one_source`, `unknown_field`, `fields_unused`, `sort_unused`, `hidden_unused` (`hidden=true` with `bitmagnet`), `too_many_hashes` or `bad_hash`. Each names the parameter at fault in `field` where there is one; `query_syntax` also gives `start` and `end`."),
         (status = 403, body = ErrorEnvelope, description = "`cross_origin`."),
         (status = 404, body = ErrorEnvelope, description = "`collection_not_found`."),
+        (status = 422, body = ErrorEnvelope, description = "`regex_stopped`: a `/…/` term ran out of its time budget, so the file would be incomplete. Narrow the search and try again."),
         (status = 429, body = ErrorEnvelope, description = "`too_many_jobs`."),
         (status = 503, body = ErrorEnvelope, description = "`search_disabled`, or `shutting_down`."),
     )
@@ -491,12 +493,10 @@ async fn resolve(
         let shown = search::base_query(&ast, Visibility { hidden, adult }).query();
         let cancel = CancelToken::new();
         let _guard = cancel.cancel_on_drop();
-        let lease = tokio::task::spawn_blocking(move || {
-            Lease::new(index.index(), &shown, crate::unix_now(), sort, &cancel)
-        })
-        .await
-        .map_err(internal)?
-        .map_err(search::search_error)?;
+        let lease =
+            tokio::task::spawn_blocking(move || query_lease(index.index(), &shown, sort, &cancel))
+                .await
+                .map_err(internal)??;
         let total = lease.total();
         (
             Source::Query {
@@ -508,6 +508,38 @@ async fn resolve(
             total.approx,
         )
     })
+}
+
+/// The lease an export of `shown` reads, refused whole when a `/…/`
+/// term ran out of time ([`whole`]).
+pub(crate) fn query_lease(
+    index: Arc<lodestar_search::SearchIndex>,
+    shown: &lodestar_search::Node,
+    sort: lodestar_search::Sort,
+    cancel: &CancelToken,
+) -> ApiResult<Lease> {
+    let lease =
+        Lease::new(index, shown, crate::unix_now(), sort, cancel).map_err(search::search_error)?;
+    whole(lease)
+}
+
+/// `lease`, unless a `/…/` term ran out of its time budget: the file
+/// would then hold only what was checked in time, with nothing to say
+/// so, and it's refused instead (RX-1). Torznab refuses the same way.
+pub(crate) fn whole(lease: Lease) -> ApiResult<Lease> {
+    if lease.regex_stopped() {
+        return Err(regex_stopped());
+    }
+    Ok(lease)
+}
+
+/// An export whose `/…/` term ran out of its time budget.
+pub(crate) fn regex_stopped() -> ApiError {
+    ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "regex_stopped",
+        "This search took too long to check every /regex/ match. Narrow it and try again.",
+    )
 }
 
 /// The streamed response for job `id`.

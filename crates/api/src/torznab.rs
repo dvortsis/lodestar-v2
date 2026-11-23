@@ -268,8 +268,14 @@ async fn run(s: ApiState, req: &query::Request, mode: Mode, adult: bool) -> Resp
     let cancel = CancelToken::new();
     let _guard = cancel.cancel_on_drop();
     let answer = tokio::task::spawn_blocking(move || {
-        let lease = Lease::new_at(search.index(), &shown, crate::unix_now(), 0, sort, &cancel)
-            .map_err(search::search_error)?;
+        // A feed must never be short without saying so: *arr apps store
+        // what they get. Torznab's `q` is plain words, so a `/…/` term
+        // can't reach here today; should one, a stop is an error the
+        // client retries, not a partial feed (RX-1).
+        let lease = crate::export::whole(
+            Lease::new_at(search.index(), &shown, crate::unix_now(), 0, sort, &cancel)
+                .map_err(search::search_error)?,
+        )?;
         let total = lease.total().value;
         // Past the search's window, an empty page (§8's offset bound).
         let limit = limit.min(MAX_WINDOW.saturating_sub(offset));
@@ -323,7 +329,7 @@ async fn run(s: ApiState, req: &query::Request, mode: Mode, adult: bool) -> Resp
     .await;
     match answer {
         Ok(Ok((total, items))) => results(feed(offset, total as u64, &items)),
-        Ok(Err(e)) => failed(e.into_response().status()),
+        Ok(Err(e)) => error_of(e),
         Err(e) => failed(crate::error::internal(e).into_response().status()),
     }
 }
@@ -331,6 +337,19 @@ async fn run(s: ApiState, req: &query::Request, mode: Mode, adult: bool) -> Resp
 /// A page of results, as RSS.
 fn results(body: String) -> Response {
     document(StatusCode::OK, "application/rss+xml; charset=utf-8", body)
+}
+
+/// A search's error as a Torznab document. A `/…/` term that ran out of
+/// time is a 503 the client retries, never a short feed.
+fn error_of(e: crate::ApiError) -> Response {
+    if e.code() == "regex_stopped" {
+        return error_document(
+            StatusCode::SERVICE_UNAVAILABLE,
+            code::UNKNOWN,
+            "The search took too long to check; try again",
+        );
+    }
+    failed(e.into_response().status())
 }
 
 /// A search that failed while running (already logged, if internal).
@@ -464,6 +483,18 @@ fn write_item(x: &mut Xml, item: &Item) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A search whose `/…/` term ran out of time is a retryable error,
+    /// never a short feed; and Torznab's `q` can't carry one: `/x/` is a
+    /// plain word there.
+    #[test]
+    fn a_stopped_regex_is_an_error_and_q_carries_none() {
+        let resp = error_of(crate::export::regex_stopped());
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let r = query::parse(Some("t=search&q=%2Fx%2F")).unwrap();
+        let ast = r.ast(Mode::Search).unwrap();
+        assert!(!ast.has_regex(), "{ast:?}");
+    }
 
     fn item(name: &str) -> Item {
         Item {

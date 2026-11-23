@@ -54,6 +54,20 @@ pub(crate) struct Cx<'a> {
     /// set by [`compile`] for `sig:<info hash>`, whose reference torrent
     /// must pass them ([`SamePayload`]). Callers pass `&[]`.
     pub visible: &'a [Q],
+    /// Whether `name_trigram` is complete in the snapshot searched, so a
+    /// `/…/` clause may prefilter on it (RX-1); otherwise it verifies
+    /// every name.
+    pub trigrams: bool,
+    /// The search's regex deadline ([`crate::CancelToken::regex_deadline`]):
+    /// every `/…/` clause verifies against it. `None` (callers outside a
+    /// search) gives each clause [`crate::regex_verify::VERIFY_BUDGET`]
+    /// from its compile.
+    pub regex_deadline: Option<std::time::Instant>,
+    /// A lease's `/…/` clauses by pattern, already verified on the
+    /// snapshot this compiles for: a clause with the same pattern reuses
+    /// one, its matches and its stop, instead of verifying again (facet
+    /// variants and recovery counts on a lease, RX-1).
+    pub regex_shared: Option<&'a crate::regex_verify::Shared>,
 }
 
 impl std::ops::Deref for Cx<'_> {
@@ -1063,6 +1077,25 @@ fn compile_opt(node: &Node, f: &Cx<'_>, now: i64) -> Option<Q> {
             }
         }
         Node::TimeOfDay { .. } => checked(node, f, now),
+        // The trigram prefilter, then the stored name verified under the
+        // time budget (`regex_verify`).
+        Node::Regex { pattern } => {
+            let trigram = (f.trigrams && f.name_trigram != ABSENT).then_some(f.name_trigram);
+            let deadline = f.regex_deadline.unwrap_or_else(|| {
+                let now = std::time::Instant::now();
+                now.checked_add(crate::regex_verify::budget())
+                    .unwrap_or(now)
+            });
+            match f
+                .regex_shared
+                .and_then(|shared| shared.get(pattern, trigram))
+            {
+                Some(kept) => Box::new(kept),
+                None => Box::new(crate::regex_verify::RegexQuery::new(
+                    pattern, f.name, trigram, deadline,
+                )),
+            }
+        }
         Node::Hash { hash } => match hex20(hash) {
             Some(bytes) if f.hash != ABSENT => Box::new(TermQuery::new(
                 Term::from_field_bytes(f.hash, &bytes),

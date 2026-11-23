@@ -222,10 +222,16 @@ fn natural_too_long(e: NaturalError) -> String {
 }
 
 /// A query syntax error, with the span the UI highlights.
+/// A refused `/…/` pattern, or a query over the regex clause cap, also
+/// gives its stable reason (`regex_syntax`, `regex_too_many`, …).
 fn parse_error(e: ParseError) -> ApiError {
-    ApiError::bad_request("query_syntax", e.message)
+    let err = ApiError::bad_request("query_syntax", e.message)
         .field("q")
-        .span(e.start, e.end)
+        .span(e.start, e.end);
+    match e.reason {
+        Some(reason) => err.reason(reason),
+        None => err,
+    }
 }
 
 /// Parses a query: the AST and its canonical text, or a `query_syntax`
@@ -1147,6 +1153,10 @@ pub(crate) fn request_ast(ast: Option<Node>, q: Option<String>) -> ApiResult<Nod
             let text = ast.to_query();
             match parse(&text) {
                 Ok(again) if again == ast => ast,
+                // Over the regex clause cap: the same error as typed.
+                Err(e) if e.reason == Some(lodestar_search::REGEX_TOO_MANY) => {
+                    return Err(parse_error(e).field("ast"));
+                }
                 _ => {
                     return Err(ApiError::bad_request(
                         "invalid_ast",
@@ -1434,6 +1444,38 @@ pub(crate) fn unix_now() -> i64 {
 mod tests {
     use super::*;
     use crate::extract::{field_names, repeated_param};
+
+    /// A fifth `/…/` clause is a `query_syntax` error at its span, with
+    /// the stable reason and a message that says what to do (RX-1).
+    #[test]
+    fn too_many_regexes_give_their_reason() {
+        let q = "/a/ /b/ /c/ /d/ /e/";
+        let e = request_ast(None, Some(q.to_owned())).unwrap_err();
+        let body = e.body();
+        let err = &body["error"];
+        assert_eq!(err["code"], "query_syntax");
+        assert_eq!(err["reason"], "regex_too_many");
+        assert_eq!(
+            (err["start"].as_u64(), err["end"].as_u64()),
+            (Some(16), Some(19))
+        );
+        assert_eq!(err["message"], "Use at most 4 /regex/ terms in one search.");
+        // A refused pattern gives its own.
+        let e = request_ast(None, Some("/a(b/".to_owned())).unwrap_err();
+        assert_eq!(e.body()["error"]["reason"], "regex_syntax");
+        // So does an AST over the cap.
+        let ast = Node::And {
+            of: (0..5)
+                .map(|i| Node::Regex {
+                    pattern: format!("a{i}"),
+                })
+                .collect(),
+        };
+        let e = request_ast(Some(ast), None).unwrap_err();
+        let body = e.body();
+        assert_eq!(body["error"]["reason"], "regex_too_many");
+        assert_eq!(body["error"]["field"], "ast");
+    }
 
     #[test]
     fn search_params_are_the_request_fields() {

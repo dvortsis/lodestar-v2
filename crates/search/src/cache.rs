@@ -310,7 +310,8 @@ impl ResultCache {
         // A lease with `file:(…)` holds the clauses' id sets (a sorted id
         // list per set, and a bitset of up to the highest id / 8 bytes),
         // far beyond the per-entry estimate: those searches aren't kept.
-        let cache = !files;
+        // Nor are regex searches (RX-1), which may stop partway.
+        let cache = !files && !spec.node.has_regex();
         self.search.get_or_compute(key, seen, cache, cancel, |key| {
             let lease = Arc::new(Lease::new_at(
                 index.clone(),
@@ -345,7 +346,9 @@ impl ResultCache {
     ) -> Result<(Arc<CachedFacets>, Outcome)> {
         let (at, seen) = Snapshot::current(index, spec.query.has_file_clause());
         let key = facet_key(index, spec, at, spec.now, spec.utc_offset);
-        self.facets.get_or_compute(key, seen, true, cancel, |key| {
+        // A regex search may stop partway (RX-1): never kept.
+        let cache = !spec.query.has_regex();
+        self.facets.get_or_compute(key, seen, cache, cancel, |key| {
             let lease = Lease::new_at(
                 index.clone(),
                 spec.query,
@@ -380,7 +383,7 @@ impl ResultCache {
         };
         let seen = Seen::of(index, lease.searcher());
         let now = Seen::of(serving, &serving.searcher());
-        let cache = seen == now;
+        let cache = seen == now && !spec.query.has_regex();
         let key = facet_key(index, spec, at, lease.now(), lease.utc_offset());
         let (got, outcome) = self
             .facets

@@ -74,6 +74,10 @@ pub struct FacetsResponse {
     /// The display name of each plugin id the `source` facet lists.
     #[schema(example = json!({"dht": "Mainline DHT"}))]
     pub source_names: BTreeMap<String, String>,
+    /// A `/…/` term of the query ran out of its time budget: `total`'s
+    /// matches as counted here and the histograms are what was checked
+    /// in time. Each facet has its own `stopped`. Not shown yet (RX-2).
+    pub stopped: bool,
     pub took_ms: f64,
     /// The search's result count, as `/search` reports it.
     pub total: usize,
@@ -106,6 +110,10 @@ pub struct TermFacet {
     /// The field is still being backfilled after an index upgrade, so the
     /// counts are low (only `source`): show them as partial.
     pub partial: bool,
+    /// A `/…/` term of the query ran out of its time budget while this
+    /// facet was counted: the counts are what was checked in time. Not
+    /// shown yet (RX-2); never the same as `partial`.
+    pub stopped: bool,
     /// The top values by count (ties by value), then any value the query
     /// selects or excludes that isn't among them. Flags list `yes` and
     /// `no`.

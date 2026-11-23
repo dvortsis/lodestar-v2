@@ -1114,6 +1114,41 @@ fn natural_refuses_valid_query_past_the_cap() {
     assert!(refused_rightly(phrase, NaturalError::Syntax).is_err());
 }
 
+/// The char ranges of `phrase`'s `/…/` literals, as the query lexer
+/// finds them: a `/` that starts a word and isn't followed by
+/// whitespace, up to the next `/` that ends a word (whitespace, a
+/// parenthesis, a quote, `|` or the end).
+/// (The phrases here have no backslashes, so nothing is escaped.)
+fn regex_spans(phrase: &str) -> Vec<(usize, usize)> {
+    let cs: Vec<char> = phrase.chars().collect();
+    let space = |c: Option<&char>| c.is_some_and(|c| c.is_ascii_whitespace());
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < cs.len() {
+        let starts_word = i == 0 || space(cs.get(i - 1));
+        if cs[i] == '/'
+            && starts_word
+            && cs
+                .get(i + 1)
+                .is_some_and(|c| !c.is_ascii_whitespace() && *c != ')')
+            && let Some(close) = (i + 1..cs.len()).find(|&j| cs[j] == '/')
+        {
+            let after = cs.get(close + 1);
+            if after.is_none() || space(after) || after.is_some_and(|c| "()\"|".contains(*c)) {
+                out.push((i, close + 1));
+                i = close + 1;
+                continue;
+            }
+        }
+        // To the end of this word.
+        while i < cs.len() && !cs[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2000))]
 
@@ -1206,7 +1241,7 @@ proptest! {
         let phrase = words.join(" ");
         let n = match natural(&phrase) {
             Ok(n) => n,
-            // `/x` is regex syntax: not a query yet.
+            // An unclosed or bad `/x` regex is a syntax error.
             Err(e) => return refused_rightly(&phrase, e),
         };
         let mut at = 0;
@@ -1216,9 +1251,21 @@ proptest! {
             let end = start + w.chars().count();
             let in_chip = n.read.iter().any(|r| r.0 < end && start < r.1);
             let trimmed = w.trim_matches(|c: char| "[]{},.;:!?'".contains(c));
-            let kept = n.text.iter().any(|t| t == w || t == trimmed);
+            // Slashes that don't make a regex (`/a flac/naruto`, RX-1)
+            // leave the phrase as query text: a word is kept when the
+            // query still holds it as written.
+            let symbols = phrase.contains('/')
+                && w
+                    .split_whitespace()
+                    .all(|p| n.canonical.split_whitespace().any(|t| t == p));
+            let kept = symbols || n.text.iter().any(|t| t == w || t == trimmed);
+            // Slashes can join words into a `/…/` regex (`/b flac/`),
+            // kept in the query as written (RX-1): only a word inside
+            // one is excused.
+            let in_regex = regex_spans(&phrase).iter().any(|&(s, e)| s <= start && end <= e)
+                && lodestar_search::parse(&n.canonical).is_ok_and(|q| q.has_regex());
             prop_assert!(
-                kept || in_chip || lodestar_search::natural::is_filler(trimmed),
+                kept || in_chip || in_regex || lodestar_search::natural::is_filler(trimmed),
                 "{:?} lost from {:?}: {}", w, phrase, n.canonical
             );
             // A word read alone into a keyword chip is that value and

@@ -192,6 +192,8 @@ fn slow_lease(index: &Arc<SearchIndex>, sort: Sort, delay: Duration) -> Lease {
         groups: Mutex::new(None),
         now: 0,
         utc_offset: 0,
+        regex_bytes: 0,
+        regex_deadline: None,
     }
 }
 
@@ -286,6 +288,7 @@ fn tiny(ttl_ms: u64, max_leases: usize, per_client: usize) -> Leases {
         max_age: Duration::from_secs(3600),
         max_leases,
         per_client,
+        ..LeaseConfig::default()
     })
 }
 
@@ -597,4 +600,33 @@ fn a_cancelled_scan_over_several_segments_caches_no_segment() {
     let total = crate::count::total(&index.searcher(), &compiled, &fresh).unwrap();
     assert_eq!(total.value, 12);
     assert_eq!(index.cache_usage().file_set_entries, 3);
+}
+
+/// The stem fallback's `/…/` clauses are the exact pass's: once the
+/// exact pass verified, a wide pass compiled after the search's regex
+/// budget ran out still reads the whole answer, never a partial one.
+#[test]
+fn the_stem_fallback_reuses_the_exact_passes_regex_clauses() {
+    let (index, _) = index_with(300, 4);
+    let node = crate::query::parse(r"/\brare\b/").unwrap();
+    let searcher = index.searcher();
+    let fresh = CancelToken::new();
+    let exact = index.compile_at(&node, 0, 0, false, &fresh, None).unwrap();
+    crate::regex_verify::seal(exact.query.as_ref(), &searcher, &fresh).unwrap();
+    let whole = count::total(&searcher, &exact, &fresh).unwrap().value;
+    assert!(whole > 0 && !crate::regex_verify::stopped(&exact));
+    // A token whose regex budget is spent, as after a slow exact pass.
+    let spent = CancelToken::new();
+    spent.regex_deadline(Duration::ZERO);
+    let shared = crate::regex_verify::Shared::of(exact.query.as_ref());
+    let wide = index
+        .compile_shared(&node, 0, 0, true, &spent, None, Some(&shared))
+        .unwrap();
+    crate::regex_verify::seal(wide.query.as_ref(), &searcher, &spent).unwrap();
+    assert_eq!(count::total(&searcher, &wide, &spent).unwrap().value, whole);
+    assert!(!crate::regex_verify::stopped(&wide));
+    // Without them, it would be partial.
+    let alone = index.compile_at(&node, 0, 0, true, &spent, None).unwrap();
+    crate::regex_verify::seal(alone.query.as_ref(), &searcher, &spent).unwrap();
+    assert!(crate::regex_verify::stopped(&alone));
 }

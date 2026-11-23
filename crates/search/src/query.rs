@@ -42,6 +42,13 @@ pub const MAX_QUERY_BYTES: usize = 2048;
 pub const MAX_CLAUSES: usize = 64;
 /// Deepest parenthesis nesting.
 pub const MAX_DEPTH: usize = 16;
+/// `/…/` clauses one query may hold (RX-1, security review S8-10): each
+/// verifies stored names, so the cap bounds a search's regex work and
+/// what its lease keeps. Checked again at compile time
+/// ([`crate::compile`]), since a stored node may not come from here.
+pub const MAX_REGEX_CLAUSES: usize = 4;
+/// [`ParseError::reason`] for a query over [`MAX_REGEX_CLAUSES`].
+pub const REGEX_TOO_MANY: &str = "regex_too_many";
 const MAX_NEAR: u32 = 50;
 /// Most words in one NEAR chain.
 pub const MAX_NEAR_WORDS: usize = 16;
@@ -397,11 +404,23 @@ pub enum Node {
         from: u16,
         to: u16,
     },
+    /// `/…/` or `name:/…/` (§8): names the pattern matches anywhere, as
+    /// [`crate::regex`] parses it (case-insensitive unless `(?-i)`). The
+    /// pattern is checked when parsed and again when compiled, since a
+    /// stored query may come from elsewhere.
+    Regex {
+        pattern: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ParseError {
     pub message: String,
+    /// The stable reason code when the error has one: a refused `/…/`
+    /// pattern's (`regex_syntax`, …) or [`REGEX_TOO_MANY`]. The API
+    /// sends it as the error's `reason`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
     /// Byte range in the query text.
     pub start: usize,
     pub end: usize,
@@ -417,6 +436,7 @@ impl std::error::Error for ParseError {}
 
 fn err<T>(message: impl Into<String>, start: usize, end: usize) -> Result<T, ParseError> {
     Err(ParseError {
+        reason: None,
         message: message.into(),
         start,
         end,
@@ -550,6 +570,8 @@ enum Lex {
     /// `name:` followed by its raw value (possibly empty).
     Field(String, String),
     Word(String),
+    /// `/…/` or `name:/…/`: the pattern, `\/` unescaped.
+    Regex(String),
 }
 
 #[derive(Debug, Clone)]
@@ -578,6 +600,18 @@ fn lex(q: &str) -> Result<Vec<Spanned>, ParseError> {
             continue;
         }
         let start = i;
+        // `/…/` or `name:/…/`, when the slashes delimit one (see
+        // [`regex_literal`]); otherwise the text lexes as a word below.
+        let regex = match c {
+            b'/' => regex_literal(q, i)?,
+            b'n' if q[i..].starts_with(REGEX_FIELD) => regex_literal(q, i + REGEX_FIELD.len() - 1)?,
+            _ => None,
+        };
+        if let Some((pattern, end)) = regex {
+            push(&mut out, Lex::Regex(pattern), start, end);
+            i = end;
+            continue;
+        }
         match c {
             b'(' => {
                 push(&mut out, Lex::LParen, i, i + 1);
@@ -623,6 +657,19 @@ fn lex(q: &str) -> Result<Vec<Spanned>, ParseError> {
                     end += 1;
                 }
                 let word = &q[i..end];
+                // Field names are lowercase; `Name:/x/` would otherwise
+                // search for the word "Name:/x/" while looking like a
+                // pattern.
+                if word
+                    .get(..REGEX_FIELD.len())
+                    .is_some_and(|p| p.eq_ignore_ascii_case(REGEX_FIELD) && p != REGEX_FIELD)
+                {
+                    return err(
+                        "write name:/…/ in lowercase for a /regex/",
+                        start,
+                        start + REGEX_FIELD.len() - 1,
+                    );
+                }
                 let lex = match word {
                     "OR" => Lex::Or,
                     "AND" => Lex::And,
@@ -663,12 +710,98 @@ fn lex(q: &str) -> Result<Vec<Spanned>, ParseError> {
     Ok(out)
 }
 
+/// `name:` with a regex value.
+const REGEX_FIELD: &str = "name:/";
+
+/// The regex literal whose opening `/` is at byte `open`: everything up
+/// to the next `/` not escaped by a backslash, which the pattern can't
+/// hold otherwise (`\/` becomes `/` and `\"` a quote; any other escape
+/// stays, for the regex parser). Returns the pattern and the byte after
+/// the closing `/`.
+///
+/// `None` when the slashes don't delimit a pattern, and the text is plain
+/// words instead (`tv / movies / 1080p`, `/usr/bin`, `/usr`, a lone `/`):
+/// the opening `/` is followed by whitespace, `)` or the end; the closing
+/// one by anything that doesn't end a word (whitespace, a parenthesis, a
+/// quote, `|`, the end); or there's no closing one. The rule: a plain word
+/// never renders as a pattern, so a pattern starts and ends exactly where
+/// a word could (`/or/` before `(` would otherwise come back as one). A
+/// bare `"` before the closing `/` makes it words too: a phrase's text is
+/// rewritten when rendered (its whitespace becomes single spaces), so a
+/// slash inside one could otherwise close a pattern only after a round
+/// trip. A literal that delimits but is empty (`//`) is an error.
+fn regex_literal(q: &str, open: usize) -> Result<Option<(String, usize)>, ParseError> {
+    // What ends a word, as the lexer splits them (whitespace is ASCII
+    // only): a pattern starts and ends exactly where a word could.
+    let ends_word = |b: Option<&u8>| {
+        b.is_none_or(|n| n.is_ascii_whitespace() || matches!(n, b'(' | b')' | b'"' | b'|'))
+    };
+    // A pattern may start with `(` or `|` (`/(720|1080)p/`), not with
+    // whitespace or `)`, which no pattern can; a `/` at the very end, or
+    // closing a group (`(x /)`), is a word too.
+    if q.as_bytes()
+        .get(open + 1)
+        .is_none_or(|n| n.is_ascii_whitespace() || *n == b')')
+    {
+        return Ok(None);
+    }
+    let mut pattern = String::new();
+    let mut chars = q[open + 1..].char_indices();
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '/' => {
+                let end = open + 1 + at + 1;
+                if !ends_word(q.as_bytes().get(end)) {
+                    return Ok(None);
+                }
+                if pattern.is_empty() {
+                    return err("empty regex", open, end);
+                }
+                return Ok(Some((pattern, end)));
+            }
+            // A quote is written `\"` in a pattern: a bare one ends the
+            // scan, so a slash before a phrase stays a word whatever the
+            // phrase holds (its text is rewritten when rendered).
+            '"' => return Ok(None),
+            '\\' => match chars.next() {
+                Some((_, '/')) => pattern.push('/'),
+                Some((_, '"')) => pattern.push('"'),
+                Some((_, next)) => {
+                    pattern.push('\\');
+                    pattern.push(next);
+                }
+                None => pattern.push('\\'),
+            },
+            c => pattern.push(c),
+        }
+    }
+    // Unclosed: plain words (`/usr`, `movies /2023`), as an unclosed
+    // pattern never is one.
+    Ok(None)
+}
+
+/// A regex leaf: the pattern checked under [`crate::regex`]'s limits,
+/// a refusal reported at the literal with its stable code.
+fn regex_node(pattern: String, start: usize, end: usize) -> Result<Node, ParseError> {
+    match crate::regex::parse(&pattern) {
+        Ok(_) => Ok(Node::Regex { pattern }),
+        Err(e) => Err(ParseError {
+            reason: Some(e.reason.code()),
+            message: format!("regex: {e}"),
+            start,
+            end,
+        }),
+    }
+}
+
 // ---- parser ----------------------------------------------------------------
 
 struct Parser<'a> {
     toks: Vec<Spanned>,
     pos: usize,
     leaves: usize,
+    /// `/…/` clauses so far ([`MAX_REGEX_CLAUSES`]).
+    regexes: usize,
     depth: usize,
     text: &'a str,
     units: Units,
@@ -698,6 +831,7 @@ pub fn parse_with(text: &str, units: Units) -> Result<Node, ParseError> {
         toks,
         pos: 0,
         leaves: 0,
+        regexes: 0,
         depth: 0,
         text,
         units,
@@ -866,6 +1000,21 @@ impl Parser<'_> {
                 self.leaf(start, end)?;
                 word(TextField::Any, &w, start, end)
             }
+            Lex::Regex(pattern) => {
+                self.leaf(start, end)?;
+                self.regexes += 1;
+                if self.regexes > MAX_REGEX_CLAUSES {
+                    return Err(ParseError {
+                        reason: Some(REGEX_TOO_MANY),
+                        message: format!(
+                            "Use at most {MAX_REGEX_CLAUSES} /regex/ terms in one search."
+                        ),
+                        start,
+                        end,
+                    });
+                }
+                regex_node(pattern, start, end)
+            }
             Lex::Field(name, value) => {
                 self.leaf(start, end)?;
                 let kind = field(&name).expect("lexer checked");
@@ -907,13 +1056,10 @@ fn phrase(field: TextField, text: &str, start: usize, end: usize) -> Result<Node
 }
 
 fn word(field: TextField, w: &str, start: usize, end: usize) -> Result<Node, ParseError> {
-    if field == TextField::Any {
-        if let Some(h) = bare_hash(w) {
-            return Ok(Node::Hash { hash: h });
-        }
-        if w.starts_with('/') {
-            return err("regex search arrives with the trigram index", start, end);
-        }
+    if field == TextField::Any
+        && let Some(h) = bare_hash(w)
+    {
+        return Ok(Node::Hash { hash: h });
     }
     if let Some(rest) = w.strip_prefix('~') {
         if rest.chars().count() < 3 {
@@ -1021,6 +1167,7 @@ fn field_value(
             let mut any = Vec::new();
             for v in value.split(',') {
                 let v = tag_value(key, v).ok_or_else(|| ParseError {
+                    reason: None,
                     message: tag_help(key, name, v),
                     start,
                     end,
@@ -1033,6 +1180,7 @@ fn field_value(
         }
         FieldKind::Verified => {
             let any = any_of(value, Verified::from_name).ok_or_else(|| ParseError {
+                reason: None,
                 message: format!("{name}: expects yes or no"),
                 start,
                 end,
@@ -1041,6 +1189,7 @@ fn field_value(
         }
         FieldKind::Source => {
             let any = any_of(value, source_value).ok_or_else(|| ParseError {
+                reason: None,
                 message: format!(
                     "{name}: expects source ids like nyaa,dht (letters, digits, . _ -; \
                      at most {MAX_SOURCE_BYTES} bytes each)"
@@ -1053,6 +1202,7 @@ fn field_value(
         FieldKind::Network => {
             let any = any_of(value, |v| Network::from_name(&v.to_ascii_lowercase())).ok_or_else(
                 || ParseError {
+                    reason: None,
                     message: format!(
                         "{name}: expects one of {}",
                         Network::ALL.map(Network::as_str).join(", ")
@@ -1067,6 +1217,7 @@ fn field_value(
         FieldKind::File => file(word(TextField::Any, value, start, end)?, start, end),
         FieldKind::TimeOfDay => {
             let (from, to) = time_range(value).ok_or_else(|| ParseError {
+                reason: None,
                 message: format!("{name}: expects a time of day or range like 22:00..02:00"),
                 start,
                 end,
@@ -1261,6 +1412,7 @@ fn range(
     end: usize,
 ) -> Result<(Option<u64>, Option<u64>), ParseError> {
     let bad = || ParseError {
+        reason: None,
         message: format!("can't read {value:?} as a number or range"),
         start,
         end,
@@ -1373,6 +1525,7 @@ fn date_range(
     end: usize,
 ) -> Result<(Option<When>, Option<When>), ParseError> {
     let bad = || ParseError {
+        reason: None,
         message: format!("can't read {value:?} as a date, range or age like <7d"),
         start,
         end,
@@ -1534,7 +1687,8 @@ impl Node {
     }
 
     /// Whether any clause tests `verified:`, `source:` or `network:`, or
-    /// `sig:`: what only the search index knows, so a filter rule can't
+    /// `sig:`, or a `/…/` regex (RX-1): what only the search index knows
+    /// or runs, so a filter rule can't
     /// test it (the judge would call it no match, and negated, a match
     /// for everything).
     pub fn mentions_provenance(&self) -> bool {
@@ -1542,7 +1696,8 @@ impl Node {
             Node::Verified { .. }
             | Node::Source { .. }
             | Node::Network { .. }
-            | Node::Sig { .. } => true,
+            | Node::Sig { .. }
+            | Node::Regex { .. } => true,
             Node::And { of } | Node::Or { of } => of.iter().any(Node::mentions_provenance),
             Node::Not { of } | Node::File { of } => of.mentions_provenance(),
             _ => false,
@@ -1685,6 +1840,30 @@ impl Node {
         }
     }
 
+    /// Whether the query has a `/…/` clause anywhere. Its result isn't
+    /// cached: a time-budget stop makes it partial
+    /// ([`crate::regex_verify::stopped`]), and its lease holds each
+    /// clause's verified matches.
+    ///
+    /// It looks inside `file:(…)` too, although the parser refuses a
+    /// regex there (`files::file_clause_ok`): a stored node isn't
+    /// trusted to have come from the parser.
+    pub fn has_regex(&self) -> bool {
+        self.regex_clauses() > 0
+    }
+
+    /// The `/…/` clauses in the query, `file:(…)` included (see
+    /// [`Node::has_regex`]); at most [`MAX_REGEX_CLAUSES`] from the
+    /// parser.
+    pub fn regex_clauses(&self) -> usize {
+        match self {
+            Node::And { of } | Node::Or { of } => of.iter().map(Node::regex_clauses).sum(),
+            Node::Not { of } | Node::File { of } => of.regex_clauses(),
+            Node::Regex { .. } => 1,
+            _ => 0,
+        }
+    }
+
     /// Canonical query text; [`parse`] of it gives back the same AST
     /// under either reading ([`Units`]). Sizes are bytes or IEC units
     /// only, so this is the text anything stored holds: every release
@@ -1764,6 +1943,25 @@ impl Node {
             }
             Node::Word { field, word } => {
                 let _ = write!(out, "{}{word}", text_field(*field));
+            }
+            // `/` and `"` escaped again, as the lexer reads them. Every
+            // pattern the parser yields renders back to itself. A node it
+            // didn't make may not: one ending in an unpaired `\` (it would
+            // escape the closing `/`; compile refuses it), or one that
+            // can't start or end where a word could (`Regex(" x")` renders
+            // `/ x/`, which reads back as words; `Regex(")x")` renders text
+            // that doesn't parse).
+            Node::Regex { pattern } => {
+                out.push('/');
+                let mut escaped = false;
+                for c in pattern.chars() {
+                    if matches!(c, '/' | '"') && !escaped {
+                        out.push('\\');
+                    }
+                    escaped = c == '\\' && !escaped;
+                    out.push(c);
+                }
+                out.push('/');
             }
             Node::Phrase { field, text } => {
                 let _ = write!(out, "{}\"{text}\"", text_field(*field));
@@ -2238,7 +2436,7 @@ mod tests {
         assert!(e("a*b").contains("'*'"));
         assert!(e("a NEAR/0 b").contains("NEAR"));
         assert!(e("size:5GB..1GB").contains("backwards"));
-        assert!(e("/S0[1-9]/").contains("regex"));
+        assert!(e("/S0[1-9/").contains("regex"));
         let err = parse("x sise:1").unwrap_err();
         assert_eq!((err.start, err.end), (2, 7));
     }
@@ -2707,6 +2905,8 @@ mod tests {
         assert!(sig("-sig:7a9f3c12dd0e44b1").mentions_provenance());
         assert!(sig(&format!("x (y | sig:{hash})")).mentions_provenance());
         assert!(!sig(&format!("hash:{hash}")).mentions_provenance());
+        // A regex is run by the search index only (RX-1).
+        assert!(sig("x -/cam/").mentions_provenance());
         // Only the pasted-hash form resolves a reference torrent.
         let same = |q: &str| sig(q).mentions_same_payload();
         assert!(same(&format!("sig:{hash}")));

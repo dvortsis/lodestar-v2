@@ -6,9 +6,17 @@
 //! the client disconnects) or runs out of time (a budget, e.g. for an
 //! exact count on demand). A token made with [`CancelToken::with_budget`]
 //! also stops when its parent does.
+//!
+//! **The regex budget** (RX-1, S8-11): every `/…/` clause compiled under
+//! one search verifies against one deadline, [`CancelToken::regex_deadline`],
+//! started by the search's first regex compile. It lives on the token's
+//! scope: the root token, or the nearest [`CancelToken::regex_scope`]. A
+//! [`CancelToken::with_budget`] child shares its parent's, so facet
+//! variants, the adult-facet pass and recovery under one request all
+//! spend the same 2 s.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::index::{Error, Result};
@@ -22,18 +30,78 @@ struct Inner {
     cancelled: AtomicBool,
     deadline: Option<Instant>,
     parent: Option<CancelToken>,
+    /// A regex-budget scope ([`CancelToken::regex_deadline`]): the root
+    /// and [`CancelToken::regex_scope`] tokens. Its deadline, once a
+    /// regex compile has started it.
+    regex: Option<OnceLock<Instant>>,
 }
 
 /// Shared by every clone: cancelling one cancels them all.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CancelToken {
     inner: Arc<Inner>,
+}
+
+impl Default for CancelToken {
+    fn default() -> Self {
+        CancelToken::new()
+    }
 }
 
 impl CancelToken {
     /// A token that stops only when cancelled.
     pub fn new() -> CancelToken {
-        CancelToken::default()
+        CancelToken {
+            inner: Arc::new(Inner {
+                regex: Some(OnceLock::new()),
+                ..Inner::default()
+            }),
+        }
+    }
+
+    /// A child with a regex budget of its own, that stops when this token
+    /// does: one per saved search in a percolation run, which shares one
+    /// token but must not share one regex deadline.
+    pub fn regex_scope(&self) -> CancelToken {
+        CancelToken {
+            inner: Arc::new(Inner {
+                regex: Some(OnceLock::new()),
+                parent: Some(self.clone()),
+                ..Inner::default()
+            }),
+        }
+    }
+
+    /// A child whose regex budget ends at `deadline`, already started:
+    /// for passes over a lease taken by an earlier request (its facets,
+    /// its recovery counts), which spend what's left of the search's
+    /// budget, never a fresh one (S8-11).
+    pub fn regex_scope_until(&self, deadline: Instant) -> CancelToken {
+        CancelToken {
+            inner: Arc::new(Inner {
+                regex: Some(OnceLock::from(deadline)),
+                parent: Some(self.clone()),
+                ..Inner::default()
+            }),
+        }
+    }
+
+    /// The deadline every `/…/` clause compiled under this token's scope
+    /// verifies against: `budget` from the first call in the scope (see
+    /// the module docs). Later calls get the same instant, whatever
+    /// `budget` they pass.
+    pub fn regex_deadline(&self, budget: Duration) -> Instant {
+        let mut chain = std::iter::successors(Some(self), |t| t.inner.parent.as_ref());
+        let start = || {
+            let now = Instant::now();
+            now.checked_add(budget).unwrap_or(now)
+        };
+        // Every chain ends at a root, which is a scope; without one the
+        // budget would just start now.
+        match chain.find_map(|t| t.inner.regex.as_ref()) {
+            Some(slot) => *slot.get_or_init(start),
+            None => start(),
+        }
     }
 
     /// A child that also stops after `budget`, or when this token does.
@@ -43,6 +111,7 @@ impl CancelToken {
                 cancelled: AtomicBool::new(false),
                 deadline: Instant::now().checked_add(budget),
                 parent: Some(self.clone()),
+                regex: None,
             }),
         }
     }

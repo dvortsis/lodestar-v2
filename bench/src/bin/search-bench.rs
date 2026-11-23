@@ -63,6 +63,8 @@ use rand_chacha::ChaCha8Rng;
 const KEYWORD_P95: Duration = Duration::from_millis(30);
 /// §3: file-level query joined to torrents, p95.
 const FILE_P95: Duration = Duration::from_millis(150);
+/// §3: full-name regex (trigram prefilter + verify), p95.
+const REGEX_P95: Duration = Duration::from_millis(500);
 /// §3: filter-only browse over the whole corpus, p95.
 const BROWSE_P95: Duration = Duration::from_millis(50);
 /// §3: facets for the same query (a separate request), p95.
@@ -519,6 +521,24 @@ fn classes(seed: u64, per_class: usize, hot: bool) -> Vec<Class> {
                 format!("{} ({a} | {b})", pick(r, common))
             }),
         },
+        // `/…/` (RX-1): the trigram prefilter, then each candidate's
+        // stored name verified. Words are alphanumeric, so safe as
+        // literals.
+        Class {
+            name: "regex",
+            target: Some(REGEX_P95),
+            cold: true,
+            sort: Sort::Relevance,
+            queries: make(&mut |r| match r.random_range(0..4) {
+                0 => format!("/{}/", pick(r, rare)),
+                1 => {
+                    let pair = adjacent(r, 2).replace(' ', "[ ._-]+");
+                    format!("/{pair}/")
+                }
+                2 => format!("/{}.{{0,20}}(19|20)\\d\\d/", pick(r, common)),
+                _ => format!("/(?-i){}\\w*/", pick(r, rare)),
+            }),
+        },
     ]);
     out
 }
@@ -906,6 +926,10 @@ fn recovery_path(
     for class in classes(a.seed, a.queries.min(RECOVERY_QUERIES), a.hot)
         .into_iter()
         .filter(|c| a.only.as_deref().is_none_or(|o| c.name.contains(o)))
+        // Each removal keeps the `/…/` clause and verifies its candidates
+        // again, so a regex's recovery is cut by the budget by design
+        // (RX-1); the regex class itself is timed above.
+        .filter(|c| c.name != "regex")
     {
         let mut searches = Vec::with_capacity(class.queries.len());
         let mut times = Vec::with_capacity(class.queries.len());

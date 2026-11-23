@@ -773,7 +773,13 @@ fn did_you_mean(
     let Ok(ast) = query::parse(q) else {
         return Ok(out);
     };
-    if ast == Node::All || count_up_to(&cx.searcher, &cx.compiled(ast)?, FEW, cx.cancel)? >= FEW {
+    // A `/…/` query gets no count-based offers (RX-1): counting it would
+    // verify names under the regex budget each keystroke, past the
+    // request's cancel, and a count cut short reads as "few results".
+    if ast == Node::All
+        || ast.has_regex()
+        || count_up_to(&cx.searcher, &cx.compiled(ast)?, FEW, cx.cancel)? >= FEW
+    {
         return Ok(out);
     }
     let text = cx.index.fields().text;
@@ -963,6 +969,35 @@ mod tests {
             assert_eq!(did_you_mean_for(q, true), [fixed], "{q}");
         }
         assert_eq!(did_you_mean_for("typ:movie", false), ["type:movie"]);
+    }
+
+    /// A misspelt word is corrected, but not in a query with a `/…/`
+    /// term, which gets no count-based offers.
+    #[test]
+    fn a_regex_query_gets_no_count_based_correction() {
+        let (index, _) = index_with(50, 1);
+        let restrict = |n: Node| n;
+        let fixes = |q: &str| -> Vec<String> {
+            let req = Request {
+                q,
+                pos: None,
+                limit: 8,
+                shown: Shown {
+                    adult: false,
+                    hidden: false,
+                },
+                restrict: &restrict,
+                now: 0,
+            };
+            suggest(&index, &req, &CancelToken::new())
+                .unwrap()
+                .into_iter()
+                .filter(|s| s.kind == Kind::DidYouMean)
+                .map(|s| s.insert)
+                .collect()
+        };
+        assert!(!fixes("rarr x").is_empty(), "the plain query is corrected");
+        assert!(fixes("rarr /x/ x").is_empty());
     }
 
     /// `title_count` against a live count of `visible` torrents, with

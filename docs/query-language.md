@@ -450,6 +450,35 @@ A shortened signature is an error, so a typo never quietly finds nothing:
 sig:7a9f3c12 => use all 16 hex digits of a payload signature
 ```
 
+## Regular expressions
+
+A pattern between slashes matches anywhere in the torrent's name. `name:/…/` is the same thing (write `name:` in lowercase).
+
+```query
+/S0[1-9]E\d+/
+name:/(720|1080)p/
+show /s\d\de\d\d/
+-/\bcam\b/
+/AC\/DC/
+/\"live\"/
+```
+
+- **Case doesn't matter**, as in the rest of search: `/S01E02/` finds `s01e02`. Start with `(?-i)` to match case exactly.
+- **The syntax** is the usual one (character classes, `|`, `*`, `+`, `{2,4}`, `\d`, `\w`, `\b`), without look-around or back-references. Write a `/` inside the pattern as `\/` and a quote as `\"`.
+- **Where a pattern starts and ends.** A `/` starts a pattern only when text follows it straight away (not a space or `)`), and the closing `/` must come before a space, a parenthesis, a quote, `|` or the end of the search. A bare quote before the closing `/` makes them plain text too. Otherwise, or when there's no closing `/`, the slashes are plain text: `tv / movies / 1080p`, `/usr/bin`, `/usr` and `movies /2023` are words.
+- **Limits** keep patterns from slowing every search: at most 4 patterns in one search, each at most 512 bytes, nested at most 16 deep, with repeat counts up to 100 and classes small enough to match quickly. A pattern over a limit is refused with the reason.
+- **Lodestar first narrows by the pattern's three-letter pieces**, then checks each remaining name. Patterns with no such piece (`/.+/`, `/\d/`) check every name, so they're slower. A word next to the pattern doesn't make it faster yet: Lodestar still checks every name the pattern's own pieces let through. Give the pattern a longer piece of plain text instead.
+- **All the patterns in one search share 2 seconds**, planning included. The facet counts and the "try removing" suggestions for that search reuse what the search already checked, so they agree with its count however much later they load. When the 2 seconds run out, the search stops and shows what it had found by then. For now, nothing on the results page says it stopped, so the count looks exact when it isn't. It can be too low, or too high when the pattern excludes (`-/x/`).
+- **Saved searches with a pattern** don't skip torrents when the pattern runs out of time. The alert check tries the same torrents again a minute later, then waits twice as long after each further stop, up to an hour, so their alerts arrive late. Other saved searches aren't held up. If it keeps running out of time, the log says so once an hour (the `search.percolate_regex_stopped` event). Narrow the pattern to fix it.
+- **Exports never come out short:** exporting a search whose pattern runs out of time fails with "This search took too long to check every /regex/ match". Narrow the pattern and export again.
+- Filter rules can't use patterns: a rule with `/…/` is refused when you save it.
+
+```query-fail
+/S0[1-9/ => regex_syntax
+/(?s)a/ => regex_flag_not_allowed
+/a1/ /a2/ /a3/ /a4/ /a5/ => at most 4 /regex/ terms
+```
+
 ## How results are ranked
 
 Order **by relevance** is the default. Other sorts are `discovered`, `size`, `files`, `seeders`, `leechers`, `trackers` and `seen`, each ascending or descending.
@@ -595,14 +624,7 @@ These are in the plan but don't work today. Each gives an error that says so, an
 
 | Plan | Today |
 |---|---|
-| `/S0[1-9]E\d+/` regular expressions | *regex search arrives with the trigram index* |
 | `resolved:plugin` | not a value; use `files`, `folder` or `structure` |
-
-Each of these fails with the message shown after `=>`:
-
-```query-fail
-/S0[1-9]E\d+/ => regex search arrives
-```
 
 ## Limits
 
