@@ -71,3 +71,11 @@
 	flex: 1 1 calc(var(--spacing) * 40);
 	min-width: 0;
 }
+
+.ls-detail-label {
+	display: block;
+	margin-block-end: calc(var(--spacing) * 1);
+	font-size: var(--text-small);
+	line-height: var(--text-small--line-height);
+	color: var(--color-muted-text);
+}

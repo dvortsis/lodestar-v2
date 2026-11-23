@@ -3,12 +3,10 @@
 	// the primary action live in the container's header (the Drawer's, or the page's h1). Everything
 	// below the fold (Contents, Parsed) and the error states load as separate chunks when needed, to
 	// keep the first load inside the 15 KB budget (§10.1).
-	import { resolve } from '$app/paths';
 	import { m } from '$lib/paraglide/messages.js';
 	import Skeleton from '$lib/ui/feedback/Skeleton.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import { showBidi } from '$lib/util/bidi';
-	import { isMagnet } from '$lib/util/magnet';
 	import { whenVisible } from './visible';
 	import Provenance from './provenance/Provenance.svelte';
 	import Summary from './summary/Summary.svelte';
@@ -30,16 +28,19 @@
 	const hit = $derived(model.hit);
 	const error = $derived(model.error);
 	const rawName = $derived(detail?.name ?? hit?.name ?? '');
-	const magnet = $derived(detail && isMagnet(detail.magnet) ? detail.magnet : null);
 
 	// Lazy chunks, held as components once loaded (no {#await}: its runtime would ship with Search).
 	let Contents = $state.raw<typeof import('./Contents.svelte').default>();
 	let Parsed = $state.raw<typeof import('./parsed/Parsed.svelte').default>();
 	let ErrorState = $state.raw<typeof import('./ErrorState.svelte').default>();
 	let Adult = $state.raw<typeof import('./adult/AdultEnrichment.svelte').default>();
+	let Swarm = $state.raw<typeof import('./swarm/Swarm.svelte').default>();
+	let Technical = $state.raw<typeof import('./TechnicalDetails.svelte').default>();
 	let Identified = $state.raw<typeof import('./identified/Identified.svelte').default>();
 	let contentsAsked = false;
 	let parsedAsked = false;
+	let swarmAsked = false;
+	let technicalAsked = false;
 	function loadContents() {
 		if (contentsAsked) return;
 		contentsAsked = true;
@@ -50,11 +51,23 @@
 		parsedAsked = true;
 		void import('./parsed/Parsed.svelte').then((mod) => (Parsed = mod.default));
 	}
+	function loadSwarm() {
+		if (swarmAsked) return;
+		swarmAsked = true;
+		void import('./swarm/Swarm.svelte').then((mod) => (Swarm = mod.default));
+	}
+	function loadTechnical() {
+		if (technicalAsked) return;
+		technicalAsked = true;
+		void import('./TechnicalDetails.svelte').then((mod) => (Technical = mod.default));
+	}
 	// The full page has no fold to scroll to: its sections load at once, so it settles to one layout.
 	$effect(() => {
 		if (mode === 'page' && detail) {
 			loadContents();
 			loadParsed();
+			loadSwarm();
+			loadTechnical();
 		}
 	});
 	// ErrorState on an error; the adult-enrichment section only when the API sent it (admin, Show
@@ -88,21 +101,6 @@
 	{/if}
 
 	{#if detail}
-		<div class="ls-detail-row">
-			{#if magnet}
-				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- a magnet URI, checked by isMagnet -->
-				<a class="btn btn-ghost btn-sm" href={magnet} data-testid="detail-open-magnet"
-					>{m.detail_open_magnet()}</a
-				>
-			{/if}
-			{#if mode === 'drawer'}
-				<a
-					class="btn btn-ghost btn-sm"
-					href={resolve('/t/[hash]', { hash: detail.hash })}
-					data-testid="detail-open-full">{m.detail_open_full()}</a
-				>
-			{/if}
-		</div>
 		<Summary {detail} {hit} {level} />
 		<Provenance provenance={detail.provenance} {level} />
 		{#if Identified}<Identified {detail} {level} />{/if}
@@ -135,7 +133,20 @@
 				<Skeleton lines={3} />
 			{/if}
 		</section>
-		<!-- Slots for the Swarm, Related and Notes & labels sections (follow-ups), in story order. -->
+		<div use:whenVisible={loadSwarm}>
+			{#if Swarm}
+				<Swarm {detail} {level} />
+			{:else}
+				<div class="ls-detail-section" aria-busy="true">
+					<div role="heading" aria-level={level}>{m.detail_section_swarm()}</div>
+					<Skeleton lines={3} />
+				</div>
+			{/if}
+		</div>
+		<div use:whenVisible={loadTechnical}>
+			{#if Technical}<Technical {detail} {hit} />{:else}<Skeleton lines={1} />{/if}
+		</div>
+		<!-- Slots for Related and Notes & labels (follow-ups), in story order. -->
 	{:else if !error}
 		<div role="status" aria-busy="true" aria-label={m.detail_loading()}>
 			<Skeleton lines={6} />

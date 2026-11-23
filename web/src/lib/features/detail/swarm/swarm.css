@@ -1,0 +1,98 @@
+/* The Swarm section's own rules: they load with its lazy chunk, not with the first view. */
+/* The Swarm line: the plot with its peak label at the top start and 0 at the bottom start. */
+.ls-detail-chart {
+	--ls-chart-height: calc(var(--spacing) * 24);
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	grid-template-rows: var(--ls-chart-height);
+	column-gap: calc(var(--spacing) * 2);
+}
+.ls-detail-chart > svg {
+	grid-column: 2;
+	grid-row: 1;
+}
+.ls-detail-chart-max,
+.ls-detail-chart-zero {
+	grid-column: 1;
+	grid-row: 1;
+}
+.ls-detail-chart-zero {
+	align-self: end;
+	text-align: end;
+}
+.ls-detail-chart-max {
+	align-self: start;
+	text-align: end;
+}
+
+.ls-detail-scroll {
+	overflow-x: auto;
+}
+.ls-detail-table {
+	width: 100%;
+	text-align: start;
+	font-size: var(--text-small);
+	line-height: var(--text-small--line-height);
+}
+.ls-detail-table caption {
+	padding-block: calc(var(--spacing) * 1);
+	text-align: start;
+	color: var(--color-muted-text);
+}
+.ls-detail-table th,
+.ls-detail-table td {
+	padding-inline: calc(var(--spacing) * 2);
+	text-align: start;
+}
+.ls-detail-table th:first-child,
+.ls-detail-table td:first-child {
+	padding-inline-start: 0;
+}
+.ls-detail-table thead th {
+	font-weight: var(--font-weight-medium);
+}
+.ls-detail-table thead th:not(:first-child):not(:last-child),
+.ls-detail-table td[data-num] {
+	text-align: end;
+}
+.ls-detail-table tbody tr {
+	border-top: var(--border) solid var(--color-base-300);
+}
+.ls-detail-table tbody th {
+	font-weight: var(--font-weight-normal);
+	overflow-wrap: anywhere;
+}
+.ls-detail-table td[data-num] {
+	font-variant-numeric: tabular-nums;
+}
+.ls-detail-table td[data-when] {
+	white-space: nowrap;
+}
+.ls-detail-key {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1);
+}
+.ls-detail-key > svg {
+	width: calc(var(--spacing) * 5);
+	height: calc(var(--spacing) * 2);
+}
+.ls-detail-chart > svg {
+	height: var(--ls-chart-height);
+	width: 100%;
+	overflow: visible;
+	border-block-end: var(--border) solid var(--color-base-300);
+	border-inline-start: var(--border) solid var(--color-base-300);
+}
+.ls-detail-chart-max,
+.ls-detail-chart-zero,
+.ls-detail-axis {
+	font-size: var(--text-small);
+	line-height: var(--text-small--line-height);
+	color: var(--color-muted-text);
+	font-variant-numeric: tabular-nums;
+}
+.ls-detail-axis {
+	display: flex;
+	justify-content: space-between;
+}

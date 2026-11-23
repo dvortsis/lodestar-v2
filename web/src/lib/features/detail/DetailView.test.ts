@@ -136,24 +136,6 @@ describe('DetailView states', () => {
 		render(DetailView, { model: m, mode: 'drawer' });
 		expect(screen.queryByTestId('detail-raw-name')).toBeNull();
 	});
-
-	it('links Open magnet only for a magnet: URL and Open full page only in the drawer', () => {
-		const ok = model({ detail: torrentDetail(), hit: null, status: 'ready' });
-		const { unmount } = render(DetailView, { model: ok, mode: 'drawer' });
-		expect(screen.getByTestId('detail-open-magnet').getAttribute('href')).toMatch(/^magnet:\?/);
-		expect(screen.getByTestId('detail-open-full').getAttribute('href')).toBe('/t/' + HASH);
-		unmount();
-		render(DetailView, { model: ok, mode: 'page' });
-		expect(screen.queryByTestId('detail-open-full')).toBeNull();
-		document.body.innerHTML = '';
-		const bad = model({
-			detail: torrentDetail({ magnet: 'javascript:alert(1)' }),
-			hit: null,
-			status: 'ready'
-		});
-		render(DetailView, { model: bad, mode: 'drawer' });
-		expect(screen.queryByTestId('detail-open-magnet')).toBeNull();
-	});
 });
 
 describe('DetailModel swaps', () => {

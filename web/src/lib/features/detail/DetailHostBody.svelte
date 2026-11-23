@@ -219,12 +219,11 @@
 			onClose={closeDetail}
 			returnFocus={focusTarget}
 		>
-			{#snippet actions()}<DetailActions detail={model.detail} />{/snippet}
-			{#if mode === 'full'}
-				<div class="ls-detail-row">
-					<Button dense onclick={back}>{m.detail_back()}</Button>
-				</div>
-			{/if}
+			<!-- Under the title, in the DOM as well as on screen: the title, then the actions. -->
+			<div class="ls-detail-row" data-testid="detail-actions">
+				{#if mode === 'full'}<Button dense onclick={back}>{m.detail_back()}</Button>{/if}
+				<DetailActions detail={model.detail} mode="drawer" />
+			</div>
 			<DetailView {model} mode="drawer" onBack={back} />
 		</Drawer>
 	{/key}

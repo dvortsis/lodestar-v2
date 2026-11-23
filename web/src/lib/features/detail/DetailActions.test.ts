@@ -1,17 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { clearDetailCaches } from './cache';
 import { torrentDetail } from './fixtures';
 import DetailActions from './DetailActions.svelte';
 
 const copyMagnet = vi.hoisted(() => vi.fn());
 const sendHash = vi.hoisted(() => vi.fn());
-const client = vi.hoisted(() => ({ name: null as string | null }));
+const client = vi.hoisted(() => ({ name: null as string | null, unreadable: false }));
 const label = vi.hoisted(() => vi.fn());
 vi.mock('./magnet', () => ({ copyMagnet }));
 vi.mock('./send', () => ({
 	sendLabel: async (fresh?: boolean) => (label(fresh), client.name && `Send to ${client.name}`),
-	sendHash
+	sendHash,
+	clientUnreadable: () => client.unreadable
 }));
 
 beforeEach(() => copyMagnet.mockClear());
@@ -61,5 +62,81 @@ describe('Send to the client', () => {
 			timeout: 10_000
 		});
 		client.name = null;
+	});
+});
+
+describe('Open in torrent client and the actions menu', () => {
+	it('links Open in torrent client only for a magnet: URL', () => {
+		const { unmount } = render(DetailActions, { detail: torrentDetail() });
+		const link = screen.getByTestId('detail-open-magnet');
+		expect(link.getAttribute('href')).toMatch(/^magnet:\?/);
+		expect(link.textContent).toBe('Open in torrent client');
+		unmount();
+		render(DetailActions, { detail: torrentDetail({ magnet: 'javascript:alert(1)' }) });
+		expect(screen.queryByTestId('detail-open-magnet')).toBeNull();
+	});
+
+	it('puts Open full page in the menu for the drawer only, and Block in both', async () => {
+		const { unmount } = render(DetailActions, { detail: torrentDetail(), mode: 'drawer' });
+		await fireEvent.click(screen.getByTestId('detail-actions-menu'));
+		expect(
+			await screen.findByRole('menuitem', { name: 'Open full page' }, { timeout: 10_000 })
+		).toBeTruthy();
+		expect(screen.getByRole('menuitem', { name: 'Block this…' })).toBeTruthy();
+		unmount();
+		document.body.innerHTML = '';
+		render(DetailActions, { detail: torrentDetail(), mode: 'page' });
+		await fireEvent.click(screen.getByTestId('detail-actions-menu'));
+		expect(
+			await screen.findByRole('menuitem', { name: 'Block this…' }, { timeout: 10_000 })
+		).toBeTruthy();
+		expect(screen.queryByRole('menuitem', { name: 'Open full page' })).toBeNull();
+	});
+});
+
+describe('the no-client item in the actions menu', () => {
+	afterEach(() => {
+		client.name = null;
+		client.unreadable = false;
+	});
+	const items = async () => {
+		await fireEvent.click(screen.getByTestId('detail-actions-menu'));
+		await screen.findByRole('menuitem', { name: 'Block this…' }, { timeout: 10_000 });
+		return screen.getAllByRole('menuitem').map((e) => e.textContent!.trim());
+	};
+
+	it('adds "Set up a download client…" as the last item when no client is set up', async () => {
+		render(DetailActions, { detail: torrentDetail() });
+		await vi.waitFor(() => expect(label).toHaveBeenCalled(), { timeout: 10_000 });
+		await vi.dynamicImportSettled();
+		expect((await items()).at(-1)).toBe('Set up a download client…');
+		expect(screen.queryByTestId('detail-client-hint')).toBeNull();
+	});
+
+	it('has no such item when a client is set up, or when the read failed', async () => {
+		client.name = 'qBittorrent';
+		const first = render(DetailActions, { detail: torrentDetail() });
+		await screen.findByTestId('detail-send');
+		expect(await items()).not.toContain('Set up a download client…');
+		first.unmount();
+		document.body.innerHTML = '';
+		client.name = null;
+		client.unreadable = true;
+		render(DetailActions, { detail: torrentDetail() });
+		await vi.dynamicImportSettled();
+		expect(await items()).not.toContain('Set up a download client…');
+	});
+
+	it('opens the menu from the keyboard before it has loaded: ArrowDown and ArrowUp', async () => {
+		for (const key of ['ArrowDown', 'ArrowUp']) {
+			document.body.innerHTML = '';
+			const { unmount } = render(DetailActions, { detail: torrentDetail() });
+			await fireEvent.keyDown(screen.getByTestId('detail-actions-menu'), { key });
+			expect(
+				await screen.findByRole('menuitem', { name: 'Block this…' }, { timeout: 10_000 }),
+				key
+			).toBeTruthy();
+			unmount();
+		}
 	});
 });

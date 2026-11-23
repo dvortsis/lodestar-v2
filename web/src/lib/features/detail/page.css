@@ -3,3 +3,24 @@
 .ls-detail-page [data-section='summary'] {
 	max-width: var(--manuscript-width);
 }
+
+.ls-detail-back {
+	align-self: start;
+	width: fit-content;
+}
+@media (pointer: coarse) {
+	.ls-detail-back {
+		display: inline-flex;
+		align-items: center;
+		min-block-size: var(--target-min);
+	}
+}
+/* The actions take their own row under the title on a phone (focus order follows the screen). */
+.ls-detail-page-actions {
+	flex-basis: 100%;
+}
+@media (min-width: 30rem) {
+	.ls-detail-page-actions {
+		flex-basis: auto;
+	}
+}
