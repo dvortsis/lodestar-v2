@@ -439,6 +439,14 @@ describe('Rising and Recently resolved', () => {
 		expect(document.querySelector('.dsc-grid')?.classList.contains('dsc-solo')).toBe(false);
 	});
 
+	it('hides an unavailable section that gives no reason, rather than showing an empty shell', async () => {
+		handler = () => response({ rising: group({ status: 'unavailable', hits: [], reason: null }) });
+		mount();
+		await screen.findByTestId('discover-newest-total');
+		expect(screen.queryByTestId('discover-rising')).toBeNull();
+		expect(screen.queryByText(/Not available/)).toBeNull();
+	});
+
 	it('keeps a short notice for a reason that is not about unbuilt data', async () => {
 		handler = () => response({ rising: unavailable('no_title') });
 		mount();
