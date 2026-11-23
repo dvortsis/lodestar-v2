@@ -62,7 +62,8 @@ test('a Lantern Keeper version shows its composition', async ({ page }) => {
 	const lantern = manifest().torrents.find((t) => t.name.includes('Lantern Keeper'))!;
 	await page.goto(`/t/${lantern.hash}`);
 	await expect(page.getByTestId('detail-compbar-dominant')).toBeVisible();
-	await expect(page.getByTestId('detail-groups-item').first()).toBeVisible();
+	// One file group repeats the bar, so the list under it is hidden (I26); more groups show it.
+	await expect(page.getByTestId('detail-compbar')).toBeVisible();
 });
 
 test('a never-scraped torrent says so', async ({ page }) => {
