@@ -22,6 +22,8 @@ lodestar-filter.workspace = true
 lodestar-integrations.workspace = true
 lodestar-log.workspace = true
 lodestar-metainfo.workspace = true
+# `SearchHit.resolution`'s schema lists `Resolution::ALL` (already built via search).
+lodestar-release-parser.workspace = true
 lodestar-search.workspace = true
 lodestar-store.workspace = true
 rand = "0.10"

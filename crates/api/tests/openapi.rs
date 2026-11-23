@@ -645,3 +645,67 @@ fn nullability_follows_the_field_contract() {
         assert!(!nullable(&body, f), "ErrorBody.{f}");
     }
 }
+
+/// Every value a hit's `resolution` may hold is listed: the parser's
+/// canonical forms plus null, so the web client's type is that union. The
+/// committed `openapi.json` is held to this document by CI's drift check.
+/// Every example hit's resolution is one of them.
+#[test]
+fn a_hits_resolution_lists_the_canonical_values() {
+    use lodestar_release_parser::Resolution;
+    let doc = doc();
+    let field = &doc["components"]["schemas"]["SearchHit"]["properties"]["resolution"];
+    let allowed: Vec<Value> = Resolution::ALL
+        .iter()
+        .map(|r| Value::from(r.as_str()))
+        .chain([Value::Null])
+        .collect();
+    assert_eq!(field["enum"].as_array(), Some(&allowed));
+    // The description is hand-written: it must name every value.
+    let description = field["description"].as_str().unwrap();
+    for r in Resolution::ALL {
+        let v = format!("`{}`", r.as_str());
+        assert!(description.contains(&v), "description lacks {v}");
+    }
+    assert!(allowed.contains(&field["example"]));
+    // Hits in the document's examples: any object there carrying the
+    // hit's own keys. Only `example`/`examples` values are searched, so a
+    // schema's `properties` never counts.
+    fn hits<'a>(v: &'a Value, out: &mut Vec<&'a Value>) {
+        match v {
+            Value::Object(m) => {
+                if m.contains_key("piece_len") && m.contains_key("resolved_via") {
+                    out.push(v);
+                }
+                m.values().for_each(|c| hits(c, out));
+            }
+            Value::Array(a) => a.iter().for_each(|c| hits(c, out)),
+            _ => {}
+        }
+    }
+    fn examples<'a>(v: &'a Value, out: &mut Vec<&'a Value>) {
+        match v {
+            Value::Object(m) => {
+                for (k, c) in m {
+                    if k == "example" || k == "examples" {
+                        hits(c, out);
+                    } else {
+                        examples(c, out);
+                    }
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|c| examples(c, out)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    examples(&doc, &mut found);
+    assert!(!found.is_empty(), "no example hits found");
+    for hit in found {
+        let r = &hit["resolution"];
+        assert!(
+            r.is_string() && allowed.contains(r),
+            "example hit resolution {r}"
+        );
+    }
+}

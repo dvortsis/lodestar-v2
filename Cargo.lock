@@ -1619,6 +1619,7 @@ dependencies = [
  "lodestar-log",
  "lodestar-metainfo",
  "lodestar-pipeline",
+ "lodestar-release-parser",
  "lodestar-search",
  "lodestar-sources",
  "lodestar-store",

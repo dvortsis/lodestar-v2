@@ -461,6 +461,36 @@ impl UnpopulatedField {
     }
 }
 
+/// `SearchHit.resolution`'s schema: a string or null, the string one of
+/// `Resolution::ALL` in its canonical form. Built from the parser's list,
+/// so a new resolution reaches the document (and the web client's type)
+/// on the next `cargo run -p lodestar --bin openapi`; CI's drift check
+/// fails until it's committed. `schema_with` replaces the derived schema
+/// whole, so the field's description is written here (and
+/// `tests/openapi.rs` checks it names every value).
+fn resolution_schema() -> utoipa::openapi::Object {
+    use lodestar_release_parser::Resolution;
+    use utoipa::openapi::{ObjectBuilder, Type, schema::SchemaType};
+    let values = Resolution::ALL
+        .iter()
+        .map(|r| serde_json::Value::from(r.as_str()))
+        .chain([serde_json::Value::Null]);
+    // `example`, as the derived schemas write it; utoipa 5 deprecates it
+    // for OpenAPI 3.1's `examples`.
+    #[allow(deprecated)]
+    ObjectBuilder::new()
+        .schema_type(SchemaType::from_iter([Type::String, Type::Null]))
+        .description(Some(
+            "The release resolution the name gives, in the canonical form `res:`\n\
+             matches: `480p`, `576p`, `720p`, `1080i`, `1080p`, `1440p`, `2160p`\n\
+             or `4320p` (aliases such as `4k`, `8k` or a bare `1080` are stored\n\
+             in this form). Null = none in the name, or not classified.",
+        ))
+        .enum_values(Some(values))
+        .example(Some(Resolution::R1080p.as_str().into()))
+        .build()
+}
+
 /// One search result: the torrent summary (`docs/metrics.md` §7.1), its
 /// relevance and, for a query with a file clause, the files that matched.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -519,11 +549,9 @@ pub struct SearchHit {
     pub metadata_at: i64,
     pub name: String,
     pub piece_len: u64,
-    /// The release resolution the name gives, in the canonical form `res:`
-    /// matches: `480p`, `576p`, `720p`, `1080i`, `1080p`, `1440p`, `2160p`
-    /// or `4320p` (aliases such as `4k`, `8k` or a bare `1080` are stored
-    /// in this form). Null = none in the name, or not classified.
-    #[schema(required = true, example = "1080p")]
+    /// The release resolution the name gives; null = none. Its schema,
+    /// description included, is `resolution_schema`'s.
+    #[schema(required = true, schema_with = resolution_schema)]
     pub resolution: Option<String>,
     /// How the title was found when the name wasn't informative:
     /// `files`, `folder` or `structure`; null = from the name itself, or
