@@ -10673,7 +10673,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T04:05:10Z",
+    "updated": "2026-11-23T04:05:35Z",
     "items": [
       {
         "slot": 1,
@@ -11582,6 +11582,7 @@
     "credit": "owner $200 Claude API credit, 2026-11-22",
     "max_open_prs": 2,
     "order": [
+      "X-size-own-modules",
       "RX-1",
       "X-setup-token-boot",
       "X-unverified-cap-index",
@@ -11610,15 +11611,15 @@
       "X-sampler-streak-metrics",
       "X-capacity-rejection-source",
       "X-hidden-count",
-      "X-detail-attributes",
-      "X-size-own-modules"
+      "X-detail-attributes"
     ],
     "after": {
       "ENR-13b": "ENR-terms-api merged",
-      "GS-4": "X-detail-depth-compare merged (it follows X-size-own-modules, which holds web/.size-limit.mjs from 2026-11-23T04:0xZ)",
+      "GS-4": "X-detail-depth-compare merged",
       "X-cmp-egress-ui": "X-gluetun-hostfile-ui merged",
       "X-capacity-rejection-source": "CR-SOFT-TIMEOUT merged (both own actor.rs, mod.rs, metrics.rs, docs/metrics.md)",
-      "X-sampler-streak-metrics": "CR-SOFT-TIMEOUT merged (both own crates/lodestar/src/metrics.rs and docs/metrics.md)"
+      "X-sampler-streak-metrics": "CR-SOFT-TIMEOUT merged (both own crates/lodestar/src/metrics.rs and docs/metrics.md)",
+      "X-size-own-modules": "X-detail-depth-compare merged (it holds web/.size-limit.mjs first; runner 2026-11-23T04:1xZ)"
     }
   },
   "pause_history": [
@@ -11634,8 +11635,8 @@
   ],
   "size_file_holder": {
     "path": "web/.size-limit.mjs",
-    "holder": "X-size-own-modules (API lane)",
-    "since": "2026-11-23T04:03:50Z",
-    "next": "X-detail-depth-compare"
+    "holder": "X-detail-depth-compare (in-house, slot 2 after #1085)",
+    "since": "2026-11-23T04:05:35Z",
+    "next": "X-size-own-modules (API lane, front of order)"
   }
 }
