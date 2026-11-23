@@ -29,7 +29,8 @@
 	// (its `?…`), so the link is /search with them. A direct link has none, so it is plain /search.
 	let search = $state('');
 	afterNavigate(({ from }) => {
-		search = from?.url.pathname === '/search' ? from.url.search : '';
+		const url = from?.url; // can be absent on a reload-like entry
+		search = url?.pathname === '/search' ? url.search : '';
 	});
 	onMount(
 		() =>

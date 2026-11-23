@@ -1317,9 +1317,11 @@ const actionsMenu = ownChunk(
 // The shared Menu (bits-ui) loads on demand for the results' row menu too, so "Detail sections"
 // leaves its chunks out, by the chunk names the build gives them (the Menu, bits-ui's index-client,
 // scroll-lock and the popper/floating-layer pieces).
-// X-detail-depth (runner r14): the growth 38.82 → 47.44 KB is the Swarm chunk 3.8 KB + 0.6 KB CSS,
+// X-detail-depth (runner r14): the growth 38.82 → 47.49 KB is the Swarm chunk 3.8 KB + 0.6 KB CSS,
 // Technical details 1.5 KB + its CSS and the tracker "checked" time (RelativeTime) 0.9 KB; all load
-// when a section opens.
+// when a section opens. Review round: +47 B for the Swarm "never scraped" and has-data branches; the
+// actions menu 0.68 → 0.79 KB for the "Set up a download client…" item and the pre-load ArrowDown
+// handler. /t gives back its raise: 22.21 → 22.04 KB (the inline hint is gone).
 const MENU_CHUNKS = new Set([
 	'Menu',
 	'index-client',
@@ -1768,7 +1770,7 @@ export default [
 	// X-auth-early-401 (runner §2.26): the same replay: 21,967 B measured locally, 21,971 B in CI
 	// (its build SHA moves the chunk names), rounded up to the next 0.01 KB.
 	// X-labels (runner §2.26): 21,979 → 22,129 B, as the drawer.
-	entry('/t/[hash] route (own JS + CSS)', torrentView, '22.21 KB'),
+	entry('/t/[hash] route (own JS + CSS)', torrentView, '22.04 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[
@@ -1780,7 +1782,7 @@ export default [
 				!menuOnly.includes(f) &&
 				!actionsMenu.includes(f)
 		),
-		'47.44 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		'47.49 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
@@ -1792,7 +1794,7 @@ export default [
 	entry(
 		'Detail actions menu (on demand)',
 		requireMeasuredJs('Detail actions menu (on demand)', actionsMenu),
-		'0.68 KB'
+		'0.79 KB'
 	),
 	entry('Detail identified-as section (on demand)', identifiedSection, '2.84 KB'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
