@@ -1,0 +1,21 @@
+# X-index-banner-late decisions
+
+Slice `X-index-banner-late`, from #1075 (X-search-toolbar): the "still growing" banner could land after the result rows and push them down. The runner chose option (a) at step 0 (runner, `docs/owner-decisions.md` §2.26 UX; flagged to the owner under §2.19).
+
+- **Measured on main (a6ed7bc8).** With `/search/state` answered only after row 1 was painted (past the panel's `FIGURES_WAIT_MS`, 1 s), the banner moved row 1 from y 271 to 309 at 390 px (CLS 0.027) and from 247 to 307 at 1440 px (CLS 0.023), the same at 1x and 4x CPU. `e2e/search-index-banner.routes.test.ts` now asserts row 1's y unchanged, no shift in `#results`, and total CLS below 1e-9 from row 1's paint on, in all four runs.
+- **The banner's presence changes only while no rows are on screen (runner, refines §10.4 States, "Cold start").** The decision ("growing" or not) comes only from `GET /search/state`; nothing else the panel has carries it. So:
+  - The rows still wait up to 1 s for the answer. If it's later, they paint with **the last answer this browser saw** (`results/index-memory.ts`: the growing flag, count and rate in `localStorage` under `lodestar.indexState`, versioned). The banner and its space are there from the rows' first frame, and the live figures fill the same one-line banner in place when the answer lands (the e2e checks its height doesn't change).
+  - A late answer that disagrees with what's shown (a first visit with nothing remembered, or the index just crossed 1,000,000) is **held** until the next moment no rows are shown: an empty, loading, error or "No results" state, or the next visit. It then applies before any new row paints. A first visit with a slow `/search/state` therefore shows no "still growing" over its first rows; the e2e checks it appears at the next no-results and loading states.
+  - Why not reserve the space (b): after the 1 s wait a reserved band either stays blank when no banner shows, or collapses above painted rows (a shift). Why not an overlay (c): §10.4 puts index-state banners inline above the results, and an overlay would cover row 1.
+- **The memory is a per-viewer convenience, never trusted.** Every read and write is in try/catch; a missing key, corrupt JSON, a different version or malformed fields read as nothing remembered (`index-memory.test.ts`). It holds no secrets (a torrent count and rate), and is used only for the banner's first frame.
+- **The rebuild banner stays live (runner).** A rebuild that starts or ends while rows are on screen (the shell's stream, or the `rebuild` in `/search/state`) still adds or removes its banner at once, and can move the rows. It's a state change the user should see as it happens (the old index keeps serving, some fields may be unavailable), it's rare, and the shell's pill moves with it. The full-page cold start is unchanged: it replaces the empty state, never sits above rows.
+- **Where it lives.** `results/ResultsPanel.svelte` (`growingShown`, held by a pre-effect while rows are painted; the rows also wait for the banner's chunk when it's to show, which can only happen without rows). `results/IndexState.svelte` takes either the live answer or the remembered figures (its prop type narrows to the two figures it reads). No copy change.
+- **Size (`npm run size:ci`, gzip).** Paid from the Search results headroom; no limit raised.
+
+  | Entry                                  | main     | this branch | limit    |
+  | -------------------------------------- | -------- | ----------- | -------- |
+  | Search route JS (initial)              | 44.99 kB | 44.99 kB    | 45 kB    |
+  | Search results (lazy)                  | 40.28 kB | 40.59 kB    | 40.86 kB |
+  | Search index-state banners (on demand) | 4.01 kB  | 4.01 kB     | 4.1 kB   |
+
+- **Seen, not fixed (runner's follow-up).** At 1440 px with a 4x CPU the shell's nav links shift by about 9e-5 at boot (~190 ms, before any row), on main too. It's outside the results region and this slice's paths; the spec counts shifts from row 1's paint on, and any shift inside `#results` from the page's first frame.

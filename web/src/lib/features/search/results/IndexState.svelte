@@ -13,8 +13,9 @@
 
 	interface Props {
 		banner: Kind;
-		/** Null when `/search/state` failed: a live rebuild still shows. */
-		state: IndexState | null;
+		/** Null when `/search/state` failed: a live rebuild still shows. Before it answers, the
+		 *  remembered figures (`index-memory.ts`). */
+		state: Pick<IndexState, 'searchable_torrents' | 'growth_per_hour'> | null;
 		full?: boolean;
 		focusBar: () => void;
 	}
