@@ -193,6 +193,7 @@ fn slow_lease(index: &Arc<SearchIndex>, sort: Sort, delay: Duration) -> Lease {
         now: 0,
         utc_offset: 0,
         regex_bytes: 0,
+        regex_deadline: None,
     }
 }
 

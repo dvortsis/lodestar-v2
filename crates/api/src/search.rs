@@ -1152,6 +1152,10 @@ pub(crate) fn request_ast(ast: Option<Node>, q: Option<String>) -> ApiResult<Nod
             let text = ast.to_query();
             match parse(&text) {
                 Ok(again) if again == ast => ast,
+                // Over the regex clause cap: the same error as typed.
+                Err(e) if e.reason == Some(lodestar_search::REGEX_TOO_MANY) => {
+                    return Err(parse_error(e).field("ast"));
+                }
                 _ => {
                     return Err(ApiError::bad_request(
                         "invalid_ast",
@@ -1458,6 +1462,18 @@ mod tests {
         // A refused pattern gives its own.
         let e = request_ast(None, Some("/a(b/".to_owned())).unwrap_err();
         assert_eq!(e.body()["error"]["reason"], "regex_syntax");
+        // So does an AST over the cap.
+        let ast = Node::And {
+            of: (0..5)
+                .map(|i| Node::Regex {
+                    pattern: format!("a{i}"),
+                })
+                .collect(),
+        };
+        let e = request_ast(Some(ast), None).unwrap_err();
+        let body = e.body();
+        assert_eq!(body["error"]["reason"], "regex_too_many");
+        assert_eq!(body["error"]["field"], "ast");
     }
 
     #[test]

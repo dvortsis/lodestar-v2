@@ -173,6 +173,7 @@ pub fn percolate(
     let sig_complete = index
         .prefilter("payload_sig", &searcher, Box::new(EmptyQuery))
         .is_some();
+    let mut ran = false;
     for d in due {
         // `sig:<info hash>` resolves its reference torrent through the
         // query's own visibility clauses (`compile::SamePayload`). A saved
@@ -196,6 +197,18 @@ pub fn percolate(
         } else {
             d.query
         };
+        // Over the regex clause cap (a stored node the parser didn't
+        // make): it would compile to nothing and move its watermark past
+        // every torrent, so it fails instead, logged and kept where it is
+        // (S8-10).
+        if query.regex_clauses() > crate::query::MAX_REGEX_CLAUSES {
+            lodestar_log::log_event!(
+                crate::log_events::PERCOLATE_SEARCH_FAILED,
+                saved_search = lodestar_log::Count(d.id.unsigned_abs())
+            );
+            out.failed.push(d.id);
+            continue;
+        }
         let end = upto.min(d.watermark.saturating_add(limits.max_range.max(1)));
         if end <= d.watermark {
             continue;
@@ -209,7 +222,10 @@ pub fn percolate(
         // and budget; the run's first stays whole unless it's stoppable.
         // Each search's regex clauses get a budget of their own, not
         // what the run's earlier searches left of one.
-        let scan_cancel = (d.stoppable || !out.matched.is_empty()).then(|| cancel.regex_scope());
+        // "Ran" is any search that got this far, matched or not: one
+        // whose regex stopped took its time too (S8-12).
+        let scan_cancel = (d.stoppable || ran).then(|| cancel.regex_scope());
+        ran = true;
         let compiled = match &scan_cancel {
             Some(token) => {
                 match index.compile_cancelled(query, now, d.utc_offset, d.stems, token) {
@@ -234,9 +250,18 @@ pub fn percolate(
         // its regex budget only, as it's verified while collected.
         if let Some(token) = &scan_cancel {
             let (after, upto) = (d.watermark, end);
-            crate::regex_verify::seal_where(&q, &searcher, token, &|seg| {
+            let sealed = crate::regex_verify::seal_where(&q, &searcher, token, &|seg| {
                 may_hold(seg, after, upto).unwrap_or(true)
-            })?;
+            });
+            if sealed.is_err() {
+                // As a failed scan: it keeps its watermark.
+                lodestar_log::log_event!(
+                    crate::log_events::PERCOLATE_SEARCH_FAILED,
+                    saved_search = lodestar_log::Count(d.id.unsigned_abs())
+                );
+                out.failed.push(d.id);
+                continue;
+            }
         }
         let stopped = Arc::new(AtomicBool::new(false));
         let collector = PostFilter {
@@ -523,7 +548,7 @@ mod tests {
         // The regex first (compiled without the run's token) and again
         // later (under its own regex scope).
         let dues = [due(1, &regex), due(2, &word), due(3, &regex)];
-        let budget = |b| crate::regex_verify::BUDGET.with(|c| c.set(b));
+        let budget = crate::regex_verify::set_budget_on_this_thread;
         budget(Some(Duration::ZERO));
         let p = percolate(&index, &dues, 300, ALL, 0, &CancelToken::new()).unwrap();
         budget(None);

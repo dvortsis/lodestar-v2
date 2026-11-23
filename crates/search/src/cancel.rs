@@ -72,19 +72,36 @@ impl CancelToken {
         }
     }
 
+    /// A child whose regex budget ends at `deadline`, already started:
+    /// for passes over a lease taken by an earlier request (its facets,
+    /// its recovery counts), which spend what's left of the search's
+    /// budget, never a fresh one (S8-11).
+    pub fn regex_scope_until(&self, deadline: Instant) -> CancelToken {
+        CancelToken {
+            inner: Arc::new(Inner {
+                regex: Some(OnceLock::from(deadline)),
+                parent: Some(self.clone()),
+                ..Inner::default()
+            }),
+        }
+    }
+
     /// The deadline every `/…/` clause compiled under this token's scope
     /// verifies against: `budget` from the first call in the scope (see
     /// the module docs). Later calls get the same instant, whatever
     /// `budget` they pass.
     pub fn regex_deadline(&self, budget: Duration) -> Instant {
         let mut chain = std::iter::successors(Some(self), |t| t.inner.parent.as_ref());
-        let slot = chain
-            .find_map(|t| t.inner.regex.as_ref())
-            .expect("every chain ends at a root, which is a scope");
-        *slot.get_or_init(|| {
+        let start = || {
             let now = Instant::now();
             now.checked_add(budget).unwrap_or(now)
-        })
+        };
+        // Every chain ends at a root, which is a scope; without one the
+        // budget would just start now.
+        match chain.find_map(|t| t.inner.regex.as_ref()) {
+            Some(slot) => *slot.get_or_init(start),
+            None => start(),
+        }
     }
 
     /// A child that also stops after `budget`, or when this token does.

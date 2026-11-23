@@ -458,6 +458,7 @@ mod tests {
             sample_rate: None,
             unavailable: Vec::new(),
             matches: 10,
+            partial: false,
         }
     }
 

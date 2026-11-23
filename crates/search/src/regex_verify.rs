@@ -56,21 +56,22 @@ use crate::regex::{Pattern, Plan};
 /// the clauses not done are partial.
 pub const VERIFY_BUDGET: Duration = Duration::from_secs(2);
 /// The budget a search's first regex compile starts
-/// ([`VERIFY_BUDGET`]; unit tests may set a shorter one on their thread,
-/// [`BUDGET`]).
+/// ([`VERIFY_BUDGET`], or a shorter one tests set on their thread with
+/// [`set_budget_on_this_thread`]).
 pub(crate) fn budget() -> Duration {
-    #[cfg(test)]
-    if let Some(b) = BUDGET.with(std::cell::Cell::get) {
-        return b;
-    }
-    VERIFY_BUDGET
+    BUDGET.with(std::cell::Cell::get).unwrap_or(VERIFY_BUDGET)
 }
 
-#[cfg(test)]
 thread_local! {
-    /// [`budget`] on this thread, when set.
-    pub(crate) static BUDGET: std::cell::Cell<Option<Duration>> =
-        const { std::cell::Cell::new(None) };
+    static BUDGET: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+}
+
+/// For tests, here and in the crates that percolate (`lodestar`): the
+/// budget searches compiled on this thread start, `None` for
+/// [`VERIFY_BUDGET`]. A `Duration::ZERO` makes every verify stop.
+#[doc(hidden)]
+pub fn set_budget_on_this_thread(budget: Option<Duration>) {
+    BUDGET.with(|b| b.set(budget));
 }
 
 /// `regex`'s compiled-program limit, its default spelled out: the planner's
@@ -178,18 +179,26 @@ enum Matches {
 }
 
 impl Matches {
-    fn of(ids: Vec<DocId>, max_doc: DocId) -> Matches {
-        let dense = (max_doc as usize).div_ceil(64) * 8;
-        if ids.len() * 4 > dense {
-            let mut set = BitSet::with_max_value(max_doc);
-            for id in ids {
-                set.insert(id);
+    /// Adds `doc` (ascending, below `max_doc`), switching to a bitset
+    /// once the ids would take more room than one.
+    fn insert(&mut self, doc: DocId, max_doc: DocId) {
+        match self {
+            Matches::Sparse(ids) => {
+                let dense = (max_doc as usize).div_ceil(64) * 8;
+                if (ids.len() + 1) * 4 > dense {
+                    let mut set = BitSet::with_max_value(max_doc);
+                    for id in ids.iter() {
+                        set.insert(*id);
+                    }
+                    set.insert(doc);
+                    *self = Matches::Dense(set);
+                } else {
+                    ids.push(doc);
+                }
             }
-            Matches::Dense(set)
-        } else {
-            let mut ids = ids;
-            ids.shrink_to_fit();
-            Matches::Sparse(ids)
+            Matches::Dense(set) => {
+                set.insert(doc);
+            }
         }
     }
 
@@ -373,16 +382,18 @@ impl RegexQuery {
         cancel: Option<&CancelToken>,
     ) -> tantivy::Result<Matches> {
         let max = reader.max_doc();
-        let mut ids: Vec<DocId> = Vec::new();
         let Some(re) = &prepared.verifier else {
-            return Ok(Matches::Sparse(ids));
+            return Ok(Matches::Sparse(Vec::new()));
         };
         if self.out_of_time(cancel) {
             self.stop();
-            return Ok(Matches::Sparse(ids));
+            return Ok(Matches::Sparse(Vec::new()));
         }
         let store = reader.get_store_reader(STORE_BLOCKS)?;
         let alive = reader.alive_bitset();
+        // Ids until they'd outgrow a bitset, then the bitset: never more
+        // than the smaller of the two while verifying, either.
+        let mut found = Matches::Sparse(Vec::new());
         let mut n = 0u32;
         let mut check = |doc: DocId| -> tantivy::Result<bool> {
             n += 1;
@@ -398,7 +409,7 @@ impl RegexQuery {
                 .and_then(|v| v.as_str())
                 .is_some_and(|name| re.is_match(name))
             {
-                ids.push(doc);
+                found.insert(doc, max);
             }
             Ok(true)
         };
@@ -421,7 +432,10 @@ impl RegexQuery {
                 }
             }
         }
-        Ok(Matches::of(ids, max))
+        if let Matches::Sparse(ids) = &mut found {
+            ids.shrink_to_fit();
+        }
+        Ok(found)
     }
 
     /// Verifies every segment of `searcher` not done yet, under `cancel`.

@@ -521,6 +521,11 @@ pub struct Facets {
     pub unavailable: Vec<String>,
     /// Matches the shared pass counted (scaled when sampled).
     pub matches: u64,
+    /// A `/…/` clause of the shared pass stopped at the search's regex
+    /// budget (RX-1): `matches` and the histograms are what was verified
+    /// in time (the histograms say `approx` too). Each facet says so for
+    /// its own pass ([`TermCounts::partial`]).
+    pub partial: bool,
 }
 
 impl Facets {
@@ -613,6 +618,9 @@ pub fn facets(
     cancel: &CancelToken,
 ) -> Result<Facets> {
     cancel.check()?;
+    // Variants verify under what's left of the search's regex budget.
+    let scoped = lease.regex_token(cancel);
+    let cancel = &scoped;
     let index = lease.index();
     let missing = index.missing_fields();
     let lacks = |names: &[String]| names.iter().any(|n| missing.contains(n));
@@ -790,7 +798,11 @@ pub fn facets(
     let histograms = base
         .histos
         .iter()
-        .map(|h| (*h, histogram(*h, shared_tally, params.first_run)))
+        .map(|h| {
+            let mut g = histogram(*h, shared_tally, params.first_run);
+            g.approx |= stopped[0];
+            (*h, g)
+        })
         .collect();
     Ok(Facets {
         terms,
@@ -798,6 +810,7 @@ pub fn facets(
         sample_rate,
         unavailable,
         matches: shared_tally.docs.round() as u64,
+        partial: stopped[0],
     })
 }
 

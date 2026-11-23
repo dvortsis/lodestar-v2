@@ -63,6 +63,10 @@ pub struct Lease {
     utc_offset: i32,
     /// What its `/…/` clauses keep ([`crate::regex_verify::retained_bytes`]).
     regex_bytes: usize,
+    /// The search's regex deadline, when it has a `/…/` clause: later
+    /// passes over the lease spend what's left of it
+    /// ([`Lease::regex_token`]).
+    regex_deadline: Option<Instant>,
 }
 
 impl std::fmt::Debug for Lease {
@@ -163,6 +167,10 @@ impl Lease {
         // Only the verified matches stay (S8-10).
         crate::regex_verify::release(compiled.query.as_ref());
         let regex_bytes = crate::regex_verify::retained_bytes(compiled.query.as_ref());
+        // The one `compile_at` started.
+        let regex_deadline = node
+            .has_regex()
+            .then(|| cancel.regex_deadline(crate::regex_verify::budget()));
         let sort = if index.sort_available(sort) {
             sort
         } else {
@@ -180,6 +188,7 @@ impl Lease {
             now,
             utc_offset,
             regex_bytes,
+            regex_deadline,
         })
     }
 
@@ -199,6 +208,7 @@ impl Lease {
             now: 0,
             utc_offset: 0,
             regex_bytes: 0,
+            regex_deadline: None,
         }
     }
 
@@ -217,6 +227,17 @@ impl Lease {
     /// it against [`LeaseConfig::max_regex_bytes`].
     pub fn regex_bytes(&self) -> usize {
         self.regex_bytes
+    }
+
+    /// `cancel` for a pass over this lease that compiles its own `/…/`
+    /// clauses (facet variants, recovery counts): it spends what's left
+    /// of the search's regex budget, never a fresh one, whichever
+    /// request asks (S8-11).
+    pub(crate) fn regex_token(&self, cancel: &CancelToken) -> CancelToken {
+        match self.regex_deadline {
+            Some(d) => cancel.regex_scope_until(d),
+            None => cancel.clone(),
+        }
     }
 
     /// Whether a `/…/` clause stopped before verifying the snapshot: every
