@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-23T03:39:07Z",
+  "updated_at": "2026-11-23T06:38:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-23T03:39:07Z",
+  "last_heartbeat": "2026-11-23T06:38:42Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10684,7 +10684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T04:57Z",
+    "updated": "2026-11-23T06:38:42Z",
     "items": [
       {
         "slot": 1,
@@ -10693,14 +10693,14 @@
         "agent": "session_01MMjhnCtuh4cDvCQfwQaNEM",
         "model": "opus",
         "since": "2026-11-23T02:34:31Z",
-        "doing": "A-window rebuild + screen (runner call 04:50Z)"
+        "doing": "#1091 accepted 294763bd; CI then merge"
       },
       {
         "slot": 2,
         "slice": "X-detail-depth-compare",
         "role": "build",
         "agent": "session_01MMjhn9cZMDErsMAqoMyqqR",
-        "doing": "go 04:55Z; building",
+        "doing": "#1094 accepted 2835eeb9; CI then merge",
         "since": "2026-11-23T04:51Z",
         "model": "sonnet"
       },
@@ -10711,7 +10711,7 @@
         "agent": "session_01MMjhn97dJhp7ywVm6pLZy2",
         "model": "opus",
         "since": "2026-11-23T04:05:10Z",
-        "doing": "go (remembered decision, presence never changes while rows painted); building"
+        "doing": "#1093 accepted c746790c; CI then merge"
       },
       {
         "slot": 4,
@@ -10719,7 +10719,7 @@
         "role": "core",
         "agent": "session_01MMjhn9y8N1rkWqdWauxiMt",
         "model": "opus",
-        "doing": "step 0",
+        "doing": "#1095 ready 6d0dabe2; fresh review running",
         "since": "2026-11-23T04:57Z"
       }
     ],
@@ -10825,7 +10825,7 @@
       "effect": "AWS stop = 90% of the lower of $130.56 and $133.72 = $117.50 of new AWS spend from 2026-11-23T00:31Z (r15 rule; conservative: spend since 00:31Z already counts against it). Replaces the interim $100 stop."
     }
   ],
-  "heartbeat": "2026-11-23T03:39:07Z",
+  "heartbeat": "2026-11-23T06:38:42Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "build_slices": true,
