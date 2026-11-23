@@ -10663,7 +10663,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T02:49:41Z",
+    "updated": "2026-11-23T02:54:06Z",
     "items": [
       {
         "slot": 1,
@@ -10690,7 +10690,7 @@
         "agent": "session_01MMjhnBgVHySe1NFVBPiukH",
         "model": "sonnet",
         "since": "2026-11-23T02:49:41Z",
-        "doing": "step 0 (brief 266163db); #1086 X-narrow-states-2 merged 85d0a8cb, that session archived"
+        "doing": "go 02:5xZ (BAAB mode, analyze_cr --design/--aa, fleet A/A via purpose aa; vm-status.sh + rules.py added to owns); building"
       },
       {
         "slot": 4,
@@ -11607,7 +11607,6 @@
       "ENR-13b": "ENR-terms-api merged",
       "GS-4": "X-detail-depth PR 1 and its Compare PR 2 merged",
       "X-cmp-egress-ui": "X-gluetun-hostfile-ui merged",
-      "X-detail-attributes": "X-detail-depth (#1081) merged",
       "X-size-own-modules": ".size-limit.mjs handed to it by the runner (after X-detail-depth, then X-shell-home)",
       "X-capacity-rejection-source": "CR-SOFT-TIMEOUT merged (both own actor.rs, mod.rs, metrics.rs, docs/metrics.md)",
       "X-sampler-streak-metrics": "CR-SOFT-TIMEOUT merged (both own crates/lodestar/src/metrics.rs and docs/metrics.md)"
