@@ -10814,8 +10814,15 @@
       "at": "2026-11-23T06:21Z",
       "source": "owner, runner chat",
       "text": "$154.86",
-      "meaning": "remaining AWS credit balance read from Billing -> Credits, answering the runner (X-test-vm could not read it: Cost Explorer only)",
-      "effect": "AWS stop = 90% of the lower of $154.86 and $133.72 = $120.35 of new AWS spend from 2026-11-23T00:31Z (r15 rule). Replaces the interim $100 stop."
+      "meaning": "the Claude API credit balance (owner correction at 2026-11-23T06:23Z); the runner first misread it as the AWS balance",
+      "effect": "none on AWS; Claude API credit remaining $154.86 (API lane budget)"
+    },
+    {
+      "at": "2026-11-23T06:23Z",
+      "source": "owner, runner chat",
+      "text": "I gave you the claude api balance. The AWS balance is $130.56",
+      "meaning": "remaining AWS credit balance $130.56",
+      "effect": "AWS stop = 90% of the lower of $130.56 and $133.72 = $117.50 of new AWS spend from 2026-11-23T00:31Z (r15 rule; conservative: spend since 00:31Z already counts against it). Replaces the interim $100 stop."
     }
   ],
   "heartbeat": "2026-11-23T03:39:07Z",
