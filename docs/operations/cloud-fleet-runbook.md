@@ -240,7 +240,7 @@ An **A/A block** runs the stage's **control in both arms**: the treatment's swit
     --block s1.json s2.json s3.json s4.json --design abba
   ```
   - The report says `"analysis": "noise_floor"`, with the fit under `noise_floor`, not `fit`.
-  - Each block's four segments must have identical switches (`aa_switches_differ` otherwise).
+  - Each block's four segments must have identical switches (`aa_switches_differ` otherwise), with the treatment off (`aa_treatment_on` otherwise).
   - `gate` and `checkpoint1` refuse such a report.
 
 ### 3.4 `/fleet run arm-switch <vm>`, after each segment
@@ -260,7 +260,7 @@ An **A/A block** runs the stage's **control in both arms**: the treatment's swit
   - A `failed:` list names what isn't so; `lodestar_running` between segments is normal.
   - No `block_segment` means no block is recorded.
   - **During a block** it also reports `block_intact`, `host_guard_drops <n>` and `block_mode_<mode> 1`:
-    - `block_mode_abba` or `block_mode_on` is the block's mode (`on` is an on-only block, §3.3.2). It comes from the same reader `arm-switch` and `copy-off` use.
+    - `block_mode_abba`, `block_mode_baab` or `block_mode_on` is the block's mode (`baab` is a BAAB block, §3.3.3; `on` is an on-only block, §3.3.2; an A/A block reports its order, §3.3.4). It comes from the same reader `arm-switch` and `copy-off` use.
     - `block_mode_unknown` means the block's record (`block.env`) is missing or damaged. `arm-switch` and `copy-off` will refuse it. Don't start more work on that VM, and follow §3.3's steps for a block that can't be ended: run `copy-off`, and if it answers `failed: evidence_present, copy_off` or `failed: block_env`, escalate to the owner for cleanup.
     - `failed: block_intact` means the guard couldn't be put back. gluetun was stopped on purpose and the block is damaged. Run `copy-off`.
   - **`failed: boot_guard_held`** means the VM rebooted mid-block and the guard couldn't be held at boot. Docker is kept down on purpose, so `docker_up` fails too and no container runs, gluetun and Lodestar included. The VM itself is still on the internet (that's how this step reaches it). Anything that starts Docker again runs the same check first. That VM's block and its evidence are lost, because copy-off needs Docker: tear the fleet down.

@@ -958,6 +958,12 @@ class DesignTests(unittest.TestCase):
         bad[0][1]["verdict"] = "invalid"
         judged = analyze_cr.judge_block(bad[0], "utp", design="abba", aa=True)
         self.assertEqual(judged["problems"], ["segment_invalid"])
+        # Both arms must be the control: an all-on block isn't an A/A of the control.
+        on = block("BBBB", [100, 103, 98, 101])
+        self.assertEqual(analyze_cr.judge_block(on, "utp", design="abba", aa=True)["problems"], ["aa_treatment_on"])
+        # A low B-labelled mean is noise, never a loss.
+        low = self.aa_blocks(means=((100, 0.0001, 98, 101),))[0]
+        self.assertFalse(analyze_cr.judge_block(low, "utp", design="abba", aa=True)["loss_without_fit"])
 
     def test_design_arguments_are_checked(self):
         blocks = self.aa_blocks()

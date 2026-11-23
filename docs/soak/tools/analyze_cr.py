@@ -1183,6 +1183,8 @@ def judge_block(reports, treatment, winners=None, design=None, aa=False):
     if aa:  # X-fleet-baab: both arms ran the same switches, so the arms are the recorded labels
         if len({frozenset(k for k, v in s["switches"].items() if v) for s in segs}) != 1:
             problems.append("aa_switches_differ")
+        if any(s["switches"].get(x) for s in segs for x in own):  # both arms are the control
+            problems.append("aa_treatment_on")
         arms = DESIGNS[design]
     else:
         if "?" in arms:
@@ -1223,7 +1225,7 @@ def judge_block(reports, treatment, winners=None, design=None, aa=False):
     a_means = [s["net"] for s, arm in zip(segs, arms) if arm == "A" and s["verdict"] == "valid"]
     if any(m is None or m <= 0 for m in a_means):
         problems.append("control_did_not_crawl")
-    loss = (not problems and all(m > 0 for m in a_means)
+    loss = (not aa and not problems and all(m > 0 for m in a_means)  # an A/A block never shows a loss
             and any(s["verdict"] == "valid" and s["net"] is not None and s["net"] <= 0
                     for s, arm in zip(segs, arms) if arm == "B"))
     return {"valid": not problems, "problems": sorted(set(problems)), "order": arms, "loss_without_fit": loss,

@@ -2,7 +2,7 @@
 
 CR-SPEC, as amended by r5.1 (`docs/build-plan.md` §0.5), runs every treatment as balanced blocks: ABBA, then BAAB. Until now the fleet tooling could only run ABBA, and `analyze_cr.py` couldn't analyse an A/A run. The runner approved the design at step 0 (message of 2026-11-23Z). The A/A block is the runner's call (§2.26), flagged to the owner, who can veto it (§2.19).
 
-- **BAAB is a block mode (`MODE=baab`).** It runs treatment, control, control, treatment. It's valid wherever ABBA is, stacked stages included (the control is the winners, r5.1 A2). On-only keeps its rules. The rules file takes `"mode": "baab"`. `rules.py` stays closed: only the enum values and `args()` changed.
+- **BAAB is a block mode (`MODE=baab`).** It runs treatment, control, control, treatment. It's valid wherever ABBA is, stacked stages included (the control is the winners, r5.1 A2). On-only keeps its rules. The rules file takes `"mode": "baab"`. `rules.py` stays closed: the enum values, `args()` and `_mode_ok` (which admits `purpose` aa with abba or baab only) changed.
 - **The order is recorded in `block.env`'s `MODE` line, and ABBA is its absence.** `MODE=abba` is never written, so an ABBA block's `block.env`, and its start-block arguments, are byte-identical to before. A block from before this change, with no `MODE` line, reads as ABBA. `load_block_env` accepts `MODE` on or baab only.
 - **One arm function per language.** In the shell it's block-lib.sh `arm_of`, which arm_env, arm-switch and start-block all go through. In Python it's `scrub.arm_of`, which mirrors it, because copy-off mounts `scrub.py` alone into its container. `analyze_cr.DESIGNS` gives the same orders as arm letters. A test (`BaabAndAA.test_one_order_for_every_reader`) checks the three agree for every mode and segment. `vm-status.sh` prints the validated `MODE` (`block_mode_baab`). No other reader in `infra/fleet` or `docs/soak/tools` assumed ABBA.
 - **An A/A block is `PURPOSE=aa`, with ABBA or BAAB (runner, §2.26; flagged §2.19).**
@@ -14,7 +14,7 @@ CR-SPEC, as amended by r5.1 (`docs/build-plan.md` §0.5), runs every treatment a
 - **`analyze_cr.py effect` takes the recorded design.**
   - `--design abba|baab` is repeatable, one per `--block`.
   - A block whose switch-derived order differs from its design is invalid: `order_differs_from_design`.
-  - `--aa`, which needs `--design`, labels the run A/A. Each block's four segments must have identical switches (`aa_switches_differ`), and the arms are the design labels.
+  - `--aa`, which needs `--design`, labels the run A/A. Each block's four segments must have identical switches (`aa_switches_differ`) with the treatment's own switches off (`aa_treatment_on`), and the arms are the design labels. An A/A block never sets `loss_without_fit`.
   - Every other block check still applies. Rule 6.2's `fit_effect` runs unchanged on those labels.
   - The result is reported as `"analysis": "noise_floor"`, `"outcome": "noise_floor"`, `"decided": false`, with the fit under `noise_floor`. There's never a `fit` key and never a win, loss or no-effect outcome.
   - One valid block is enough (df 1); A/A blocks needn't come in ABBA/BAAB pairs.
