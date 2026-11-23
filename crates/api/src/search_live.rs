@@ -1266,6 +1266,37 @@ mod tests {
         assert_eq!(wait(&l).1, step * 8);
     }
 
+    /// Export (and Torznab) refuse a lease whose `/…/` term ran out of
+    /// time, rather than serve what was checked in time as the whole.
+    #[test]
+    fn a_stopped_regex_lease_is_refused_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = corpus(dir.path());
+        let index = std::sync::Arc::new(SearchIndex::in_memory().unwrap());
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+        let lease = |token: &CancelToken| {
+            lodestar_search::Lease::new(
+                index.clone(),
+                &q("/movie/"),
+                0,
+                lodestar_search::Sort::Relevance,
+                token,
+            )
+            .unwrap()
+        };
+        assert!(crate::export::whole(lease(&CancelToken::new())).is_ok());
+        let spent = CancelToken::new();
+        spent.regex_deadline(Duration::ZERO);
+        let e = crate::export::whole(lease(&spent)).err().unwrap();
+        assert_eq!(e.code(), "regex_stopped");
+        assert_eq!(
+            e.body()["error"]["message"],
+            "This search took too long to check every /regex/ match. Narrow it and try again."
+        );
+    }
+
     // The endpoints.
 
     struct Http {

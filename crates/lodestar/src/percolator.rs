@@ -253,13 +253,23 @@ pub fn run_once(
     now: i64,
     seen: &mut Seen,
 ) -> Result<Run, BoxError> {
-    if !seen.regex_backoff.is_empty() || !seen.regex_warned.is_empty() {
-        let regex: HashSet<i64> = store
-            .percolation_due(i64::MAX)?
-            .iter()
-            .filter(|s| serde_json::from_str::<Node>(&s.ast).is_ok_and(|n| n.has_regex()))
-            .map(|s| s.id)
-            .collect();
+    // Only the searches it holds a wait or warning for are looked up.
+    let held: HashSet<i64> = seen
+        .regex_backoff
+        .keys()
+        .chain(seen.regex_warned.keys())
+        .copied()
+        .collect();
+    if !held.is_empty() {
+        let mut regex = HashSet::new();
+        for id in held {
+            let still = store.saved_search(id)?.is_some_and(|s| {
+                !s.paused && serde_json::from_str::<Node>(&s.ast).is_ok_and(|n| n.has_regex())
+            });
+            if still {
+                regex.insert(id);
+            }
+        }
         seen.prune_regex(&regex);
     }
     let mut due = store.percolation_due(through)?;

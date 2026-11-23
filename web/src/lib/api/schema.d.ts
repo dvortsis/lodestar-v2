@@ -13723,6 +13723,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            /** @description `regex_stopped`: a `/…/` term ran out of its time budget, so the file would be incomplete. Narrow the search and try again. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description `too_many_jobs`: four jobs are running or paused. */
             429: {
                 headers: {
@@ -13794,6 +13803,15 @@ export interface operations {
             };
             /** @description `collection_not_found`. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `regex_stopped`: a `/…/` term ran out of its time budget, so the file would be incomplete. Narrow the search and try again. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

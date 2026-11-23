@@ -657,6 +657,19 @@ fn lex(q: &str) -> Result<Vec<Spanned>, ParseError> {
                     end += 1;
                 }
                 let word = &q[i..end];
+                // Field names are lowercase; `Name:/x/` would otherwise
+                // search for the word "Name:/x/" while looking like a
+                // pattern.
+                if word
+                    .get(..REGEX_FIELD.len())
+                    .is_some_and(|p| p.eq_ignore_ascii_case(REGEX_FIELD) && p != REGEX_FIELD)
+                {
+                    return err(
+                        "write name:/…/ in lowercase for a /regex/",
+                        start,
+                        start + REGEX_FIELD.len() - 1,
+                    );
+                }
                 let lex = match word {
                     "OR" => Lex::Or,
                     "AND" => Lex::And,
@@ -1923,6 +1936,10 @@ impl Node {
                 let _ = write!(out, "{}{word}", text_field(*field));
             }
             // `/` escaped again, as the lexer reads it.
+            // The parser never yields a pattern ending in an unpaired `\`
+            // (it would escape the closing `/`), and compile refuses one,
+            // so a stored node holding one is the only text that doesn't
+            // round-trip.
             Node::Regex { pattern } => {
                 out.push('/');
                 let mut escaped = false;

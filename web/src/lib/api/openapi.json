@@ -3134,6 +3134,16 @@
               }
             }
           },
+          "422": {
+            "description": "`regex_stopped`: a `/…/` term ran out of its time budget, so the file would be incomplete. Narrow the search and try again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "`too_many_jobs`: four jobs are running or paused.",
             "content": {
@@ -3245,6 +3255,16 @@
           },
           "404": {
             "description": "`collection_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`regex_stopped`: a `/…/` term ran out of its time budget, so the file would be incomplete. Narrow the search and try again.",
             "content": {
               "application/json": {
                 "schema": {

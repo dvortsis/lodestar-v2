@@ -282,6 +282,13 @@ fn slashes_delimit_a_regex_only_where_a_pattern_can_start_and_end() {
         assert!(!n.has_regex(), "{q}");
         assert_eq!(parse(&n.to_query()).unwrap(), n, "{q}");
     }
+    // `name:` is lowercase, like every field: another case is an error,
+    // not a silent word search.
+    for q in ["Name:/x/", "NAME:/x/ y"] {
+        let e = parse(q).unwrap_err();
+        assert!(e.message.contains("lowercase"), "{q}: {e}");
+    }
+    assert!(parse("Name:x").is_ok(), "a plain word, as `Title:x` is");
     // Still an error when it delimits one but is empty.
     assert!(parse("// x").unwrap_err().message.contains("empty"));
     // `file:(…)` is looked inside, though the parser refuses one there.

@@ -40,8 +40,8 @@ use std::time::{Duration, Instant};
 use ::regex::{Regex, RegexBuilder};
 use tantivy::index::SegmentId;
 use tantivy::query::{
-    BitSetDocSet, BooleanQuery, ConstScorer, EmptyScorer, EnableScoring, Explanation, Occur, Query,
-    Scorer, TermQuery, Weight,
+    BooleanQuery, ConstScorer, EmptyScorer, EnableScoring, Explanation, Occur, Query, Scorer,
+    TermQuery, Weight,
 };
 use tantivy::schema::{Field, IndexRecordOption, Value};
 use tantivy::{
@@ -572,6 +572,95 @@ impl DocSet for IdsDocSet {
     }
 }
 
+/// A segment's dense matches as a doc set, reading the shared bitset a
+/// 64-document bucket at a time.
+struct DenseDocSet {
+    matches: Arc<Matches>,
+    bucket: u32,
+    /// The current bucket's documents not yet visited.
+    rest: u64,
+    doc: DocId,
+}
+
+impl DenseDocSet {
+    fn new(matches: Arc<Matches>) -> DenseDocSet {
+        let mut d = DenseDocSet {
+            matches,
+            bucket: 0,
+            rest: 0,
+            doc: TERMINATED,
+        };
+        d.from_bucket(0);
+        d
+    }
+
+    fn bits(&self) -> Option<&BitSet> {
+        match &*self.matches {
+            Matches::Dense(bits) => Some(bits),
+            Matches::Sparse(_) => None,
+        }
+    }
+
+    /// Moves to the first document in bucket `from` or later.
+    fn from_bucket(&mut self, from: u32) {
+        let next = self.bits().and_then(|bits| {
+            let buckets = bits.max_value().div_ceil(64);
+            if from >= buckets {
+                return None;
+            }
+            let b = bits.first_non_empty_bucket(from)?;
+            Some((b, u64::from_le_bytes(bits.tinyset(b).into_bytes())))
+        });
+        match next {
+            Some((b, set)) => {
+                self.bucket = b;
+                self.rest = set;
+                self.pop();
+            }
+            None => self.doc = TERMINATED,
+        }
+    }
+
+    /// The lowest document left in the current bucket, else the next.
+    fn pop(&mut self) {
+        if self.rest == 0 {
+            self.from_bucket(self.bucket + 1);
+            return;
+        }
+        let low = self.rest.trailing_zeros();
+        self.rest &= self.rest - 1;
+        self.doc = self.bucket * 64 + low;
+    }
+}
+
+impl DocSet for DenseDocSet {
+    fn advance(&mut self) -> DocId {
+        if self.doc != TERMINATED {
+            self.pop();
+        }
+        self.doc
+    }
+
+    fn seek(&mut self, target: DocId) -> DocId {
+        if self.doc != TERMINATED && self.doc < target && target / 64 > self.bucket {
+            self.from_bucket(target / 64);
+        }
+        while self.doc < target {
+            self.advance();
+        }
+        self.doc
+    }
+
+    fn doc(&self) -> DocId {
+        self.doc
+    }
+
+    fn size_hint(&self) -> u32 {
+        self.bits()
+            .map_or(0, |b| u32::try_from(b.len()).unwrap_or(u32::MAX))
+    }
+}
+
 impl Weight for RegexWeight {
     fn scorer(&self, reader: &SegmentReader, boost: Score) -> tantivy::Result<Box<dyn Scorer>> {
         // A pass that didn't seal: verified now, under the deadline only.
@@ -585,10 +674,8 @@ impl Weight for RegexWeight {
             return Ok(Box::new(EmptyScorer));
         }
         Ok(match &*set {
-            Matches::Dense(bits) => Box::new(ConstScorer::new(
-                BitSetDocSet::from(BitSet::clone(bits)),
-                boost,
-            )),
+            // Shared, not cloned: a lease's every page reads it.
+            Matches::Dense(_) => Box::new(ConstScorer::new(DenseDocSet::new(set.clone()), boost)),
             Matches::Sparse(_) => Box::new(ConstScorer::new(
                 IdsDocSet {
                     matches: set.clone(),
@@ -826,6 +913,38 @@ mod tests {
                 .unwrap()
                 .stopped()
         );
+    }
+
+    /// The shared dense doc set walks and seeks exactly the bitset's
+    /// documents.
+    #[test]
+    fn a_dense_doc_set_reads_the_shared_bitset() {
+        let max = 1000;
+        let ids: Vec<DocId> = (0..max).filter(|d| d % 3 == 0 || *d == 999).collect();
+        let mut m = Matches::Sparse(Vec::new());
+        for id in &ids {
+            m.insert(*id, max);
+        }
+        assert!(matches!(m, Matches::Dense(_)));
+        let m = Arc::new(m);
+        let mut d = DenseDocSet::new(m.clone());
+        let mut got = Vec::new();
+        while d.doc() != TERMINATED {
+            got.push(d.doc());
+            d.advance();
+        }
+        assert_eq!(got, ids);
+        for target in [0, 1, 64, 65, 500, 998, 999, 1000] {
+            let mut d = DenseDocSet::new(m.clone());
+            let want = ids
+                .iter()
+                .copied()
+                .find(|&i| i >= target)
+                .unwrap_or(TERMINATED);
+            assert_eq!(d.seek(target), want, "seek {target}");
+        }
+        let empty = Arc::new(Matches::Dense(BitSet::with_max_value(max)));
+        assert_eq!(DenseDocSet::new(empty).doc(), TERMINATED);
     }
 
     #[test]
