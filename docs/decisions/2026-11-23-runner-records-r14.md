@@ -21,12 +21,13 @@ Each runner call is flagged to the owner, who can veto it (§2.19). Size calls a
      - stored per DHT query doesn't fall;
      - the memory bound holds.
      Stored per slot-second is no longer a condition for a change whose purpose is more slots, because each extra lookup reaches lower-value hashes by design. Per query (politeness) and memory are the bounds that protect the network and the host.
+     - **This loosens build-plan §0.5's screen for CR-1c only** (per query "doesn't fall" instead of "rises", per slot-second dropped). The owner accepted the recommendation that said so (00:26Z); this PR amends the plan's screen row to match, and it's flagged (§2.19). Every other switch keeps the standing rule: per slot-second and per query both rise.
   2. **New slice CR-SOFT-TIMEOUT** (core, Opus, `/security-review`). It is build-plan §0.5's "bounded soft timeout", built now rather than waiting for CR-5:
      - a lookup stops waiting on an unanswered DHT query sooner;
      - behind its own switch, off by default;
-     - screened in the calibrated CR-SIM scenario first.
+     - screened in the calibrated CR-SIM scenario first, under §0.5's standing rule (stored per slot-second and per query both rise), not item 32's CR-1c rule.
      It only shortens waits. It never lengthens one, never raises the rate or outstanding caps, and never loosens a bound against slow peers (those stay the owner's). It takes the next free build slot.
-  3. **The `ext:experiment-host` hold stands.** The box is down, and "soon" isn't "up". The hold lifts when the owner says the box is back.
+  3. **Experiment-host runs wait until the owner says the box is back.** The box is down, and "soon" isn't "up". The `experiment-host` condition stays met: it's the standing permission (§2.68), and only the box is missing.
   4. **Cloud first, provisional (below).**
 - **Cloud spend (runner's reading).**
   - The owner named the remaining credit, not a cloud. The conversation was about AWS, so the runner reads it as AWS: new AWS spend from 2026-11-23T00:31Z may use up to the stated $133.72.
@@ -34,6 +35,8 @@ Each runner call is flagged to the owner, who can veto it (§2.19). Size calls a
   - The runner may not read billing. So X-test-vm confirms the balance from billing before stage 1, and the lower figure wins if billing shows less.
   - X-test-vm sends a cost estimate before each stage. A stage that would cross the stop doesn't start.
   - This replaces §2.74's $100 AWS cap for these tests only. Linode's $100 and the fleet's $40 are unchanged.
+  - **If billing shows no AWS credit** (the owner may have meant another credit), §2.74's $100 AWS cap stands, no stage starts that would cross it, and the runner asks the owner.
+  - **What counts:** all AWS spend from 00:31Z counts against the new limit, including the remaining hours of the three lanes that started about 2026-11-22T21:20Z.
 
 ## Cloud-first provisional A/B (runner's design)
 - **Stage 1 runs in parallel, as independent treatments.**
@@ -48,11 +51,11 @@ Each runner call is flagged to the owner, who can veto it (§2.19). Size calls a
   - It uses one instance, plus an A/A instance only if stage 1's A/A showed a wide noise floor.
 - **Start:** stage 1 starts as soon as X-test-vm posts the balance and the estimate. It doesn't wait for the three lanes running now (ending about 2026-11-23T11:00Z), unless X-test-vm's concurrency limit or vCPU quota requires it.
 - **What the results count for:**
-  - They're provisional relative effects (B against A), with their intervals. They can drop or keep a switch.
+  - They're provisional relative effects (B against A), with their intervals. They choose the stacked control for the cloud's own CR-AB-LC. Like the cloud screen, they can stop a treatment only for a clear failure (a crash, a memory or disk bound, nothing stored, or a clear harm); every other stage 1 treatment still gets its host run.
   - They never count as the G-v06-crawler gain, which still comes from the experiment host.
   - Absolute rates aren't comparable: AWS ran at 8.16/min against CR-0's 12.3.
 - **When the host is back:** it takes CR-AB-ADM and CR-AB-4 as the runs of record. The cloud moves on to CR-AB-LC as soon as its own stage 1 reports.
-- **New slice X-host-ab-runsheet** (docs and infra, Sonnet, reviewed on Opus). It prepares the experiment host's stage 1 run sheet now, so the first block can start within hours of the owner's word:
+- **New slice X-host-ab-runsheet** (docs, Sonnet, reviewed on Opus; the earlier host runbooks were Opus, so a weak result is redone on Opus). It prepares the experiment host's stage 1 run sheet now, so the first block can start within hours of the owner's word:
   - CR-AB-ADM and CR-AB-4 under CR-SPEC's ABBA/BAAB design;
   - backup set to excluded;
   - §2.68's parity and backup pause, with a restore step that always runs;
@@ -137,7 +140,7 @@ Each runner call is flagged to the owner, who can veto it (§2.19). Size calls a
   - Logs uses a two-line row and wraps by default below 640 px, set by CSS before first paint. There's no `matchMedia` at mount, and layout shift is 0 at 390 px.
   - **The Discover tab strip** fades at its edges with tokens. Focus removes the fade (`:has(:focus-visible)`), and a focused tab scrolls into view. The sr-only cue is gone.
   - **Owns gain** `settings/logging/**` (the Verbosity wrap only).
-  - **A commit ran prettier over `docs/decisions/`** and rewrote 520 records. They were restored from the previous head in the same PR. X-narrow-states-2 says what ran it, and the runner decides whether a guard is needed.
+  - **A commit ran prettier over `docs/decisions/`** and rewrote 520 records. They were restored from the previous head in the same PR. X-narrow-states-2 says what ran it (in its step 0), and the runner decides whether a guard is needed.
   - **The contrast failure was mid-fade.** The e2e now waits until no animation is running (15 s deadline) before axe.
 
 ## Calls in running slices
@@ -194,18 +197,18 @@ Each runner call is flagged to the owner, who can veto it (§2.19). Size calls a
   - Discover hides `unavailable` when its reason is null.
   - **Deferred:** Newest's width jump becomes a requirement on whichever slice ships Rising, which decides the layout before paint.
 
-## Corrections
-- **r13 said "Search cards rises to 8.11 kB".** It didn't: X-search-toolbar's own permission classifier refused the edit, and the runner didn't route around it. Search cards stays at 8.01 kB. The raw name on cards waits for X-cards-raw-name.
-- **X-detail-depth's Settings raises** (r13's running-slice notes) were superseded the same evening, when the slice chose text-only menu items. The Settings entries are as on main.
-
 ## Size measurement
 - size-limit's `own()` credits a route by chunk partition. So a shared chunk moving between routes, or a renamed lazy chunk's hashed filename, moves a route's figure without its code changing (Compare +0.25 kB, Results +3 B).
 - **X-size-own-modules** measures a route by its module set and ignores hashed import specifiers. It runs once `web/.size-limit.mjs` is handed to it.
 
+## Follow-ups tracked in runner-state, not new slices
+- **The `?browse=1` layout shift** of 0.012–0.013 at 320–360 px, which predates X-search-toolbar (its decisions file names it a runner follow-up). Tracked in runner-state `followups`; it rides the next slice that owns the search layout.
+- **A back link on `/alerts`**, from X-detail-depth's step 0. Tracked in runner-state `followups`; it rides the next alerts slice.
+
 ## New slices
 - **Crawler (core, Opus):**
   - CR-SOFT-TIMEOUT (above);
-  - X-sampler-streak-metrics: export the sampler's failure, streak and known counters;
+  - X-sampler-streak-metrics: export the sampler's failure, streak and known-node counters;
   - X-capacity-rejection-source: label capacity rejections by source. On four lanes they were 3.8 to 6.1 M an hour, and they aren't fetch admission.
 - **Experiment host:** X-host-ab-runsheet (above).
 - **API (core, Opus):**
