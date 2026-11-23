@@ -9021,6 +9021,11 @@
       "id": "X-fleet-baab-tails",
       "note": "From #1089: an analyze_cr golden case for stacked and rehearsal blocks; a copy-off.sh run on a BAAB block; docs/soak/tools/linux/README.md to mention --design and --aa. Rides the next fleet or analyze_cr slice.",
       "added": "2026-11-23T03:45Z"
+    },
+    {
+      "id": "X-querybar-static-q",
+      "note": "A pasted /search?q= link shows an empty bar until the lazy Live editor mounts (hundreds of ms under load); write q into QueryBar's static bar at mount (+16 B, Search route at its 45 kB budget, so it must pay with a saving; handle q with a newline). From X-retry-typed-flake step 0 option B.",
+      "added": "2026-11-23T04:15Z"
     }
   ],
   "main_health": [
@@ -10673,7 +10678,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T04:05:35Z",
+    "updated": "2026-11-23T04:15:45Z",
     "items": [
       {
         "slot": 1,
@@ -10682,7 +10687,7 @@
         "agent": "session_01MMjhnCtuh4cDvCQfwQaNEM",
         "model": "sonnet",
         "since": "2026-11-23T02:34:31Z",
-        "doing": "#1091 ready 5c6bffbd; rv1091 review + security running"
+        "doing": "#1091 infra fix (collect.py SWITCH_ENV + compose pass-through, owns approved); rv1091 review running"
       },
       {
         "slot": 2,
@@ -10691,7 +10696,7 @@
         "agent": "session_01MMjhnCUfvFAhDBHWuB237x",
         "model": "opus",
         "since": "2026-11-22T23:21:00Z",
-        "doing": "#1085 bd2595a6 delta checked; CI watch then merge"
+        "doing": "#1085 merged-tree Search route 45.01/45: merging main + 13 B cut"
       },
       {
         "slot": 3,
@@ -10700,7 +10705,7 @@
         "agent": "session_01MMjhn97dJhp7ywVm6pLZy2",
         "model": "opus",
         "since": "2026-11-23T04:05:10Z",
-        "doing": "step 0 (brief 4e81d3e4); #1090 X-host-ab-runsheet merged a6ed7bc8, that session archived"
+        "doing": "go (remembered decision, presence never changes while rows painted); building"
       },
       {
         "slot": 4,
@@ -10709,7 +10714,7 @@
         "agent": "session_01MMjhn8bBUtJUmZftUciuWc",
         "model": "opus",
         "since": "2026-11-23T04:03:50Z",
-        "doing": "step 0 (brief e9807b2a); #1088 X-shell-home merged 1cec2e30, that session archived"
+        "doing": "go (option A: failSearch waits for the editor; focused Live-held test); building"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
