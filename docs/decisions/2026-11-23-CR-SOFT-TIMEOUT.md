@@ -39,6 +39,7 @@ CR-0's ledger shows a lookup holding its slot for about 24 s of the 25 s `LOOKUP
 - **When a leg ends with soft queries out** (on its closest set, its values, its deadline, a cancel or a shutdown), its soft queries aren't dropped as its other queries are.
   - They're re-tagged `Purpose::Detached` and stay against the outstanding cap until they're answered or time out.
   - A detached query no longer names its lookup id, so a late answer can't reach a later lookup that reuses the id.
+  - **It leaves its request's in-flight count as it's detached,** as a dropped query does. A request's family legs share its 3 lanes, so otherwise the other leg would lose a lane for good, and the query cap's end would never fire. The security review on this delta found this; `a_detached_query_frees_its_request_lane_for_the_other_leg` fails without the fix.
   - **A detached answer feeds no lookup,** but it's handled as any matched answer is: it updates the routing table, offers its nodes to the sampler, votes on our external address and marks the address as answering. A detached timeout marks the node failed in the routing table and counts in `dht_timeouts_total`.
   - **This makes the two arms unlike on timeouts.** With the switch off, a query that outlives its leg is dropped uncounted. With it on, a detached query that never answers counts as a timeout. So the timeout rate (CR-SIM's `unanswered` column, and the live rate) reads higher with the switch on.
   - **The query cap's end waits for every query in flight,** slow ones included, as with the switch off. So it detaches nothing.
@@ -113,6 +114,7 @@ Build-plan §0.5's standing rule: keep only if stored per slot-second and stored
   - a late KRPC error fails a slow query once;
   - refresh and scrape lookups never go soft;
   - a detached answer, and its repeat, never reach a lookup that reused its id;
+  - in a two-family request, a leg that ends with a soft query out gives that query's lane back, so the other leg has all three;
   - off allocates nothing.
 - **Property tests:**
   - **The bounds,** on a scripted network of 80 fast, late and silent nodes, with `dht.lookup_end` off and on, switch on and off:

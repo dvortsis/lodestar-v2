@@ -1019,3 +1019,45 @@ proptest! {
         })?;
     }
 }
+
+/// A two-family request: when one leg ends with a soft query out, that
+/// query leaves the request's shared in-flight count as it's detached, so
+/// the other leg gets all three lanes. The second family is a second IPv4
+/// socket, as in the ledger's two-family test.
+#[tokio::test(start_paused = true)]
+async fn a_detached_query_frees_its_request_lane_for_the_other_leg() {
+    let (mut a, mut s) = actor(true, false);
+    let second = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    second.set_nonblocking(true).unwrap();
+    s.push(SendSocket::Udp(second));
+    a.families.push(Family {
+        table: RoutingTable::new(a.ids[0], false),
+        ipv6: false,
+    });
+    // Family 1: five silent nodes, all far from the hash.
+    for i in 0..5u8 {
+        a.families[1].table.insert(
+            at(0xD0 + i, 0xD0 + i, 800 + u16::from(i)),
+            Contact::Response,
+            0,
+        );
+    }
+    let sem = Arc::new(Semaphore::new(1));
+    let close = spread(1, 8);
+    let _rx = far_request(&mut a, &s, &sem, &close);
+    assert_eq!(a.lookups.len(), 2, "two legs");
+    // Leg 0: every close node answers but the closest.
+    answer_all_but(&mut a, &s, &close[..1]);
+    tick(&mut a, &s, 1).await;
+    check(&a);
+    assert_eq!(detached(&a), 1, "leg 0 ended with its soft query out");
+    assert_eq!(a.lookups.len(), 1, "leg 1 still runs");
+    tick(&mut a, &s, 1).await;
+    check(&a);
+    let leg1 = a
+        .pending
+        .values()
+        .filter(|p| matches!(p.purpose, Purpose::Lookup(_)) && p.family == 1)
+        .count();
+    assert_eq!(leg1, ALPHA, "the other leg has all three lanes");
+}

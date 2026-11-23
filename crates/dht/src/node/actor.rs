@@ -2704,11 +2704,22 @@ impl Actor {
             .collect();
         for t in tids {
             // CR-SOFT-TIMEOUT: a soft-expired query stays out, against the
-            // outstanding cap, until it's answered or times out.
+            // outstanding cap, until it's answered or times out. It leaves
+            // its request's in-flight count now, as a dropped query does,
+            // so a request's other family leg keeps its lanes; detached, it
+            // never touches the request again.
             if self.soft_tids.contains(&t)
                 && let Some(p) = self.pending.get_mut(&t)
             {
                 p.purpose = Purpose::Detached;
+                if let Some(r) = self
+                    .lookups
+                    .get(&lid)
+                    .and_then(|l| l.owner)
+                    .and_then(|o| self.peer_requests.get_mut(&o))
+                {
+                    r.inflight = r.inflight.saturating_sub(1);
+                }
                 continue;
             }
             if self.take_pending(t).hinted {
