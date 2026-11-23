@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-23T00:38:45Z",
+  "updated_at": "2026-11-23T01:03:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11567,7 +11567,7 @@
     ]
   },
   "reserved_for_api_lane": {
-    "updated": "2026-11-22T22:01:44Z",
+    "updated": "2026-11-23T01:03:00Z",
     "by": "runner",
     "credit": "owner $200 Claude API credit, 2026-11-22",
     "max_open_prs": 2,
@@ -11604,17 +11604,12 @@
       "X-size-own-modules"
     ],
     "after": {
-      "ENR-terms-api": "#X-hit-resolution merged (torrents.rs)",
       "ENR-13b": "ENR-terms-api merged",
-      "X-alert-noun": "X-hit-resolution merged (search messages)",
       "GS-4": "X-detail-depth PR 1 and its Compare PR 2 merged",
       "X-cmp-egress-ui": "X-gluetun-hostfile-ui merged",
-      "X-insights-reconcile-test": "runner records r14 merged",
-      "X-sampler-streak-metrics": "r14",
-      "X-capacity-rejection-source": "r14",
-      "X-hidden-count": "r14",
-      "X-detail-attributes": "r14 and X-hit-resolution and X-detail-depth merged",
-      "X-size-own-modules": "r14 and .size-limit.mjs handed to it"
+      "X-detail-attributes": "X-detail-depth (#1081) merged",
+      "X-size-own-modules": ".size-limit.mjs handed to it by the runner (after X-detail-depth, then X-shell-home)",
+      "X-capacity-rejection-source": "never beside CR-SOFT-TIMEOUT (both own crates/dht/src/node/actor.rs and mod.rs); the runner says when it is free"
     }
   },
   "pause_history": [
