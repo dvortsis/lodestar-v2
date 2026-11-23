@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-23T22:29:52Z",
+  "updated_at": "2026-11-23T23:26:12Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10684,13 +10684,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T22:29:52Z",
+    "updated": "2026-11-23T23:26:12Z",
     "items": [
       {
         "slot": 1,
-        "status": "idle",
-        "doing": "freed: RX-1 merged as #1082; stays empty (owner 2026-11-23T06:09Z)",
-        "since": "2026-11-23T19:59:39Z"
+        "model": "opus",
+        "slice": "X-soft-key",
+        "role": "build",
+        "agent": "session_01MMjhnA5T7k66ekhtDJK66s (opus)",
+        "doing": "for X-test-vm: soft treatment key (block-lib, rules, collector, analyze_cr soft report)",
+        "since": "2026-11-23T23:26:12Z"
       },
       {
         "slot": 2,
