@@ -10689,10 +10689,10 @@
       {
         "slot": 1,
         "model": "opus",
-        "slice": "RX-1-fixes",
+        "slice": "RX-1",
         "role": "build",
         "agent": "session_01MMjhn911SUimiUBvzWMwkb (opus)",
-        "doing": "step 0: plan for the #1082 fixes (taken over from the API lane at its cost stop)",
+        "doing": "RX-1-fixes: the #1082 review fixes, taken over from the API lane at its cost stop",
         "since": "2026-11-23T08:31:45Z"
       },
       {
