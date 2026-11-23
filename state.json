@@ -10684,7 +10684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T06:49Z",
+    "updated": "2026-11-23T07:00:18Z",
     "items": [
       {
         "slot": 1,
@@ -10697,12 +10697,8 @@
       },
       {
         "slot": 2,
-        "slice": "X-detail-depth-compare",
-        "role": "build",
-        "agent": "session_01MMjhn9cZMDErsMAqoMyqqR",
-        "doing": "#1094 accepted 2835eeb9; CI then merge",
-        "since": "2026-11-23T04:51Z",
-        "model": "sonnet"
+        "model": "sonnet",
+        "status": "idle"
       },
       {
         "slot": 3,
