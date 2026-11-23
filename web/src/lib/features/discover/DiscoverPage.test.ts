@@ -410,14 +410,48 @@ describe('rows', () => {
 });
 
 describe('Rising and Recently resolved', () => {
-	it('words every unavailable section as a compact notice', async () => {
+	it('hides a section the server cannot build yet, with no shell and no "coming soon"', async () => {
 		mount();
-		const rising = await screen.findByTestId('discover-rising-unavailable');
-		expect(rising.textContent).toMatch(/enough seeder counts/);
-		expect(screen.getByTestId('discover-resolved-unavailable').textContent).toMatch(
-			/doesn't record when a torrent gets identified/
-		);
-		expect(rising.textContent).toMatch(/Not available/);
+		await screen.findByTestId('discover-newest-total');
+		expect(screen.queryByTestId('discover-rising')).toBeNull();
+		expect(screen.queryByTestId('discover-resolved')).toBeNull();
+		expect(screen.queryByText(/Not available|coming soon/i)).toBeNull();
+		expect(document.querySelector('.dsc-grid')?.classList.contains('dsc-solo')).toBe(true);
+	});
+
+	it('keeps the side column out while loading, so Newest does not change width', async () => {
+		mount();
+		expect(screen.queryByTestId('discover-rising')).toBeNull();
+		expect(document.querySelector('.dsc-side')).toBeNull();
+		await screen.findByTestId('discover-newest-total');
+		expect(document.querySelector('.dsc-side')).toBeNull();
+	});
+
+	it('hides every needs_* reason, one section at a time', async () => {
+		handler = () =>
+			response({
+				rising: group({ hits: [hit(21)] }),
+				recently_resolved: unavailable('needs_resolution_history')
+			});
+		mount();
+		await screen.findByTestId(`discover-rising-${hash(21)}`);
+		expect(screen.queryByTestId('discover-resolved')).toBeNull();
+		expect(document.querySelector('.dsc-grid')?.classList.contains('dsc-solo')).toBe(false);
+	});
+
+	it('hides an unavailable section that gives no reason, rather than showing an empty shell', async () => {
+		handler = () => response({ rising: group({ status: 'unavailable', hits: [], reason: null }) });
+		mount();
+		await screen.findByTestId('discover-newest-total');
+		expect(screen.queryByTestId('discover-rising')).toBeNull();
+		expect(screen.queryByText(/Not available/)).toBeNull();
+	});
+
+	it('keeps a short notice for a reason that is not about unbuilt data', async () => {
+		handler = () => response({ rising: unavailable('no_title') });
+		mount();
+		const notice = await screen.findByTestId('discover-rising-unavailable');
+		expect(notice.textContent).toMatch(/without a resolved title/);
 	});
 
 	it('offers the one next step when search is off', async () => {

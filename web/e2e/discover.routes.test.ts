@@ -172,7 +172,7 @@ test.describe('states', () => {
 		await expect(page.getByText(/Couldn't load Discover/)).toBeHidden();
 	});
 
-	test('Rising and Recently resolved: unavailable as notices, available as rows', async ({
+	test('Rising and Recently resolved: unbuilt ones are hidden, available as rows', async ({
 		page,
 		go,
 		mock
@@ -180,12 +180,9 @@ test.describe('states', () => {
 		mock.on('getSettings', showAdultSettings(false));
 		mock.on('getDiscover', discoverResponse());
 		await go('/discover');
-		await expect(page.getByTestId('discover-rising-unavailable')).toContainText(
-			'enough seeder counts'
-		);
-		await expect(page.getByTestId('discover-resolved-unavailable')).toContainText(
-			"doesn't record when a torrent gets identified"
-		);
+		await expect(page.getByTestId('discover-newest-total')).toBeVisible();
+		await expect(page.getByTestId('discover-rising')).toHaveCount(0);
+		await expect(page.getByTestId('discover-resolved')).toHaveCount(0);
 		mock.on(
 			'getDiscover',
 			discoverResponse({

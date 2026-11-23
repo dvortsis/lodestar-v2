@@ -52,20 +52,20 @@
 			{dominant}
 			testid="detail-compbar"
 		/>
-		<HBarList
-			label={m.composition()}
-			items={rows.map((r) => ({
-				key: r.group,
-				label: m.detail_group_files({
-					group: groupLabel(r.group),
-					files: formatCount(r.files, locale)
-				}),
-				value: r.bytes,
-				share: r.pct_bytes / 100,
-				color: GROUP_COLOR[r.group]
-			}))}
-			format={formatBytes}
-			testid="detail-groups"
-		/>
+		{#if rows.length > 1}<HBarList
+				label={m.composition()}
+				items={rows.map((r) => ({
+					key: r.group,
+					label: m.detail_group_files({
+						group: groupLabel(r.group),
+						files: formatCount(r.files, locale)
+					}),
+					value: r.bytes,
+					share: r.pct_bytes / 100,
+					color: GROUP_COLOR[r.group]
+				}))}
+				format={formatBytes}
+				testid="detail-groups"
+			/>{/if}
 	{/if}
 </div>

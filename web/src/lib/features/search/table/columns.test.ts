@@ -41,7 +41,7 @@ describe('column prefs', () => {
 		expect(p.order.slice(0, 2)).toEqual(['size', 'name']);
 		expect(new Set(p.order).size).toBe(p.order.length);
 		expect(p.order).toContain('discovered');
-		expect(p.hidden).toEqual(['files', 'raw']);
+		expect(p.hidden).toEqual(['files', 'raw', 'res']);
 	});
 
 	it('show the raw name by default, and keep a saved choice that predates it', () => {
@@ -52,6 +52,42 @@ describe('column prefs', () => {
 		});
 		expect(visible(old)).not.toContain('raw');
 		expect(visible(normalize({ order: ['name', 'raw', 'size'], hidden: [] }))).toContain('raw');
+	});
+
+	it('show the resolution by default, and keep a saved choice that predates it', () => {
+		expect(defaultPrefs().order).toEqual([
+			'name',
+			'raw',
+			'type',
+			'res',
+			'size',
+			'files',
+			'seeders',
+			'leechers',
+			'trackers',
+			'discovered'
+		]);
+		expect(visible(defaultPrefs())).toContain('res');
+		// Saved after Raw name, before Resolution: Raw name stays as chosen, Resolution arrives hidden.
+		const withRaw = normalize({
+			order: ['name', 'type', 'raw', 'size', 'files'],
+			hidden: ['raw']
+		});
+		expect(withRaw.order.slice(0, 5)).toEqual(['name', 'type', 'raw', 'size', 'files']);
+		expect(withRaw.order).toContain('res');
+		expect(withRaw.hidden).toEqual(['raw', 'res']);
+		const shownRaw = normalize({ order: ['name', 'raw', 'size'], hidden: [] });
+		expect(visible(shownRaw)).toContain('raw');
+		expect(visible(shownRaw)).not.toContain('res');
+		// Saved before both: both arrive hidden.
+		expect(normalize({ order: ['name', 'size'], hidden: [] }).hidden).toEqual(['raw', 'res']);
+		// A choice that knows the column keeps it, shown or hidden, and toggling it back works.
+		expect(visible(normalize({ order: ['name', 'res', 'raw'], hidden: [] }))).toContain('res');
+		const off = normalize({ order: ['name', 'res', 'raw'], hidden: ['res'] });
+		expect(visible(off)).not.toContain('res');
+		expect(visible(normalize(toggleColumn(off, 'res')))).toContain('res');
+		// No order stored at all reads as the defaults: shown.
+		expect(visible(normalize({ hidden: [] }))).toContain('res');
 	});
 
 	it('work when storage throws or is missing', () => {
@@ -70,7 +106,7 @@ describe('column prefs', () => {
 	it('toggle and move', () => {
 		expect(toggleColumn(defaultPrefs(), 'name')).toEqual(defaultPrefs());
 		const moved = moveColumn(defaultPrefs(), 'type', 1);
-		expect(moved.order.slice(2, 4)).toEqual(['size', 'type']);
+		expect(moved.order.slice(2, 4)).toEqual(['res', 'type']);
 		expect(moveColumn(defaultPrefs(), 'name', -1)).toEqual(defaultPrefs());
 	});
 });

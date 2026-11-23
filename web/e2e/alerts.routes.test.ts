@@ -6,6 +6,7 @@ import type { components } from '../src/lib/api/schema';
 import { expectNoA11yViolations } from './a11y';
 import { dialogSettled } from './support/dialog';
 import { liveEvents } from './support/events-server';
+import { heightAfterSettling, shifts, watchShifts } from './support/layout-shift';
 import { expect, test } from './support/test';
 import type { OpenApiMock } from './mock/openapi-mock';
 
@@ -61,6 +62,7 @@ const hit = (n: number, over: Partial<Hit> = {}): Hit => ({
 	metadata_at: T0,
 	name: `Lantern.Keeper.S01E0${n}.1080p.WEB-DL`,
 	piece_len: 262144,
+	resolution: null,
 	resolved_via: null,
 	score: 0,
 	seeders: 40 + n,
@@ -643,4 +645,66 @@ test.describe('under a coarse pointer', () => {
 		const box = (await page.getByTestId('alerts-name-1').boundingBox())!;
 		expect(box.height).toBeGreaterThanOrEqual(44);
 	});
+});
+
+test.describe('X-narrow-states-2: no blank card', () => {
+	for (const [name, rows, query] of [
+		['two matches', [row(2, true), row(1, true)], ''],
+		['unread matches (a mark row)', [row(2, false), row(1, true)], ''],
+		['compact density', [row(2, false), row(1, true)], '?density=compact']
+	] as const) {
+		for (const width of [320, 390]) {
+			for (const root of [16, 20]) {
+				test(`${name} at ${width} px, ${root} px root font: the list ends where the rows end, with no layout shift`, async ({
+					page,
+					go,
+					mock
+				}) => {
+					await page.setViewportSize({ width, height: 844 });
+					// The root font size, set before the page's own scripts read their tokens.
+					await page.addInitScript((px) => {
+						const set = () => (document.documentElement.style.fontSize = `${px}px`);
+						if (document.documentElement) set();
+						else document.addEventListener('readystatechange', set, { once: true });
+					}, root);
+					await watchShifts(page, '.al-list');
+					detailMocks(mock, { ...LANTERN, unread: 0 }, [...rows]);
+					await go(`/alerts/1${query}`);
+					await expect(page.getByTestId('alert-row-2')).toBeVisible();
+					expect(
+						await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)
+					).toBe(`${root}px`);
+					const sized = await heightAfterSettling(page, '.al-list');
+					expect(sized.after).toBe(sized.before);
+					const m = await page.evaluate(() => {
+						const list = document.querySelector('.al-list')!.getBoundingClientRect();
+						const last = document
+							.querySelector('[data-testid="alert-row-1"]')!
+							.getBoundingClientRect();
+						const grid = document.querySelector('.al-list [role="grid"]') as HTMLElement;
+						return {
+							blank: list.bottom - last.bottom,
+							scrollHeight: grid.scrollHeight,
+							clientHeight: grid.clientHeight
+						};
+					});
+					// Only the card's border and the row's own padding sit below the last row: not a
+					// band, and never a clipped row (a negative gap) or a scroll.
+					expect(m.blank).toBeGreaterThanOrEqual(0);
+					expect(m.blank).toBeLessThan(24);
+					expect(m.scrollHeight).toBe(m.clientHeight);
+					// A "since you last looked" mark that doesn't fit is cut with an ellipsis, never mid-word.
+					const mark = page.getByTestId('alert-divider');
+					if (await mark.count()) {
+						const css = await mark.evaluate((el) => {
+							const c = getComputedStyle(el);
+							return [c.textOverflow, c.overflow, c.whiteSpace];
+						});
+						expect(css).toEqual(['ellipsis', 'hidden', 'nowrap']);
+					}
+					expect(await shifts(page)).toEqual([]);
+				});
+			}
+		}
+	}
 });

@@ -44,6 +44,7 @@
 		name: m.search_table_col_name,
 		raw: m.search_table_col_raw,
 		type: m.search_table_col_type,
+		res: m.search_table_col_res,
 		size: m.search_table_col_size,
 		files: m.search_table_col_files,
 		seeders: m.seeders,

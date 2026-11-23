@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RECENT_MAX, addRecent, loadRecent } from './recent';
+import { RECENT_MAX, addRecent, clearRecent, loadRecent } from './recent';
 
 afterEach(() => {
 	localStorage.clear();
@@ -38,5 +38,15 @@ describe('recent queries', () => {
 		});
 		expect(loadRecent()).toEqual([]);
 		expect(() => addRecent('res:1080p')).not.toThrow();
+	});
+
+	it('forgets everything on clear, and survives blocked storage', () => {
+		addRecent('a');
+		clearRecent();
+		expect(loadRecent()).toEqual([]);
+		vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+			throw new Error('blocked');
+		});
+		expect(() => clearRecent()).not.toThrow();
 	});
 });
