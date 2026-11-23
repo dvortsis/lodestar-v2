@@ -256,8 +256,11 @@ test.describe('first-run wizard', () => {
 		await expectNoA11yViolations(page);
 	});
 
-	test('from 640 px the step list reads in full, numbered 1 to 12', async ({ page, go }) => {
-		await page.setViewportSize({ width: 1024, height: 800 });
+	test('from 640 px the step list reads in full, numbered 1 to 12; at 639 px it is compact', async ({
+		page,
+		go
+	}) => {
+		await page.setViewportSize({ width: 640, height: 800 });
 		await go('/welcome');
 		await expect(h2(page, 'Network check')).toBeVisible();
 		await expect(page.getByTestId('wizard-progress').locator('li').first()).toContainText(
@@ -265,6 +268,14 @@ test.describe('first-run wizard', () => {
 		);
 		await expect(page.getByTestId('wizard-step-how')).toContainText('5. How it works · Not yet');
 		await expect(page.getByText('12. Done · Not yet')).toBeVisible();
+		// At 640 px the name is real text, not a 1 px visually hidden box.
+		const name = page.getByTestId('wizard-step-how').locator('span span');
+		expect((await name.boundingBox())!.width).toBeGreaterThan(40);
+		// One pixel narrower, the compact layout takes over.
+		await page.setViewportSize({ width: 639, height: 800 });
+		await expect
+			.poll(async () => (await name.boundingBox())!.width, { timeout: 10_000 })
+			.toBeLessThanOrEqual(1);
 	});
 
 	test('phone stepper: icons differ in shape and pass 3:1, names carry number and status, the current step is whole at 320 px', async ({

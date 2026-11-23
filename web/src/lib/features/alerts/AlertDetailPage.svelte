@@ -82,13 +82,13 @@
 	});
 
 	// A short list ends where its rows end (no blank card); a list with more to load keeps the full
-	// height. A mark row is pinned to 10 spacing steps (`.al-divider`), so the sum scales with the
+	// height. A mark row is pinned to 10 spacing steps, 2.5rem (`.al-divider`), so the sum scales with the
 	// root font size like the mark does.
-	const listHeight = $derived(
-		d.hasMore
-			? undefined
-			: `calc(${items.filter((it) => it.kind !== 'mark').length * rowHeight}px + ${items.filter((it) => it.kind === 'mark').length} * var(--spacing) * 10)`
-	);
+	const listHeight = $derived.by(() => {
+		if (d.hasMore) return undefined;
+		const marks = items.filter((it) => it.kind === 'mark').length;
+		return `calc(${(items.length - marks) * rowHeight}px + ${marks * 2.5}rem)`;
+	});
 	let active = $state(0);
 
 	function open(_: number, item: Item) {
@@ -414,6 +414,10 @@
 	.al-skeleton :global(.al-skeleton-row) {
 		block-size: var(--row-height-comfortable);
 	}
+	/* A row's visually hidden text (an absolutely placed span) must not widen the scroll height. */
+	.al-list [role='gridcell'] {
+		contain: paint;
+	}
 	.al-empty {
 		margin: 0;
 		padding: calc(var(--spacing) * 6) 0;
@@ -430,13 +434,11 @@
 		overflow: hidden;
 	}
 	.al-divider {
-		/* Pinned, so the list can be sized from its rows: one line, cut with an ellipsis. */
+		/* Pinned, so the list can be sized from its rows: one line, cut by the row cell. */
 		margin: 0;
 		block-size: calc(var(--spacing) * 10);
 		padding-inline: calc(var(--spacing) * 4);
-		overflow: hidden;
 		white-space: nowrap;
-		text-overflow: ellipsis;
 		color: var(--color-base-content);
 		font-size: var(--text-small);
 		line-height: calc(var(--spacing) * 10);

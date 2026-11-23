@@ -18,3 +18,6 @@ Follow-ups from X-narrow-states (#1080), from the UI review of 2026-11-13 (P9, P
   - **b)** Every step's text reads number, name and status ("5. How it works · Skipped"), the same as the wide layout.
   - **c)** From 640 px every step shows icon plus text; the 1024 px test checks it.
   - **d)** The current step is the visible text ("7. Storage & retention · Current step"); at 320 px it is not cut and the page doesn't scroll sideways.
+- **Alert list scroll.** A narrow row's "discovered" fact can wrap onto a hidden line whose absolutely placed visually-hidden span escaped the row's clipping and added 5 px of scroll height at 320 px (7 px at a 20 px root font). The row cells now clip (`overflow: clip`), and the alert e2e runs at 320 and 390 px, with a 16 px and a 20 px root font, asserting no scroll and no clipped row.
+- **What `heightAfterSettling` measures.** Only after the rows are visible, and with the web fonts blocked (the specs that count shifts block `**/fonts/**`) its font-settling part checks nothing; it is a regression guard for a size change after the first paint.
+- **Sizes as measured** (`npm run size:ci`): Alert route 45.97 / 46 kB, Welcome 16.50 / 16.5 kB (no headroom: later wizard slices must pay with removals), Facet rail 18.85 / 18.86 kB.

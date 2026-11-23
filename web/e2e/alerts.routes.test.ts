@@ -648,38 +648,54 @@ test.describe('under a coarse pointer', () => {
 });
 
 test.describe('X-narrow-states-2: no blank card', () => {
-	test.use({ viewport: { width: 390, height: 844 } });
 	for (const [name, rows, query] of [
 		['two matches', [row(2, true), row(1, true)], ''],
 		['unread matches (a mark row)', [row(2, false), row(1, true)], ''],
 		['compact density', [row(2, false), row(1, true)], '?density=compact']
 	] as const) {
-		test(`${name} end the list where the rows end, with no layout shift`, async ({
-			page,
-			go,
-			mock
-		}) => {
-			await watchShifts(page, '.al-list');
-			detailMocks(mock, { ...LANTERN, unread: 0 }, [...rows]);
-			await go(`/alerts/1${query}`);
-			await expect(page.getByTestId('alert-row-2')).toBeVisible();
-			const sized = await heightAfterSettling(page, '.al-list');
-			expect(sized.after).toBe(sized.before);
-			const m = await page.evaluate(() => {
-				const list = document.querySelector('.al-list')!.getBoundingClientRect();
-				const last = document.querySelector('[data-testid="alert-row-1"]')!.getBoundingClientRect();
-				const grid = document.querySelector('.al-list [role="grid"]') as HTMLElement | null;
-				return {
-					blank: list.bottom - last.bottom,
-					clipped: grid ? grid.scrollHeight - grid.clientHeight : 0
-				};
-			});
-			// Only the card's border and the row's own padding sit below the last row: not a band, and
-			// never a clipped row (a negative gap).
-			expect(m.blank).toBeGreaterThanOrEqual(0);
-			expect(m.blank).toBeLessThan(24);
-			expect(m.clipped).toBeLessThanOrEqual(0);
-			expect(await shifts(page)).toEqual([]);
-		});
+		for (const width of [320, 390]) {
+			for (const root of [16, 20]) {
+				test(`${name} at ${width} px, ${root} px root font: the list ends where the rows end, with no layout shift`, async ({
+					page,
+					go,
+					mock
+				}) => {
+					await page.setViewportSize({ width, height: 844 });
+					// The root font size, set before the page's own scripts read their tokens.
+					await page.addInitScript((px) => {
+						const set = () => (document.documentElement.style.fontSize = `${px}px`);
+						if (document.documentElement) set();
+						else document.addEventListener('readystatechange', set, { once: true });
+					}, root);
+					await watchShifts(page, '.al-list');
+					detailMocks(mock, { ...LANTERN, unread: 0 }, [...rows]);
+					await go(`/alerts/1${query}`);
+					await expect(page.getByTestId('alert-row-2')).toBeVisible();
+					expect(
+						await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)
+					).toBe(`${root}px`);
+					const sized = await heightAfterSettling(page, '.al-list');
+					expect(sized.after).toBe(sized.before);
+					const m = await page.evaluate(() => {
+						const list = document.querySelector('.al-list')!.getBoundingClientRect();
+						const last = document
+							.querySelector('[data-testid="alert-row-1"]')!
+							.getBoundingClientRect();
+						const grid = document.querySelector('.al-list [role="grid"]') as HTMLElement;
+						return {
+							blank: list.bottom - last.bottom,
+							scrollHeight: grid.scrollHeight,
+							clientHeight: grid.clientHeight
+						};
+					});
+					// Only the card's border and the row's own padding sit below the last row: not a
+					// band, and never a clipped row (a negative gap) or a scroll.
+					expect(m.blank).toBeGreaterThanOrEqual(0);
+					expect(m.blank).toBeLessThan(24);
+					expect(m.scrollHeight).toBe(m.clientHeight);
+					expect(await shifts(page)).toEqual([]);
+				});
+			}
+		}
 	}
 });
