@@ -29,7 +29,17 @@
 	// "Seen {relative}": the message wraps a RelativeTime, so split it around a marker.
 	const MARK = '\u0000';
 	const seen = $derived(m.scrape_age({ relative: MARK }).split(MARK));
-	const empty = $derived(!series && trackers.length === 0 && !hasDht);
+	// Any figure at all is data: a single sample, the completed count, the summary's own counts.
+	const hasHistory = $derived(!!history && (history.daily.length > 0 || history.weekly.length > 0));
+	const empty = $derived(
+		!series &&
+			!hasHistory &&
+			trackers.length === 0 &&
+			!hasDht &&
+			detail.completed === null &&
+			detail.seeders === null &&
+			detail.leechers === null
+	);
 </script>
 
 <section
@@ -100,9 +110,9 @@
 			{m.detail_swarm_completed({ count: formatCount(detail.completed, locale) })}
 		</p>
 	{/if}
-	{#if empty}
-		<p class="text-muted-text" data-testid="detail-swarm-empty">
-			{detail.last_scrape_at === null ? m.never_scraped() : m.detail_swarm_none()}
-		</p>
+	{#if detail.last_scrape_at === null}
+		<p class="text-muted-text" data-testid="detail-swarm-empty">{m.never_scraped()}</p>
+	{:else if empty}
+		<p class="text-muted-text" data-testid="detail-swarm-empty">{m.detail_swarm_none()}</p>
 	{/if}
 </section>

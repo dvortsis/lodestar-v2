@@ -83,8 +83,6 @@
 	"detail_send_failed": "无法发送到 {name}。请重试。",
 	"detail_send_no_client": "尚未设置下载客户端。请在“设置”的“集成”中添加。",
 	"detail_actions_menu": "更多操作",
-	"detail_client_hint": "发送到下载客户端。",
-	"detail_client_setup": "设置",
 	"detail_external_link": "（在新标签页中打开）",
 	"detail_technical": "技术详情",
 	"detail_hash": "信息哈希",
@@ -105,5 +103,6 @@
 	"detail_swarm_dht": "DHT 估算",
 	"detail_swarm_dht_estimate": "{seeds} 个做种、{peers} 个节点（DHT 估算值）",
 	"detail_swarm_completed": "已上报 {count} 次完成下载",
-	"detail_swarm_none": "暂无节点群数据。"
+	"detail_swarm_none": "暂无节点群数据。",
+	"detail_setup_client": "设置下载客户端…"
 }

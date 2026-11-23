@@ -68,7 +68,47 @@ describe('Swarm', () => {
 		expect(dht).toContain('estimate');
 		expect(dht).toMatch(/≈\s*40/);
 		unmount();
-		render(Swarm, { detail: torrentDetail({ last_scrape_at: null, completed: null }) });
+		render(Swarm, {
+			detail: torrentDetail({
+				last_scrape_at: null,
+				completed: null,
+				seeders: null,
+				leechers: null
+			})
+		});
 		expect(screen.getByTestId('detail-swarm-empty').textContent).toContain('Never scraped');
+	});
+
+	it('shows "Seen …" with an absolute time for a scraped torrent', () => {
+		const now = Date.now() / 1000;
+		render(Swarm, { detail: torrentDetail({ last_scrape_at: now - 3 * 3600 }) });
+		const age = screen.getByTestId('detail-scrape-age');
+		expect(age.textContent).toMatch(/^\s*Seen 3 hours ago/);
+		expect(within(age).getByTestId('detail-scrape-at').textContent).toMatch(/\d{4}/);
+	});
+
+	it('says "No swarm numbers yet" only when there is truly nothing', () => {
+		const bare = {
+			completed: null,
+			seeders: null,
+			leechers: null,
+			swarm_history: null,
+			swarm_trackers: [],
+			dht_peers: null,
+			dht_seeds: null
+		};
+		const { unmount } = render(Swarm, { detail: torrentDetail(bare) });
+		expect(screen.getByTestId('detail-swarm-empty').textContent).toContain('No swarm numbers yet');
+		unmount();
+		// the completed count, a single sample and the summary's own counts are each data
+		for (const over of [
+			{ completed: 12 },
+			{ swarm_history: { daily: [sample(0, 5, 1)], weekly: [] } },
+			{ seeders: 120, leechers: 4 }
+		]) {
+			const view = render(Swarm, { detail: torrentDetail({ ...bare, ...over }) });
+			expect(screen.queryByTestId('detail-swarm-empty'), JSON.stringify(over)).toBeNull();
+			view.unmount();
+		}
 	});
 });

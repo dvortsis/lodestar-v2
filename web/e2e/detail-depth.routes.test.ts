@@ -121,3 +121,62 @@ test('Back to Search links to Search on a direct load', async ({ page, go, mock 
 	await go(`/t/${HASH}`);
 	await expect(page.getByTestId('detail-back-search')).toHaveAttribute('href', /^\/search(\?|$)/);
 });
+
+const integrations = (clients: { id: string; name: string }[]) =>
+	({
+		section: 'integrations',
+		revision: 1,
+		restart_required: [],
+		fields: {
+			clients: { value: clients, source: 'db', read_only: false },
+			default_client: { value: '', source: 'default', read_only: false }
+		}
+	}) as never;
+
+for (const width of [390, 1440]) {
+	test(`no client: the settings read lands with 0 layout shift, and the menu offers Set up at ${width}`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		await page.setViewportSize({ width, height: 900 });
+		mockTorrent(mock, swarm, hit());
+		let release!: () => void;
+		const held = new Promise<void>((r) => (release = r));
+		mock.on('getSettings', (async () => {
+			await held;
+			return integrations([]);
+		}) as never);
+		await go(`/t/${HASH}`);
+		await expect(page.getByTestId('detail-copy-magnet')).toBeVisible();
+		await expect(page.getByTestId('detail-swarm-chart')).toBeVisible();
+		// Count layout shifts from here on: only what the held read causes.
+		await page.evaluate(() => {
+			const w = window as unknown as { __cls: number };
+			w.__cls = 0;
+			new PerformanceObserver((list) => {
+				for (const e of list.getEntries()) {
+					const s = e as unknown as { value: number; hadRecentInput: boolean };
+					if (!s.hadRecentInput) w.__cls += s.value;
+				}
+			}).observe({ type: 'layout-shift' });
+		});
+		release();
+		await expect.poll(() => mock.calls('getSettings').length, { timeout: 10_000 }).toBe(1);
+		await page.getByTestId('detail-actions-menu').click();
+		await expect(page.getByRole('menuitem', { name: 'Set up a download client…' })).toBeVisible({
+			timeout: 10_000
+		});
+		expect(await page.evaluate(() => (window as unknown as { __cls: number }).__cls)).toBe(0);
+	});
+}
+
+test('with a client the menu has no Set up item', async ({ page, go, mock }) => {
+	mockTorrent(mock, swarm, hit());
+	mock.on('getSettings', integrations([{ id: 'q', name: 'qBittorrent' }]));
+	await go(`/t/${HASH}`);
+	await expect(page.getByTestId('detail-send')).toBeVisible();
+	await page.getByTestId('detail-actions-menu').click();
+	await expect(page.getByRole('menuitem', { name: 'Block this…' })).toBeVisible();
+	await expect(page.getByRole('menuitem', { name: 'Set up a download client…' })).toHaveCount(0);
+});

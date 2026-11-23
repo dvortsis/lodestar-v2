@@ -13,8 +13,10 @@
 		mode: 'drawer' | 'page';
 		hash: string;
 		onblock: () => void;
+		/** No download client is set up: the last item leads to where one is added. */
+		noClient?: boolean;
 	}
-	let { open = $bindable(), mode, hash, onblock }: Props = $props();
+	let { open = $bindable(), mode, hash, onblock, noClient = false }: Props = $props();
 
 	const items = $derived<MenuItem[]>([
 		...(mode === 'drawer' ? [{ id: 'full', label: m.detail_open_full() }] : []),
@@ -22,11 +24,13 @@
 			id: 'block',
 			label: m.detail_block(),
 			separatorBefore: mode === 'drawer'
-		}
+		},
+		...(noClient ? [{ id: 'setup', label: m.detail_setup_client(), separatorBefore: true }] : [])
 	]);
 	function select(id: string) {
 		if (id === 'full') void goto(resolve('/t/[hash]', { hash }));
 		else if (id === 'block') onblock();
+		else if (id === 'setup') void goto(resolve('/settings/[section]', { section: 'integrations' }));
 	}
 </script>
 

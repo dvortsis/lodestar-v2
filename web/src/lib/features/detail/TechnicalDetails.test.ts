@@ -15,13 +15,13 @@ describe('TechnicalDetails', () => {
 		expect(screen.queryByTestId('detail-hash-v2')).toBeNull();
 	});
 
-	it('shows the flags as badges with text, the v2 hash, and junk reasons', () => {
+	it('shows the flags as badges with text, the v2 hash and the junk score', () => {
 		render(TechnicalDetails, {
 			detail: torrentDetail({
 				flags: ['private', 'v2', 'hybrid', 'files_partial'],
 				hash_v2: 'f'.repeat(64)
 			}),
-			hit: searchHit({ junk_score: 70, junk_reasons: ['tiny-video'] })
+			hit: searchHit({ junk_score: 70 })
 		});
 		const flags = screen.getByTestId('detail-flags');
 		for (const label of ['Private', 'v2', 'Hybrid', 'Partial file list'])

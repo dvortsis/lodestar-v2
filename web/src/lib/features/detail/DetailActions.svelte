@@ -3,7 +3,6 @@
 	// lazily after mount), else Copy magnet, which then stays as the secondary action.
 	import { onDestroy } from 'svelte';
 	import { m } from '$lib/paraglide/messages.js';
-	import { resolve } from '$app/paths';
 	import IconDots from '~icons/ph/dots-three-bold';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import { isMagnet } from '$lib/util/magnet';
@@ -28,25 +27,16 @@
 	}
 	let label = $state<string | null>(null);
 	let go: (hash: string) => unknown = () => {};
-	// With no download client the header says so once per browser (a convenience: every storage
-	// access is guarded, and without storage the hint simply shows each time).
-	const HINT_KEY = 'lodestar.detail.client-hint';
-	let hint = $state(false);
-	function noClient() {
-		try {
-			if (localStorage.getItem(HINT_KEY) === '1') return;
-			localStorage.setItem(HINT_KEY, '1');
-		} catch {
-			// storage unavailable: show the hint anyway
-		}
-		hint = true;
-	}
+	// With no download client the More actions menu gets a last item, "Set up a download client…"
+	// (nothing appears after paint, so the layout never shifts). An unreadable read (offline, signed
+	// out) isn't "no client", so it adds nothing.
+	let noClient = $state(false);
 	void import('./send').then(
 		(s) =>
 			s.sendLabel(true).then((l) => {
 				go = s.sendHash;
 				label = l;
-				if (!l && !gone && !s.clientUnreadable()) noClient();
+				noClient = !l && !gone && !s.clientUnreadable();
 			}),
 		() => {}
 	);
@@ -67,6 +57,13 @@
 				void import('./commands').then((c) => c.failed(true));
 			}
 		);
+	}
+
+	// ArrowDown and ArrowUp open the menu from the keyboard before its chunk has loaded.
+	function openOnArrow(event: KeyboardEvent) {
+		if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+		event.preventDefault();
+		openMenu();
 	}
 
 	// "Block this…" (§20.2) through the flows' one door (S-filters-2c): it only ever adds a rule,
@@ -120,7 +117,7 @@
      disabled colours reads as low contrast mid-transition (axe, rose-pine-dark). -->
 {#if detail}
 	{#if ActionsMenu}
-		<ActionsMenu bind:open={menuOpen} {mode} hash={detail.hash} onblock={block} />
+		<ActionsMenu bind:open={menuOpen} {mode} hash={detail.hash} onblock={block} {noClient} />
 	{:else}
 		<Button
 			dense
@@ -129,18 +126,11 @@
 			aria-label={m.detail_actions_menu()}
 			data-testid="detail-actions-menu"
 			onclick={openMenu}
+			onkeydown={openOnArrow}
 		>
 			<IconDots class="size-(--icon-size-nav)" aria-hidden="true" />
 		</Button>
 	{/if}
-{/if}
-{#if hint}
-	<p class="ls-detail-hint" data-testid="detail-client-hint">
-		{m.detail_client_hint()}
-		<a class="link" href={resolve('/settings/[section]', { section: 'integrations' })}
-			>{m.detail_client_setup()}</a
-		>
-	</p>
 {/if}
 {#if Block && target && target.hash === detail?.hash}
 	<Block

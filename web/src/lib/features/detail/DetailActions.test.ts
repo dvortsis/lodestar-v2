@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { clearDetailCaches } from './cache';
 import { torrentDetail } from './fixtures';
 import DetailActions from './DetailActions.svelte';
@@ -94,58 +94,49 @@ describe('Open in torrent client and the actions menu', () => {
 	});
 });
 
-describe('the no-client hint', () => {
+describe('the no-client item in the actions menu', () => {
 	afterEach(() => {
 		client.name = null;
 		client.unreadable = false;
-		localStorage.clear();
-		vi.restoreAllMocks();
 	});
+	const items = async () => {
+		await fireEvent.click(screen.getByTestId('detail-actions-menu'));
+		await screen.findByRole('menuitem', { name: 'Block this…' }, { timeout: 10_000 });
+		return screen.getAllByRole('menuitem').map((e) => e.textContent!.trim());
+	};
 
-	it('shows once per browser with a link to Set up, and not again', async () => {
-		localStorage.clear();
-		label.mockClear();
-		const first = render(DetailActions, { detail: torrentDetail() });
-		const hint = await screen.findByTestId('detail-client-hint');
-		expect(hint.textContent).toContain('Set up');
-		expect(within(hint).getByRole('link').getAttribute('href')).toBe('/settings/integrations');
-		first.unmount();
+	it('adds "Set up a download client…" as the last item when no client is set up', async () => {
 		render(DetailActions, { detail: torrentDetail() });
-		await vi.waitFor(() => expect(label).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+		await vi.waitFor(() => expect(label).toHaveBeenCalled(), { timeout: 10_000 });
 		await vi.dynamicImportSettled();
+		expect((await items()).at(-1)).toBe('Set up a download client…');
 		expect(screen.queryByTestId('detail-client-hint')).toBeNull();
 	});
 
-	it('still renders, and shows the hint, when storage is unavailable', async () => {
-		vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-			throw new Error('blocked');
-		});
-		vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-			throw new Error('blocked');
-		});
-		render(DetailActions, { detail: torrentDetail() });
-		expect(await screen.findByTestId('detail-client-hint')).toBeTruthy();
-	});
-
-	it('shows no hint when a client is set up', async () => {
+	it('has no such item when a client is set up, or when the read failed', async () => {
 		client.name = 'qBittorrent';
+		const first = render(DetailActions, { detail: torrentDetail() });
+		await screen.findByTestId('detail-send');
+		expect(await items()).not.toContain('Set up a download client…');
+		first.unmount();
+		document.body.innerHTML = '';
+		client.name = null;
+		client.unreadable = true;
 		render(DetailActions, { detail: torrentDetail() });
-		expect(await screen.findByTestId('detail-send')).toBeTruthy();
-		expect(screen.queryByTestId('detail-client-hint')).toBeNull();
+		await vi.dynamicImportSettled();
+		expect(await items()).not.toContain('Set up a download client…');
 	});
 
-	it('is not used up by a settings read that failed (offline, signed out)', async () => {
-		localStorage.clear();
-		client.unreadable = true;
-		label.mockClear();
-		const first = render(DetailActions, { detail: torrentDetail() });
-		await vi.waitFor(() => expect(label).toHaveBeenCalledTimes(1), { timeout: 10_000 });
-		await vi.dynamicImportSettled();
-		expect(screen.queryByTestId('detail-client-hint')).toBeNull();
-		expect(localStorage.getItem('lodestar.detail.client-hint')).toBeNull();
-		first.unmount();
-		client.unreadable = false;
-		render(DetailActions, { detail: torrentDetail() });
-		expect(await screen.findByTestId('detail-client-hint')).toBeTruthy();
+	it('opens the menu from the keyboard before it has loaded: ArrowDown and ArrowUp', async () => {
+		for (const key of ['ArrowDown', 'ArrowUp']) {
+			document.body.innerHTML = '';
+			const { unmount } = render(DetailActions, { detail: torrentDetail() });
+			await fireEvent.keyDown(screen.getByTestId('detail-actions-menu'), { key });
+			expect(
+				await screen.findByRole('menuitem', { name: 'Block this…' }, { timeout: 10_000 }),
+				key
+			).toBeTruthy();
+			unmount();
+		}
 	});
 });

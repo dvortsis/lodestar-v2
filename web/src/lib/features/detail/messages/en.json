@@ -83,8 +83,6 @@
 	"detail_send_failed": "Couldn’t send to {name}. Try again.",
 	"detail_send_no_client": "No download client is set up. Add one in Settings, under Integrations.",
 	"detail_actions_menu": "More actions",
-	"detail_client_hint": "Send to a download client.",
-	"detail_client_setup": "Set up",
 	"detail_external_link": "(opens in a new tab)",
 	"detail_technical": "Technical details",
 	"detail_hash": "Info hash",
@@ -105,5 +103,6 @@
 	"detail_swarm_dht": "DHT estimate",
 	"detail_swarm_dht_estimate": "{seeds} seeders, {peers} peers (a DHT estimate)",
 	"detail_swarm_completed": "{count} completed downloads reported",
-	"detail_swarm_none": "No swarm numbers yet."
+	"detail_swarm_none": "No swarm numbers yet.",
+	"detail_setup_client": "Set up a download client…"
 }

@@ -124,7 +124,7 @@ test('from the drawer: Block this…, then Esc sends nothing and focus comes bac
 	await kbd.press('Enter');
 	const item = page.getByRole('menuitem', { name: 'Block this…' });
 	await expect(item).toBeVisible();
-	await kbd.press('End');
+	await kbd.press('ArrowDown');
 	await expect(item).toBeFocused();
 	await kbd.press('Enter');
 	await settled(page);
