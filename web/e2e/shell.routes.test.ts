@@ -169,7 +169,7 @@ test.describe('responsive navigation', () => {
 		await liveEvents(page);
 		await page.setViewportSize({ width: 390, height: 800 });
 		await go('/search');
-		const pill = page.getByRole('link', { name: /Crawling/ });
+		const pill = page.getByRole('link', { name: /Working/ });
 		await expect(pill).toBeVisible();
 		await expect(pill).toContainText('Crawler status. Open Insights.');
 		// Visually hidden: clipped to a pixel, still in the accessibility tree.

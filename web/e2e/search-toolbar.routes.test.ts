@@ -426,7 +426,7 @@ test.describe('the Filters button at 390 px never covers other content', () => {
 		const title = page.getByTestId('results-empty-title');
 		await expect(title).toBeVisible();
 		const filters = page.getByTestId('facet-open');
-		if (await filters.count()) {
+		if (await filters.isVisible()) {
 			expect(overlaps((await filters.boundingBox())!, (await title.boundingBox())!)).toBe(false);
 		}
 	});

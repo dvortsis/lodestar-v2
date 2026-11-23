@@ -40,11 +40,11 @@
 </script>
 
 <div class="rp-empty" data-home="" data-testid="results-empty">
-	<h2 class="rp-empty-title" data-testid="results-empty-title">
+	<p class="rp-empty-title" data-testid="results-empty-title">
 		{count !== null
 			? m.search_home_title({ count: formatCount(count, locale) })
 			: m.search_home_title_unknown()}
-	</h2>
+	</p>
 	<p>{m.search_home_lead()}</p>
 	<!-- Always there, at its own height: the status arrives after the first frame. -->
 	<p class="rp-health" data-testid="home-health">{health}</p>

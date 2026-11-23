@@ -124,7 +124,7 @@
 			<button
 				type="button"
 				class="btn btn-ghost {touch ? 'btn-square' : 'px-2 text-small'} {FOCUS_RING} {TARGET_MIN}"
-				aria-label={m.shell_palette_open()}
+				aria-label={touch ? m.shell_palette_open() : `${m.shell_palette_open()} ${keys}`}
 				aria-keyshortcuts={isMacPlatform() ? 'Meta+K' : 'Control+K'}
 				data-testid="palette-button"
 				onclick={() => (shell.paletteOpen = true)}
