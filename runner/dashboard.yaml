@@ -578,6 +578,7 @@ placement:
   - X-worker-oversize-nits
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
+  - X-fleet-baab
   - X-pia-bridge-manual
   - X-pia-bridge-docs
   - X-restart-banner-polish
