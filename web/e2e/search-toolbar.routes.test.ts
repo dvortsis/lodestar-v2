@@ -420,15 +420,23 @@ test.describe('the Filters button at 390 px never covers other content', () => {
 	const overlaps = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
 		a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
-	test('the empty state’s title', async ({ page, mock }) => {
+	test('the home screen has no Filters button to cover its title', async ({ page, mock }) => {
 		server(mock, () => body([], { total: 0 }));
 		await page.goto('/search?q=%20%20');
-		const title = page.getByTestId('results-empty-title');
-		await expect(title).toBeVisible();
+		await expect(page.getByTestId('results-empty-title')).toBeVisible();
+		// X-shell-home: the home has no facets, so the button is hidden with the rail.
+		await expect(page.getByTestId('facet-open')).toBeHidden();
+	});
+
+	test('on a results page the Filters button does not cover the count', async ({ page, mock }) => {
+		server(mock, () => body(hits(3), { total: 3 }));
+		await page.goto('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		const count = page.getByTestId('results-count');
 		const filters = page.getByTestId('facet-open');
-		if (await filters.isVisible()) {
-			expect(overlaps((await filters.boundingBox())!, (await title.boundingBox())!)).toBe(false);
-		}
+		await expect(count).toBeVisible();
+		await expect(filters).toBeVisible();
+		expect(overlaps((await filters.boundingBox())!, (await count.boundingBox())!)).toBe(false);
 	});
 
 	test('the “Details couldn’t load” alert above the toolbar', async ({ page, mock }) => {
