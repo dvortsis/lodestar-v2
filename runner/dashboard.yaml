@@ -578,6 +578,7 @@ placement:
   - X-worker-oversize-nits
   - X-pia-vm-helper
   - X-fleet-sudo-narrow
+  - X-fleet-baab
   - X-pia-bridge-manual
   - X-pia-bridge-docs
   - X-restart-banner-polish
@@ -1939,6 +1940,11 @@ owner_queue:
   action: 'Should a metadata fetch over uTP get one extra 4 s for its first window, only while pieces are still arriving (CR-UTP-FIRST-WINDOW option (b), on top of (d), which merged as #1054)? A slow uTP peer could then hold its first claim for 8 s instead of 4 s; a silent peer still has 4 s, and TCP is unchanged. After (d), at most 9.25% of first windows still miss at 20% packet loss and 2.5% at 15%; the extension would save those that need under 8 s (not measured with it in place). The runner recommends no, unless live data show uTP paths at 15% loss or worse are common (docs/decisions/2026-11-22-CR-UTP-FIRST-WINDOW.md)'
   unblocks: Fewer missed metadata fetches over lossy uTP paths, at a looser bound against slow peers
   when: Any time; until then the 4 s deadline holds for every transport
+- n: 35
+  type: decision
+  action: 'May a provisional cloud A/B stage keep one test instance for up to 44 h, as the fleet does (cloud-fleet-runbook.md), instead of at most 24 h? You approved Linux test instances on AWS with 24 h expiry tags. A stage runs two blocks of about 18 h each, so with 24 h each block gets a fresh instance and IP. That still gives a valid result, because each block is balanced within its own instance, but the spread between blocks is wider. The 48 h guard and the spend stop are unchanged either way. The runner recommends yes, for the cloud A/B stages only (runner records r15).'
+  unblocks: One instance and IP for a whole cloud stage, so stage results are a little tighter
+  when: Any time; until then each block gets its own instance
 
 gates:
 - id: G-v05
