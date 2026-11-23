@@ -10809,6 +10809,13 @@
       "at": "2026-11-14T15:53Z",
       "answer": "Owner: AWS quota raised to 1000 (in chat; assumed EC2 vCPU, region and on-demand/spot not stated). Planning fact for cloud-testing and fleet sizing only; runner makes no AWS calls, spend stays the owner's decision.",
       "via": "runner chat"
+    },
+    {
+      "at": "2026-11-23T06:21Z",
+      "source": "owner, runner chat",
+      "text": "$154.86",
+      "meaning": "remaining AWS credit balance read from Billing -> Credits, answering the runner (X-test-vm could not read it: Cost Explorer only)",
+      "effect": "AWS stop = 90% of the lower of $154.86 and $133.72 = $120.35 of new AWS spend from 2026-11-23T00:31Z (r15 rule). Replaces the interim $100 stop."
     }
   ],
   "heartbeat": "2026-11-23T03:39:07Z",
