@@ -355,25 +355,32 @@ impl LiveQueries {
             .map(|s| s.changed.subscribe())
     }
 
-    /// The registrations to run, most behind first.
+    /// The registrations to run, most behind first; those whose pattern
+    /// has run out of time before go after the rest, so they never hold
+    /// a plain one back.
     pub fn due(&self) -> Vec<LiveDue> {
         let st = self.screened(self.adult.shown());
         let now = Instant::now();
-        let mut due: Vec<LiveDue> = st
+        let mut due: Vec<(bool, LiveDue)> = st
             .regs
             .iter()
             // Waiting after a regex stop: it sits this pass out.
             .filter(|r| r.regex_wait.is_none_or(|(until, _)| now >= until))
-            .map(|r| LiveDue {
-                key: r.key,
-                watermark: r.watermark,
-                query: r.query.clone(),
-                utc_offset: r.utc_offset,
-                stems: r.stems,
+            .map(|r| {
+                (
+                    r.regex_wait.is_some(),
+                    LiveDue {
+                        key: r.key,
+                        watermark: r.watermark,
+                        query: r.query.clone(),
+                        utc_offset: r.utc_offset,
+                        stems: r.stems,
+                    },
+                )
             })
             .collect();
-        due.sort_by_key(|d| (d.watermark, d.key));
-        due
+        due.sort_by_key(|(heavy, d)| (*heavy, d.watermark, d.key));
+        due.into_iter().map(|(_, d)| d).collect()
     }
 
     /// Adds a run's counts: `(key, from, through, count)` for each that
@@ -404,10 +411,12 @@ impl LiveQueries {
         }
     }
 
-    /// Live queries `stopped` (keys) ran out of their regex time: each
-    /// waits (see [`REGEX_BACKOFF`]); those in `ran` ran whole, and their
-    /// wait ends.
-    fn regex_ran(&self, stopped: &[i64], ran: &[i64]) {
+    /// Live queries `stopped` (keys) ran out of their own regex time: each
+    /// waits, longer each time (see [`REGEX_BACKOFF`]). Those `cut` by
+    /// the run's budget mid-verify wait the first step only, never
+    /// longer, since how much budget the run had left says nothing of
+    /// the pattern. Those in `ran` ran whole, and their wait ends.
+    fn regex_ran(&self, stopped: &[i64], cut: &[i64], ran: &[i64]) {
         let mut st = self.lock();
         let now = Instant::now();
         for r in st.regs.iter_mut() {
@@ -416,6 +425,10 @@ impl LiveQueries {
                     .regex_wait
                     .map_or(REGEX_BACKOFF.0, |(_, w)| (w * 2).min(REGEX_BACKOFF.1));
                 r.regex_wait = Some((now + wait, wait));
+            } else if cut.contains(&r.key) {
+                // The doubling stays where its own stops left it.
+                let wait = r.regex_wait.map_or(REGEX_BACKOFF.0, |(_, w)| w);
+                r.regex_wait = Some((now + REGEX_BACKOFF.0, wait));
             } else if ran.contains(&r.key) {
                 r.regex_wait = None;
             }
@@ -495,17 +508,23 @@ pub fn percolate_live(
         .collect();
     let p = percolate(index, &entries, through, limits, now, cancel)?;
     let ran_keys: Vec<i64> = p.matched.iter().map(|m| m.id).collect();
-    // A pattern the run's budget cut waits as one that ran out of its own
-    // time does: live entries get only what saved searches left of the
-    // budget, so it would otherwise be first, and cut, every pass.
-    let waits: Vec<i64> = p
-        .regex_stopped
+    // A pattern the run's budget cut waits too: live entries get only what
+    // saved searches left of the budget, so it would otherwise be first,
+    // and cut, every pass.
+    live.regex_ran(&p.regex_stopped, &p.regex_cut, &ran_keys);
+    let from: HashMap<i64, i64> = due.iter().map(|d| (d.key, d.watermark)).collect();
+    let settled: std::collections::HashSet<i64> = ran_keys
         .iter()
+        .chain(&p.regex_stopped)
         .chain(&p.regex_cut)
+        .chain(&p.failed)
         .copied()
         .collect();
-    live.regex_ran(&waits, &ran_keys);
-    let from: HashMap<i64, i64> = due.iter().map(|d| (d.key, d.watermark)).collect();
+    let upto = through.min(p.snapshot_max);
+    let left = due
+        .iter()
+        .filter(|d| d.watermark < upto && !settled.contains(&d.key))
+        .count();
     let ran: Vec<(i64, i64, i64, u64)> = p
         .matched
         .iter()
@@ -515,9 +534,10 @@ pub fn percolate_live(
     Ok(LiveRun {
         ran: ran.len(),
         matched: ran.iter().map(|r| r.3).sum(),
-        // A stop that cut a pattern isn't more to do at once: that entry
-        // waits now, and the others run on the next commit or poll.
-        more: p.capped > 0 || (p.stopped && p.regex_cut.is_empty()),
+        // After a stop, more only while an entry with work didn't run:
+        // one that stopped or was cut waits now, so this can't spin, and
+        // plain entries behind a cut one run at once.
+        more: p.capped > 0 || (p.stopped && left > 0),
     })
 }
 
@@ -1164,6 +1184,86 @@ mod tests {
             l.due().iter().all(|d| d.key != key),
             "not due before its wait"
         );
+    }
+
+    /// A plain entry behind a cut pattern still counts on the same
+    /// wakeup: after the cut, the pass reports `more` while it hasn't
+    /// run, and the rerun reaches it. Entries that stopped before go
+    /// after plain ones.
+    #[test]
+    fn a_plain_live_query_behind_a_cut_pattern_runs_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = corpus(dir.path());
+        let index = SearchIndex::in_memory().unwrap();
+        let mut w = index.writer(15 << 20).unwrap();
+        w.catch_up(&mut store, 100).unwrap();
+        w.commit().unwrap();
+        let (_, l) = live(LiveConfig::default());
+        let heavy: Vec<String> = (0..3)
+            .map(|_| l.register(1, &q("/movie/"), false, 0, 0).unwrap().id)
+            .collect();
+        let plain = l.register(1, &q("movie"), false, 0, 0).unwrap().id;
+        let run_token = CancelToken::new();
+        lodestar_search::regex_verify::cancel_at_next_seal_on_this_thread(run_token.clone());
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &run_token, true).unwrap();
+        assert_eq!(
+            (run.ran, run.more),
+            (0, true),
+            "the plain one is still to run"
+        );
+        // The rerun at once: the cut one waits, the rest run.
+        let run = percolate_live(&index, &l, 5, LIMITS, 0, &CancelToken::new(), true).unwrap();
+        assert_eq!((run.ran, run.more), (3, false));
+        assert_eq!(matched(&l, &plain), 2);
+        assert_eq!(matched(&l, &heavy[0]), 0);
+        // Once its wait is over, one that stopped before runs after the
+        // plain ones, even at a lower watermark.
+        {
+            let mut st = l.lock();
+            let r = st.regs.iter_mut().find(|r| r.id == heavy[0]).unwrap();
+            let (until, wait) = r.regex_wait.unwrap();
+            r.regex_wait = Some((until - REGEX_BACKOFF.0, wait));
+        }
+        let plain_key = l.lock().regs.iter().find(|r| r.id == plain).unwrap().key;
+        let late = |l: &LiveQueries| l.lock().regs.iter().find(|r| r.id == heavy[0]).unwrap().key;
+        let order: Vec<i64> = l.due().iter().map(|d| d.key).collect();
+        assert_eq!(order.last(), Some(&late(&l)));
+        assert!(order.contains(&plain_key));
+    }
+
+    /// A stop at the pattern's own deadline doubles its wait; a cut by
+    /// the run's budget always waits the first step only.
+    #[test]
+    fn only_the_patterns_own_stops_lengthen_its_wait() {
+        let (_, l) = live(LiveConfig::default());
+        let id = l.register(1, &q("/movie/"), false, 0, 0).unwrap().id;
+        let key = l.lock().regs.iter().find(|r| r.id == id).unwrap().key;
+        let wait = |l: &LiveQueries| {
+            let st = l.lock();
+            let r = st.regs.iter().find(|r| r.key == key).unwrap();
+            let (until, w) = r.regex_wait.unwrap();
+            (until.saturating_duration_since(Instant::now()), w)
+        };
+        let step = REGEX_BACKOFF.0;
+        for _ in 0..3 {
+            l.regex_ran(&[], &[key], &[]);
+            let (left, w) = wait(&l);
+            assert!(
+                left <= step && w == step,
+                "a cut waits one step: {left:?} {w:?}"
+            );
+        }
+        l.regex_ran(&[key], &[], &[]);
+        assert_eq!(wait(&l).1, step * 2);
+        l.regex_ran(&[key], &[], &[]);
+        assert_eq!(wait(&l).1, step * 4);
+        // A cut in between neither lengthens nor resets it.
+        l.regex_ran(&[], &[key], &[]);
+        let (left, w) = wait(&l);
+        assert!(left <= step);
+        assert_eq!(w, step * 4);
+        l.regex_ran(&[key], &[], &[]);
+        assert_eq!(wait(&l).1, step * 8);
     }
 
     // The endpoints.

@@ -71,17 +71,31 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// For tests: cancel `token` when the next [`seal`] on this thread starts,
-/// as a run's budget running out mid-verify would (`api`'s live queries).
+thread_local! {
+    static STOP_AT_SEAL: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// For tests only: after `skip` more [`seal`]s on this thread, the next
+/// one finds its budget spent, as a search's last pass would after its
+/// earlier ones used it up: what it would verify stays unverified, and
+/// its clauses stop. Clauses already verified (shared ones) are kept.
+#[doc(hidden)]
+pub fn stop_at_seal_on_this_thread(skip: usize) {
+    STOP_AT_SEAL.with(|c| c.set(Some(skip)));
+}
+
+/// For tests only: cancel `token` when the next [`seal`] on this thread
+/// starts, as a run's budget running out mid-verify would (`api`'s live
+/// queries).
 #[doc(hidden)]
 pub fn cancel_at_next_seal_on_this_thread(token: CancelToken) {
     CANCEL_AT_SEAL.with(|t| *t.borrow_mut() = Some(token));
 }
 
 /// For tests only (no production caller), here and in the crates that
-/// percolate (`lodestar`): the
-/// budget searches compiled on this thread start, `None` for
-/// [`VERIFY_BUDGET`]. A `Duration::ZERO` makes every verify stop.
+/// percolate (`lodestar`): the budget searches compiled on this thread
+/// start, `None` for [`VERIFY_BUDGET`]. A `Duration::ZERO` makes every
+/// verify stop.
 #[doc(hidden)]
 pub fn set_budget_on_this_thread(budget: Option<Duration>) {
     BUDGET.with(|b| b.set(budget));
@@ -476,6 +490,19 @@ impl RegexQuery {
         Ok(())
     }
 
+    /// Every segment of `searcher` not verified yet stays unverified, and
+    /// the clause stops: what a pass out of budget leaves ([`seal`]'s
+    /// test hook).
+    fn stop_unverified(&self, searcher: &Searcher, only: &dyn Fn(&SegmentReader) -> bool) {
+        let mut done = lock(&self.state.done);
+        for reader in searcher.segment_readers().iter().filter(|r| only(r)) {
+            if let std::collections::hash_map::Entry::Vacant(e) = done.entry(reader.segment_id()) {
+                e.insert(Arc::new(Matches::Sparse(Vec::new())));
+                self.stop();
+            }
+        }
+    }
+
     fn release(&self) {
         *lock(&self.state.prepared) = Prep::Released;
     }
@@ -657,10 +684,26 @@ pub(crate) fn seal_where(
     if let Some(token) = CANCEL_AT_SEAL.with(|t| t.borrow_mut().take()) {
         token.cancel();
     }
+    let out_of_budget = STOP_AT_SEAL.with(|c| match c.get() {
+        Some(0) => {
+            c.set(None);
+            true
+        }
+        Some(n) => {
+            c.set(Some(n - 1));
+            false
+        }
+        None => false,
+    });
     let mut out = Ok(());
     each_clause(query, &mut |r| {
         if out.is_ok() {
-            out = r.seal(searcher, cancel, only);
+            out = if out_of_budget {
+                r.stop_unverified(searcher, only);
+                Ok(())
+            } else {
+                r.seal(searcher, cancel, only)
+            };
         }
     });
     Ok(out?)

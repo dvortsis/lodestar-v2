@@ -23,7 +23,11 @@
 //!   entries on what's left of the same budget, with the same range cap
 //!   ([`lodestar_api::search_live::percolate_live`]). So they never
 //!   delay an alert; when the budget runs out first they're `more`, and
-//!   the next run (straight away) takes them.
+//!   the next run (straight away) takes them. One whose `/…/` pattern ran
+//!   out of time, or was cut by the run's budget, waits before it runs
+//!   again (a cut always one step, a stop of its own longer each time),
+//!   and runs after the plain ones; the pass is `more` only while an
+//!   entry with work that isn't waiting is left, so it can't spin.
 //! - **Promoted torrents** (SRC-2b, `docs/decisions/2026-11-02-SRC-2b.md`)
 //!   keep an id below the watermarks, so the range never reaches them.
 //!   `promote` queues each one durably ([`Store::promoted_due`]); after

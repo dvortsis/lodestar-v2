@@ -29,8 +29,10 @@
 //!   whose verify stopped there is left out of [`Percolation::matched`]
 //!   and listed in [`Percolation::regex_stopped`]: its watermark stays,
 //!   so the range is retried next run, and an alert is never lost to a
-//!   partial verify. It doesn't make [`Percolation::more`] true, so a
-//!   pattern that always runs out of time doesn't spin the runs.
+//!   partial verify. It doesn't make [`Percolation::more`] true by
+//!   itself; a search the run's token cut mid-verify is also listed in
+//!   [`Percolation::regex_cut`], for callers that pace those entries
+//!   (live queries).
 //!
 //! No store writes here: the caller records the result in one
 //! transaction per range ([`lodestar_store::Store::record_percolation`]).

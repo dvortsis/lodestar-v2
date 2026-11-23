@@ -502,7 +502,8 @@ fn a_leases_facets_and_recovery_reuse_its_regex_matches_after_its_budget() {
     let waited = Instant::now() + Duration::from_secs(10);
     while started.elapsed() <= budget {
         assert!(Instant::now() < waited, "the budget never passed");
-        std::thread::yield_now();
+        // Sleep out what's left, not a fixed time; the loop rechecks.
+        std::thread::sleep(budget.saturating_sub(started.elapsed()));
     }
     let params = FacetParams::default();
     let fs = FacetSpec {

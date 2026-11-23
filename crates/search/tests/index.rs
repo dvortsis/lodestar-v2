@@ -601,6 +601,43 @@ fn an_index_left_behind_catches_up_alone() {
     assert_eq!(ids(&index, "file:(ext:flac -zzqxnever)"), [1]);
 }
 
+/// A lease's stem fallback reuses the exact pass's verified `/…/`
+/// clauses (RX-1): a wide pass with no budget left can't replace the
+/// exact answer with a partial one.
+#[test]
+fn a_leases_stem_fallback_keeps_the_exact_passes_regex_matches() {
+    let tdk = "The.Dark.Knight.2008.1080p.BluRay.x264-GRP";
+    let kotz = "Knights.of.the.Zodiac.2023.1080p.WEB-DL.x264-GRP";
+    let mut store = store_with(&[
+        sized(tdk, &[("tdk.mkv", 10 * GB)]),
+        sized(kotz, &[("kotz.mkv", 3 * GB)]),
+    ]);
+    lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100)
+        .unwrap()
+        .unwrap();
+    let index = SearchIndex::in_memory().unwrap();
+    let mut w = index.writer(15 << 20).unwrap();
+    w.catch_up(&mut store, 100).unwrap();
+    w.commit().unwrap();
+    let index = std::sync::Arc::new(index);
+    let node = lodestar_search::parse("knights -/zzz/").unwrap();
+    // The exact pass verifies; the next seal, the wide pass's, finds the
+    // budget spent.
+    lodestar_search::regex_verify::stop_at_seal_on_this_thread(1);
+    let lease = lodestar_search::Lease::new(
+        index,
+        &node,
+        NOW,
+        Sort::Relevance,
+        &lodestar_search::CancelToken::new(),
+    );
+    lodestar_search::regex_verify::stop_at_seal_on_this_thread(usize::MAX);
+    let lease = lease.unwrap();
+    assert!(lease.stemmed());
+    assert_eq!(lease.total().value, 2);
+    assert!(!lease.regex_stopped());
+}
+
 #[test]
 fn plurals_match_through_the_title_stem_as_a_fallback() {
     let tdk = "The.Dark.Knight.2008.1080p.BluRay.x264-GRP";

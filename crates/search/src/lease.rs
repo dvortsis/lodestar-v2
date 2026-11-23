@@ -13,8 +13,8 @@
 //! ids for [`LeaseConfig::ttl`] from their last use, bounded in number
 //! overall and per client, and in the regex matches they hold
 //! ([`LeaseConfig::max_regex_bytes`], each client at most a quarter of
-//! it), the least recently used going first. A retired index stays open (and on disk) until its last
-//! lease is gone.
+//! it), the least recently used going first. A retired index stays open
+//! (and on disk) until its last lease is gone.
 
 use std::cmp::{Ordering as Cmp, Reverse};
 use std::collections::{BinaryHeap, HashMap};
@@ -1354,8 +1354,10 @@ impl Leases {
     ) -> Vec<Slot> {
         let max = self.config.max_regex_bytes;
         let share = max / 4;
-        // What each client holds, and in all, kept as leases go: one pass
-        // over the map, not one per lease removed.
+        // What each client holds, and in all, kept as leases go rather
+        // than summed again for each one removed. (Phase 2 still scans the
+        // map once per lease it removes, for the oldest of each client;
+        // it runs only with more than four clients near their shares.)
         let mut by_client: HashMap<u64, usize> = HashMap::new();
         for s in map.values() {
             *by_client.entry(s.client).or_default() += s.lease.regex_bytes;
@@ -1405,7 +1407,16 @@ impl Leases {
             }
             let mut order: Vec<(u64, usize)> = by_client
                 .iter()
-                .map(|(&c, &b)| (c, if c == client { b + bytes } else { b }))
+                .map(|(&c, &b)| {
+                    (
+                        c,
+                        if c == client {
+                            b.saturating_add(bytes)
+                        } else {
+                            b
+                        },
+                    )
+                })
                 .chain((!by_client.contains_key(&client)).then_some((client, bytes)))
                 .filter(|(_, b)| *b > 0)
                 .collect();
