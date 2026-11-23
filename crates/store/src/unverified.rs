@@ -1291,10 +1291,7 @@ impl Store {
         let limit = limit.clamp(1, MAX_PURGE_STEP);
         let tx = begin_write(&mut self.conn)?;
         let ids: Vec<i64> = tx
-            .prepare_cached(
-                "SELECT id FROM unverified_items WHERE network = ?1 AND id > ?2
-                 ORDER BY id LIMIT ?3",
-            )?
+            .prepare_cached(PURGE_PAGE)?
             .query_map(params![network as i64, after, limit as i64], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for &id in &ids {
@@ -1312,13 +1309,10 @@ impl Store {
     }
 
     /// Unverified items stored under `network`: the count a tier purge
-    /// would remove now, and what [`USENET_CAP`] bounds.
+    /// would remove now, and what [`USENET_CAP`] bounds. Read from the
+    /// kept count (V16), not by counting the rows.
     pub fn unverified_count(&self, network: Network) -> Result<u64> {
-        let n: i64 = self
-            .conn
-            .prepare_cached("SELECT count(*) FROM unverified_items WHERE network = ?1")?
-            .query_row([network as i64], |r| r.get(0))?;
-        Ok(n as u64)
+        stored_count(&self.conn, network)
     }
 
     /// A plugin's state value.
@@ -1495,25 +1489,46 @@ fn forced_private(network: Network, flags: i64) -> bool {
     network == Network::Usenet || flags & PRIVATE != 0
 }
 
+/// [`cap_network`]'s eviction: `network`'s lowest ids, read in order
+/// through `unverified_items_network` (V16).
+const EVICT_OLDEST: &str = "DELETE FROM unverified_items WHERE id IN (
+    SELECT id FROM unverified_items WHERE network = ?1 ORDER BY id LIMIT ?2)";
+/// [`Store::purge_network`]'s page, through the same index.
+const PURGE_PAGE: &str = "SELECT id FROM unverified_items WHERE network = ?1 AND id > ?2
+    ORDER BY id LIMIT ?3";
+
 /// Drops `network`'s oldest unverified items (lowest id: first found)
 /// past `cap`, at most [`MAX_PURGE_STEP`] in this call. An old item seen
 /// again in the same batch is still old: it can go, though the call
 /// reported it as [`Put::Existing`]. Usenet items have
 /// no swarm hash, so nothing is journalled.
+///
+/// The count is V16's kept one ([`stored_count`]): one row read, so a
+/// write under the cap does no counting. The eviction reads the lowest
+/// ids through `unverified_items_network`, with no sort
+/// (X-unverified-cap-index).
 fn cap_network(tx: &Transaction<'_>, network: Network, cap: u64) -> Result<usize> {
-    let n: i64 = tx
-        .prepare_cached("SELECT count(*) FROM unverified_items WHERE network = ?1")?
-        .query_row([network as i64], |r| r.get(0))?;
-    let excess = (n as u64).saturating_sub(cap).min(MAX_PURGE_STEP as u64);
+    let excess = stored_count(tx, network)?
+        .saturating_sub(cap)
+        .min(MAX_PURGE_STEP as u64);
     if excess == 0 {
         return Ok(0);
     }
     Ok(tx
-        .prepare_cached(
-            "DELETE FROM unverified_items WHERE id IN (
-                 SELECT id FROM unverified_items WHERE network = ?1 ORDER BY id LIMIT ?2)",
-        )?
+        .prepare_cached(EVICT_OLDEST)?
         .execute(params![network as i64, excess as i64])?)
+}
+
+/// `network`'s unverified items, from V16's `unverified_counts`, which
+/// its triggers keep in step with every insert, delete and network
+/// change. No row is no items. A negative count could only come from a
+/// write the triggers missed: it reads as 0, so it can never evict.
+fn stored_count(conn: &Connection, network: Network) -> Result<u64> {
+    let n: Option<i64> = conn
+        .prepare_cached("SELECT n FROM unverified_counts WHERE network = ?1")?
+        .query_row([network as i64], |r| r.get(0))
+        .optional()?;
+    Ok(n.map_or(0, |n| u64::try_from(n).unwrap_or(0)))
 }
 
 fn check_state(key: &str, value: Option<&[u8]>) -> Result<()> {
@@ -1951,5 +1966,89 @@ mod tests {
         assert_eq!(item.network, Network::Usenet);
         assert!(item.private_source);
         assert_eq!(item.claims, Some(claims()));
+    }
+
+    /// The cap's eviction and the tier purge read a network's lowest ids
+    /// through V16's `unverified_items_network`, in order: no sort, no
+    /// scan of the table. The count reads one row (X-unverified-cap-index).
+    #[test]
+    fn the_cap_and_the_purge_use_the_index() {
+        let store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let plan = |sql: &str| -> Vec<String> {
+            let mut stmt = store
+                .conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap();
+            let ones = vec![1i64; stmt.parameter_count()];
+            stmt.query_map(rusqlite::params_from_iter(ones), |r| r.get(3))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        for sql in [EVICT_OLDEST, PURGE_PAGE] {
+            let plan = plan(sql);
+            assert!(
+                plan.iter()
+                    .any(|s| s.contains("COVERING INDEX unverified_items_network (network=?")),
+                "{plan:?}"
+            );
+            assert!(
+                plan.iter()
+                    .all(|s| !s.contains("TEMP B-TREE") && !s.starts_with("SCAN unverified_items")),
+                "{plan:?}"
+            );
+        }
+        let plan = plan("SELECT n FROM unverified_counts WHERE network = ?1");
+        assert!(
+            plan.iter()
+                .all(|s| s.starts_with("SEARCH unverified_counts")),
+            "{plan:?}"
+        );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+        /// Under any cap and any run of batches, new and seen-again keys
+        /// mixed: after each write the kept count is the tier's rows, and
+        /// a write that added an item leaves the newest `cap` (highest
+        /// ids) of what was there and what it added.
+        #[test]
+        fn the_capped_tier_keeps_its_count_and_its_newest(
+            cap in 1u64..8,
+            batches in proptest::collection::vec(
+                proptest::collection::vec(0u16..40, 1..6), 1..12),
+        ) {
+            let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+            let src = store.register_source("prowlarr", "1", T).unwrap();
+            let c = claims();
+            let keys: Vec<UsenetKey> = (0..40)
+                .map(|n| UsenetKey::new("1", &format!("g{n}")).unwrap())
+                .collect();
+            for batch in batches {
+                let items: Vec<_> = batch
+                    .iter()
+                    .map(|&n| usenet(&keys[n as usize], src, &c, T))
+                    .collect();
+                let before = ids(&store);
+                let puts = store.put_unverified_capped(&items, cap).unwrap();
+                let now = ids(&store);
+                proptest::prop_assert_eq!(
+                    store.unverified_count(Network::Usenet).unwrap(),
+                    now.len() as u64
+                );
+                let mut expect = before.clone();
+                expect.extend(puts.iter().filter_map(|p| match p {
+                    Put::New(id) => Some(*id),
+                    _ => None,
+                }));
+                expect.sort_unstable();
+                if expect.len() > before.len() {
+                    let keep = expect.len().saturating_sub(cap as usize);
+                    expect.drain(..keep);
+                }
+                proptest::prop_assert_eq!(now, expect);
+            }
+        }
     }
 }
