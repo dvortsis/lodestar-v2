@@ -9011,6 +9011,11 @@
       "id": "X-alerts-back-link",
       "note": "A back link on /alerts, from X-detail-depth step 0. Rides the next alerts slice (r14).",
       "added": "2026-11-23T00:50Z"
+    },
+    {
+      "id": "X-signout-clear-order",
+      "note": "clearRecent() runs after logout() including toLogin(); if the redirect throws after the server signed out, recent searches stay. Move it before toLogin in auth/session.svelte.ts. From rv1088 (X-shell-home #1088). Rides the next auth slice.",
+      "added": "2026-11-23T03:24Z"
     }
   ],
   "main_health": [
@@ -10663,7 +10668,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T02:54:06Z",
+    "updated": "2026-11-23T03:24:30Z",
     "items": [
       {
         "slot": 1,
@@ -10672,7 +10677,7 @@
         "agent": "session_01MMjhnCtuh4cDvCQfwQaNEM",
         "model": "sonnet",
         "since": "2026-11-23T02:34:31Z",
-        "doing": "go 02:4xZ (design c, 1 s soft timeout, metrics.rs approved); building"
+        "doing": "building; 3/4-cap headroom rule added 03:0xZ (r15 review)"
       },
       {
         "slot": 2,
@@ -10681,7 +10686,7 @@
         "agent": "session_01MMjhnCUfvFAhDBHWuB237x",
         "model": "opus",
         "since": "2026-11-22T23:21:00Z",
-        "doing": "#1085 round 2 bf22524b; delta review running"
+        "doing": "#1085 delta round 3 (barrier tests, CONTROL drift guard) after rv1085b CHANGES"
       },
       {
         "slot": 3,
@@ -10690,7 +10695,7 @@
         "agent": "session_01MMjhnBgVHySe1NFVBPiukH",
         "model": "sonnet",
         "since": "2026-11-23T02:49:41Z",
-        "doing": "go 02:5xZ (BAAB mode, analyze_cr --design/--aa, fleet A/A via purpose aa; vm-status.sh + rules.py added to owns); building"
+        "doing": "#1089 ready 18aa677c; rv1089 review running"
       },
       {
         "slot": 4,
@@ -10699,7 +10704,7 @@
         "agent": "session_01MMjhn9bmyCJJen821FeiDs",
         "model": "sonnet",
         "since": "2026-11-22T22:38:32Z",
-        "doing": ".size-limit.mjs + Menu.svelte handed over 02:3xZ; building"
+        "doing": "#1088 fix round after rv1088 CHANGES (restart link text, health CLS test, decisions)"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
