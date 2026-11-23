@@ -436,12 +436,10 @@ test.describe('the Filters button at 390 px never covers other content', () => {
 		await page.goto('/search?q=nothingmatchesthis');
 		const none = page.getByText('No torrents match').first();
 		await expect(none).toBeVisible();
+		// For a real query the facets are there, so the button shows (the home has none).
 		const filters = page.getByTestId('facet-open');
-		if (await filters.isVisible()) {
-			expect(overlaps((await filters.boundingBox())!, (await none.boundingBox())!)).toBe(false);
-		} else {
-			await expect(filters).toBeHidden();
-		}
+		await expect(filters).toBeVisible();
+		expect(overlaps((await filters.boundingBox())!, (await none.boundingBox())!)).toBe(false);
 	});
 
 	test('on a results page the Filters button does not cover the count', async ({ page, mock }) => {
