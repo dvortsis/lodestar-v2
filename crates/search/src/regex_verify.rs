@@ -78,7 +78,8 @@ pub fn cancel_at_next_seal_on_this_thread(token: CancelToken) {
     CANCEL_AT_SEAL.with(|t| *t.borrow_mut() = Some(token));
 }
 
-/// For tests, here and in the crates that percolate (`lodestar`): the
+/// For tests only (no production caller), here and in the crates that
+/// percolate (`lodestar`): the
 /// budget searches compiled on this thread start, `None` for
 /// [`VERIFY_BUDGET`]. A `Duration::ZERO` makes every verify stop.
 #[doc(hidden)]
@@ -381,8 +382,10 @@ impl RegexQuery {
                 Matches::Sparse(Vec::new())
             }
         });
-        // Two passes may race on one segment; the first kept wins, so
-        // every pass sees one answer.
+        // Two passes may race on one segment, such as an unsealed sorted
+        // search's parallel pieces of it: both verify (accepted: it only
+        // happens outside a lease, within one budget), and the first kept
+        // wins, so every pass sees one answer.
         Ok(lock(&self.state.done).entry(id).or_insert(set).clone())
     }
 

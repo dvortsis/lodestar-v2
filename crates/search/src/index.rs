@@ -1428,8 +1428,10 @@ impl SearchIndex {
         )
     }
 
+    /// [`SearchIndex::compile_at`], its `/…/` clauses reusing `regex_shared`'s
+    /// where the pattern is the same (see [`SearchIndex::compile_on_lease`]).
     #[allow(clippy::too_many_arguments)]
-    fn compile_shared(
+    pub(crate) fn compile_shared(
         &self,
         node: &Node,
         now: i64,

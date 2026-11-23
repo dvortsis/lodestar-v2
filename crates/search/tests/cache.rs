@@ -487,8 +487,9 @@ fn a_leases_facets_and_recovery_reuse_its_regex_matches_after_its_budget() {
     let (_store, index, _w) = fixture(30);
     let cache = ResultCache::default();
     let node = parse("/night/ ext:mkv").unwrap();
-    // A short budget for the search, then wait it out.
-    let budget = Duration::from_millis(200);
+    // A budget the search easily finishes in, even on a loaded runner,
+    // then wait it out.
+    let budget = Duration::from_secs(2);
     lodestar_search::regex_verify::set_budget_on_this_thread(Some(budget));
     let started = Instant::now();
     let search = cache

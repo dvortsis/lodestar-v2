@@ -149,16 +149,19 @@ impl Lease {
         let at = Some(searcher.generation().generation_id());
         // A `/…/` clause verifies the whole snapshot now, under this
         // request's token, so every later page reads the same matches.
-        let compile = |stems| -> Result<Compiled> {
-            let c = index.compile_at(node, now, utc_offset, stems, cancel, at)?;
-            crate::regex_verify::seal(c.query.as_ref(), &searcher, cancel)?;
-            Ok(c)
-        };
-        let exact = compile(false)?;
+        let exact = index.compile_at(node, now, utc_offset, false, cancel, at)?;
+        crate::regex_verify::seal(exact.query.as_ref(), &searcher, cancel)?;
         let mut total = count::total(&searcher, &exact, cancel)?;
         let (mut compiled, mut stemmed) = (exact, false);
         if total.value < STEM_FALLBACK_BELOW && crate::compile::has_stem_alternative(node) {
-            let wide = compile(true)?;
+            // Its `/…/` clauses are the exact pass's, already verified: a
+            // wide pass that ran out of budget could otherwise replace a
+            // complete answer with a partial one that happens to count
+            // more, and nothing verifies twice.
+            let shared = crate::regex_verify::Shared::of(compiled.query.as_ref());
+            let wide =
+                index.compile_shared(node, now, utc_offset, true, cancel, at, Some(&shared))?;
+            crate::regex_verify::seal(wide.query.as_ref(), &searcher, cancel)?;
             let wider = count::total(&searcher, &wide, cancel)?;
             if wider.value > total.value {
                 (compiled, stemmed, total) = (wide, true, wider);
@@ -1351,12 +1354,13 @@ impl Leases {
     ) -> Vec<Slot> {
         let max = self.config.max_regex_bytes;
         let share = max / 4;
-        let held = |map: &HashMap<LeaseId, Slot>, of: Option<u64>| {
-            map.values()
-                .filter(|s| of.is_none_or(|c| s.client == c))
-                .map(|s| s.lease.regex_bytes)
-                .sum::<usize>()
-        };
+        // What each client holds, and in all, kept as leases go: one pass
+        // over the map, not one per lease removed.
+        let mut by_client: HashMap<u64, usize> = HashMap::new();
+        for s in map.values() {
+            *by_client.entry(s.client).or_default() += s.lease.regex_bytes;
+        }
+        let mut total: usize = by_client.values().sum();
         // Only regex leases free regex bytes.
         let lru_regex = |map: &HashMap<LeaseId, Slot>, of: u64| {
             map.iter()
@@ -1365,33 +1369,51 @@ impl Leases {
                 .map(|(id, _)| *id)
         };
         let mut gone = Vec::new();
-        while held(map, Some(client)).saturating_add(bytes) > share
+        let mut take = |map: &mut HashMap<LeaseId, Slot>,
+                        by_client: &mut HashMap<u64, usize>,
+                        total: &mut usize,
+                        id: LeaseId| {
+            if let Some(s) = map.remove(&id) {
+                let b = s.lease.regex_bytes;
+                if let Some(held) = by_client.get_mut(&s.client) {
+                    *held = held.saturating_sub(b);
+                }
+                *total = total.saturating_sub(b);
+                gone.push(s);
+            }
+        };
+        while by_client
+            .get(&client)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(bytes)
+            > share
             && let Some(id) = lru_regex(map, client)
         {
-            gone.extend(map.remove(&id));
+            take(map, &mut by_client, &mut total, id);
         }
-        while held(map, None).saturating_add(bytes) > max {
+        while total.saturating_add(bytes) > max {
             // Each client by what it will hold, the incoming lease
             // counted for its own: the most first, the inserter first of
             // equals, then whose least recently used is oldest.
-            let mut by_client: HashMap<u64, usize> = HashMap::new();
-            for s in map.values() {
-                *by_client.entry(s.client).or_default() += s.lease.regex_bytes;
+            let mut oldest: HashMap<u64, Instant> = HashMap::new();
+            for s in map.values().filter(|s| s.lease.regex_bytes > 0) {
+                oldest
+                    .entry(s.client)
+                    .and_modify(|t| *t = (*t).min(s.used))
+                    .or_insert(s.used);
             }
-            *by_client.entry(client).or_default() += bytes;
-            let oldest = |c: u64| {
-                map.values()
-                    .filter(|s| s.client == c && s.lease.regex_bytes > 0)
-                    .map(|s| s.used)
-                    .min()
-            };
-            let mut order: Vec<(u64, usize)> =
-                by_client.into_iter().filter(|(_, b)| *b > 0).collect();
-            order.sort_by_key(|&(c, b)| (Reverse(b), c != client, oldest(c)));
+            let mut order: Vec<(u64, usize)> = by_client
+                .iter()
+                .map(|(&c, &b)| (c, if c == client { b + bytes } else { b }))
+                .chain((!by_client.contains_key(&client)).then_some((client, bytes)))
+                .filter(|(_, b)| *b > 0)
+                .collect();
+            order.sort_by_key(|&(c, b)| (Reverse(b), c != client, oldest.get(&c).copied()));
             let Some(id) = order.iter().find_map(|&(c, _)| lru_regex(map, c)) else {
                 break;
             };
-            gone.extend(map.remove(&id));
+            take(map, &mut by_client, &mut total, id);
         }
         gone
     }

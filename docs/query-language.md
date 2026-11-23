@@ -452,7 +452,7 @@ sig:7a9f3c12 => use all 16 hex digits of a payload signature
 
 ## Regular expressions
 
-A pattern between slashes matches anywhere in the torrent's name. `name:/…/` is the same thing.
+A pattern between slashes matches anywhere in the torrent's name. `name:/…/` is the same thing (write `name:` in lowercase).
 
 ```query
 /S0[1-9]E\d+/
