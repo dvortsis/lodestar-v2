@@ -14,19 +14,23 @@ JSON with exactly these keys (the optional ones as noted):
       "spec_commit": "<40 hex>",                 # the collector's --spec-commit (CR-SPEC in force)
       "treatment": "adm",                        # adm | utp | route | lc | hint | split
       "winners": [],                             # optional, non-empty for lc/hint/split only: earlier winners
-      "mode": "abba",                            # optional: abba (the default) | on, with purpose
-      "purpose": "screen",                       # optional, with "mode": "on" only
+      "mode": "abba",                            # optional: abba (the default) | baab | on
+      "purpose": "screen",                       # optional: screen (with on) | aa (with abba or baab)
       "segment_hours": 2,                        # 2 or 3 (screen rule 3)
       "notice_version": 4                        # the Legal Notice version start-block accepts (4 on main, 2026-11-11)
     }
 
 `mode` and `purpose` (X-block-on-only-mode) are optional too. `"mode": "abba"`
 (the default, and what an absent mode means) is the A/B block: control,
-treatment, treatment, control. `"mode": "on"` runs the treatment in every
+treatment, treatment, control. `"mode": "baab"` (X-fleet-baab) is CR-SPEC's
+second block: treatment, control, control, treatment, valid wherever abba is.
+`"purpose": "aa"`, with abba or baab only, is an A/A block: both arms run the
+stage's control (the winners on, the treatment off), so it measures the noise
+floor, never a treatment. `"mode": "on"` runs the treatment in every
 segment, so there's no control and no A/B verdict: it's accepted only with
 `"purpose": "screen"` (a screen that declares it needs no control, such as a
 fresh-database screen) and never with `winners` (a stacked stage's control is
-the winners). `purpose` goes only with `"mode": "on"`. Any other combination
+the winners). `"purpose": "screen"` goes only with `"mode": "on"`. Any other combination
 refuses; start-block refuses it again (block-lib.sh mode_check).
 
 `winners` (X-fleet-stacked-arms) lists treatment keys, each at most once and
@@ -58,7 +62,7 @@ SCREEN = re.compile(r"[a-z0-9-]{1,40}\Z")
 KEYS = {"version", "screen", "lodestar_image", "lodestar_commit", "spec_commit", "treatment", "segment_hours",
         "notice_version"}
 OPTIONAL = {"winners", "mode", "purpose"}
-MODES = ("abba", "on")
+MODES = ("abba", "baab", "on")
 # The treatment keys (block-lib.sh's TREATMENT_KEYS; the collector's TREATMENT_SWITCHES).
 TREATMENTS = ("adm", "utp", "route", "lc", "hint", "split")
 # The stacked ones (the collector's STACKED): only they take winners (r5.1 A2).
@@ -100,12 +104,13 @@ def parse(text: bytes) -> dict:
 
 
 def _mode_ok(mode, purpose, has_purpose, winners) -> bool:
-    """On-only has no control arm: only for a screen that needs none, never a stacked stage."""
+    """On-only has no control arm: only for a screen that needs none, never a stacked stage.
+    An A/A block (purpose aa) needs a control order: abba or baab, stacked or not."""
     if not isinstance(mode, str) or mode not in MODES:
         return False
     if mode == "on":
         return purpose == "screen" and isinstance(purpose, str) and not winners
-    return not has_purpose  # a purpose, even null, goes only with on-only
+    return not has_purpose or (purpose == "aa" and isinstance(purpose, str))  # a purpose, even null, is screen's or aa
 
 
 def read(commit: str, repo: str, run=subprocess.run) -> tuple[dict, dict[str, bytes]]:
@@ -123,10 +128,12 @@ def read(commit: str, repo: str, run=subprocess.run) -> tuple[dict, dict[str, by
 def args(rules: dict, rules_commit: str, vm: str, block_id: str) -> dict[str, str]:
     """start-block's arguments (remote.payload checks their shape again). The
     winners are joined by '-', which the arguments' shape allows; none, no
-    WINNERS argument. MODE and PURPOSE only for on-only, so an abba block's
-    arguments are as before."""
+    WINNERS argument. MODE for on-only and baab, PURPOSE for on-only and A/A, so
+    an abba block's arguments are as before."""
     winners = {"WINNERS": "-".join(rules["winners"])} if rules.get("winners") else {}
-    on = {"MODE": "on", "PURPOSE": "screen"} if rules.get("mode") == "on" else {}
+    on = {"MODE": rules["mode"]} if rules.get("mode") in ("on", "baab") else {}
+    if rules.get("purpose") in ("screen", "aa"):
+        on["PURPOSE"] = rules["purpose"]
     return {**winners, **on, "IMAGE_DIGEST": rules["image_digest"], "LODESTAR_COMMIT": rules["lodestar_commit"],
             "SPEC_COMMIT": rules["spec_commit"], "RULES_COMMIT": rules_commit, "TREATMENT": rules["treatment"],
             "SEGMENT_HOURS": str(rules["segment_hours"]), "ROLE": vm, "NOTICE_VERSION": str(rules["notice_version"]),

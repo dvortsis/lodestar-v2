@@ -49,7 +49,7 @@ for (const width of [390, 1366]) {
 			const pill = page.getByTestId('status-pill');
 			await expect.poll(() => pill.getAttribute('data-state'), { timeout: 15_000 }).toBe('stalled');
 			await expect(pill).toHaveAttribute('href', '/insights');
-			await expect(pill).toContainText('Stalled'); // in the accessible name at every width
+			await expect(pill).toContainText('Needs attention'); // in the accessible name at every width
 			await expect(page.getByTestId('status-pill-announce')).toContainText('Open Insights', {
 				timeout: 15_000
 			});

@@ -1,0 +1,14 @@
+{
+	"search_home_title": "搜索 {count} 个种子",
+	"search_home_title_unknown": "搜索种子",
+	"search_home_lead": "Lodestar 会自动在网络上发现种子，并让你搜索它们。在上方输入几个词，或试试这些：",
+	"search_home_recent": "你最近的搜索",
+	"search_home_recent_clear": "清除最近的搜索",
+	"search_home_recent_note": "仅保存在此浏览器中。",
+	"search_home_saved": "已保存的搜索",
+	"search_home_health_working": "Lodestar 正在运行，并不断发现新种子。",
+	"search_home_health_ready": "Lodestar 已就绪，正在等待新种子。",
+	"search_home_health_paused": "爬虫已暂停。打开洞察以恢复。",
+	"search_home_health_restart": "有更改需要重启。打开设置。",
+	"search_home_health_attention": "有事项需要注意。打开洞察查看详情。"
+}

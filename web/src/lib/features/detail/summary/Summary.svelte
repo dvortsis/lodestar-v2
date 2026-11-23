@@ -1,11 +1,10 @@
 <script lang="ts">
 	// §10.5.1 summary facts. Every number goes through $lib/format and has a data-testid; a null is
 	// "—" (never 0), and a never-scraped swarm says so in words.
-	import { DASH, formatBytes, formatCount, formatDateTime, formatScore } from '$lib/format';
+	import { DASH, formatBytes, formatCount, formatDateTime } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import Badge from '$lib/ui/labels/Badge.svelte';
-	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import type { SearchHit, TorrentDetail } from '../cache';
 	import { junkText } from './junk';
 
@@ -17,20 +16,6 @@
 	let { detail, hit, level = 3 }: Props = $props();
 
 	const locale = $derived(currentLocale());
-	const flags = $derived(
-		(
-			[
-				['private', m.detail_flag_private],
-				['v2', m.detail_flag_v2],
-				['hybrid', m.detail_flag_hybrid],
-				['files_partial', m.detail_flag_files_partial]
-			] as const
-		).filter(([flag]) => detail.flags.includes(flag))
-	);
-	const never = $derived(detail.last_scrape_at === null);
-	// "Seen {relative}": the message wraps a RelativeTime, so split it around a marker.
-	const MARK = '\u0000';
-	const seen = $derived(m.scrape_age({ relative: MARK }).split(MARK));
 	const trackersKnown = $derived(
 		detail.trackers_reporting !== null && detail.trackers_checked !== null
 	);
@@ -82,18 +67,6 @@
 			{/if}
 		</dd>
 
-		<dt>{m.detail_swarm()}</dt>
-		<dd data-testid="detail-scrape-age">
-			{#if never}
-				{m.never_scraped()}
-			{:else}
-				{seen[0]}<RelativeTime seconds={detail.last_scrape_at} />{seen[1]}
-				<span class="text-muted-text" data-testid="detail-scrape-at"
-					>· {formatDateTime(detail.last_scrape_at, locale)}</span
-				>
-			{/if}
-		</dd>
-
 		<dt>{m.trackers_reporting()}</dt>
 		<dd class="tabular-nums" data-testid="detail-trackers">
 			{#if trackersKnown}
@@ -106,28 +79,13 @@
 			{/if}
 		</dd>
 
-		<dt>{m.detail_piece_size()}</dt>
-		<dd class="tabular-nums" data-testid="detail-piece-size">
-			{formatBytes(detail.piece_len, locale)}
-		</dd>
-
-		{#if flags.length}
-			<dt>{m.detail_flags()}</dt>
-			<dd class="ls-detail-row" data-testid="detail-flags">
-				{#each flags as [flag, label] (flag)}<Badge variant="info">{label()}</Badge>{/each}
-			</dd>
-		{/if}
-
-		<dt>{m.junk()}</dt>
-		<dd class="ls-detail-stack">
-			<span class="tabular-nums" data-testid="detail-junk-score"
-				>{formatScore(hit?.junk_score ?? null, locale)}</span
-			>
-			{#if reasons.length}
+		{#if reasons.length}
+			<dt>{m.junk()}</dt>
+			<dd>
 				<ul class="ls-detail-stack" data-testid="detail-junk-reasons">
 					{#each reasons as reason (reason)}<li>{junkText(reason)}</li>{/each}
 				</ul>
-			{/if}
-		</dd>
+			</dd>
+		{/if}
 	</dl>
 </section>

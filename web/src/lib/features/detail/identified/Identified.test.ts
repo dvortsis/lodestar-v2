@@ -30,7 +30,11 @@ describe('Identified', () => {
 		expect(text('detail-identified-answer')).toContain('92% sure');
 		expect(text('detail-identified-chosen')).toBe('Used as the title');
 		expect(text('detail-identified-canonical')).toBe('The Shawshank Redemption');
-		expect(text('detail-identified-ids')).toBe('imdb: tt0111161');
+		expect(text('detail-identified-ids')).toContain('IMDb: tt0111161');
+		const link = screen.getByTestId('detail-identified-id-link') as HTMLAnchorElement;
+		expect(link.getAttribute('href')).toBe('https://www.imdb.com/title/tt0111161/');
+		expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+		expect(link.getAttribute('target')).toBe('_blank');
 		expect(text('detail-identified-genres')).toBe('drama');
 		expect(screen.getByTestId('detail-identified-alt').querySelector('bdi')?.lang).toBe('ja');
 	});

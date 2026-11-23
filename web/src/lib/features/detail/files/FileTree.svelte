@@ -24,6 +24,7 @@
 		matched?: readonly number[];
 	}
 	let { detail, matched = [] }: Props = $props();
+	const filterId = $props.id();
 
 	const locale = $derived(currentLocale());
 	const hash = $derived(detail.hash);
@@ -233,11 +234,12 @@
 >
 	<div class="ls-detail-row">
 		<div class="ls-detail-grow">
+			<label class="ls-detail-label" for={filterId}>{m.detail_tree_filter()}</label>
 			<Input
+				id={filterId}
 				type="search"
 				dense
 				bind:value={filterText}
-				aria-label={m.detail_tree_filter()}
 				placeholder={m.detail_tree_filter_placeholder()}
 				data-testid="detail-file-tree-filter"
 			/>

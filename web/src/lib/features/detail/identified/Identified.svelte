@@ -11,7 +11,9 @@
 	import { showBidi } from '$lib/util/bidi';
 	import { formatPercent } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
+	import IconExternal from '~icons/ph/arrow-square-out-bold';
 	import type { TorrentDetail } from '../cache';
+	import { idLink } from './ids';
 
 	let { detail, level = 3 }: { detail: TorrentDetail; level?: number } = $props();
 	const id = $props.id();
@@ -68,7 +70,20 @@
 						<dt>{m.detail_identified_ids()}</dt>
 						<dd data-testid="detail-identified-ids">
 							{#each a.ids as x, xi (xi)}{#if xi > 0},
-								{/if}<bdi>{showBidi(x.scheme)}: {showBidi(x.value)}</bdi>{/each}
+								{/if}{@const link = idLink(
+									x.scheme,
+									x.value
+								)}{#if link}<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- a fixed https template filled from a validated id (ids.ts) --><a
+										href={link.href}
+										target="_blank"
+										rel="noopener noreferrer"
+										class="link inline-flex items-center gap-1"
+										data-testid="detail-identified-id-link"
+										><bdi>{link.name}: {x.value}</bdi><IconExternal
+											class="size-(--icon-size-row)"
+											aria-hidden="true"
+										/><span class="sr-only">{m.detail_external_link()}</span></a
+									>{:else}<bdi>{showBidi(x.scheme)}: {showBidi(x.value)}</bdi>{/if}{/each}
 						</dd>
 					{/if}
 					{#if a.alt_titles.length > 0}

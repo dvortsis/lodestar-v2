@@ -3,12 +3,20 @@
 import type { RebuildSnapshot } from '$lib/shell/status';
 
 let rebuild = $state.raw<RebuildSnapshot | null>(null);
+let pillKind = $state('unknown');
 
 export const testStatus = {
 	get rebuild() {
 		return rebuild;
+	},
+	get pill() {
+		return { kind: pillKind };
 	}
 };
+
+export function setPill(kind: string) {
+	pillKind = kind;
+}
 
 export function setRebuild(next: RebuildSnapshot | null) {
 	rebuild = next;

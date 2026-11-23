@@ -9,10 +9,7 @@ const ids = [
 	'detail-discovered',
 	'detail-seeders',
 	'detail-leechers',
-	'detail-scrape-age',
-	'detail-trackers',
-	'detail-piece-size',
-	'detail-junk-score'
+	'detail-trackers'
 ];
 const text = (id: string) => screen.getByTestId(id).textContent!.replace(/\s+/g, ' ').trim();
 
@@ -48,21 +45,11 @@ describe('Summary', () => {
 		expect(text('detail-files')).toBe('3');
 		expect(text('detail-seeders')).toBe('120');
 		expect(text('detail-leechers')).toBe('4');
-		expect(text('detail-piece-size')).toBe('4.00 MiB');
-		expect(text('detail-junk-score')).toBe('0');
 	});
 
 	it('says "Reported by 4 of 20 trackers checked"', () => {
 		render(Summary, { detail: torrentDetail(), hit: null });
 		expect(text('detail-trackers')).toBe('Reported by 4 of 20 trackers checked');
-	});
-
-	it('shows "Seen …" with an absolute time for a scraped torrent', () => {
-		const now = Date.now() / 1000;
-		render(Summary, { detail: torrentDetail({ last_scrape_at: now - 3 * 3600 }), hit: null });
-		const age = screen.getByTestId('detail-scrape-age');
-		expect(age.textContent).toMatch(/^\s*Seen 3 hours ago/);
-		expect(within(age).getByText(/\(.*\d{4}.*\)/)).toBeTruthy();
 	});
 
 	it('never-scraped swarm: "—" with the words "Never scraped"', () => {
@@ -82,7 +69,6 @@ describe('Summary', () => {
 			expect(el.querySelector('[aria-hidden="true"]')!.textContent).toBe('—');
 			expect(el.textContent).toContain('Never scraped');
 		}
-		expect(text('detail-scrape-age')).toBe('Never scraped');
 	});
 
 	it('keeps a scraped zero as 0, not a dash', () => {
@@ -104,47 +90,21 @@ describe('Summary', () => {
 		render(Summary, { detail: torrentDetail({ flags: ['backfill'] }), hit: null });
 		expect(screen.getByText('First seen during backfill')).toBeTruthy();
 	});
+});
 
-	it('shows the flags as badges with text', () => {
-		render(Summary, {
-			detail: torrentDetail({ flags: ['private', 'v2', 'hybrid', 'files_partial'] }),
-			hit: null
-		});
-		const flags = screen.getByTestId('detail-flags');
-		for (const label of ['Private', 'v2', 'Hybrid', 'Partial file list']) {
-			expect(within(flags).getByText(label)).toBeTruthy();
-		}
-	});
-
-	it('junk: a dash when unscored, and each reason as text, unknown keys as themselves', () => {
-		const { unmount } = render(Summary, {
-			detail: torrentDetail(),
-			hit: searchHit({ junk_score: null })
-		});
-		expect(text('detail-junk-score')).toBe('—');
+describe('Summary junk reasons', () => {
+	it('lists reasons as text only when there are some, unknown keys as themselves', () => {
+		const { unmount } = render(Summary, { detail: torrentDetail(), hit: searchHit() });
+		expect(screen.queryByTestId('detail-junk-reasons')).toBeNull();
 		unmount();
 		render(Summary, {
 			detail: torrentDetail(),
-			hit: searchHit({
-				junk_score: 70,
-				junk_reasons: ['double-extension', 'tiny-video', 'future-reason']
-			})
+			hit: searchHit({ junk_score: 70, junk_reasons: ['double-extension', 'future-reason'] })
 		});
-		expect(text('detail-junk-score')).toBe('70');
-		const reasons = screen.getByTestId('detail-junk-reasons');
-		expect(
-			within(reasons)
-				.getAllByRole('listitem')
-				.map((li) => li.textContent)
-		).toEqual([
+		const items = within(screen.getByTestId('detail-junk-reasons')).getAllByRole('listitem');
+		expect(items.map((li) => li.textContent)).toEqual([
 			'A media file name hides a program (like movie.mp4.exe)',
-			'The video files are too small for the quality claimed',
 			'future-reason'
 		]);
-	});
-
-	it('without the hit the junk row is a dash (not 0)', () => {
-		render(Summary, { detail: torrentDetail(), hit: null });
-		expect(text('detail-junk-score')).toBe('—');
 	});
 });

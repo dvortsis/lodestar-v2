@@ -312,24 +312,37 @@ wait_api() {  # at least one try, then up to API_WAIT seconds (tests shorten it)
     sleep 3
   done
 }
-# Lodestar's arm for segment $1. An ABBA block (MODE abba, the default): control,
-# treatment, treatment, control. An on-only block (MODE on, X-block-on-only-mode):
-# the treatment in every segment. Only MODE as args or block.env give it counts
-# (start-block and load_block_env unset the environment's).
+# Lodestar's arm for segment $1, by the block's recorded order (MODE). An ABBA
+# block (MODE abba, the default, and a block.env with no MODE): control,
+# treatment, treatment, control. A BAAB block (MODE baab, X-fleet-baab, CR-SPEC's
+# second block): treatment, control, control, treatment. An on-only block (MODE
+# on, X-block-on-only-mode): the treatment in every segment. Only MODE as args
+# or block.env give it counts (start-block and load_block_env unset the
+# environment's). Every reader of the order goes through this (scrub.py's
+# arm_of mirrors it; infra/fleet/tests checks the two agree). An A/A block
+# (PURPOSE aa) keeps these labels; arm_env runs both arms the same.
 arm_of() {
-  [[ ${MODE:-abba} == on ]] && { echo treatment; return; }
-  case $1 in 2 | 3) echo treatment ;; *) echo control ;; esac
+  case ${MODE:-abba} in
+    on) echo treatment ;;
+    baab) case $1 in 1 | 4) echo treatment ;; *) echo control ;; esac ;;
+    *) case $1 in 2 | 3) echo treatment ;; *) echo control ;; esac ;;
+  esac
 }
 # mode_check MODE PURPOSE WINNERS: 0 for a valid combination, or 1 with the
-# reason on stdout. On-only (MODE on) has no control arm, so it's only for a
-# screen that declares it needs none (PURPOSE screen), and never for a stacked
-# stage (WINNERS), whose control is the winners (r5.1 A2): mode_needs_control.
-# PURPOSE goes only with on-only: purpose_needs_on_mode. Empty MODE is abba.
+# reason on stdout. ABBA and BAAB (X-fleet-baab) are valid in the same places,
+# stacked stages (WINNERS) included, whose control is the winners (r5.1 A2).
+# On-only (MODE on) has no control arm, so it's only for a screen that declares
+# it needs none (PURPOSE screen), and never for a stacked stage:
+# mode_needs_control. PURPOSE screen goes only with on-only, and PURPOSE aa (an
+# A/A block: the noise floor of the stage's control) only with abba or baab:
+# purpose_needs_on_mode, purpose_needs_ab_mode. Empty MODE is abba.
 mode_check() {
   local mode=${1:-abba} purpose=$2 winners=$3
   case $mode in
-    abba) [[ -z $purpose ]] || { echo purpose_needs_on_mode; return 1; } ;;
-    on) [[ $purpose == screen && -z $winners ]] || { echo mode_needs_control; return 1; } ;;
+    abba | baab) [[ -z $purpose || $purpose == aa ]] || { echo purpose_needs_on_mode; return 1; } ;;
+    on)
+      [[ $purpose == aa ]] && { echo purpose_needs_ab_mode; return 1; }
+      [[ $purpose == screen && -z $winners ]] || { echo mode_needs_control; return 1; } ;;
     *) echo unknown_mode; return 1 ;;
   esac
 }
@@ -400,10 +413,11 @@ stacking() {
 }
 # arm_env segment: the crawler switches start_lodestar sets for segment's arm,
 # one NAME=value per line. The winners are on in both arms; the treatment's are
-# on in B (segments 2 and 3, or every segment on-only) and off in A (1 and 4).
+# on in B and off in A (arm_of: by MODE). An A/A block (PURPOSE aa) keeps them
+# off in both arms, so both run the stage's control.
 arm_env() {
   local value=false v
-  [[ $(arm_of "$1") == treatment ]] && value=true
+  [[ $(arm_of "$1") == treatment && ${PURPOSE:-} != aa ]] && value=true
   for v in "${WINNER_VARS[@]}"; do printf '%s=true\n' "$v"; done
   for v in "${TREATMENT_VARS[@]}"; do printf '%s=%s\n' "$v" "$value"; done
 }
@@ -577,8 +591,8 @@ load_block_env() {
       WINNERS) [[ $v =~ ^(($TREATMENT_KEYS)(-($TREATMENT_KEYS))*)?$ ]] || return 1 ;;  # empty: none
       SEGMENT_HOURS) [[ $v =~ ^[23]$ ]] || return 1 ;;
       ROLE) [[ $v =~ ^(main|worker)$ ]] || return 1 ;;
-      MODE) [[ $v == on ]] || return 1 ;;  # written only for on-only; abba is its absence
-      PURPOSE) [[ $v == screen ]] || return 1 ;;
+      MODE) [[ $v =~ ^(on|baab)$ ]] || return 1 ;;  # written for on-only and baab; abba is its absence
+      PURPOSE) [[ $v =~ ^(screen|aa)$ ]] || return 1 ;;
       *) return 1 ;;
     esac
     printf -v "$k" '%s' "$v"

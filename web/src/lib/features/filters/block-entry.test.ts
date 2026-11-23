@@ -34,6 +34,12 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
+/** The drawer's Block this… now sits in the More actions menu: open it, then choose the item. */
+const pressBlock = async () => {
+	await fireEvent.click(screen.getByTestId('detail-actions-menu'));
+	await fireEvent.click(await screen.findByRole('menuitem', { name: 'Block this…' }));
+};
+
 /** Each entry point: render it for a torrent with this name, and press "Block this…". */
 const entries = {
 	'a result': {
@@ -51,7 +57,7 @@ const entries = {
 	'the drawer': {
 		mount: (name: string) =>
 			render(DetailActions, { detail: torrentDetail({ hash: HASH, hash_v2: V2, name }) }),
-		press: () => fireEvent.click(screen.getByTestId('detail-block'))
+		press: () => pressBlock()
 	}
 };
 
@@ -149,7 +155,7 @@ describe.each(Object.entries(entries))('Block this… from %s', (_, entry) => {
 it('the drawer drops a press whose torrent changed before the flows loaded', async () => {
 	const first = torrentDetail({ hash: HASH, name: 'First' });
 	const view = render(DetailActions, { detail: first });
-	await fireEvent.click(screen.getByTestId('detail-block'));
+	await pressBlock();
 	await view.rerender({ detail: torrentDetail({ hash: 'ef'.repeat(20), name: 'Second' }) });
 	await vi.dynamicImportSettled();
 	expect(screen.queryByRole('dialog')).toBeNull();
@@ -165,12 +171,12 @@ it('the drawer drops a press whose torrent changed before the flows loaded', asy
 it('the drawer closes the dialog when its torrent stops being the one shown', async () => {
 	const detail = torrentDetail({ hash: HASH, name: 'Lantern.Keeper.1' });
 	const view = render(DetailActions, { detail });
-	await fireEvent.click(screen.getByTestId('detail-block'));
+	await pressBlock();
 	await opened();
 	await view.rerender({ detail: null });
 	await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 	await view.rerender({ detail });
-	await fireEvent.click(screen.getByTestId('detail-block'));
+	await pressBlock();
 	await opened();
 	clearDetailCaches(false); // visibility changed, e.g. "Show adult content" turned off
 	await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
