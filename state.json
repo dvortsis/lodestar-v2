@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-23T12:39:07Z",
+  "updated_at": "2026-11-23T15:38:38Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-23T12:39:07Z",
+  "last_heartbeat": "2026-11-23T15:38:38Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10684,7 +10684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T12:39:07Z",
+    "updated": "2026-11-23T15:38:38Z",
     "items": [
       {
         "slot": 1,
@@ -10692,7 +10692,7 @@
         "slice": "RX-1",
         "role": "build",
         "agent": "session_01MMjhn911SUimiUBvzWMwkb (opus)",
-        "doing": "RX-1-fixes: round 3 pending (S8-14 after_saved path + general review findings); 53a2d5a5 CI running",
+        "doing": "RX-1-fixes: round 5 local (export/torznab fail when regex stopped, polish), held for the final review of 5fda54fc; merged-tree test passes",
         "since": "2026-11-23T08:31:45Z"
       },
       {
@@ -10818,7 +10818,7 @@
       "effect": "AWS stop = 90% of the lower of $130.56 and $133.72 = $117.50 of new AWS spend from 2026-11-23T00:31Z (r15 rule; conservative: spend since 00:31Z already counts against it). Replaces the interim $100 stop."
     }
   ],
-  "heartbeat": "2026-11-23T12:39:07Z",
+  "heartbeat": "2026-11-23T15:38:38Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "build_slices": true,
