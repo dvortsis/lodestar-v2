@@ -550,7 +550,7 @@ pub struct SearchHit {
     pub name: String,
     pub piece_len: u64,
     /// The release resolution the name gives; null = none. Its schema,
-    /// description included, is [`resolution_schema`]'s.
+    /// description included, is `resolution_schema`'s.
     #[schema(required = true, schema_with = resolution_schema)]
     pub resolution: Option<String>,
     /// How the title was found when the name wasn't informative:
