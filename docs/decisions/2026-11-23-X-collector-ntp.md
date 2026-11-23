@@ -23,6 +23,11 @@ The runner merges this only after X-test-vm's probe shows that the patched funct
 - from a one-off container of the collector image, for both the raw syscall and `ntp_adjtime`: the return value and `ctypes.get_errno()`;
 - whether the host's `chrony.conf` has `rtcsync`. Without it, chrony may leave STA_UNSYNC set, and the kernel source then reads unsynchronised.
 
+## A missing counter in the allow-list (runner, 2026-11-23)
+- **`fetch_first_window_timeouts_total{transport}` is now kept** in snapshots (`LABELLED` in `collect.py`, labels `tcp` and `utp` only), so it no longer reads "not collected". X-test-vm found it was missing. The binary at the pin exports it (`docs/metrics.md`; `docs/decisions/2026-11-14-X-fetch-first-window.md`). It isn't required, because older binaries don't export it.
+- **No other counter was missing.** I checked every metric name that `analyze_cr.py`, `analyze_cr0.py`, `screen_sweep.py` and the fleet's scripts (`infra/`) read against the allow-list (`KEEP`). Every documented metric they read is already kept.
+- **The test** (`test_snapshots_keep_first_window_timeouts_by_transport`) checks that both transports are kept, and that an unknown transport and an unlabelled series are dropped.
+
 ## Collector identity, and how a lane picks the fix up
 - **What's recorded:** `run.json` records `collector_sha256` per segment, and analyze_cr's `identity()` reports it. `judge_block` doesn't require it to match across a block's segments: it checks `image_digest_differs`, not the collector. Each segment is judged by its own `collector_sha256`.
 - **What the fleet pins:** the rules commit gives the collector (`infra/fleet/steps/rules.py`, `TOOLS`). `start-block.sh` stages it once into `$BLOCK/tools/linux/collect.py`, which is mounted read-only into every segment's collector container.

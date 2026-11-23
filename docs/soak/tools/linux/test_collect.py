@@ -1137,6 +1137,18 @@ class PublicationTests(Base):
         self.assertNotIn('family="ipv4"', clean)
         self.assertFalse({"dht_routing_nodes", "dht_routing_good_nodes"} & set(collect.REQUIRED))
 
+    def test_snapshots_keep_first_window_timeouts_by_transport(self):
+        extra = ('lodestar_fetch_first_window_timeouts_total{transport="tcp"} 3\n'
+                 'lodestar_fetch_first_window_timeouts_total{transport="utp"} 1\n'
+                 'lodestar_fetch_first_window_timeouts_total{transport="quic"} 9\n'
+                 'lodestar_fetch_first_window_timeouts_total 4\n')
+        clean = collect.sanitize_snapshot(metrics_text(100, extra=extra))
+        self.assertIn('lodestar_fetch_first_window_timeouts_total{transport="tcp"} 3\n', clean)
+        self.assertIn('lodestar_fetch_first_window_timeouts_total{transport="utp"} 1\n', clean)
+        self.assertNotIn("quic", clean)  # only the documented transports
+        self.assertNotIn("lodestar_fetch_first_window_timeouts_total 4", clean)
+        self.assertNotIn("fetch_first_window_timeouts_total", collect.REQUIRED)  # absent from older binaries
+
     def test_counter_list_matches_the_analyzer(self):
         self.assertEqual(collect.COUNTERS, analyze_cr0.COUNTERS)
 

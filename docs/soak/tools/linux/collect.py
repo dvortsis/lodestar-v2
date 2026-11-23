@@ -115,6 +115,8 @@ LABELLED = {
     "fetch_attempts_total": _TRANSPORT,
     "fetch_success_total": _TRANSPORT,
     "fetch_connect_timeouts_total": _TRANSPORT,
+    # X-fetch-first-window: large dicts whose first window missed its 4 s bound (also timed_out).
+    "fetch_first_window_timeouts_total": _TRANSPORT,
     "fetch_family_attempts_total": _FAMILY,
     "fetch_family_success_total": _FAMILY,
     "fetch_no_route_total": _FAMILY,
