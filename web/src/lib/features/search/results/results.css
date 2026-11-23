@@ -25,6 +25,20 @@
 #search-drawer {
 	display: contents;
 }
+/* The home screen (search/home) has no facets to show: it takes the page's full width and the empty
+   rail leaves no gap above it (UI review P6). */
+.search-grid:has(.rp-empty[data-home]) {
+	grid-template-columns: minmax(0, 1fr);
+	@variant x-large {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+.rp-empty[data-home] {
+	padding-block-start: 0;
+}
+.search-grid:has(.rp-empty[data-home]) > #search-rail {
+	display: none;
+}
 .rp {
 	position: relative;
 	display: flex;

@@ -39,7 +39,7 @@
 	);
 </script>
 
-<div class="rp-empty" data-testid="results-empty">
+<div class="rp-empty" data-home="" data-testid="results-empty">
 	<h2 class="rp-empty-title" data-testid="results-empty-title">
 		{count !== null
 			? m.search_home_title({ count: formatCount(count, locale) })
