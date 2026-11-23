@@ -32,12 +32,12 @@ use lodestar_store::{Store, StoreConfig};
 
 /// Budgets in bytes per torrent (owner-set, §3; the runner tunes them under
 /// owner-decisions §2.26, a slice never does) at a ~30-file average. §3 allows 1.5 KB for
-/// the canonical store plus the torrent index; M0 reserves 0.5 KB of that
-/// for the index (built in M2), leaving 1 KB for the whole SQLite file, of
-/// which file-tree blobs may use 0.6 KB.
-const STORE_BUDGET: f64 = 1024.0;
+/// the canonical store plus the torrent index. The runner re-split it for
+/// RX-1's trigrams (2026-11-23, §2.26): 560 B for the index and 976 B for
+/// the whole SQLite file, of which file-tree blobs may use 0.6 KB.
+const STORE_BUDGET: f64 = 976.0;
 const BLOB_BUDGET: f64 = 600.0;
-const INDEX_BUDGET: f64 = 512.0;
+const INDEX_BUDGET: f64 = 560.0;
 /// The file index in smart mode (§3).
 const FILE_INDEX_BUDGET: f64 = 800.0;
 /// §3: the canonical store plus the torrent index.

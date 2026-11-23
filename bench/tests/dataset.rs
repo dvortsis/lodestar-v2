@@ -516,8 +516,8 @@ fn size_report_gives_every_size_figure_and_leaves_the_dataset_as_built() {
     assert!(r["git"].get("rev").is_some());
     for (id, budget) in [
         ("size.file-tree-blob-mean", Some(600.0)),
-        ("size.canonical-store", Some(1024.0)),
-        ("size.torrent-index", Some(512.0)),
+        ("size.canonical-store", Some(976.0)),
+        ("size.torrent-index", Some(560.0)),
         ("size.file-index-smart", Some(800.0)),
         ("size.store-torrent-index", Some(1536.0)),
         ("size.all-in", None),
