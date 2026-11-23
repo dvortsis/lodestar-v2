@@ -26,7 +26,45 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (13, V13),
     (14, V14),
     (15, V15),
+    (16, V16),
 ];
+
+/// X-unverified-cap-index (`docs/decisions/2026-11-23-X-unverified-cap-index.md`):
+/// the usenet cap's eviction and count without scanning the tier. Additive
+/// only.
+///
+/// - `unverified_items_network` serves the cap's eviction and the tier
+///   purge: a network's lowest ids are read in order, with no sort.
+/// - `unverified_counts` keeps each network's item count, so the cap
+///   reads one row instead of counting the tier. The triggers keep it in
+///   the same transaction as every insert, delete (the content-safety
+///   triggers' and the snapshot purge's included) and network change, so
+///   it's exact and crash-safe. Nothing writes `unverified_items` with
+///   `REPLACE`, whose deletes would bypass the delete trigger. No CHECK
+///   on `n`: a bookkeeping check must never fail a content-safety delete.
+/// - The backfill counts the rows already stored, through the new index.
+const V16: &str = "
+CREATE INDEX unverified_items_network ON unverified_items (network, id);
+CREATE TABLE unverified_counts (
+    network INTEGER PRIMARY KEY CHECK (network BETWEEN 0 AND 15),
+    n       INTEGER NOT NULL
+) STRICT;
+INSERT INTO unverified_counts (network, n)
+    SELECT network, count(*) FROM unverified_items GROUP BY network;
+CREATE TRIGGER unverified_counted AFTER INSERT ON unverified_items BEGIN
+    INSERT INTO unverified_counts (network, n) VALUES (new.network, 1)
+        ON CONFLICT (network) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER unverified_uncounted AFTER DELETE ON unverified_items BEGIN
+    UPDATE unverified_counts SET n = n - 1 WHERE network = old.network;
+END;
+CREATE TRIGGER unverified_recounted AFTER UPDATE OF network ON unverified_items
+    WHEN old.network != new.network BEGIN
+    UPDATE unverified_counts SET n = n - 1 WHERE network = old.network;
+    INSERT INTO unverified_counts (network, n) VALUES (new.network, 1)
+        ON CONFLICT (network) DO UPDATE SET n = n + 1;
+END;
+";
 
 /// ENR-terms (`docs/decisions/2026-11-16-ENR-terms.md`): when each
 /// source's claims on a torrent were last written (Unix seconds), so a
@@ -1687,12 +1725,13 @@ mod tests {
 
     /// Older builds opening this build's store refuse it as newer and
     /// change nothing: no migration, no snapshot, the file as it was. The
-    /// v0.5.1 code path (migrations through V12), a V13 and a V14 build
-    /// all refuse a V15 store, and so do their read-only connections.
+    /// v0.5.1 code path (migrations through V12) and V13, V14 and V15
+    /// builds all refuse a V16 store, and so do their read-only
+    /// connections.
     #[test]
     fn older_builds_refuse_a_newer_store_untouched() {
         let latest = latest_schema_version();
-        assert_eq!(latest, 15);
+        assert_eq!(latest, 16);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lodestar.db");
         drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
@@ -1706,7 +1745,7 @@ mod tests {
         };
         let (files, bytes) = (listing(), std::fs::read(&path).unwrap());
 
-        for older in [12, 13, 14] {
+        for older in [12, 13, 14, 15] {
             let mut conn = Connection::open(&path).unwrap();
             configure(&conn, 0).unwrap();
             let err =
@@ -1736,6 +1775,167 @@ mod tests {
         }
     }
 
+    /// V16 on a V15 store with BitTorrent and usenet items, then down and
+    /// up again (X-unverified-cap-index):
+    /// - up: it runs once, keeps every row, takes the pre-V16 snapshot and
+    ///   backfills each network's count; its triggers count from then on
+    ///   (an insert, a content-safety hold's delete, a network change);
+    /// - down: the update rollback restores the snapshot, a V15 store,
+    ///   which a V15 build opens and writes without the triggers;
+    /// - up again: V16 counts what that left.
+    #[test]
+    fn v16_counts_a_v15_store_and_comes_back_after_a_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lodestar.db");
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..15]).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sources (id, plugin, version, state, added_at) VALUES
+                 (0, 'dht', '1', 0, 0), (1, 'prowlarr', '1', 0, 0);
+             UPDATE id_seq SET next = 100;",
+        )
+        .unwrap();
+        let insert = |conn: &Connection, id: i64, network: i64, key: &[u8]| {
+            conn.execute(
+                "INSERT INTO unverified_items (id, network, key, source_id, sources, flags,
+                     claims, first_at, last_at)
+                 VALUES (?1, ?2, ?3, 1, 2, 3, x'01000000000000', 0, 0)",
+                rusqlite::params![id, network, key],
+            )
+            .unwrap();
+        };
+        for (id, network, key) in [
+            (1, 0, vec![0x11; 20]),
+            (2, 0, vec![0x22; 20]),
+            (3, 0, vec![0x33; 20]),
+            (4, 4, vec![0x44; 32]),
+            (5, 4, vec![0x55; 32]),
+        ] {
+            insert(&conn, id, network, &key);
+        }
+        let counts = |conn: &Connection| -> Vec<(i64, i64)> {
+            let mut stmt = conn
+                .prepare("SELECT network, n FROM unverified_counts ORDER BY network")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let rows = |conn: &Connection| -> i64 {
+            conn.query_row("SELECT count(*) FROM unverified_items", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        // Up.
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 16);
+        let snapshot = dir.path().join("lodestar.pre-v16.db");
+        assert!(snapshot.exists(), "pre-V16 snapshot");
+        assert_eq!(rows(&conn), 5);
+        assert_eq!(counts(&conn), vec![(0, 3), (4, 2)]);
+        insert(&conn, 6, 4, &[0x66; 32]);
+        conn.execute(
+            "INSERT INTO tombstones (hash, rule, at) VALUES (?1, 'CS-2', 0)",
+            [&[0x11u8; 20][..]],
+        )
+        .unwrap();
+        conn.execute("UPDATE unverified_items SET network = 4 WHERE id = 2", [])
+            .unwrap();
+        assert_eq!(rows(&conn), 5);
+        assert_eq!(counts(&conn), vec![(0, 1), (4, 4)]);
+        // Once only: a second open finds it current and takes no snapshot.
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 16);
+        assert!(!dir.path().join("lodestar.pre-v16.1.db").exists());
+        drop(conn);
+
+        // Down: the snapshot replaces the store, as the update rollback
+        // restores it, and a V15 build runs on it.
+        for side in ["lodestar.db-wal", "lodestar.db-shm"] {
+            let _ = std::fs::remove_file(dir.path().join(side));
+        }
+        std::fs::copy(&snapshot, &path).unwrap();
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..15]).unwrap();
+        assert_eq!(version(&conn), 15);
+        assert_eq!(rows(&conn), 5, "the snapshot's rows");
+        let objects: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name IN ('unverified_counts',
+                     'unverified_items_network', 'unverified_counted')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(objects, 0, "no V16 object in a V15 store");
+        conn.execute("DELETE FROM unverified_items WHERE id = 1", [])
+            .unwrap();
+        insert(&conn, 7, 4, &[0x77; 32]);
+
+        // Up again: the backfill counts what the V15 build left.
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 16);
+        assert!(dir.path().join("lodestar.pre-v16.1.db").exists());
+        assert_eq!(counts(&conn), vec![(0, 2), (4, 3)]);
+        assert_eq!(count_check(&conn), 0);
+    }
+
+    /// Networks whose kept count isn't their `count(*)`.
+    fn count_check(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM unverified_counts c WHERE n != (
+                 SELECT count(*) FROM unverified_items u WHERE u.network = c.network)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// V16's cost on a big store (X-unverified-cap-index): a V15 store of
+    /// 1M BitTorrent and 1M usenet unverified items, with and without the
+    /// pre-migration snapshot. Run with `cargo test --release -p
+    /// lodestar-store --lib v16_migration_time -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement; writes a ~500 MB store"]
+    fn v16_migration_time_on_a_2m_item_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lodestar.db");
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..15]).unwrap();
+        conn.execute_batch(
+            "BEGIN;
+             INSERT INTO sources (id, plugin, version, state, added_at)
+                 VALUES (1, 'prowlarr', '1', 0, 0);
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000000)
+             INSERT INTO unverified_items (id, network, key, source_id, sources, flags, claims,
+                 first_at, last_at)
+             SELECT i, CASE WHEN i <= 1000000 THEN 0 ELSE 4 END,
+                 randomblob(CASE WHEN i <= 1000000 THEN 20 ELSE 32 END), 1, 2, 3,
+                 randomblob(150), 0, 0 FROM n;
+             UPDATE id_seq SET next = 2000001;
+             COMMIT;",
+        )
+        .unwrap();
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        let t = std::time::Instant::now();
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        let with_snapshot = t.elapsed();
+        assert_eq!(count_check(&conn), 0);
+        let mut bare = Connection::open(dir.path().join("lodestar.pre-v16.db")).unwrap();
+        configure(&bare, 0).unwrap();
+        let t = std::time::Instant::now();
+        migrate_with(&mut bare, None, MIGRATIONS).unwrap();
+        let alone = t.elapsed();
+        eprintln!(
+            "2M unverified items, {} MB: V16 with snapshot {with_snapshot:?}, migration alone {alone:?}",
+            bytes / 1_000_000
+        );
+    }
+
     /// V15 on a V14 store with claims from an identify source and two
     /// others: it runs once, every row is kept and stamped 0, the pre-V15
     /// snapshot is taken, and the retention sweep then deletes only the
@@ -1763,7 +1963,7 @@ mod tests {
             b = "33".repeat(20),
         ))
         .unwrap();
-        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..15]).unwrap();
         assert_eq!(version(&conn), 15);
         assert!(dir.path().join("lodestar.pre-v15.db").exists());
         let count = |conn: &Connection, sql: &str| -> i64 {
@@ -1778,7 +1978,7 @@ mod tests {
             5
         );
         // Once only: a second open finds it current and takes no snapshot.
-        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..15]).unwrap();
         assert_eq!(version(&conn), 15);
         assert!(!dir.path().join("lodestar.pre-v15.1.db").exists());
         drop(conn);
@@ -1873,7 +2073,8 @@ mod tests {
     }
 
     /// A fresh install of this build ends with the same schema as an
-    /// upgrade from V14, the claims stamp and its index included.
+    /// upgrade from V14 or V15: the claims stamp, the unverified tier's
+    /// network index, its kept counts and their triggers included.
     #[test]
     fn the_latest_schema_on_a_fresh_store_matches_an_upgraded_one() {
         let schema = |conn: &Connection| -> Vec<(String, String)> {
@@ -1890,16 +2091,23 @@ mod tests {
         };
         let mut fresh = Connection::open_in_memory().unwrap();
         migrate_with(&mut fresh, None, MIGRATIONS).unwrap();
-        let mut upgraded = Connection::open_in_memory().unwrap();
-        migrate_with(&mut upgraded, None, &MIGRATIONS[..14]).unwrap();
-        migrate_with(&mut upgraded, None, MIGRATIONS).unwrap();
         assert_eq!(version(&fresh), latest_schema_version());
-        assert_eq!(schema(&fresh), schema(&upgraded));
-        assert!(
-            schema(&fresh)
-                .iter()
-                .any(|(n, _)| n == "torrent_claims_stored")
-        );
+        for from in [14, 15] {
+            let mut upgraded = Connection::open_in_memory().unwrap();
+            migrate_with(&mut upgraded, None, &MIGRATIONS[..from]).unwrap();
+            migrate_with(&mut upgraded, None, MIGRATIONS).unwrap();
+            assert_eq!(schema(&fresh), schema(&upgraded), "from V{from}");
+        }
+        for want in [
+            "torrent_claims_stored",
+            "unverified_items_network",
+            "unverified_counts",
+            "unverified_counted",
+            "unverified_uncounted",
+            "unverified_recounted",
+        ] {
+            assert!(schema(&fresh).iter().any(|(n, _)| n == want), "{want}");
+        }
     }
 
     /// A fresh install runs V1–V14 in order and ends with the same schema
