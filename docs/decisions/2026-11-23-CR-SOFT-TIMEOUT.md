@@ -140,5 +140,5 @@ Build-plan §0.5's standing rule: keep only if stored per slot-second and stored
   - **`infra/fleet/steps/vm/compose.yaml`:** the switch passed through by bare name, so a cloud screen or an A/B block can set it, and one that doesn't leaves it at its default.
   - **`infra/fleet/steps/vm/block-lib.sh`:** the switch in `CRAWLER_SWITCHES`, so a block unsets it before Lodestar starts, as it does the others.
   - **Why:** X-fleet-switch-passthrough's tests require every `LODESTAR_DHT_*` variable `config.rs` reads to be known to all three, so a new switch can't be missed. Without these lines, CI's `infra` job fails on this PR.
-  - **The analyzer needed no change:** `analyze_cr.py` derives its switch lists from `SWITCH_ENV`, and its tests pass with the new entry.
+  - **The analyzer needed no code change:** `analyze_cr.py` derives its switch lists from `SWITCH_ENV`. Its byte-identity golden (`docs/soak/tools/fixtures/cr_effect_abba_golden.json`, from X-fleet-baab #1089) was regenerated. The only change is a `"soft_timeout": false` entry in each block's recorded switches (280 bytes per two blocks), with every outcome the same.
 - **`crates/lodestar/src/metrics.rs`:** the two counters, their helper and its test.
