@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-23T02:49:41Z",
+  "updated_at": "2026-11-23T03:39:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-23T00:38:45Z",
+  "last_heartbeat": "2026-11-23T03:39:07Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -10668,7 +10668,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T03:24:30Z",
+    "updated": "2026-11-23T03:39:07Z",
     "items": [
       {
         "slot": 1,
@@ -10695,7 +10695,7 @@
         "agent": "session_01MMjhnBgVHySe1NFVBPiukH",
         "model": "sonnet",
         "since": "2026-11-23T02:49:41Z",
-        "doing": "#1089 ready 18aa677c; rv1089 review running"
+        "doing": "#1089 approved; delta 6c5ffd5f checked; CI watch then merge"
       },
       {
         "slot": 4,
@@ -10704,7 +10704,7 @@
         "agent": "session_01MMjhn9bmyCJJen821FeiDs",
         "model": "sonnet",
         "since": "2026-11-22T22:38:32Z",
-        "doing": "#1088 fix round after rv1088 CHANGES (restart link text, health CLS test, decisions)"
+        "doing": "#1088 last round: pin zero-results Filters test (no isVisible branch)"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
@@ -10795,7 +10795,7 @@
       "via": "runner chat"
     }
   ],
-  "heartbeat": "2026-11-23T00:38:45Z",
+  "heartbeat": "2026-11-23T03:39:07Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
     "requested_at": "2026-11-09T05:54Z",
