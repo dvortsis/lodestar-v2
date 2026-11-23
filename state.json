@@ -10684,12 +10684,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-23T07:19:34Z",
+    "updated": "2026-11-23T08:31:45Z",
     "items": [
       {
         "slot": 1,
         "model": "opus",
-        "status": "idle"
+        "slice": "RX-1-fixes",
+        "role": "build",
+        "agent": "session_01MMjhn911SUimiUBvzWMwkb (opus)",
+        "doing": "step 0: plan for the #1082 fixes (taken over from the API lane at its cost stop)",
+        "since": "2026-11-23T08:31:45Z"
       },
       {
         "slot": 2,
