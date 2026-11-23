@@ -9005,12 +9005,12 @@
     {
       "id": "X-browse-cls",
       "note": "?browse=1 layout shift 0.012-0.013 at 320-360 px (predates X-search-toolbar; its decisions file names it a runner follow-up). Rides the next slice that owns the search layout (r14).",
-      "added": "2026-11-23T00:55Z"
+      "added": "2026-11-23T00:50Z"
     },
     {
       "id": "X-alerts-back-link",
       "note": "A back link on /alerts, from X-detail-depth step 0. Rides the next alerts slice (r14).",
-      "added": "2026-11-23T00:55Z"
+      "added": "2026-11-23T00:50Z"
     }
   ],
   "main_health": [
