@@ -54,7 +54,7 @@ In words: runner → operator → `/fleet` comment → `fleet.yml` → the Linod
 ### Words used below
 - **Screen:** a short, fail-only test of one crawler change on the two Linodes. It never ranks variants or shows a gain.
 - **Block:** one screen's run on one VM: four **segments** of 2 or 3 hours each.
-- **Arm:** the setting a segment runs with: the **control** (the change off) or the **treatment** (the change on). The order is ABBA: control, treatment, treatment, control.
+- **Arm:** the setting a segment runs with: the **control** (the change off) or the **treatment** (the change on). The order is ABBA by default: control, treatment, treatment, control. CR-SPEC's second block is BAAB (§3.3.3).
 
 ## 2. Booking a fleet session
 Before each session:
@@ -204,7 +204,7 @@ By default a block is **ABBA**: segment 1 is the control, 2 and 3 the treatment,
 - **What's refused,** by the control plane when it reads the rules (`the screen rules at that commit are malformed`) and again by start-block on the VM, which names the reason:
   - `"mode": "on"` without `"purpose": "screen"` (`mode_needs_control`);
   - `"mode": "on"` with `winners`: a stacked stage's control is the winners (`mode_needs_control`);
-  - `"purpose"` without `"mode": "on"` (`purpose_needs_on_mode`);
+  - `"purpose": "screen"` without `"mode": "on"` (`purpose_needs_on_mode`; `"purpose": "aa"` is §3.3.4);
   - any other mode or purpose value (`args_valid` alone).
 - **What the VM gets:** `block.env` gains `MODE=on` and `PURPOSE=screen`. start-block's answer counts one more `ok` than an abba block's (its `mode_on` line); the sure check is `vm-status`: its answer carries `block_mode_on 1` (`block_mode_abba 1` for an ABBA block). `block_mode_unknown 1` is covered in §3.5. Every segment starts Lodestar with the treatment's switches on. Everything else is the same as an ABBA block: the leak test, the host and boot guards, arm-switch after each segment, copy-off. No stop condition changes.
 - **In the evidence:** copy-off marks the block `"mode": "on"` and every segment's `arm` as `treatment`. `analyze_cr.py effect` refuses such a block with `no_control_arm` (and `order_not_abba_or_baab`), so it never counts toward an A/B outcome. Each segment's own `segment` report reads as usual.
@@ -215,6 +215,33 @@ By default a block is **ABBA**: segment 1 is the control, 2 and 3 the treatment,
   sudo cat /proc/"$(sudo docker inspect -f '{{.State.Pid}}' lodestar)"/environ | tr '\0' '\n' | grep '^LODESTAR_DHT_'
   ```
   Only the `LODESTAR_DHT_` lines matter here; don't copy the rest anywhere.
+
+### 3.3.3 A BAAB block (CR-SPEC's second block)
+CR-SPEC runs every treatment as balanced pairs of blocks: **ABBA, then BAAB** (`docs/build-plan.md` §0.5). A BAAB block runs the treatment in segments 1 and 4 and the control in 2 and 3 (X-fleet-baab).
+- **Write it in the rules:** add `"mode": "baab"`. It's valid wherever ABBA is, including a stacked stage with `winners` (§3.3.1), whose control is the winners. Everything else in the rules is the same as the block's ABBA partner.
+- **What's refused:** `"mode": "baab"` with `"purpose": "screen"` (`purpose_needs_on_mode`), and any other spelling (`args_valid` alone).
+- **What the VM gets:** `block.env` gains `MODE=baab`. An ABBA block still has no `MODE` line, and a block with no `MODE` line, even one from before this change, reads as ABBA. start-block's answer adds a `mode_baab` line, and `vm-status` reports `block_mode_baab 1`. arm-switch and copy-off take each segment's arm from that line. Nothing else changes: the leak test, the guards, the stop conditions.
+- **In the evidence:** copy-off marks the block `"mode": "baab"`, with segments 1 and 4 as `treatment` and 2 and 3 as `control`. For the analysis, pass each block's recorded order to `effect` in the same order as its `--block`:
+  ```bash
+  python3 docs/soak/tools/analyze_cr.py effect --treatment adm \
+    --block s1.json s2.json s3.json s4.json --design abba \
+    --block t1.json t2.json t3.json t4.json --design baab
+  ```
+  A block whose switches don't follow its design is invalid (`order_differs_from_design`), so it never counts. Without `--design`, `effect` reads the order from the switches alone, as before.
+
+### 3.3.4 An A/A block (the noise floor)
+An **A/A block** runs the stage's **control in both arms**: the treatment's switches stay off in every segment, and any winners stay on. It keeps its order's labels (ABBA or BAAB). It measures the noise floor between legs. **It never measures a treatment** and never gives a win, loss or no-effect outcome.
+- **Write it in the rules:** add `"purpose": "aa"`, with no mode (ABBA) or with `"mode": "baab"`. Keep `treatment`, and `winners` for a stacked stage: they name the control it measures.
+- **What's refused:** `"purpose": "aa"` with `"mode": "on"` (`purpose_needs_ab_mode`).
+- **What the VM gets:** `block.env` gains `PURPOSE=aa`, and start-block's answer adds a `purpose_aa` line. `vm-status` still reports the order (`block_mode_abba 1` or `block_mode_baab 1`).
+- **In the evidence:** copy-off adds `"purpose": "aa"` to the document; no other block carries it. Analyse it with `--aa` and the blocks' designs:
+  ```bash
+  python3 docs/soak/tools/analyze_cr.py effect --treatment adm --aa \
+    --block s1.json s2.json s3.json s4.json --design abba
+  ```
+  - The report says `"analysis": "noise_floor"`, with the fit under `noise_floor`, not `fit`.
+  - Each block's four segments must have identical switches (`aa_switches_differ` otherwise).
+  - `gate` and `checkpoint1` refuse such a report.
 
 ### 3.4 `/fleet run arm-switch <vm>`, after each segment
 - **What it does:** the operator runs it shortly before a segment ends, at the booked times.

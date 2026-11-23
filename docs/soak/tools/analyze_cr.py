@@ -7,7 +7,7 @@ and never contacts the crawler.
 
   segment RUN [--output F] [--publish DIR] [--winners W]
                                              one segment: window, rates, checks, verdict
-  effect --treatment T --block R R R R ... [--winners W]
+  effect --treatment T --block R R R R ... [--winners W] [--design D ... [--aa]]
                                              block checks and the effect fit (rules 6.1-6.3)
   route-baseline REPORT ...                  rule 5.3: run CR-AB-ROUTE, or record the skip
   gate COMB [--comparator COMP]              rule 6.8: the v0.6 crawler gate
@@ -16,6 +16,10 @@ and never contacts the crawler.
 `effect`, `gate` and `checkpoint1` read the JSON reports `segment` and `effect` write.
 From stage 2 (r5.1 A2, docs/decisions/2026-11-20-path-to-100-cr-spec.md) the control
 has every earlier winner on: `--winners` names them in a JSON file, {"winners": [...]}.
+`--design abba|baab`, one per `--block` (X-fleet-baab), is each block's recorded order: a
+block whose switches give another order is invalid (`order_differs_from_design`). With
+`--aa` the run is an A/A one: both arms ran the same switches, so the arms are the design
+labels and the fit is reported as the noise floor, never as an effect.
 Standard library only.
 """
 
@@ -1155,8 +1159,17 @@ def segment_view(report):
             "hint_first": report.get("hint_first"), "sampler_split": report.get("sampler_split")}
 
 
-def judge_block(reports, treatment, winners=None):
-    """Rules 2.3, 5, 6.1 (with r5.1 A1 and A2), 6.2's zero rule and 6.7 for one block of four segments."""
+# A block's recorded order (block.env's MODE, X-fleet-baab) as the arm letters; infra/fleet's
+# scrub.arm_of and block-lib.sh's arm_of give the same arms (a test checks the three agree).
+DESIGNS = {"abba": "ABBA", "baab": "BAAB"}
+
+
+def judge_block(reports, treatment, winners=None, design=None, aa=False):
+    """Rules 2.3, 5, 6.1 (with r5.1 A1 and A2), 6.2's zero rule and 6.7 for one block of four segments.
+
+    `design` (X-fleet-baab) is the block's recorded order, "abba" or "baab": the order the
+    switches give must match it. With `aa` the block is labelled A/A: all four segments'
+    switches must be identical, and the arms are the design's labels."""
     own = collect.TREATMENT_SWITCHES[treatment]
     segs = [segment_view(r) for r in reports]
     problems = []
@@ -1167,12 +1180,19 @@ def judge_block(reports, treatment, winners=None):
         on = [bool(s["switches"].get(x)) for x in own]
         return "B" if all(on) else "A" if not any(on) else "?"
     arms = "".join(arm(s) for s in segs)
-    if "?" in arms:
-        problems.append("treatment_switches_split")
-    if arms not in ("ABBA", "BAAB"):
-        problems.append("order_not_abba_or_baab")
-    if "A" not in arms and "?" not in arms:  # X-block-on-only-mode: an on-only block has no control, so no A/B verdict
-        problems.append("no_control_arm")
+    if aa:  # X-fleet-baab: both arms ran the same switches, so the arms are the recorded labels
+        if len({frozenset(k for k, v in s["switches"].items() if v) for s in segs}) != 1:
+            problems.append("aa_switches_differ")
+        arms = DESIGNS[design]
+    else:
+        if "?" in arms:
+            problems.append("treatment_switches_split")
+        if arms not in ("ABBA", "BAAB"):
+            problems.append("order_not_abba_or_baab")
+        if "A" not in arms and "?" not in arms:  # X-block-on-only-mode: an on-only block has no control, so no A/B verdict
+            problems.append("no_control_arm")
+        if design is not None and arms != DESIGNS[design]:
+            problems.append("order_differs_from_design")
     for s in segs:
         if s["verdict"] == "invalid" or (s["verdict"] == "void" and s["reasons"] != ["no_opportunity"]):
             problems.append("segment_" + s["verdict"])
@@ -1256,9 +1276,16 @@ def outcome(fit, valid_blocks):
     return "inconclusive_run_blocks_3_and_4" if valid_blocks == 2 else "inconclusive_switch_stays_off"
 
 
-def analyze_effect(treatment, block_reports, winners=None):
+def analyze_effect(treatment, block_reports, winners=None, designs=None, aa=False):
     winners = stack_args("ab", treatment, winners)
-    blocks = [judge_block(reports, treatment, winners) for reports in block_reports]
+    if designs is not None and (len(designs) != len(block_reports) or any(d not in DESIGNS for d in designs)):
+        raise ValueError("give one --design (abba or baab) per --block")
+    if aa and designs is None:
+        raise ValueError("--aa needs the blocks' --design")
+    if aa:
+        return noise_floor(treatment, block_reports, winners, designs)
+    blocks = [judge_block(reports, treatment, winners, design) for reports, design
+              in zip(block_reports, designs or [None] * len(block_reports))]
     valid = [b for b in blocks if b["valid"]]
     own = collect.TREATMENT_SWITCHES[treatment]
     out = {"schema": 1, "spec": SPEC, "treatment": treatment, "switch": "+".join(own),
@@ -1319,6 +1346,37 @@ def analyze_effect(treatment, block_reports, winners=None):
         "guardrails": guardrail_fits(valid),
     }
     return out
+
+
+def noise_floor(treatment, block_reports, winners, designs):
+    """X-fleet-baab: an A/A run. Both arms ran the same switches (the stage's control), so the
+    blocks' design labels split them and rule 6.2's fit gives the noise floor between legs. It
+    never decides anything: there's no `fit` and no win, loss or no_effect."""
+    blocks = [judge_block(reports, treatment, winners, design, aa=True)
+              for reports, design in zip(block_reports, designs)]
+    valid = [b for b in blocks if b["valid"]]
+    out = {"schema": 1, "spec": SPEC, "analysis": "noise_floor", "treatment": treatment,
+           "designs": list(designs), "blocks": blocks, "valid_blocks": len(valid),
+           "rehearsal": any(r.get("rehearsal") for reports in block_reports for r in reports),
+           "outcome": "noise_floor", "decided": False}
+    if winners is not None:
+        out["winners"] = winners
+    if not valid:
+        out["reason"] = "no valid A/A block"
+        return out
+    out["noise_floor"] = fit_effect(valid, "net")
+    out["also_reported"] = {"gross": fit_effect(valid, "gross"), "stored": fit_effect(valid, "stored"),
+                            "fetch_success_per_attempt": fit_effect(valid, "success")}
+    return out
+
+
+NOISE_FLOOR_REFUSED = "an A/A report is a noise floor, not an effect"
+
+
+def refuse_noise_floor(report):
+    if report.get("analysis") == "noise_floor" or report.get("outcome") == "noise_floor":
+        raise ValueError(NOISE_FLOOR_REFUSED)
+    return report
 
 
 def ledger_by_arm(blocks):
@@ -1448,6 +1506,9 @@ FINAL_OUTCOMES = ("win", "no_effect", "loss", "inconclusive_switch_stays_off", "
 def checkpoint1(utp, others, comparator, cr0):
     """Rule 6.9's projection, with both models and their intervals."""
     out = {"schema": 1, "spec": SPEC, "kind": "projection_not_measurement"}
+    if any(e.get("analysis") == "noise_floor" or e.get("outcome") == "noise_floor" for e in [utp] + list(others)):
+        out["error"] = NOISE_FLOOR_REFUSED  # X-fleet-baab
+        return out
     if any(e.get("rehearsal") for e in [utp] + list(others)) or (comparator or {}).get("rehearsal"):
         out["error"] = "rehearsal evidence: not projected"
         return out
@@ -1541,6 +1602,9 @@ def main(argv=None):
     p.add_argument("--treatment", choices=sorted(collect.TREATMENT_SWITCHES), required=True)
     p.add_argument("--block", nargs=4, action="append", required=True, metavar="REPORT")
     p.add_argument("--winners", help="From stage 2: JSON file naming the earlier winners (r5.1 A2)")
+    p.add_argument("--design", action="append", choices=sorted(DESIGNS),
+                   help="Each block's recorded order, one per --block, in the same order")
+    p.add_argument("--aa", action="store_true", help="An A/A run: report the noise floor (needs --design)")
     p.add_argument("--output", type=Path)
     p = sub.add_parser("route-baseline")
     p.add_argument("reports", nargs="+")
@@ -1565,16 +1629,19 @@ def main(argv=None):
             write(report, args.output)
         elif args.command == "effect":
             write(analyze_effect(args.treatment, [[load_report(p) for p in block] for block in args.block],
-                                 load_winners(args.winners) if args.winners else None), args.output)
+                                 load_winners(args.winners) if args.winners else None, args.design, args.aa),
+                  args.output)
         elif args.command == "route-baseline":
             write(route_baseline([load_report(p) for p in args.reports]), None)
         elif args.command == "gate":
-            write(gate(load_report(args.comb), load_report(args.comparator) if args.comparator else None), None)
+            write(gate(refuse_noise_floor(load_report(args.comb)),
+                       load_report(args.comparator) if args.comparator else None), None)
         else:
-            adm = load_report(args.adm)
+            adm = refuse_noise_floor(load_report(args.adm))
             if adm.get("treatment") != "adm":
                 raise ValueError("--adm must be the CR-ADM effect report")
-            write(checkpoint1(load_report(args.utp), [adm] + [load_report(p) for p in args.other],
+            write(checkpoint1(refuse_noise_floor(load_report(args.utp)),
+                              [adm] + [refuse_noise_floor(load_report(p)) for p in args.other],
                               load_report(args.comparator), load_report(args.cr0_report)), None)
     except (OSError, ValueError, KeyError) as error:
         print(f"Cannot analyze evidence: {error}", file=sys.stderr)

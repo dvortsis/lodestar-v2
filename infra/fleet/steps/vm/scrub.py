@@ -110,6 +110,23 @@ def winners_list(v):
     Checked as a whole, so one bad entry drops the list, never just itself."""
     return (isinstance(v, list) and len(v) <= len(TREATMENT_KEYS) and all(treatment_key(w) for w in v)
             and len(set(v)) == len(v))
+
+
+# The block's recorded orders (block.env's MODE; abba is its absence).
+MODES = ("abba", "baab", "on")
+
+
+def arm_of(mode: str, n: int) -> str:
+    """Segment n's arm in a block of this mode: block-lib.sh's arm_of, mirrored
+    here because copy-off mounts this file alone (a test checks the two agree).
+    ABBA: control, treatment, treatment, control. BAAB (X-fleet-baab): treatment,
+    control, control, treatment. On-only: the treatment in every segment. An
+    A/A block keeps its order's labels; both arms ran the control."""
+    if mode == "on":
+        return "treatment"
+    return "treatment" if n in ((1, 4) if mode == "baab" else (2, 3)) else "control"
+
+
 RESULT = {
     "schema_version": num, "state": word, "reason": word, "stop_mode": word, "samples": num, "ended": time,
     "suppression_ended": opt(lambda v: num(v) or time(v)), "baseline_started": opt(lambda v: num(v) or time(v)),
@@ -136,7 +153,7 @@ REPORT = {
 SEGMENT = {"segment": num, "arm": one_of("control", "treatment"), "result": RESULT, "report": REPORT}
 DOC = {"version": num, "rules_commit": commit, "spec_commit": commit, "lodestar_commit": commit,
        "image_digest": digest, "treatment": treatment_key, "winners": winners_list,
-       "mode": one_of("abba", "on"), "segment_hours": num,
+       "mode": one_of(*MODES), "purpose": one_of("aa"), "segment_hours": num,
        "role": one_of("main", "worker"),
        "outages": num, "outage_notes": num, "host_guard_drops": count, "damaged": boolean,
        "segments": [SEGMENT]}
@@ -226,7 +243,7 @@ def collect(block: Path, out: Path, run=subprocess.run) -> dict:
     for line in (block / "block.env").read_text(encoding="ascii").splitlines():
         k, _, v = line.partition("=")
         env[k] = v
-    mode = "on" if env.get("MODE") == "on" else "abba"  # block.env names MODE for on-only alone
+    mode = env.get("MODE") if env.get("MODE") in ("on", "baab") else "abba"  # abba is MODE's absence
     doc = {"version": 1, "rules_commit": env.get("RULES_COMMIT"), "spec_commit": env.get("SPEC_COMMIT"),
            "lodestar_commit": env.get("LODESTAR_COMMIT"), "image_digest": "sha256:" + env.get("IMAGE_DIGEST", ""),
            "treatment": env.get("TREATMENT"),
@@ -237,6 +254,8 @@ def collect(block: Path, out: Path, run=subprocess.run) -> dict:
            "outage_notes": count_lines(block / "notes"),
            "host_guard_drops": count_kind(block / "outages", "host_guard_dropped"), "damaged": damaged(block),
            "segments": []}
+    if env.get("PURPOSE") == "aa":  # X-fleet-baab: an A/A block is marked, so it's never read as an effect
+        doc["purpose"] = "aa"
     # A stacked treatment's segments are analysed against the winners (r5.1 A2): analyze_cr
     # refuses one without --winners. The file goes to out, never into the evidence.
     stacked = []
@@ -256,7 +275,7 @@ def collect(block: Path, out: Path, run=subprocess.run) -> dict:
             report = read_json(report_path) if r.returncode == 0 else None
         except subprocess.TimeoutExpired:
             report = None
-        doc["segments"].append({"segment": n, "arm": "treatment" if mode == "on" or n in (2, 3) else "control",
+        doc["segments"].append({"segment": n, "arm": arm_of(mode, n),
                                 "result": read_json(seg / "result.json"),
                                 "report": report if report is not None else {"state": "analysis_failed"}})
     return scrub(doc)

@@ -5,8 +5,9 @@
 #    window complete; it has stopped Lodestar (--stop).
 # 2. After the last segment, end the block: the marker goes and the watcher
 #    stops. Otherwise record the next segment in the marker, start Lodestar
-#    alone with the next arm (gluetun isn't recreated; safe restart makes it a
-#    resumed start), and start that segment's collector with a new root.
+#    alone with the next arm (block-lib.sh arm_of, by the block's recorded
+#    MODE: ABBA, BAAB or on-only; gluetun isn't recreated; safe restart makes it
+#    a resumed start), and start that segment's collector with a new root.
 # A segment that didn't complete its window stops here: the block stays
 # recorded (mid-block for every other check) until copy-off ends it.
 # Run as root by the step bootstrap: step.sh <workdir> [stack] [-] [block].
