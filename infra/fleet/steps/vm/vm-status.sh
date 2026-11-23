@@ -26,10 +26,10 @@ NAME=run_clean; say test ! -e "$PIA_RUN"
 # reader arm-switch and copy-off use, run in a subshell so nothing it sets
 # leaks: a record it rejects, for any reason, is unknown, and a valid one with
 # no MODE is abba. The control side keeps only the grammar's lines, so the mode
-# is a count line whose name carries it: block_mode_abba, block_mode_on or
-# block_mode_unknown, each 1.
+# is a count line whose name carries it: block_mode_abba, block_mode_baab
+# (X-fleet-baab), block_mode_on or block_mode_unknown, each 1.
 block_mode() { ( load_block_env >/dev/null 2>&1 || { printf unknown; exit 0; }
-  [[ ${MODE:-} == on ]] && printf on || printf abba ); }
+  printf '%s' "${MODE:-abba}" ); }
 
 # The block marker (OP-3b): a recorded block, and its segment.
 case $(block_state) in

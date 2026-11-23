@@ -5,6 +5,7 @@ check their exact arguments; the leak test, the collector and the analyzer are
 fakes in the step's work directory."""
 
 import base64
+import hashlib
 import io
 import json
 import os
@@ -2456,7 +2457,7 @@ class OnOnlyMode(Base):
                  "a purpose on an abba block": {"purpose": "screen"},
                  "a purpose with abba named": {"mode": "abba", "purpose": "screen"},
                  "a null purpose on an abba block": {"purpose": None},
-                 "an unknown mode": {"mode": "baab"}, "a mode in capitals": {"mode": "ON"},
+                 "an unknown mode": {"mode": "bbaa"}, "a mode in capitals": {"mode": "ON"},
                  "a mode as a list": {"mode": ["on"]}, "a mode as a boolean": {"mode": True},
                  "a null mode": {"mode": None}, "a purpose as a list": {"mode": "on", "purpose": ["screen"]},
                  "free text": {"mode": "on; reboot", "purpose": "screen"}}
@@ -2579,9 +2580,9 @@ class OnOnlyMode(Base):
 
     def test_the_scrubber_keeps_only_a_known_mode(self):
         base = Scrubber.doc(self)
-        for mode in ("abba", "on"):
+        for mode in ("abba", "baab", "on"):
             self.assertEqual(scrub.scrub({**base, "mode": mode})["mode"], mode)
-        for mode in ("both", "baab", "off", "ab", "ON", "on only", PRIVATE[0], "", 1, None, ["on"]):  # word-shaped but wrong too
+        for mode in ("both", "BAAB", "bbaa", "off", "ab", "ON", "on only", PRIVATE[0], "", 1, None, ["on"]):  # word-shaped but wrong too
             with self.subTest(mode=mode):
                 out = scrub.scrub({**base, "mode": mode})
                 self.assertNotIn("mode", out)
@@ -2609,3 +2610,270 @@ class OnOnlyMode(Base):
         abba = analyze_cr.judge_block([seg(arm == "B", i) for i, arm in enumerate("ABBA")], "adm")
         self.assertNotIn("no_control_arm", abba["problems"])
         self.assertNotIn("order_not_abba_or_baab", abba["problems"])
+
+
+def collected(env, segments=4):
+    """scrub.collect over a block of `segments` segments recorded with block.env `env`,
+    each segment's report a raw one with its own numbers, as the bytes copy-off prints."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        block, out = tmp / "block", tmp / "out"
+        for n in range(1, segments + 1):
+            (block / "evidence" / f"seg-{n}").mkdir(parents=True)
+            (block / "evidence" / f"seg-{n}" / "result.json").write_text(json.dumps(raw_result()))
+        (block / "tools").mkdir()
+        out.mkdir()
+        values = {"IMAGE_DIGEST": DIGEST, "LODESTAR_COMMIT": LC, "SPEC_COMMIT": SC, "RULES_COMMIT": RC,
+                  "TREATMENT": "adm", "SEGMENT_HOURS": "2", "ROLE": "main", **env}
+        (block / "block.env").write_text("".join(f"{k}={v}\n" for k, v in values.items()))
+        (block / "outages").write_text("1 link_outage\n")
+
+        def run(argv, **_):
+            report = raw_report()
+            report["numerator"]["window"]["mean_net_per_min"] = 40.0 + int(argv[3][-1])
+            Path(argv[argv.index("--output") + 1]).write_text(json.dumps(report))
+            return subprocess.CompletedProcess(argv, 0)
+
+        return scrub.dumps(scrub.collect(block, out, run=run))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+BAAB = {"MODE": "baab"}
+AA = {"PURPOSE": "aa"}
+# scrub.collect's bytes for these blocks, captured from scrub.py before X-fleet-baab: only
+# the order's labelling changed, so every other block's evidence is byte-identical.
+SCRUB_GOLDEN = {
+    "abba": ({}, "f264294f34a90fcdd3ec0d3f800e7c247d4452fdf3cbca720087de105e00faac"),
+    "abba_stacked": ({"TREATMENT": "lc", "WINNERS": "adm-utp"},
+                     "eda4fa0bbe71d5e1d24c7ddf98de28a7fc4d3f5a3e031b0b46485175434455c1"),
+    "on_only": (ON_ONLY, "e44eff20dbf0bfb5b34818ddcfd5629a8aabc2171b814253bf344543b6842f17"),
+}
+
+
+class BaabAndAA(Base):
+    """X-fleet-baab: MODE=baab runs treatment, control, control, treatment wherever ABBA is
+    valid; PURPOSE=aa runs either order with both arms the stage's control (the noise floor);
+    every reader takes the arms from the recorded order."""
+
+    def arm(self):
+        return dict(ln.split("=", 1) for ln in (self.stub / "arm.env").read_text().splitlines())
+
+    def rules_args(self, **over):
+        return rules.args(rules.parse(json.dumps({**RULES, **over}).encode()), RC, "main", "42-1")
+
+    def test_rules_take_baab_and_aa(self):
+        plain = self.rules_args()
+        for over, extra in (({"mode": "baab"}, {"MODE": "baab"}),
+                            ({"purpose": "aa"}, {"PURPOSE": "aa"}),
+                            ({"mode": "abba", "purpose": "aa"}, {"PURPOSE": "aa"}),
+                            ({"mode": "baab", "purpose": "aa"}, {"MODE": "baab", "PURPOSE": "aa"}),
+                            ({"mode": "baab", "treatment": "lc", "winners": ["adm"]},
+                             {"MODE": "baab", "TREATMENT": "lc", "WINNERS": "adm"}),
+                            ({"mode": "baab", "purpose": "aa", "treatment": "hint", "winners": ["adm", "lc"]},
+                             {"MODE": "baab", "PURPOSE": "aa", "TREATMENT": "hint", "WINNERS": "adm-lc"})):
+            with self.subTest(over=over):
+                a = self.rules_args(**over)
+                self.assertEqual(a, {**plain, **extra})
+                remote.payload({}, a)  # every value fits the argument shape
+
+    def test_rules_refuse_aa_and_screen_in_the_wrong_mode(self):
+        cases = {"aa on an on-only block": {"mode": "on", "purpose": "aa"},
+                 "screen on a baab block": {"mode": "baab", "purpose": "screen"},
+                 "a null purpose on a baab block": {"mode": "baab", "purpose": None},
+                 "aa in capitals": {"purpose": "AA"}, "aa as a list": {"purpose": ["aa"]},
+                 "baab in capitals": {"mode": "BAAB"}, "free text": {"mode": "baab x"}}
+        for name, over in cases.items():
+            with self.subTest(name), self.assertRaises(remote.StepRefused):
+                rules.parse(json.dumps({**RULES, **over}).encode())
+
+    def test_baab_runs_treatment_control_control_treatment(self):
+        self.args(**BAAB)
+        rc, lines, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok mode_baab", lines)
+        self.assertNotIn("ok mode_on", lines)
+        self.assertEqual(lines[-1], "ok start_block")
+        self.assertIn("ROLE=main\nMODE=baab\n", (self.block / "block.env").read_text())
+        self.assertEqual(self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"], "true")  # segment 1: B
+        self.assertEqual(self.arm()["LODESTAR_DHT_SAFE_RESTART"], "true")
+        for seg, want in ((1, "false"), (2, "false"), (3, "true")):  # into segments 2, 3 and 4
+            with self.subTest(seg=seg):
+                self.setUp()
+                self.make_block(segment=seg, **BAAB)
+                self.finish_segment(seg)
+                rc, lines, raw = self.run_script("arm-switch.sh", MODE="abba")  # the environment's never counts
+                self.assertEqual(rc, 0, raw)
+                self.assertEqual(self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"], want)
+
+    def test_a_stacked_baab_block_keeps_the_winners_on(self):
+        self.args(MODE="baab", TREATMENT="lc", WINNERS="adm-utp")
+        rc, lines, raw = self.run_script("start-block.sh")
+        self.assertEqual(rc, 0, raw)
+        arm = self.arm()
+        self.assertEqual((arm["LODESTAR_DHT_LOOKUP_END"], arm["LODESTAR_DHT_PRESET_SLOTS"]), ("true", "true"))
+        self.assertEqual((arm["LODESTAR_DHT_COORDINATED_ADMISSION"], arm["LODESTAR_DHT_UTP"]), ("true", "true"))
+        self.setUp()
+        self.make_block(segment=1, MODE="baab", TREATMENT="lc", WINNERS="adm-utp")
+        self.finish_segment(1)
+        rc, _, raw = self.run_script("arm-switch.sh")
+        self.assertEqual(rc, 0, raw)
+        arm = self.arm()
+        self.assertEqual((arm["LODESTAR_DHT_LOOKUP_END"], arm["LODESTAR_DHT_COORDINATED_ADMISSION"]),
+                         ("false", "true"))  # segment 2: the control is the winners
+
+    def test_an_aa_block_runs_the_control_in_both_arms(self):
+        for order in ({}, BAAB):
+            with self.subTest(order=order):
+                self.setUp()
+                self.args(**order, PURPOSE="aa", TREATMENT="lc", WINNERS="adm")
+                rc, lines, raw = self.run_script("start-block.sh")
+                self.assertEqual(rc, 0, raw)
+                self.assertIn("ok purpose_aa", lines)
+                self.assertIn("PURPOSE=aa\n", (self.block / "block.env").read_text())
+                self.assertEqual((self.arm()["LODESTAR_DHT_LOOKUP_END"], self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"]),
+                                 ("false", "true"))
+                for seg in (1, 2, 3):
+                    self.setUp()
+                    self.make_block(segment=seg, **order, PURPOSE="aa", TREATMENT="lc", WINNERS="adm")
+                    self.finish_segment(seg)
+                    rc, _, raw = self.run_script("arm-switch.sh")
+                    self.assertEqual(rc, 0, raw)
+                    self.assertEqual(self.arm()["LODESTAR_DHT_LOOKUP_END"], "false")  # never the treatment
+                    self.assertEqual(self.arm()["LODESTAR_DHT_PRESET_SLOTS"], "false")
+                    self.assertEqual(self.arm()["LODESTAR_DHT_COORDINATED_ADMISSION"], "true")
+
+    def test_refusals(self):
+        for over, why in (({"MODE": "on", "PURPOSE": "aa"}, "purpose_needs_ab_mode"),
+                          ({"MODE": "baab", "PURPOSE": "screen"}, "purpose_needs_on_mode")):
+            with self.subTest(over=over):
+                self.setUp()
+                self.args(**over)
+                rc, lines, raw = self.run_script("start-block.sh")
+                self.assertEqual((rc, lines), (1, [f"fail {why}", "fail args_valid", "fail start_block"]), raw)
+                self.assertEqual(self.log(), "")
+        for over in ({"MODE": "BAAB"}, {"MODE": "bbaa"}, {"PURPOSE": "AA"}, {"MODE": "baab;x"}):
+            with self.subTest(over=over):
+                self.setUp()
+                self.args(**over)
+                rc, lines, _ = self.run_script("start-block.sh")
+                self.assertEqual((rc, lines), (1, ["fail args_valid", "fail start_block"]))
+        for env in ({"MODE": "abba"}, {"MODE": "BAAB"}, {"MODE": "on", "PURPOSE": "aa"},
+                    {"MODE": "baab", "PURPOSE": "screen"}, {"PURPOSE": "aa;x"}):
+            with self.subTest(env=env):
+                self.setUp()
+                self.make_block(segment=1, **env)
+                self.finish_segment(1)
+                rc, lines, _ = self.run_script("arm-switch.sh")
+                self.assertEqual((rc, lines[-2:]), (1, ["fail block_env", "fail arm_switch"]))
+
+    def test_vm_status_names_a_baab_block(self):
+        for env, mode in (({}, "abba"), (BAAB, "baab"), ({**BAAB, **AA}, "baab"), (AA, "abba"), (ON_ONLY, "on")):
+            with self.subTest(env=env):
+                shutil.rmtree(self.block, ignore_errors=True)
+                self.make_block(**env)
+                rc, lines, out = self.run_script("vm-status.sh")
+                self.assertEqual(rc, 0, out)
+                self.assertEqual([ln for ln in lines if ln.startswith("count block_mode_")],
+                                 [f"count block_mode_{mode} 1"])
+
+    def test_one_order_for_every_reader(self):
+        """block-lib.sh's arm_of, scrub.arm_of and analyze_cr's DESIGNS agree for every mode and segment."""
+        analyze_cr = analyzer()
+        for mode in ("", "abba", "baab", "on"):
+            r = subprocess.run(["bash", "-c", f'. "$1"; MODE={mode}; for n in 1 2 3 4; do arm_of $n; done',
+                                "_", str(VM / "block-lib.sh")], capture_output=True, text=True, timeout=30,
+                               env={"PATH": "/usr/bin:/bin", "BLOCK": str(self.block)})
+            shell = r.stdout.split()
+            with self.subTest(mode=mode):
+                self.assertEqual(shell, [scrub.arm_of(mode or "abba", n) for n in range(1, 5)], r.stderr)
+                if mode != "on":
+                    letters = analyze_cr.DESIGNS[mode or "abba"]
+                    self.assertEqual(shell, ["treatment" if a == "B" else "control" for a in letters])
+        self.assertEqual(sorted(analyze_cr.DESIGNS), ["abba", "baab"])
+        self.assertEqual(scrub.MODES, ("abba", "baab", "on"))
+
+    def test_copy_off_labels_a_baab_block_by_its_order(self):
+        for env, mode, arms in ((BAAB, "baab", ["treatment", "control", "control", "treatment"]),
+                                ({}, "abba", ["control", "treatment", "treatment", "control"]),
+                                ({**BAAB, **AA}, "baab", ["treatment", "control", "control", "treatment"])):
+            with self.subTest(env=env):
+                doc = json.loads(collected(env))
+                self.assertEqual((doc["mode"], [s["arm"] for s in doc["segments"]]), (mode, arms))
+                self.assertEqual(doc.get("purpose"), env.get("PURPOSE"))  # an A/A block alone is marked
+                self.assertEqual(scrub.scrub(doc), doc)  # the control plane's second pass keeps it
+
+    def test_scrubbed_evidence_is_otherwise_byte_identical(self):
+        for name, (env, digest) in SCRUB_GOLDEN.items():
+            with self.subTest(block=name):
+                self.assertEqual(hashlib.sha256(collected(env)).hexdigest(), digest)
+        # A BAAB block's evidence differs from an ABBA one's only in the mode and the labels.
+        abba, baab = json.loads(collected({})), json.loads(collected(BAAB))
+        for s in abba["segments"]:
+            s["arm"] = "treatment" if s["segment"] in (1, 4) else "control"
+        self.assertEqual({**abba, "mode": "baab"}, baab)
+        aa = json.loads(collected(AA))
+        self.assertEqual({k: v for k, v in aa.items() if k != "purpose"}, json.loads(collected({})))
+
+    def test_the_scrubber_keeps_only_purpose_aa(self):
+        base = Scrubber.doc(self)
+        self.assertEqual(scrub.scrub({**base, "purpose": "aa"})["purpose"], "aa")
+        for purpose in ("screen", "AA", "a/a", PRIVATE[0], "", 1, None, ["aa"]):
+            with self.subTest(purpose=purpose):
+                out = scrub.scrub({**base, "purpose": purpose})
+                self.assertNotIn("purpose", out)
+                self.assertNotIn(PRIVATE[0], scrub.dumps(out).decode())
+
+    def test_scrub_collect_on_the_vm_with_a_baab_block(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        block, out = tmp / "block", tmp / "out"
+        out.mkdir()
+        for n in range(1, 5):
+            (block / "evidence" / f"seg-{n}").mkdir(parents=True)
+            (block / "evidence" / f"seg-{n}" / "result.json").write_text(json.dumps(raw_result()))
+        (block / "tools").mkdir()
+        (block / "block.env").write_text(f"IMAGE_DIGEST={DIGEST}\nLODESTAR_COMMIT={LC}\nSPEC_COMMIT={SC}\n"
+                                         f"RULES_COMMIT={RC}\nTREATMENT=adm\nSEGMENT_HOURS=2\nROLE=main\nMODE=baab\n")
+        (tmp / "report.json").write_text(json.dumps(raw_report()))
+        (block / "tools" / "analyze_cr.py").write_text(
+            f"import sys\nopen(sys.argv[4], 'x').write(open({str(tmp / 'report.json')!r}).read())\n")
+        r = subprocess.run([sys_executable(), str(VM / "scrub.py"), "collect", str(block), str(out)],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = json.loads(r.stdout)
+        self.assertEqual((doc["mode"], [s["arm"] for s in doc["segments"]]),
+                         ("baab", ["treatment", "control", "control", "treatment"]))
+
+    def test_the_analysis_checks_the_recorded_order(self):
+        """analyze_cr's `effect --design`, from the scrubbed document's mode: a BAAB block whose
+        switches follow it is valid; one labelled with the other order is refused; an A/A block
+        is judged by its labels and reported as a noise floor."""
+        analyze_cr = analyzer()
+
+        def seg(on, i):
+            r = raw_report()
+            r.update(kind="ab", treatment="adm", verdict="valid", verdict_reasons=[], clean_stop=True)
+            r["identity"] = {"image_digest": "sha256:" + DIGEST,
+                             "switches": {"safe_restart": True, "coordinated_admission": on}}
+            r["timeline"] = {"process_start_utc": f"2026-11-22T{i * 3:02d}:00:00Z",
+                             "window_start_utc": f"2026-11-22T{i * 3:02d}:30:00Z",
+                             "window_end_utc": f"2026-11-22T{i * 3 + 2:02d}:30:00Z",
+                             "last_scrape_utc": f"2026-11-22T{i * 3 + 2:02d}:58:00Z"}
+            r["numerator"]["window"]["mean_net_per_min"] = 40.0 + i
+            return r
+
+        doc = json.loads(collected(BAAB))
+        reports = [seg(s["arm"] == "treatment", i) for i, s in enumerate(doc["segments"])]
+        judged = analyze_cr.judge_block(reports, "adm", design=doc["mode"])
+        self.assertEqual((judged["valid"], judged["order"]), (True, "BAAB"))
+        wrong = analyze_cr.judge_block(reports, "adm", design="abba")
+        self.assertEqual(wrong["problems"], ["order_differs_from_design"])
+        aa_doc = json.loads(collected({**BAAB, **AA}))
+        aa = [seg(False, i) for i in range(4)]
+        out = analyze_cr.analyze_effect("adm", [aa], designs=[aa_doc["mode"]], aa=aa_doc.get("purpose") == "aa")
+        self.assertEqual((out["analysis"], out["outcome"], out["valid_blocks"]), ("noise_floor", "noise_floor", 1))
+        self.assertEqual(out["blocks"][0]["order"], "BAAB")
+        self.assertNotIn("fit", out)
+
