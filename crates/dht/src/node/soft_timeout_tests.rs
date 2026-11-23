@@ -1,13 +1,14 @@
 //! CR-SOFT-TIMEOUT (`dht.soft_timeout`) against the real actor, on tokio's
 //! paused clock: an owned peer lookup's query left unanswered past the
-//! soft timeout frees its lane and stops holding the leg's end, while it
-//! stays out, against the outstanding cap, until it's answered (once) or
-//! times out. Off, the same scripts wait as before. Every case runs with
-//! `dht.lookup_end` off and on.
+//! soft timeout keeps its lane, so the leg asks exactly whom it would with
+//! the switch off, but stops holding the leg's end once K others have
+//! answered. It stays out, against the outstanding cap, until it's
+//! answered (once) or times out. With the switch on a leg never ends later
+//! than with it off. Cases run with `dht.lookup_end` off and on.
 
 use super::*;
 use crate::node::lookup::ALPHA;
-use crate::node::{Intensity, LedgerEnd, PeerResult, PermitReturn};
+use crate::node::{LedgerEnd, PermitReturn};
 use lodestar_metainfo::InfoHash;
 use proptest::prelude::*;
 use rand::SeedableRng;
@@ -215,14 +216,20 @@ fn returns(a: &Actor) -> u64 {
     a.stats.snapshot().peer_permit_returns.iter().sum()
 }
 
+/// Peer lookups' queries sent so far (the node's own maintenance aside).
+fn lookup_queries(a: &Actor) -> u64 {
+    a.stats.snapshot().ledger.queries[QueryPurpose::PeerLookup as usize]
+}
+
 fn ended(a: &Actor, why: LedgerEnd) -> u64 {
     a.stats.snapshot().ledger.ended[why as usize]
 }
 
 /// The bookkeeping every step must keep: a request's in-flight count is
-/// its legs' queries out that haven't gone soft; a leg holds at most
-/// `ALPHA` soft queries and `2 · ALPHA` in all; every soft tid is pending;
-/// the outstanding cap and the 64-query cap hold.
+/// all its legs' queries out, slow ones included (they keep their lanes);
+/// a leg has at most `ALPHA` out; every soft tid is pending and names a
+/// running lookup or is detached; the outstanding cap and the 64-query cap
+/// hold.
 fn check(a: &Actor) {
     for (owner, r) in &a.peer_requests {
         let legs: Vec<u32> = a
@@ -231,28 +238,26 @@ fn check(a: &Actor) {
             .filter(|(_, l)| l.owner == Some(*owner))
             .map(|(lid, _)| *lid)
             .collect();
-        let hard = a
+        let queries = a
             .pending
-            .iter()
-            .filter(|(t, p)| {
-                matches!(p.purpose, Purpose::Lookup(lid) if legs.contains(&lid))
-                    && !a.soft_tids.contains(t)
+            .values()
+            .filter(|p| {
+                matches!(p.purpose, Purpose::Lookup(lid) if legs.contains(&lid)) && !p.hinted
             })
             .count();
-        assert_eq!(r.inflight, hard, "request in flight = hard queries out");
+        assert_eq!(r.inflight, queries, "request in flight = queries out");
         assert!(r.sent <= MAX_PEER_QUERIES, "64-query cap");
     }
     for (lid, l) in &a.lookups {
-        assert!(l.slow() <= ALPHA, "at most ALPHA slow");
         let leg = a
             .pending
             .values()
-            .filter(|p| matches!(p.purpose, Purpose::Lookup(id) if id == *lid))
+            .filter(|p| matches!(p.purpose, Purpose::Lookup(id) if id == *lid) && !p.hinted)
             .count();
-        assert!(leg <= 2 * ALPHA, "a leg has {leg} out");
+        assert!(leg <= ALPHA, "a leg has {leg} out");
+        assert!(l.slow() <= leg, "slow {} of {leg} out", l.slow());
     }
     assert!(a.soft_tids.iter().all(|t| a.pending.contains_key(t)));
-    // A soft query names a running lookup, or is detached.
     for t in &a.soft_tids {
         match a.pending[t].purpose {
             Purpose::Lookup(lid) => assert!(a.lookups.contains_key(&lid)),
@@ -265,115 +270,102 @@ fn check(a: &Actor) {
     assert!(st.soft_timeout_late <= st.soft_timeouts);
 }
 
-/// One silent node in the closest set: on, it stops holding the leg after
-/// the soft timeout (1–2 s) and the request ends on its closest set of K
-/// answers, with
-/// the silent query still out (detached, against the outstanding cap).
-/// Its late answer settles once; a repeat is dropped. Off, the leg waits
-/// for the query timeout.
-#[tokio::test(start_paused = true)]
-async fn a_silent_node_stops_holding_the_leg() {
-    for (soft, lookup_end) in COMBOS {
-        let (mut a, s) = actor(soft, lookup_end);
-        let sem = Arc::new(Semaphore::new(4));
-        // The table keeps 8 of them (one bucket); nodes[1] lists the 9th.
-        let nodes = spread(1, 9);
-        table(&mut a, &nodes[..8]);
-        let mut rx = request(&mut a, &s, &sem);
-        assert_eq!(out(&a).len(), 3, "ALPHA unchanged");
-        // nodes[0] stays silent; the other 8 answer at once.
-        answer(&mut a, &s, &nodes[1], &nodes[8..]);
-        answer_all_but(&mut a, &s, &nodes[..1]);
-        check(&a);
-        assert!(
-            rx.try_recv().is_err(),
-            "nodes[0] is the closest, unanswered"
-        );
-        tick(&mut a, &s, 1).await;
-        check(&a);
-        if soft {
-            // nodes[0] slow, the 9th node joins the closest set; it answers.
-            assert!(rx.try_recv().is_err());
-            answer_all_but(&mut a, &s, &nodes[..1]);
-            assert_eq!(rx.try_recv(), Ok(vec![]), "{lookup_end}");
-            assert_eq!(ended(&a, LedgerEnd::NoValues), 1);
-            assert_eq!(returns(&a), 1);
-            assert_eq!(sem.available_permits(), 4);
-            assert!(a.lookups.values().all(|l| l.owner.is_none()));
-            assert!(a.peer_requests.is_empty());
-            assert_eq!(a.active_get_peers, 0);
-            // Still out, against the cap, naming no lookup.
-            assert_eq!(detached(&a), 1);
-            assert!(out(&a).is_empty());
-            assert_eq!(a.stats.snapshot().soft_timeouts, 1);
-            // The late answer: counted, settles once.
-            let tid = tid_to(&a, &nodes[0]);
-            reply_as(&mut a, &s, tid, nodes[0].addr, nodes[0].id, &[]);
-            let st = a.stats.snapshot();
-            assert_eq!((st.soft_timeout_late, st.answered), (1, 9));
-            assert!(detached(&a) == 0 && a.soft_tids.is_empty());
-            assert!(!a.pending_addrs.contains_key(&nodes[0].addr));
-            reply_as(&mut a, &s, tid, nodes[0].addr, nodes[0].id, &[]);
-            let st = a.stats.snapshot();
-            assert_eq!(
-                (st.soft_timeout_late, st.answered),
-                (1, 9),
-                "repeat dropped"
-            );
-            assert_eq!(returns(&a), 1, "the permit came back once");
-        } else {
-            assert!(rx.try_recv().is_err(), "off: still waiting at 1 s");
-            tick(&mut a, &s, 1).await;
-            tick(&mut a, &s, 1).await;
-            assert!(rx.try_recv().is_err(), "off: still waiting at 3 s");
-            tick(&mut a, &s, 1).await;
-            // nodes[0] failed at the query timeout; the 9th takes its place.
-            answer_all_but(&mut a, &s, &nodes[..1]);
-            assert_eq!(rx.try_recv(), Ok(vec![]), "the query timeout ends it");
-            assert_eq!(a.stats.snapshot().soft_timeouts, 0);
-            assert!(a.soft_tids.is_empty());
-            assert!(out(&a).is_empty() && detached(&a) == 0);
-        }
-    }
+/// Starts a request whose three far starting nodes answer at once, the
+/// first listing `close`, as early hops of a walk do.
+fn far_request(
+    a: &mut Actor,
+    s: &[SendSocket],
+    sem: &Arc<Semaphore>,
+    close: &[NodeInfo],
+) -> oneshot::Receiver<Vec<SocketAddr>> {
+    let far: Vec<_> = (0..3)
+        .map(|i| at(0xF0 + i, 0xF0 + i, 900 + u16::from(i)))
+        .collect();
+    table(a, &far);
+    let rx = request(a, s, sem);
+    answer(a, s, &far[0], close);
+    answer(a, s, &far[1], &[]);
+    answer(a, s, &far[2], &[]);
+    rx
 }
 
-/// Silent nodes free their lanes for the next candidates, but a leg holds
-/// at most ALPHA soft queries: the next ones keep their lanes until the
-/// query timeout. A leg never has more than 2 · ALPHA queries out, and no
-/// node is asked twice.
+/// The closest node stays silent; the far ones asked first and the 7
+/// other close ones answer. On, once it goes soft (1–2 s) the leg ends on
+/// K answers without it, and the silent query stays out, detached, until
+/// it answers (once; a repeat is dropped) or times out. Off, the leg waits
+/// for the query timeout.
 #[tokio::test(start_paused = true)]
-async fn freed_lanes_ask_the_next_candidates_within_the_bound() {
+async fn a_silent_closest_node_stops_holding_the_leg() {
     for (soft, lookup_end) in COMBOS {
         let (mut a, s) = actor(soft, lookup_end);
         let sem = Arc::new(Semaphore::new(1));
-        let nodes = spread(1, 12);
-        table(&mut a, &nodes);
-        let _rx = request(&mut a, &s, &sem);
-        assert_eq!(out(&a).len(), 3);
+        let close = spread(1, 8);
+        let mut rx = far_request(&mut a, &s, &sem, &close);
+        answer_all_but(&mut a, &s, &close[..1]);
+        check(&a);
+        assert!(rx.try_recv().is_err(), "the closest is unanswered");
+        let sent = lookup_queries(&a);
         tick(&mut a, &s, 1).await;
         check(&a);
-        let lid = *a.lookups.keys().next().unwrap();
+        assert_eq!(lookup_queries(&a), sent, "nothing more sent");
         if soft {
-            assert_eq!(a.lookups[&lid].slow(), 3);
-            assert_eq!(out(&a).len(), 6, "three more asked");
-            // A second second: the three new ones can't go soft too.
-            tick(&mut a, &s, 1).await;
-            check(&a);
-            assert_eq!(out(&a).len(), 6);
-            assert_eq!(a.stats.snapshot().soft_timeouts, 3);
+            assert_eq!(rx.try_recv(), Ok(vec![]), "{lookup_end}");
+            assert_eq!(ended(&a, LedgerEnd::NoValues), 1);
+            assert_eq!((returns(&a), sem.available_permits()), (1, 1));
+            assert!(a.peer_requests.is_empty() && a.active_get_peers == 0);
+            assert_eq!(detached(&a), 1, "still out, against the cap");
+            assert_eq!(a.stats.snapshot().soft_timeouts, 1);
+            let tid = tid_to(&a, &close[0]);
+            let answered = a.stats.snapshot().answered;
+            reply_as(&mut a, &s, tid, close[0].addr, close[0].id, &[]);
+            let st = a.stats.snapshot();
+            assert_eq!((st.soft_timeout_late, st.answered), (1, answered + 1));
+            assert!(detached(&a) == 0 && a.soft_tids.is_empty());
+            reply_as(&mut a, &s, tid, close[0].addr, close[0].id, &[]);
+            let st = a.stats.snapshot();
+            assert_eq!(
+                (st.soft_timeout_late, st.answered),
+                (1, answered + 1),
+                "repeat"
+            );
+            assert_eq!(returns(&a), 1, "the permit came back once");
         } else {
-            assert_eq!(out(&a).len(), 3, "off: lanes held");
+            for _ in 0..2 {
+                tick(&mut a, &s, 1).await;
+                assert!(rx.try_recv().is_err(), "off: still waiting");
+            }
+            tick(&mut a, &s, 1).await;
+            assert_eq!(rx.try_recv(), Ok(vec![]), "the query timeout ends it");
+            assert_eq!(a.stats.snapshot().soft_timeouts, 0);
+            assert!(a.soft_tids.is_empty() && detached(&a) == 0);
         }
-        let asked: Vec<SocketAddr> = out(&a).iter().map(|(_, to, _)| *to).collect();
-        let mut unique = asked.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        assert_eq!(asked.len(), unique.len(), "nobody asked twice");
     }
 }
 
-/// A late answer while the leg still runs settles the slow candidate once
-/// and its nodes join the lookup, which asks them.
+/// Soft queries keep their lanes: with tokens and room to spare, going
+/// soft sends nothing, on and off alike, and a leg still has 3 out.
+#[tokio::test(start_paused = true)]
+async fn soft_queries_keep_their_lanes_and_send_nothing_more() {
+    for (soft, lookup_end) in COMBOS {
+        let (mut a, s) = actor(soft, lookup_end);
+        let sem = Arc::new(Semaphore::new(1));
+        table(&mut a, &spread(1, 12));
+        let _rx = request(&mut a, &s, &sem);
+        a.query_rate.burst = 1_000.0;
+        a.query_rate.tokens = 1_000.0;
+        let sent = lookup_queries(&a);
+        tick(&mut a, &s, 1).await;
+        check(&a);
+        assert_eq!(out(&a).len(), ALPHA);
+        assert_eq!(lookup_queries(&a), sent, "nothing more sent");
+        assert_eq!(a.soft_tids.len(), if soft { ALPHA } else { 0 });
+        let lid = *a.lookups.keys().next().unwrap();
+        assert_eq!(a.lookups[&lid].slow(), if soft { ALPHA } else { 0 });
+    }
+}
+
+/// A late answer while the leg still runs settles the slow candidate once,
+/// frees its lane, and its nodes join the lookup, which asks the closest.
 #[tokio::test(start_paused = true)]
 async fn a_late_answer_still_feeds_a_running_leg() {
     for lookup_end in [false, true] {
@@ -385,39 +377,42 @@ async fn a_late_answer_still_feeds_a_running_leg() {
         tick(&mut a, &s, 1).await;
         let lid = *a.lookups.keys().next().unwrap();
         assert_eq!(a.lookups[&lid].slow(), 3);
-        assert_eq!(out(&a).len(), 4, "the fourth took a freed lane; two free");
-        // The first slow node answers late, with closer nodes.
         let closer = spread(1, 2);
         answer(&mut a, &s, &nodes[0], &closer);
         check(&a);
         assert_eq!(a.lookups[&lid].slow(), 2, "settled once");
         assert_eq!(a.stats.snapshot().soft_timeout_late, 1);
         let asked: Vec<SocketAddr> = out(&a).iter().map(|(_, to, _)| *to).collect();
-        assert!(closer.iter().all(|c| asked.contains(&c.addr)));
+        assert!(
+            asked.contains(&closer[0].addr),
+            "its lane goes to the closest"
+        );
+        assert_eq!(asked.len(), ALPHA);
     }
 }
 
-/// A slow query that reaches the query timeout fails then, once: the
-/// leg's slow count and the request's in-flight count stay right.
+/// A slow query that reaches the query timeout fails then, once, and its
+/// lane goes to the next candidate, which goes soft in its turn.
 #[tokio::test(start_paused = true)]
 async fn a_slow_query_fails_once_at_the_query_timeout() {
     for lookup_end in [false, true] {
         let (mut a, s) = actor(true, lookup_end);
         let sem = Arc::new(Semaphore::new(1));
-        let nodes = spread(1, 12);
-        table(&mut a, &nodes);
+        table(&mut a, &spread(1, 12));
         let _rx = request(&mut a, &s, &sem);
         let timeouts = a.stats.snapshot().timeouts;
         for _ in 0..4 {
             tick(&mut a, &s, 1).await;
             check(&a);
         }
-        // The first three timed out at 4 s, and in the same tick the next
-        // three went soft.
         let lid = *a.lookups.keys().next().unwrap();
         assert_eq!(a.stats.snapshot().timeouts - timeouts, 3);
+        assert_eq!(a.lookups[&lid].slow(), 0, "the next three just went out");
+        assert_eq!(out(&a).len(), ALPHA);
+        tick(&mut a, &s, 1).await;
+        check(&a);
         assert_eq!(a.lookups[&lid].slow(), 3);
-        assert!(a.soft_tids.len() == 3);
+        assert_eq!(a.stats.snapshot().soft_timeouts, 6);
     }
 }
 
@@ -427,8 +422,7 @@ async fn a_slow_query_fails_once_at_the_query_timeout() {
 #[tokio::test(start_paused = true)]
 async fn each_permit_returns_once_on_every_end() {
     for lookup_end in [false, true] {
-        // Every node silent: the candidates run out (no values) by the
-        // deadline at the latest.
+        // Every node silent: the deadline, or running out of candidates.
         let (mut a, s) = actor(true, lookup_end);
         let sem = Arc::new(Semaphore::new(1));
         table(&mut a, &spread(1, 40));
@@ -503,9 +497,9 @@ async fn each_permit_returns_once_on_every_end() {
     }
 }
 
-/// A query cap: a hostile network whose every answer lists closer ids
-/// that never answer. The request spends at most 64 queries and ends by
-/// its deadline, whatever the switches.
+/// A hostile network whose every answer lists closer ids that never
+/// answer: the request spends at most 64 queries and ends by its deadline,
+/// whatever the switches.
 #[tokio::test(start_paused = true)]
 async fn the_query_cap_and_deadline_hold_against_endless_closer_ids() {
     for (soft, lookup_end) in COMBOS {
@@ -516,8 +510,6 @@ async fn the_query_cap_and_deadline_hold_against_endless_closer_ids() {
         let mut fresh = 0u8;
         let mut secs = 0;
         while rx.try_recv().is_err() {
-            // Whoever is out answers with 3 new closer silent ids, then
-            // those stay silent.
             if let Some((tid, to, id)) = out(&a)
                 .into_iter()
                 .find(|(t, _, _)| !a.soft_tids.contains(t))
@@ -546,28 +538,31 @@ async fn the_query_cap_and_deadline_hold_against_endless_closer_ids() {
     }
 }
 
-/// The query cap with soft queries out: half the nodes answer at once,
-/// each listing two closer ones, and half stay silent and go soft. The
-/// request spends exactly its 64 queries, ends on the cap, and its soft
-/// queries are detached, not dropped.
+/// The query cap with queries going soft along the way: most nodes
+/// answer, one per 100 ms, each listing two closer ones, and every eighth
+/// stays silent and goes soft. The request spends exactly its 64 queries
+/// and ends on the cap once every query is settled, slow ones included,
+/// as with the switch off.
 #[tokio::test(start_paused = true)]
 async fn the_query_cap_ends_a_request_with_soft_queries_detached() {
     let (mut a, s) = actor(true, false);
     let sem = Arc::new(Semaphore::new(1));
-    // Id `0xA0 - k` (closer as k grows), own /24 and port; even k is silent.
+    // Id `0xA0 - k` (closer as k grows), own /24 and port.
     let fake = |k: u16| at(0xA0 - k as u8, k as u8, 300 + k);
     table(&mut a, &(0..4).map(fake).collect::<Vec<_>>());
     let mut next = 4u16;
     let mut rx = request(&mut a, &s, &sem);
     let mut step = 0;
     while rx.try_recv().is_err() {
-        for (tid, to, id) in out(&a) {
-            let k = to.port() - 300;
-            if k % 2 == 1 && !a.soft_tids.contains(&tid) && next < 0x9E {
-                reply_as(&mut a, &s, tid, to, id, &[fake(next), fake(next + 1)]);
-                next += 2;
-                check(&a);
-            }
+        // One answer per 100 ms step, so ticks pass while it runs.
+        if let Some((tid, to, id)) = out(&a)
+            .into_iter()
+            .find(|(_, to, _)| (to.port() - 300) % 8 != 0)
+            && next < 0x9E
+        {
+            reply_as(&mut a, &s, tid, to, id, &[fake(next), fake(next + 1)]);
+            next += 2;
+            check(&a);
         }
         tokio::time::advance(Duration::from_millis(100)).await;
         step += 1;
@@ -583,73 +578,27 @@ async fn the_query_cap_ends_a_request_with_soft_queries_detached() {
         64
     );
     assert!(a.stats.snapshot().soft_timeouts > 0);
-    assert!((1..=ALPHA).contains(&detached(&a)), "{}", detached(&a));
+    assert_eq!(detached(&a), 0, "the cap's end waits for them");
     assert_eq!(returns(&a), 1);
 }
 
-/// A freed lane still waits for the query rate and the outstanding cap:
-/// with no tokens left, or the cap full, nothing more goes out.
-#[tokio::test(start_paused = true)]
-async fn freed_lanes_wait_for_the_rate_and_the_outstanding_cap() {
-    for lookup_end in [false, true] {
-        let (mut a, s) = actor(true, lookup_end);
-        let sem = Arc::new(Semaphore::new(1));
-        table(&mut a, &spread(1, 12));
-        let _rx = request(&mut a, &s, &sem);
-        a.query_rate.tokens = 0.0;
-        a.query_rate.rate = 0.0;
-        let sent = a.stats.snapshot().queries_out;
-        tick(&mut a, &s, 1).await;
-        check(&a);
-        assert_eq!(
-            a.stats.snapshot().queries_out,
-            sent,
-            "over the rate: nothing"
-        );
-        assert_eq!(out(&a).len(), 3);
-
-        let (mut a, s) = actor(true, lookup_end);
-        let sem = Arc::new(Semaphore::new(1));
-        table(&mut a, &spread(1, 12));
-        let _rx = request(&mut a, &s, &sem);
-        let cap = a.cfg.intensity.max_outstanding();
-        for i in 0..(cap - a.pending.len()) as u64 {
-            a.pending.insert(
-                u64::MAX - i,
-                Pending {
-                    to: SocketAddr::from(([127, 0, 200, 1], 1)),
-                    id: None,
-                    sent: Instant::now() + Duration::from_secs(60),
-                    family: 0,
-                    purpose: Purpose::Ping,
-                    hinted: false,
-                },
-            );
-        }
-        tick(&mut a, &s, 1).await;
-        assert_eq!(a.pending.len(), cap, "the outstanding cap holds");
-        assert_eq!(out(&a).len(), 3, "the soft queries still count");
-    }
-}
-
 /// A detached query's late answer touches no lookup, even when its old
-/// lookup id has been reused by a new request asking the same node.
+/// lookup id has been reused by a new request asking the same node; a
+/// repeat of it settles nothing.
 #[tokio::test(start_paused = true)]
 async fn a_detached_answer_never_reaches_a_reused_lookup() {
     let (mut a, s) = actor(true, false);
     let sem = Arc::new(Semaphore::new(2));
-    let nodes = spread(1, 9);
-    table(&mut a, &nodes[..8]);
-    let mut rx = request(&mut a, &s, &sem);
+    let close = spread(1, 8);
+    let mut rx = far_request(&mut a, &s, &sem, &close);
     let old = *a.lookups.keys().next().unwrap();
-    answer(&mut a, &s, &nodes[1], &nodes[8..]);
-    answer_all_but(&mut a, &s, &nodes[..1]);
+    answer_all_but(&mut a, &s, &close[..1]);
     tick(&mut a, &s, 1).await;
-    answer_all_but(&mut a, &s, &nodes[..1]);
     assert!(rx.try_recv().is_ok());
-    let late = tid_to(&a, &nodes[0]);
-    // The next request gets the old id and asks nodes[0] again.
+    let late = tid_to(&a, &close[0]);
+    // The next request gets the old id and asks close[0] again.
     a.next_lookup = old;
+    table(&mut a, &close[..1]);
     let _rx2 = request(&mut a, &s, &sem);
     assert!(a.lookups.contains_key(&old), "id reused");
     let owner = a.lookups[&old].owner.unwrap();
@@ -658,21 +607,20 @@ async fn a_detached_answer_never_reaches_a_reused_lookup() {
         &mut a,
         &s,
         late,
-        nodes[0].addr,
-        nodes[0].id,
+        close[0].addr,
+        close[0].id,
         &spread(0x80, 3),
     );
     check(&a);
     assert_eq!((a.peer_requests[&owner].inflight, out(&a)), before);
     assert_eq!(a.stats.snapshot().soft_timeout_late, 1);
-    // The same reply again: it settles nothing a second time.
     let answered = a.stats.snapshot().answered;
     reply_as(
         &mut a,
         &s,
         late,
-        nodes[0].addr,
-        nodes[0].id,
+        close[0].addr,
+        close[0].id,
         &spread(0x80, 3),
     );
     check(&a);
@@ -681,9 +629,9 @@ async fn a_detached_answer_never_reaches_a_reused_lookup() {
     assert_eq!((a.peer_requests[&owner].inflight, out(&a)), before);
 }
 
-/// A leg whose only candidates left have gone slow doesn't end on them:
-/// with fewer than K answers it waits for them to settle, so their late
-/// answers still feed it (here, with closer nodes it then asks).
+/// A leg whose only candidates have gone slow doesn't end on them: with
+/// fewer than K answers it waits for them to settle, so their late answers
+/// still feed it (here, with a closer node it then asks).
 #[tokio::test(start_paused = true)]
 async fn a_leg_of_slow_candidates_waits_for_their_answers() {
     for lookup_end in [false, true] {
@@ -696,46 +644,49 @@ async fn a_leg_of_slow_candidates_waits_for_their_answers() {
         check(&a);
         assert_eq!(a.soft_tids.len(), 3);
         assert!(rx.try_recv().is_err(), "waits for the slow ones");
-        // One answers late, listing two closer nodes, which are asked.
         let closer = spread(1, 2);
         answer(&mut a, &s, &nodes[0], &closer);
         check(&a);
         let asked: Vec<SocketAddr> = out(&a).iter().map(|(_, to, _)| *to).collect();
-        assert!(closer.iter().all(|c| asked.contains(&c.addr)));
+        assert!(asked.contains(&closer[0].addr));
         assert!(rx.try_recv().is_err());
     }
 }
 
-/// CR-LOOKUP-END's values end with soft queries out: the request ends on
-/// enough values, its soft queries are detached, its other query is
-/// dropped, and the permit comes back once.
+/// CR-LOOKUP-END's values end with a soft query out: the request ends on
+/// enough values, its soft query is detached, the others are dropped, and
+/// the permit comes back once.
 #[tokio::test(start_paused = true)]
 async fn enough_values_end_detaches_soft_queries() {
     let (mut a, s) = actor(true, true);
     let sem = Arc::new(Semaphore::new(1));
-    table(&mut a, &spread(1, 12));
+    let nodes = spread(1, 12);
+    table(&mut a, &nodes);
     let mut rx = request(&mut a, &s, &sem);
-    tick(&mut a, &s, 1).await;
-    assert_eq!(a.soft_tids.len(), 3);
-    let fresh: Vec<_> = out(&a)
-        .into_iter()
-        .filter(|(t, _, _)| !a.soft_tids.contains(t))
-        .collect();
-    assert_eq!(fresh.len(), 3);
     let values = |net: u8| -> Vec<SocketAddr> {
         (0..4)
             .map(|i| SocketAddr::from(([10, net, 0, 1], 6000 + i)))
             .collect()
     };
-    for (k, (tid, to, id)) in fresh[..2].iter().enumerate() {
-        reply_values(&mut a, &s, *tid, *to, *id, values(k as u8 + 1));
-        check(&a);
-    }
+    // nodes[0] stays silent; nodes[1] answers with a first network's four.
+    let tid = tid_to(&a, &nodes[1]);
+    reply_values(&mut a, &s, tid, nodes[1].addr, nodes[1].id, values(1));
+    tick(&mut a, &s, 1).await;
+    assert!(a.soft_tids.contains(&tid_to(&a, &nodes[0])));
+    // Another, soft too by now, answers late with a second network's
+    // four: enough.
+    let (tid, to, id) = out(&a)
+        .into_iter()
+        .find(|(_, to, _)| *to != nodes[0].addr)
+        .unwrap();
+    reply_values(&mut a, &s, tid, to, id, values(2));
+    check(&a);
     assert_eq!(rx.try_recv().unwrap().len(), 8);
     assert_eq!(ended(&a, LedgerEnd::EnoughValues), 1);
     assert_eq!((returns(&a), sem.available_permits()), (1, 1));
-    assert_eq!(detached(&a), 3, "the soft ones stay out");
-    assert!(out(&a).is_empty(), "the other one is dropped");
+    assert!(detached(&a) >= 1, "the soft ones stay out");
+    assert_eq!(detached(&a), a.soft_tids.len());
+    assert!(out(&a).is_empty(), "the others are dropped");
 }
 
 /// A late error reply settles a slow query once, as a failure: the leg's
@@ -851,52 +802,55 @@ fn script() -> impl Strategy<Value = Script> {
         })
 }
 
+/// How a scripted run ended: the step, why, the leg's answers among its
+/// K closest live candidates and its slow queries out then, and every
+/// query the request sent, as (step, address), in order.
+struct Played {
+    step: u32,
+    why: LedgerEnd,
+    answered: usize,
+    slow: usize,
+    sends: Vec<(u32, SocketAddr)>,
+}
+
 /// Runs `script` with the switches given, in 100 ms steps with a
-/// maintenance tick every second, until the request answers; late nodes
-/// answer late, or at once with `on_time`. Returns the step it ended and
-/// why, and checks the bookkeeping at every step.
-async fn play(
-    script: &Script,
-    soft: bool,
-    lookup_end: bool,
-    on_time: bool,
-) -> (u32, LedgerEnd, (usize, usize)) {
+/// maintenance tick every second, until the request answers, checking the
+/// bookkeeping at every step.
+async fn play(script: &Script, soft: bool, lookup_end: bool) -> Played {
     let (mut a, s) = actor(soft, lookup_end);
     let sem = Arc::new(Semaphore::new(1));
     let start: Vec<_> = script.start.iter().map(|i| node(*i)).collect();
     table(&mut a, &start);
     let mut rx = request(&mut a, &s, &sem);
-    // tid -> the step it's due.
-    let mut due: Map<u64, u32> = Map::default();
-    for step in 1..=400u32 {
-        tokio::time::advance(Duration::from_millis(100)).await;
-        for (tid, to, _) in out(&a).into_iter().chain(
-            a.pending
-                .iter()
-                .filter(|(_, p)| matches!(p.purpose, Purpose::Detached))
-                .map(|(t, p)| (*t, p.to, p.id.unwrap()))
-                .collect::<Vec<_>>(),
-        ) {
-            if due.contains_key(&tid) {
-                continue;
-            }
+    let mut sends = Vec::new();
+    // tid -> the step it's due, for every query seen.
+    let mut due: Map<u64, Option<u32>> = Map::default();
+    let mut record = |a: &Actor, step: u32, sends: &mut Vec<(u32, SocketAddr)>| {
+        let mut new: Vec<(u64, SocketAddr)> = out(a)
+            .into_iter()
+            .filter(|(t, _, _)| !due.contains_key(t))
+            .map(|(t, to, _)| (t, to))
+            .collect();
+        new.sort_unstable_by_key(|(_, to)| *to);
+        for (tid, to) in new {
             let i = usize::from(to.port() - 100);
             let wait = match script.behaviour[i] {
-                Behaviour::Fast(w) => Some(u32::from(w)),
-                Behaviour::Late(_) if on_time => Some(0),
-                Behaviour::Late(w) => Some(u32::from(w)),
+                Behaviour::Fast(w) | Behaviour::Late(w) => Some(step + u32::from(w)),
                 Behaviour::Silent => None,
             };
-            if let Some(w) = wait {
-                due.insert(tid, step + w);
-            }
+            due.insert(tid, wait);
+            sends.push((step, to));
         }
-        let now: Vec<u64> = due
+        due.clone()
+    };
+    let mut known = record(&a, 0, &mut sends);
+    for step in 1..=400u32 {
+        tokio::time::advance(Duration::from_millis(100)).await;
+        let mut now: Vec<u64> = known
             .iter()
-            .filter(|(t, at)| **at <= step && a.pending.contains_key(t))
+            .filter(|(t, at)| at.is_some_and(|at| at <= step) && a.pending.contains_key(t))
             .map(|(t, _)| *t)
             .collect();
-        let mut now = now;
         now.sort_unstable();
         for tid in now {
             // An earlier reply this step may have ended the request.
@@ -908,10 +862,12 @@ async fn play(
             let (to, id) = (p.to, p.id.unwrap());
             reply_as(&mut a, &s, tid, to, id, &knows);
             check(&a);
+            known = record(&a, step, &mut sends);
         }
         if step % 10 == 0 {
             a.maintain(&s);
             check(&a);
+            known = record(&a, step, &mut sends);
         }
         if rx.try_recv().is_ok() {
             let ended = a.stats.snapshot().ledger.ended;
@@ -921,42 +877,44 @@ async fn play(
                 .unwrap();
             assert_eq!(ended.iter().sum::<u64>(), 1);
             assert_eq!(returns(&a), 1);
-            let leg = *a.legs_ended.last().expect("a leg ended");
-            return (step, why, leg);
+            let (answered, slow) = *a.legs_ended.last().expect("a leg ended");
+            return Played {
+                step,
+                why,
+                answered,
+                slow,
+                sends,
+            };
         }
     }
     panic!("the request outran its deadline");
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(48))]
+    #![proptest_config(ProptestConfig::with_cases(64))]
 
-    /// With the switch on, a leg never ends earlier than the same script
-    /// with every late node answering on time, except by its closest set
-    /// (K answers among its closest live candidates, which slow ones don't
-    /// hold) or its values; and the bookkeeping holds at every step, with
-    /// `dht.lookup_end` off and on. A leg that ends with slow queries out
-    /// always has its K answers.
+    /// The guarantee, on a scripted network of fast, late and silent nodes,
+    /// with `dht.lookup_end` off and on: with the switch on a leg never
+    /// ends later than with it off, and until it ends it sends exactly the
+    /// same queries at the same times. A leg that ends with slow queries
+    /// out has its K answers. The bookkeeping holds at every step.
     #[test]
-    fn soft_expiry_never_ends_a_leg_early_for_free(script in script(), lookup_end in any::<bool>()) {
+    fn on_never_ends_later_and_sends_the_same_queries(script in script(), lookup_end in any::<bool>()) {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .start_paused(true)
             .build()
             .unwrap();
-        let (late, why, (answered, slow)) = rt.block_on(play(&script, true, lookup_end, false));
-        let (on_time, _, _) = rt.block_on(play(&script, true, lookup_end, true));
-        prop_assert!(slow == 0 || answered >= K, "ended with {slow} slow and {answered} answers");
-        let closest_set = matches!(why, LedgerEnd::Values | LedgerEnd::NoValues) && answered >= K;
-        // A deadline lands on the first drive after 25 s: a late reply can
-        // bring that drive forward by under one tick.
-        let deadline = why == LedgerEnd::Deadline && late >= 250;
-        prop_assert!(
-            late >= on_time || closest_set || why == LedgerEnd::EnoughValues || deadline,
-            "ended at step {late} ({why:?}, {answered} answers) against {on_time} on time"
-        );
-        // The same script with the switch off holds its bookkeeping too.
-        rt.block_on(play(&script, false, lookup_end, false));
+        let on = rt.block_on(play(&script, true, lookup_end));
+        let off = rt.block_on(play(&script, false, lookup_end));
+        prop_assert!(on.step <= off.step, "on ended at {} ({:?}), off at {} ({:?})", on.step, on.why, off.step, off.why);
+        prop_assert!(on.slow == 0 || on.answered >= K, "ended with {} slow and {} answers", on.slow, on.answered);
+        let before = |v: &[(u32, SocketAddr)]| v.iter().filter(|(t, _)| *t < on.step).copied().collect::<Vec<_>>();
+        prop_assert_eq!(before(&on.sends), before(&off.sends), "the same queries before the end");
+        let at_end = |v: &[(u32, SocketAddr)]| v.iter().filter(|(t, _)| *t == on.step).copied().collect::<Vec<_>>();
+        let off_at_end = at_end(&off.sends);
+        prop_assert!(at_end(&on.sends).iter().all(|q| off_at_end.contains(q)), "nothing extra at the end");
+        prop_assert!(on.sends.iter().all(|(t, _)| *t <= on.step));
     }
 }
 
@@ -1052,285 +1010,5 @@ proptest! {
             }
             Ok(())
         })?;
-    }
-}
-
-/// [`actor`] at `intensity`, with CR-1c's switch as given and BEP 51
-/// sampling on.
-fn sampling_actor(intensity: Intensity, preset_slots: bool) -> (Actor, Vec<SendSocket>) {
-    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let addr = socket.local_addr().unwrap();
-    let cfg = Config {
-        bind: vec![addr],
-        bootstrap: vec![],
-        allow_private: true,
-        sample_start_delay: Some(Duration::ZERO),
-        harvest: crate::node::HarvestConfig {
-            sample: true,
-            passive: false,
-        },
-        intensity,
-        preset_slots,
-        soft_timeout: true,
-        ..Default::default()
-    };
-    let a = Actor::new(
-        cfg,
-        Arc::new(Stats::default()),
-        vec![addr],
-        None,
-        vec![],
-        None,
-        Instant::now(),
-        StdRng::seed_from_u64(13),
-    );
-    (a, vec![SendSocket::Udp(socket)])
-}
-
-/// Node `n` (a smaller `n` is closer to the all-zero hash), alone on its
-/// loopback address, on a port nothing listens on: it never answers.
-fn silent(n: u32) -> NodeInfo {
-    let mut id = [0u8; 20];
-    id[..4].copy_from_slice(&n.to_be_bytes());
-    id[19] = 1;
-    let b = n.to_be_bytes();
-    NodeInfo {
-        id: NodeId(id),
-        addr: SocketAddr::from(([127, b[1], b[2], b[3].max(1)], 999)),
-    }
-}
-
-fn hash(i: usize) -> InfoHash {
-    let mut h = [0u8; 20];
-    h[..8].copy_from_slice(&(i as u64).to_be_bytes());
-    InfoHash(h)
-}
-
-/// Every slot full of requests whose candidates never answer, the pool
-/// asking again for each slot that comes free: soft queries free lanes
-/// only while lookups' queries out stay within 3/4 of the outstanding
-/// cap, so BEP 51 sampling still sends and a maintenance lookup still gets
-/// its queries out (runner, 2026-11-23). Without the 3/4 check, lookups'
-/// soft and detached queries crowd sampling out at Low.
-async fn sampling_and_maintenance_keep_room(intensity: Intensity, preset_slots: bool) {
-    let (mut a, s) = sampling_actor(intensity, preset_slots);
-    for n in 1..=4096 {
-        a.families[0].table.insert(silent(n), Contact::Response, 0);
-    }
-    let budget = intensity.max_outstanding() * 3 / 4;
-    let mut next = 0;
-    let mut held = Vec::new();
-    let mut refill = |a: &mut Actor, held: &mut Vec<PeerResult>| loop {
-        let (tx, mut rx) = oneshot::channel();
-        a.on_command(Command::RequestPeers(hash(next), tx, None));
-        match rx.try_recv().expect("an answer at once") {
-            Some(r) => {
-                held.push(r);
-                next += 1;
-            }
-            None => break,
-        }
-    };
-    let lookups_out = |a: &Actor| {
-        a.pending
-            .values()
-            .filter(|p| matches!(p.purpose, Purpose::Lookup(_) | Purpose::Detached))
-            .count()
-    };
-    refill(&mut a, &mut held);
-    let step = Duration::from_millis(100);
-    // Warm up past the first soft expiries, timeouts and request ends.
-    let mut peak = 0;
-    let mut peak_ours = 0;
-    for _ in 0..150 {
-        tokio::time::advance(step).await;
-        a.maintain(&s);
-        refill(&mut a, &mut held);
-        // Owned requests' queries and detached ones; the node's own
-        // maintenance lookups send apart from soft expiry, into the room
-        // the rule keeps.
-        let ours = a
-            .pending
-            .values()
-            .filter(|p| owned(&a, p) || matches!(p.purpose, Purpose::Detached))
-            .count();
-        peak_ours = peak_ours.max(ours);
-        peak = peak.max(lookups_out(&a));
-        assert!(a.pending.len() <= intensity.max_outstanding());
-    }
-    assert!(a.stats.snapshot().soft_timeouts > 0, "queries went soft");
-    // Soft expiry stops at the line: requests' and detached queries never
-    // pass it, and with maintenance lookups too, lookups stay under the cap.
-    assert!(peak_ours <= budget, "requests' and detached: {peak_ours}");
-    assert!(peak < intensity.max_outstanding(), "lookups: {peak}");
-    // Sampling still sends, to fresh nodes (the table's cool down).
-    for n in 100_000..100_400 {
-        a.sampler.offer(silent(n), Instant::now());
-    }
-    let sampled = a.stats.snapshot().samples_sent;
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while a.stats.snapshot().samples_sent < sampled + 20 {
-        assert!(
-            Instant::now() < deadline,
-            "sampling starved: lookups hold {} of {}",
-            lookups_out(&a),
-            a.pending.len()
-        );
-        tokio::time::advance(step).await;
-        a.maintain(&s);
-        refill(&mut a, &mut held);
-    }
-    // A maintenance lookup (a refresh `find_node`) gets its queries out,
-    // within the query rate it shares.
-    let refresh = |a: &Actor| a.stats.snapshot().ledger.queries[QueryPurpose::Refresh as usize];
-    let before = refresh(&a);
-    // The table's nodes have all failed by now: it asks fresh ones.
-    let fresh: Vec<_> = (200_000..200_008).map(silent).collect();
-    let lid = a.insert_lookup(0, NodeId([0x55; 20]), &fresh, None, false, None);
-    a.drive_lookup(&s, lid);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while refresh(&a) < before + ALPHA as u64 {
-        assert!(
-            Instant::now() < deadline,
-            "maintenance starved: {} sent, {} of {} out",
-            refresh(&a) - before,
-            a.pending.len(),
-            intensity.max_outstanding()
-        );
-        tokio::time::advance(step).await;
-        a.maintain(&s);
-        refill(&mut a, &mut held);
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn at_low_with_preset_slots_sampling_and_maintenance_keep_room() {
-    sampling_and_maintenance_keep_room(Intensity::Low, true).await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn at_balanced_without_preset_slots_sampling_and_maintenance_keep_room() {
-    sampling_and_maintenance_keep_room(Intensity::Balanced, false).await;
-}
-
-/// The 3/4 rule exactly: at Low with CR-1c on, every slot's three queries
-/// out and lookups' detached queries bringing lookups within 10 of 3/4 of
-/// the outstanding cap, one tick marks only 10 queries soft. Lookups stay
-/// within 3/4 of the cap, and sampling still sends in the same tick.
-/// Without the rule all 96 would go soft, lookups would take the whole cap
-/// and sampling (which stops at 4/5) would send nothing.
-#[tokio::test(start_paused = true)]
-async fn soft_expiry_stops_at_three_quarters_of_the_cap() {
-    let (mut a, s) = sampling_actor(Intensity::Low, true);
-    for n in 1..=4096 {
-        a.families[0].table.insert(silent(n), Contact::Response, 0);
-    }
-    let slots = Intensity::Low.peer_slots();
-    let mut held = Vec::new();
-    // Tokens for every slot's three, so all are out before the tick.
-    a.query_rate.burst = 1_000.0;
-    a.query_rate.tokens = 1_000.0;
-    for i in 0..slots {
-        let (tx, rx) = oneshot::channel();
-        a.start_peer_request(&s, hash(i), Some(tx.into()), None);
-        held.push(rx);
-    }
-    let lookups_out = |a: &Actor| {
-        a.pending
-            .values()
-            .filter(|p| matches!(p.purpose, Purpose::Lookup(_) | Purpose::Detached))
-            .count()
-    };
-    assert_eq!(lookups_out(&a), slots * ALPHA);
-    let budget = Intensity::Low.max_outstanding() * 3 / 4;
-    // Earlier legs' detached queries, sent just now, so they stay out.
-    tokio::time::advance(Duration::from_secs(1)).await;
-    let room = 10;
-    for i in 0..(budget - room - lookups_out(&a)) as u64 {
-        a.pending.insert(
-            u64::MAX - i,
-            Pending {
-                to: SocketAddr::from(([127, 0, 250, 1], 1)),
-                id: Some(NodeId([0xEE; 20])),
-                sent: Instant::now(),
-                family: 0,
-                purpose: Purpose::Detached,
-                hinted: false,
-            },
-        );
-    }
-    for n in 300_000..300_100 {
-        a.sampler.offer(silent(n), Instant::now());
-    }
-    let sampled = a.stats.snapshot().samples_sent;
-    a.maintain(&s);
-    check(&a);
-    assert_eq!(a.stats.snapshot().soft_timeouts, room as u64);
-    assert!(lookups_out(&a) <= budget, "{} > {budget}", lookups_out(&a));
-    assert!(
-        a.stats.snapshot().samples_sent > sampled,
-        "sampling still sends"
-    );
-}
-
-/// The 3/4 rule when hard timeouts and soft expiries share a tick: half
-/// the slots' queries reach the query timeout while the other half's are
-/// due to go soft, with detached queries holding lookups at the line. The
-/// timed-out legs refill their lanes first, so nothing goes soft and
-/// lookups stay within 3/4 of the cap after every tick.
-#[tokio::test(start_paused = true)]
-async fn the_three_quarters_rule_counts_lanes_refilled_after_timeouts() {
-    let (mut a, s) = sampling_actor(Intensity::Low, true);
-    for n in 1..=4096 {
-        a.families[0].table.insert(silent(n), Contact::Response, 0);
-    }
-    a.query_rate.burst = 10_000.0;
-    a.query_rate.tokens = 10_000.0;
-    // Owned requests' queries and detached ones: the node's own
-    // maintenance lookups send apart from soft expiry (the rule counts
-    // them too, so this is within it).
-    let lookups_out = |a: &Actor| {
-        a.pending
-            .values()
-            .filter(|p| owned(a, p) || matches!(p.purpose, Purpose::Detached))
-            .count()
-    };
-    let budget = Intensity::Low.max_outstanding() * 3 / 4;
-    let half = Intensity::Low.peer_slots() / 2;
-    let mut held = Vec::new();
-    let mut start = |a: &mut Actor, from: usize| {
-        for i in from..from + half {
-            let (tx, rx) = oneshot::channel();
-            a.start_peer_request(&s, hash(i), Some(tx.into()), None);
-            held.push(rx);
-        }
-    };
-    start(&mut a, 0);
-    tokio::time::advance(Duration::from_millis(500)).await;
-    // Earlier legs' detached queries, out until 4.5 s.
-    let fill = budget - 2 * half * ALPHA;
-    for i in 0..fill as u64 {
-        a.pending.insert(
-            u64::MAX - i,
-            Pending {
-                to: SocketAddr::from(([127, 0, 250, 1], 1)),
-                id: Some(NodeId([0xEE; 20])),
-                sent: Instant::now(),
-                family: 0,
-                purpose: Purpose::Detached,
-                hinted: false,
-            },
-        );
-    }
-    tokio::time::advance(Duration::from_millis(500)).await;
-    start(&mut a, half);
-    assert_eq!(lookups_out(&a), budget);
-    // At 4 s the first half times out while the second half is due; at
-    // 5 s the detached ones have gone and there's room again.
-    for _ in 0..4 {
-        tick(&mut a, &s, 1).await;
-        check(&a);
-        assert!(lookups_out(&a) <= budget, "{} > {budget}", lookups_out(&a));
     }
 }

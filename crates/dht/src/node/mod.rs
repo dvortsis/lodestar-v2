@@ -208,11 +208,11 @@ pub struct Config {
     pub lookup_end: bool,
     /// CR-SOFT-TIMEOUT (`dht.soft_timeout`): an owned peer lookup's query
     /// unanswered for 1 s (on the maintenance tick, so 1–2 s) stops holding
-    /// its leg: it frees its lane and no longer blocks the closest-set end,
-    /// at most 3 such queries per leg. It stays out, and counted against
-    /// the outstanding cap, until it's answered (a late answer still
-    /// settles it) or reaches `query_timeout`. Off, lookups wait exactly as
-    /// before and nothing is allocated.
+    /// its leg's end once 8 others have answered. It keeps its lane, so the
+    /// leg asks exactly whom it would with the switch off and sends nothing
+    /// more; it stays out until it's answered (a late answer still settles
+    /// it) or reaches `query_timeout`. Off, lookups wait exactly as before
+    /// and nothing is allocated.
     pub soft_timeout: bool,
     /// CR-SOFT-TIMEOUT: how long a query waits before it goes soft,
     /// [`SOFT_TIMEOUT`] by default and never more than `query_timeout`.
@@ -1117,10 +1117,10 @@ pub type PeerPermit = tokio::sync::OwnedSemaphorePermit;
 pub const PEER_REQUEST_CAPACITY: usize = 32;
 
 /// CR-SOFT-TIMEOUT (`dht.soft_timeout`): an owned peer lookup's query
-/// unanswered this long stops holding its leg: it frees its lane and no
-/// longer blocks the closest-set end, while staying out, and counted
-/// against the outstanding cap, until it's answered or reaches
-/// `query_timeout`. Checked on the maintenance tick, so with the default
+/// unanswered this long stops holding its leg's end once 8 others have
+/// answered. It keeps its lane and stays out until it's answered or
+/// reaches `query_timeout`, so the leg sends nothing more than with the
+/// switch off. Checked on the maintenance tick, so with the default
 /// 1 s tick the wait is 1–2 s. See
 /// docs/decisions/2026-11-23-CR-SOFT-TIMEOUT.md.
 pub const SOFT_TIMEOUT: Duration = Duration::from_secs(1);

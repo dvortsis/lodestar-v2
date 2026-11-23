@@ -26,8 +26,9 @@ enum State {
     Fresh,
     InFlight,
     /// CR-SOFT-TIMEOUT: asked, unanswered past the soft timeout. Its query
-    /// is still out (a late answer settles it), but it holds no
-    /// [`ALPHA`] lane and doesn't block the leg's end, as if it had failed.
+    /// is still out and still holds its [`ALPHA`] lane, exactly as with
+    /// the switch off (a late answer settles it); it only stops holding the
+    /// leg's end once [`K`] others have answered.
     Slow,
     Responded,
     Failed,
@@ -49,8 +50,9 @@ pub(crate) struct Lookup {
     /// Index of the address family (socket) this lookup runs on.
     pub family: usize,
     candidates: Vec<Candidate>,
+    /// Queries out to candidates: [`State::InFlight`] and [`State::Slow`].
     in_flight: usize,
-    /// CR-SOFT-TIMEOUT: candidates [`State::Slow`], at most [`ALPHA`].
+    /// CR-SOFT-TIMEOUT: of those, the [`State::Slow`] ones.
     slow: usize,
     /// The leg's values, shared out by source ([`Values`]).
     pub peers: Values,
@@ -133,11 +135,14 @@ impl Lookup {
     /// Whether a candidate takes one of the K slots. In a scrape, the
     /// first K responders that sent no filters (they don't store the hash,
     /// or don't speak BEP 33) give their slot up, so the lookup reaches the
-    /// nodes that do; that bounds a scrape at 2K answers.
-    fn slot_filter(scrape: bool) -> impl FnMut(&Candidate) -> bool {
+    /// nodes that do; that bounds a scrape at 2K answers. A slow candidate
+    /// (CR-SOFT-TIMEOUT) takes its slot when choosing whom to ask, exactly
+    /// as an in-flight one does with the switch off; only the end tests
+    /// pass `skip_slow`.
+    fn slot_filter(scrape: bool, skip_slow: bool) -> impl FnMut(&Candidate) -> bool {
         let mut skipped = 0;
         move |c: &Candidate| {
-            if matches!(c.state, State::Failed | State::Slow) {
+            if c.state == State::Failed || (skip_slow && c.state == State::Slow) {
                 return false;
             }
             if scrape && c.state == State::Responded && c.blooms.is_none() && skipped < K {
@@ -157,7 +162,7 @@ impl Lookup {
     pub fn next_limit(&mut self, limit: usize) -> Vec<NodeInfo> {
         let mut out = Vec::new();
         let mut live = 0;
-        let mut counts = Lookup::slot_filter(self.scrape);
+        let mut counts = Lookup::slot_filter(self.scrape, false);
         for c in &mut self.candidates {
             if self.in_flight >= ALPHA || out.len() >= limit || live >= K {
                 break;
@@ -176,7 +181,7 @@ impl Lookup {
     }
 
     /// Settles the query out to `id`, once: in flight, or (CR-SOFT-TIMEOUT)
-    /// slow, whose lane was already freed.
+    /// slow. Either way its lane frees now.
     fn settle(&mut self, id: &NodeId, state: State) -> bool {
         match self
             .candidates
@@ -186,9 +191,8 @@ impl Lookup {
             Some(c) => {
                 if c.state == State::Slow {
                     self.slow -= 1;
-                } else {
-                    self.in_flight -= 1;
                 }
+                self.in_flight -= 1;
                 c.state = state;
                 true
             }
@@ -197,15 +201,12 @@ impl Lookup {
     }
 
     /// CR-SOFT-TIMEOUT: the query out to `id` has gone unanswered past the
-    /// soft timeout. It stops holding an [`ALPHA`] lane and the leg's end;
-    /// its answer, if one comes before the query timeout, still settles it.
-    /// Refused (false) when `id` has no query in flight, or when the leg
-    /// already holds [`ALPHA`] slow queries, so a leg never has more than
-    /// `2 · ALPHA` queries out.
+    /// soft timeout. It keeps its [`ALPHA`] lane, so the leg asks exactly
+    /// whom, and when, it would with the switch off; it only stops holding
+    /// the leg's end once [`K`] others have answered. Its answer, if one
+    /// comes before the query timeout, still settles it. False when `id`
+    /// has no query in flight.
     pub fn soft_expire(&mut self, id: &NodeId) -> bool {
-        if self.slow >= ALPHA {
-            return false;
-        }
         match self
             .candidates
             .iter_mut()
@@ -213,7 +214,6 @@ impl Lookup {
         {
             Some(c) => {
                 c.state = State::Slow;
-                self.in_flight -= 1;
                 self.slow += 1;
                 true
             }
@@ -231,7 +231,7 @@ impl Lookup {
     /// Answers among the K closest live candidates.
     #[cfg(test)]
     pub fn answered_live(&self) -> usize {
-        let mut counts = Lookup::slot_filter(self.scrape);
+        let mut counts = Lookup::slot_filter(self.scrape, true);
         self.candidates
             .iter()
             .filter(|c| counts(c))
@@ -333,16 +333,16 @@ impl Lookup {
     }
 
     /// Done when nothing is in flight and the K closest live candidates
-    /// have all answered. A slow candidate (CR-SOFT-TIMEOUT) is neither in
-    /// flight nor live, so it doesn't hold a closest set of K that has
-    /// answered; but while any is out, fewer than K answers aren't a
-    /// closest set, and the leg waits for the slow ones to settle (answer
-    /// or reach the query timeout) as it would with the switch off.
+    /// have all answered. CR-SOFT-TIMEOUT: slow queries out don't hold it
+    /// once the K closest candidates that are neither failed nor slow have
+    /// all answered. With fewer than K such answers, the leg waits for the
+    /// slow ones to settle (answer or reach the query timeout), as with the
+    /// switch off. Whenever the switch-off test holds, this one does.
     pub fn is_done(&self) -> bool {
-        if self.in_flight > 0 || self.extra_in_flight > 0 {
+        if self.in_flight > self.slow || self.extra_in_flight > 0 {
             return false;
         }
-        let mut counts = Lookup::slot_filter(self.scrape);
+        let mut counts = Lookup::slot_filter(self.scrape, true);
         let mut answered = 0;
         for c in self.candidates.iter().filter(|c| counts(c)).take(K) {
             if c.state == State::Fresh {
@@ -573,29 +573,27 @@ mod tests {
         assert_eq!(l.peers.len(), MAX_VALUES);
     }
 
-    /// CR-SOFT-TIMEOUT: a soft-expired query frees its lane and stops
-    /// holding the end, at most ALPHA per leg; its late answer settles it
-    /// once, and a repeat or a failure after that does nothing.
+    /// CR-SOFT-TIMEOUT: a soft-expired query keeps its lane (nothing more
+    /// is asked); its late answer settles it once, freeing the lane, and a
+    /// repeat or a failure after that does nothing.
     #[test]
-    fn a_slow_candidate_frees_its_lane_and_settles_once() {
+    fn a_slow_candidate_keeps_its_lane_and_settles_once() {
         let mut l = Lookup::new(NodeId([0; 20]), 0);
         for b in 1..=6 {
             l.add(spread(b));
         }
         let first = l.next();
         assert_eq!(first.len(), 3);
-        assert!(l.next().is_empty(), "alpha in flight");
         assert!(l.soft_expire(&first[0].id));
         assert!(!l.soft_expire(&first[0].id), "already slow");
-        assert_eq!(l.next().len(), 1, "a lane freed");
         assert!(l.soft_expire(&first[1].id) && l.soft_expire(&first[2].id));
         assert_eq!(l.slow(), 3);
-        let more = l.next();
-        assert_eq!(more.len(), 2);
-        assert!(!l.soft_expire(&more[0].id), "at most ALPHA slow");
-        // The late answer settles once; a repeat and a failure don't.
+        assert!(l.next().is_empty(), "slow queries keep their lanes");
+        // The late answer settles once and frees its lane; a repeat and a
+        // failure don't.
         assert!(l.on_response(&first[0].id, FROM, std::iter::empty(), &[]));
         assert_eq!(l.slow(), 2);
+        assert_eq!(l.next().len(), 1, "its lane, freed by the answer");
         assert!(!l.on_response(&first[0].id, FROM, std::iter::empty(), &[]));
         l.on_failure(&first[0].id);
         assert_eq!(l.slow(), 2);
@@ -607,8 +605,9 @@ mod tests {
     }
 
     /// CR-SOFT-TIMEOUT: a slow candidate doesn't hold a closest set of K
-    /// answers, in either end test; but with fewer than K answers the leg
-    /// waits for it. Answering late, it counts again.
+    /// others that have answered (farther ones asked earlier in the walk),
+    /// in either end test; with fewer than K answers the leg waits for it.
+    /// Answering late, it counts again.
     #[test]
     fn a_slow_candidate_holds_only_a_short_closest_set() {
         // Three candidates: the slow one holds the end.
@@ -625,23 +624,35 @@ mod tests {
         assert!(l.is_done());
         let closest: Vec<u8> = l.closest().map(|i| i.id.0[0]).collect();
         assert_eq!(closest, [1, 2, 3], "counts again once answered");
-        // Nine: K others answer, so the slow closest one doesn't hold it.
+        // Three far nodes answer first, listing 8 closer ones; the closest
+        // of those goes slow and the other 7 answer. With the far ones,
+        // that's K answers without it.
         let mut l = Lookup::new(NodeId([0; 20]), 0);
-        for b in 1..=9 {
+        for b in [0xF1, 0xF2, 0xF3] {
             l.add(spread(b));
         }
-        let q = l.next();
-        assert!(l.soft_expire(&q[0].id));
+        for c in l.next() {
+            let close = if c.id.0[0] == 0xF1 {
+                (1..=8).map(spread).collect()
+            } else {
+                vec![]
+            };
+            l.on_response(&c.id, FROM, close.into_iter(), &[]);
+        }
+        let first = l.next();
+        assert_eq!(first[0].id.0[0], 1);
+        assert!(l.soft_expire(&first[0].id));
+        for c in &first[1..] {
+            l.on_response(&c.id, FROM, std::iter::empty(), &[]);
+        }
         while let Some(c) = l.next_limit(1).pop() {
             assert!(!l.is_done());
             l.on_response(&c.id, FROM, std::iter::empty(), &[]);
         }
-        l.on_response(&q[1].id, FROM, std::iter::empty(), &[]);
-        l.on_response(&q[2].id, FROM, std::iter::empty(), &[]);
         assert_eq!(l.answered_live(), K);
         assert!(l.is_done() && l.closest_answered(2));
         // A late answer then still settles it.
-        assert!(l.on_response(&q[0].id, FROM, std::iter::empty(), &[]));
+        assert!(l.on_response(&first[0].id, FROM, std::iter::empty(), &[]));
         assert_eq!(l.slow(), 0);
     }
 
@@ -696,9 +707,9 @@ mod tests {
     proptest::proptest! {
         /// CR-SOFT-TIMEOUT: under any sequence of adds, sends, soft
         /// expiries, answers (repeated ones included), failures and
-        /// retries, the counters match the states, at most ALPHA are in
-        /// flight and ALPHA slow, the list stays bounded, and every id
-        /// settles at most once per send.
+        /// retries, the counters match the states, at most ALPHA queries
+        /// are out (slow ones included: they keep their lanes), the list
+        /// stays bounded, and every id settles at most once per send.
         #[test]
         fn counters_match_states_under_any_sequence(ops in proptest::collection::vec(op(), 1..200)) {
             let mut l = Lookup::new(NodeId([0; 20]), 0);
@@ -723,10 +734,10 @@ mod tests {
                     _ => {}
                 }
                 let count = |s: State| l.candidates.iter().filter(|c| c.state == s).count();
-                proptest::prop_assert_eq!(l.in_flight, count(State::InFlight));
+                proptest::prop_assert_eq!(l.in_flight, count(State::InFlight) + count(State::Slow));
                 proptest::prop_assert_eq!(l.slow, count(State::Slow));
-                proptest::prop_assert!(l.in_flight <= ALPHA && l.slow <= ALPHA);
-                proptest::prop_assert!(l.candidates.len() <= CAP + 2 * ALPHA);
+                proptest::prop_assert!(l.in_flight <= ALPHA);
+                proptest::prop_assert!(l.candidates.len() <= CAP + ALPHA);
             }
         }
     }

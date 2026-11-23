@@ -529,9 +529,10 @@ struct Actor {
     verify_rate: TokenBucket,
     /// Those pings still awaiting an answer.
     verify_tids: Set<u64>,
-    /// CR-SOFT-TIMEOUT: pending lookup queries past the soft timeout, which
-    /// their lookup and request no longer count in flight. Empty, and
-    /// never allocated, with `dht.soft_timeout` off.
+    /// CR-SOFT-TIMEOUT: pending lookup queries past the soft timeout. They
+    /// keep their lanes; a lookup that ends with them out detaches them
+    /// rather than dropping them. Empty, and never allocated, with
+    /// `dht.soft_timeout` off.
     soft_tids: Set<u64>,
     /// Tests only: each finished leg's answers among its K closest live
     /// candidates, and its slow queries still out, at its end.
@@ -1395,10 +1396,8 @@ impl Actor {
             self.end_seed_round_if_done();
         }
         self.verify_tids.remove(&tid);
-        // A soft-expired query left its request's count when it expired.
-        let soft = self.soft_tids.remove(&tid);
+        self.soft_tids.remove(&tid);
         if let Purpose::Lookup(lid) = p.purpose
-            && !soft
             && let Some(r) = self
                 .lookups
                 .get(&lid)
@@ -2944,12 +2943,13 @@ impl Actor {
 
     /// CR-SOFT-TIMEOUT: marks owned peer lookups' queries unanswered for
     /// `soft_timeout_after` ([`super::SOFT_TIMEOUT`] unless a screen sets
-    /// it; never more than `query_timeout`) as soft, so they stop
-    /// holding their leg's lane and end. The query stays pending, so it
-    /// still counts against the outstanding cap and a late answer still
-    /// settles it once. Each leg holds at most `ALPHA` soft
-    /// queries ([`Lookup::soft_expire`]). Returns the lookups to drive.
-    /// Nothing with the switch off.
+    /// it; never more than `query_timeout`) as soft. A soft query keeps its
+    /// lane and stays pending, so its leg asks exactly whom, and when, it
+    /// would with the switch off, and sends nothing more; it only stops
+    /// holding the leg's end once K others have answered
+    /// ([`Lookup::is_done`]). A late answer still settles it once. Returns
+    /// the lookups to drive, whose end may now have come. Nothing with the
+    /// switch off.
     fn soft_expire(&mut self, now: Instant) -> Vec<u32> {
         let mut touched = Vec::new();
         if !self.cfg.soft_timeout {
@@ -2957,8 +2957,6 @@ impl Actor {
         }
         let soft = self.cfg.soft_timeout_after.min(self.cfg.query_timeout);
         let timeout = self.cfg.query_timeout;
-        // In tid order, so a leg's ALPHA bound picks the same queries every
-        // run whatever the map's iteration order.
         let mut due: Vec<(u64, u32, NodeId)> = self
             .pending
             .iter()
@@ -2972,54 +2970,20 @@ impl Actor {
                 _ => None,
             })
             .collect();
+        // In tid order, so a run repeats whatever the map's order.
         due.sort_unstable_by_key(|(tid, _, _)| *tid);
-        // A soft query frees a lane for one more, so lookups' queries out
-        // (soft and detached ones included) stay within 3/4 of the live
-        // preset's outstanding cap, as CR-1c sizes its slots: sampling
-        // (which stops at 4/5) and maintenance keep room. Past it, a query
-        // keeps its lane, as with the switch off.
-        let budget = self.cfg.intensity.max_outstanding() * 3 / 4;
-        let mut used = self
-            .pending
-            .values()
-            .filter(|p| matches!(p.purpose, Purpose::Lookup(_) | Purpose::Detached))
-            .count();
-        // Lanes soft queries freed that a throttled drive hasn't refilled
-        // yet are promised queries too: per request, its free lanes, up to
-        // its soft queries out.
-        let mut soft_by_owner: Map<u32, usize> = Map::default();
-        for tid in &self.soft_tids {
-            if let Some(Purpose::Lookup(lid)) = self.pending.get(tid).map(|p| p.purpose)
-                && let Some(owner) = self.lookups.get(&lid).and_then(|l| l.owner)
-            {
-                *soft_by_owner.entry(owner).or_default() += 1;
-            }
-        }
-        for (owner, soft) in &soft_by_owner {
-            if let Some(r) = self.peer_requests.get(owner) {
-                used += super::lookup::ALPHA.saturating_sub(r.inflight).min(*soft);
-            }
-        }
         for (tid, lid, id) in due {
-            if used >= budget {
-                break;
-            }
             let Some(l) = self.lookups.get_mut(&lid) else {
                 continue;
             };
-            let Some(owner) = l.owner else {
-                continue;
-            };
-            if l.scrape || !l.soft_expire(&id) {
+            if l.owner.is_none() || l.scrape || !l.soft_expire(&id) {
                 continue;
             }
             self.soft_tids.insert(tid);
-            used += 1;
-            if let Some(r) = self.peer_requests.get_mut(&owner) {
-                r.inflight = r.inflight.saturating_sub(1);
-            }
             Stats::inc(&self.stats.soft_timeouts);
-            touched.push(lid);
+            if !touched.contains(&lid) {
+                touched.push(lid);
+            }
         }
         touched
     }
@@ -3065,10 +3029,7 @@ impl Actor {
         for lid in touched {
             self.drive_lookup(sockets, lid);
         }
-        // CR-SOFT-TIMEOUT: after the timeouts and their drives, so a leg
-        // whose slow queries just failed can mark its next ones soft in
-        // the same tick, and the 3/4 rule counts the lanes those drives
-        // refilled.
+        // CR-SOFT-TIMEOUT: after the timeouts and their drives.
         for lid in self.soft_expire(now_i) {
             self.drive_lookup(sockets, lid);
         }
