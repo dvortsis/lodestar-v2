@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T03:39:06Z",
+  "updated_at": "2026-11-24T06:27:51Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10681,17 +10681,29 @@
       "source": "owner, runner chat",
       "text": "finish the build slices you've got going on and then focus on supporting the cloud testing and api session. Don't start any new slices unless the cloud testing environment or api runner needs something.",
       "effect": "No new build slices. Finish CR-SOFT-TIMEOUT (#1091), X-index-banner-late (#1093), X-detail-depth-compare (#1094), X-hit-resolution-nits (slot 4). Freed slots stay empty unless X-test-vm (cloud testing) or the API lane needs a slice. Runner records PRs continue. Queued build slices (X-shell-nav-cls, X-querybar-static-q, X-rowactions-arrowdown, X-field-layout, X-cards-raw-name, ...) wait."
+    },
+    {
+      "at": "2026-11-24T06:19Z",
+      "source": "owner, Claude Duet chat",
+      "text": "1. That's to conserve credit. You can ignore those instructions. 2. Yes, behave as the runner does.",
+      "effect": "The 2026-11-23 no-new-builds hold is lifted; the Duet chat's threads do the runner's work (build slices, state, dashboard) while the runner session stays paused."
+    },
+    {
+      "at": "2026-11-24T06:26Z",
+      "source": "owner, Claude Duet chat",
+      "text": "You can leave it at 4 slots",
+      "effect": "Build slots stay at 4 (limits.phase_total unchanged); an earlier ask for 8 is withdrawn."
     }
   ],
   "slots": {
-    "updated": "2026-11-24T06:27:00Z",
+    "updated": "2026-11-24T06:27:51Z",
     "items": [
       {
         "slot": 1,
         "slice": "ENR-11",
         "role": "build",
         "model": "opus",
-        "agent": "ENR-11 thread session (standing in for the paused runner, owner 2026-11-24T06:19Z)",
+        "agent": "claude",
         "doing": "Building search enrichment: alternate titles and IMDb/TMDB-style IDs become searchable, plus Torznab ID searches.",
         "since": "2026-11-24T06:22:10Z"
       },
@@ -10699,7 +10711,7 @@
         "slot": 2,
         "slice": "NOS-2b",
         "role": "build",
-        "agent": "thread session standing in for the runner (owner 2026-11-24T06:19Z)",
+        "agent": "claude",
         "model": "opus",
         "doing": "Building the WebSocket client that Nostr relays will use (TLS, size caps, ping, reconnect back-off).",
         "since": "2026-11-24T06:25:00Z"
@@ -10709,7 +10721,7 @@
         "slice": "IRC-1",
         "role": "build",
         "model": "opus",
-        "agent": "IRC-1 thread session (standing in for the paused runner, owner 2026-11-24T06:19Z)",
+        "agent": "claude",
         "doing": "Building the IRC announce matcher: tracker definitions turn announce lines into name, size and category, and passkeyed links are never stored. Its PR waits for NOS-2b, since both change the Rust lockfiles.",
         "since": "2026-11-24T06:27:00Z"
       },
@@ -10717,12 +10729,13 @@
         "slot": 4,
         "slice": "GS-5",
         "role": "build",
-        "agent": "thread session standing in for the runner (owner 2026-11-24)",
+        "agent": "claude",
         "doing": "Building the search Group versions toggle and the +N other versions rows",
         "since": "2026-11-24T06:22:30Z"
       }
     ],
-    "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
+    "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
+    "stand_in": "From 2026-11-24T06:19Z the owner's Claude Duet chat does the runner's work while the runner session is paused to save credit (owner: 'behave as the runner does'). One thread session per build slot claims and frees its own slot; a bookkeeping thread keeps state and the dashboard current. Slots stay at 4 (owner 06:26Z: 'You can leave it at 4 slots')."
   },
   "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail.",
   "owner_actions": [
@@ -10827,9 +10840,10 @@
   "heartbeat": "2026-11-24T03:39:06Z",
   "updated": "2026-11-20T09:04Z",
   "pause": {
-    "build_slices": true,
+    "build_slices": false,
     "since": "2026-11-23T06:09Z",
-    "reason": "owner instruction: finish running slices, then support cloud testing and the API lane only"
+    "lifted": "2026-11-24T06:19Z",
+    "lifted_by": "owner, Claude Duet chat 2026-11-24T06:19Z: the 2026-11-23 no-new-builds hold was only to conserve credit; 'You can ignore those instructions.' Build slices resume in the 4 build slots (phase_total 4, unchanged)."
   },
   "owner_queue_pending": [
     {
@@ -11632,6 +11646,13 @@
     }
   },
   "pause_history": [
+    {
+      "since": "2026-11-23T06:09Z",
+      "by": "owner, runner chat",
+      "scope": "no new build slices; support cloud testing and the API lane only",
+      "lifted": "2026-11-24T06:19Z",
+      "lifted_by": "owner, Claude Duet chat: hold was to conserve credit; ignore it"
+    },
     {
       "since": "2026-11-16T05:50Z",
       "by": "owner, in chat 2026-11-16 (usage at 96%)",
