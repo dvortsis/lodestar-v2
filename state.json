@@ -4554,7 +4554,7 @@
         "GS-4 #1116 (web)"
       ],
       "pr": 1117,
-      "head": "d38127615d7f0b22a3e4108ea9b61d6e0b5ddb64"
+      "head": "3b632ad182a896becc7f2e58625d6cc7df09a20b"
     },
     "last": {
       "pr": 1112,
@@ -11068,7 +11068,7 @@
         "slice": "ENR-G",
         "role": "build",
         "model": "opus",
-        "doing": "PR #1117 d3812761 reviewed MERGE, security PASS (rv-1117b); merges on green",
+        "doing": "#1117 at 3b632ad1 (CRLF test fix + owns line, delta accepted); merges on green",
         "since": "2026-11-24T14:30Z",
         "status": "active",
         "agent": "opus"
@@ -12075,6 +12075,7 @@
   "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge.",
   "runner_todo": [
     "After #1117 merges: if its slices.yaml owns still lack crates/store/src/rules.rs and sources.rs (and the other fix files), add them in a runner records PR; wiring slice notes must carry the adult-enrichment kill-switch requirement.",
-    "Runner docs PR for docs/metrics.md: (a) dht_sample_frontier can reach 40,000 with escalation (counts held), from rv-1112; (b) the 6 h restart-gate line is wrong after X-split-resume-gate merges. Land after X-split-resume-gate."
+    "Runner docs PR for docs/metrics.md: (a) dht_sample_frontier can reach 40,000 with escalation (counts held), from rv-1112; (b) the 6 h restart-gate line is wrong after X-split-resume-gate merges. Land after X-split-resume-gate.",
+    "After #1117 merges: put the kill-switch requirement in the ENR wiring slice's notes (runner PR)."
   ]
 }
