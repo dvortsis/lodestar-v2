@@ -4538,7 +4538,8 @@
       },
       "exited_at": "2026-11-24T11:15Z",
       "exit": "merged as 4321071e"
-    }
+    },
+    "ci_note": "12:48Z playwright core failed on the known search-table j/k flake (X-flake-search-keyboard-2); re-run of failed jobs once the run finishes (one re-run per \u00a72.18)"
   },
   "landing_order_web": [
     "S-compare",
@@ -6646,7 +6647,7 @@
     {
       "id": "X-flake-search-keyboard-2",
       "from": "#637 e2e on 4a235ceb",
-      "what": "e2e/search-table.keyboard.test.ts:8 \u2014 table-row-3 not focused after j (10 s). Recurrence after #477's fix. One re-run spent on #637. If it repeats on any PR, launch an X-flake slice (sonnet) when a slot frees."
+      "what": "e2e/search-table.keyboard.test.ts:8 \u2014 table-row-3 not focused after j (10 s). Recurrence after #477's fix. One re-run spent on #637. If it repeats on any PR, launch an X-flake slice (sonnet) when a slot frees. REPEATED 2026-11-24 on #1108 (504987ec, run 45394086956, same assertion). Launch the X-flake slice (sonnet) when a slot frees; note #1108 grouped List changes may interact."
     },
     "2026-11-08: #634 X-cloud-infra-2 merged (f5e2afff); owner FYI sent (deploy via change set); session archived; slot 5 idle.",
     {
@@ -10715,7 +10716,8 @@
       "id": "bench-nrt-reuse",
       "what": "search-bench reusing --dir fails only NRT ('live indexer never indexed a new torrent'): likely bench reuse bug (from #341); give to bench owner after G-m5a",
       "at": "2026-11-01T15:16Z"
-    }
+    },
+    "X-flake-search-keyboard-2"
   ],
   "soak_r2": {
     "status": "stopped early 2026-11-01T11:00:57Z (operator_stop + already_exited_0; ~2.3 h into baseline); not gate evidence",
