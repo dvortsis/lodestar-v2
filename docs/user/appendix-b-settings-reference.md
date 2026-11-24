@@ -40,6 +40,9 @@ container variable with key `LODESTAR_LOG` to set how much Lodestar logs on ever
 (`error`, `warn`, `info` or `debug`). In v0.5.1, change this variable in the container configuration and restart to apply it.
 **Recommended:** leave it unset; the default is `info`.
 
+Newer than v0.5.1, a custom container variable with key `LODESTAR_WATCH_DIR` turns on the watch folder: a folder where Lodestar adds every `.torrent` file you drop in. Its value is the container path of a folder you map as its own **Path**, such as `/watch`. [Section 2.4](02-install-lodestar-on-unraid-and-docker.md#add-a-watch-folder-optional-newer-than-v051) shows the steps.
+**Recommended:** a folder outside **Data**. Lodestar never reads a watch folder that is **Data**, is inside it or holds it.
+
 Transparent huge pages are a Linux feature that hands out memory in 2 MB pieces. They can make Lodestar's memory use creep up over days, so Lodestar turns them off for itself only.
 
 A custom container variable with key `LODESTAR_THP` and value `allow` turns them back on; removing the variable turns them off again. A change takes effect when the container restarts.

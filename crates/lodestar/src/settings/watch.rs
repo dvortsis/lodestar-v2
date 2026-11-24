@@ -2,15 +2,19 @@
 //! folder whose `.torrent` files are taken exactly as uploads are. Off
 //! while `folder` is empty, which is the default.
 //!
-//! Saved in the app only: no `config.toml` key or `LODESTAR_*` variable
-//! backs it yet (runner, 2026-11-12: `LODESTAR_WATCH_DIR` is follow-up
-//! X-watch-env). Both fields apply live: [`crate::watch`] follows the
-//! section and checks the folder again each time it changes and at
-//! start.
+//! `folder` is also `[watch] folder` in `config.toml` and
+//! `LODESTAR_WATCH_DIR` (X-watch-env, for Docker), layered like every
+//! other field: a saved value beats the file's, and the variable beats
+//! both and makes the field read-only here. A blank variable counts as
+//! unset. `after` is saved in the app only. Both fields apply live:
+//! [`crate::watch`] follows the section and checks the folder again each
+//! time it changes and at start.
 //!
 //! What's checked, and when (rv-765 B1):
 //! - **On every load,** saved values included: only that the folder is
-//!   empty or an absolute path ([`Section::check`]). Nothing about the
+//!   empty or an absolute path ([`Section::check`]). The file's and the
+//!   variable's value get the same check in `Config::load`, which refuses
+//!   to start on a relative one. Nothing about the
 //!   disk, so a share that isn't mounted yet at start keeps its setting.
 //! - **On a save** ([`Section::confirm`], which only a patch or an import
 //!   runs): also that it's there, a directory, and not a link.
@@ -45,7 +49,8 @@ pub enum After {
 #[serde(deny_unknown_fields)]
 pub struct Watch {
     /// The folder to watch for `.torrent` files, as an absolute path;
-    /// empty turns the watch off.
+    /// empty turns the watch off. Also set in `config.toml` or
+    /// `LODESTAR_WATCH_DIR`.
     pub folder: String,
     // Undocumented here: a field's own description would wrap the
     // inlined enum in a `oneOf`.
@@ -67,16 +72,27 @@ impl Watch {
 impl Section for Watch {
     const SECTION: &'static str = "watch";
     const FIELDS: &'static [Field] = &[
-        Field::new("folder").group("watch"),
+        Field::new("folder")
+            .file("watch.folder")
+            .env("LODESTAR_WATCH_DIR")
+            .group("watch"),
         Field::new("after").group("watch").widget("radio"),
     ];
 
-    /// No `config.toml` key backs these yet.
-    fn from_config(_: &Config) -> Self {
-        Watch::default()
+    /// `folder` from `[watch] folder` or `LODESTAR_WATCH_DIR`; no key
+    /// backs `after`.
+    fn from_config(config: &Config) -> Self {
+        Watch {
+            folder: config.watch.folder.clone(),
+            ..Watch::default()
+        }
     }
 
-    fn apply(&self, _: &str, _: &mut Config) {}
+    fn apply(&self, field: &str, config: &mut Config) {
+        if field == "folder" {
+            config.watch.folder = self.folder.clone();
+        }
+    }
 
     /// Only what doesn't depend on the disk now: it runs on saved values
     /// at every start too, where a folder that isn't there yet (a share
@@ -378,6 +394,131 @@ mod tests {
         assert_eq!(shape_problem(&link), Some(FolderProblem::Link));
         // A link to the data directory is refused before it's resolved.
         assert_eq!(folder_problem(&link, &real), Some(FolderProblem::Link));
+    }
+
+    /// Where `LODESTAR_DATA_DIR` is `data` and `LODESTAR_WATCH_DIR` is
+    /// `var` (unset when `None`), reading `file` when given.
+    fn load(file: Option<&Path>, data: &Path, var: Option<&Path>) -> Config {
+        let data = data.to_string_lossy().into_owned();
+        let var = var.map(|v| v.to_string_lossy().into_owned());
+        Config::load(file, |k| match k {
+            "LODESTAR_DATA_DIR" => Some(data.clone()),
+            "LODESTAR_WATCH_DIR" => var.clone(),
+            _ => None,
+        })
+        .unwrap()
+    }
+
+    /// X-watch-env: `[watch] folder` and `LODESTAR_WATCH_DIR` are layered
+    /// like every field: a saved value beats the file's, and the variable
+    /// beats both, locks the field and never erases the saved value.
+    #[test]
+    fn the_folder_from_the_file_and_the_environment_is_layered() {
+        use crate::settings::tests::{patch, registry};
+        use lodestar_api::settings::{SettingSource, SettingsApi};
+        let root = tempfile::tempdir().unwrap();
+        let db = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let [from_file, saved, from_env] = ["a", "b", "c"].map(|n| root.path().join(n));
+        for d in [&data, &from_file, &saved, &from_env] {
+            std::fs::create_dir(d).unwrap();
+        }
+        let toml = root.path().join("config.toml");
+        let text = format!("[watch]\nfolder = '{}'\n", from_file.display());
+        std::fs::write(&toml, text).unwrap();
+        let text = |p: &Path| Value::String(p.to_string_lossy().into_owned());
+        let field = |r: &crate::settings::Registry| {
+            let f = r.section("watch").unwrap().fields["folder"].clone();
+            (f.value, f.source, f.read_only)
+        };
+        // The file's.
+        let c = load(Some(&toml), &data, None);
+        let r = registry(db.path(), &c);
+        assert_eq!(field(&r), (text(&from_file), SettingSource::File, false));
+        assert_eq!(r.get::<Watch>().folder(), Some(from_file.clone()));
+        // A saved one beats it.
+        r.patch(
+            "watch",
+            patch(serde_json::json!({ "folder": text(&saved) })),
+        )
+        .unwrap();
+        assert_eq!(field(&r), (text(&saved), SettingSource::Db, false));
+        // The variable beats both, and the app can't change it.
+        let c = load(Some(&toml), &data, Some(&from_env));
+        let r = registry(db.path(), &c);
+        assert_eq!(field(&r), (text(&from_env), SettingSource::Env, true));
+        assert_eq!(r.get::<Watch>().folder(), Some(from_env.clone()));
+        assert!(matches!(
+            r.patch("watch", patch(serde_json::json!({ "folder": text(&saved) }))),
+            Err(SettingsError::SetByEnv { ref var, .. }) if var == "LODESTAR_WATCH_DIR"
+        ));
+        // `after` stays the app's to change.
+        r.patch("watch", patch(serde_json::json!({ "after": "delete" })))
+            .unwrap();
+        assert_eq!(r.get::<Watch>().after, After::Delete);
+        // Without the variable the saved value is back.
+        let c = load(Some(&toml), &data, None);
+        let r = registry(db.path(), &c);
+        assert_eq!(field(&r), (text(&saved), SettingSource::Db, false));
+    }
+
+    /// A folder from the environment gets every rule a saved one does:
+    /// the watch built from it stays off with the cause (`watch.disabled`)
+    /// until it's fixed, and it's never read.
+    #[test]
+    fn a_folder_from_the_environment_gets_every_check() {
+        use crate::settings::tests::registry;
+        let root = tempfile::tempdir().unwrap();
+        let db = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let watch = root.path().join("watch");
+        let inside = data.join("incoming");
+        for d in [&data, &watch, &inside] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let file = root.path().join("a.torrent");
+        std::fs::write(&file, b"x").unwrap();
+        let check = |var: &Path| {
+            let c = load(None, &data, Some(var));
+            let w = registry(db.path(), &c).get::<Watch>();
+            assert_eq!(w.folder, var.to_string_lossy());
+            crate::watch::Watcher::new(&w, &c.data_dir)
+                .expect("set")
+                .check()
+        };
+        let folder = |p| Some(crate::watch::Problem::Folder(p));
+        assert_eq!(check(&watch), None);
+        assert_eq!(
+            check(&root.path().join("missing")),
+            folder(FolderProblem::Missing)
+        );
+        assert_eq!(check(&file), folder(FolderProblem::NotDirectory));
+        assert_eq!(check(&data), folder(FolderProblem::InsideDataDir));
+        assert_eq!(check(&inside), folder(FolderProblem::InsideDataDir));
+        assert_eq!(check(root.path()), folder(FolderProblem::HoldsDataDir));
+        // Through a `..` that resolves into the data directory.
+        let sneaky = watch.join("..").join("data").join("incoming");
+        assert_eq!(check(&sneaky), folder(FolderProblem::InsideDataDir));
+        #[cfg(unix)]
+        {
+            // A link, to the data directory or anywhere else, is refused
+            // before it's resolved.
+            let to_data = root.path().join("to-data");
+            std::os::unix::fs::symlink(&data, &to_data).unwrap();
+            assert_eq!(check(&to_data), folder(FolderProblem::Link));
+            let to_watch = root.path().join("to-watch");
+            std::os::unix::fs::symlink(&watch, &to_watch).unwrap();
+            assert_eq!(check(&to_watch), folder(FolderProblem::Link));
+        }
+        // A missing folder that appears later is watched, as a saved one
+        // is (rv-765 B1).
+        let later = root.path().join("later");
+        let c = load(None, &data, Some(&later));
+        let w = registry(db.path(), &c).get::<Watch>();
+        let watcher = crate::watch::Watcher::new(&w, &c.data_dir).unwrap();
+        assert_eq!(watcher.check(), folder(FolderProblem::Missing));
+        std::fs::create_dir(&later).unwrap();
+        assert_eq!(watcher.check(), None);
     }
 
     #[test]

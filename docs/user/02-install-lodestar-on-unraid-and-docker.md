@@ -215,6 +215,62 @@ Use `ghcr.io/dvortsis/lodestar-v2:0.5.1` in the `image:` field to update only wh
 
 For an exact image that a moved tag cannot change, use `ghcr.io/dvortsis/lodestar-v2@sha256:2ffce5cb9988b3173a46aeafb2a62e24cf66962da39d3286da0adbbd5d864c17` instead. A digest identifies the image content; a tag can be moved.
 
+### Add a watch folder (optional) **(newer than v0.5.1)**
+
+A watch folder is a folder where you drop `.torrent` files. Lodestar checks it every 10 seconds, adds each file the same way as an upload, then moves it into `added/` or `failed/` inside that folder. The variable `LODESTAR_WATCH_DIR` tells Lodestar which folder to watch. It works in Docker Compose and on Unraid.
+
+The path in the variable is the path *inside* the container. Docker only shows Lodestar the folders you map. So map the host folder to a container path first, then put that container path in the variable.
+
+**Recommended:** a folder of its own outside the data folder, such as `/mnt/user/torrents/watch` on Unraid or `./watch` next to `docker-compose.yml`, mapped to `/watch` in the container.
+
+**Unsafe:** the data folder, a folder inside it, or a folder that holds it, such as `/data/watch` or `/`. Lodestar refuses these and never reads them, because a watch folder there could touch its database. Use a separate folder instead.
+
+To add one with Docker Compose:
+
+1. Make the folder next to `docker-compose.yml`:
+
+    ```bash
+    mkdir watch
+    ```
+
+2. In `docker-compose.yml`, add this line under `environment:`, lined up with `TZ`:
+
+    ```yaml
+          LODESTAR_WATCH_DIR: /watch
+    ```
+
+   Then add this line under `volumes:`, below the `/data` line and lined up with it:
+
+    ```yaml
+          - ./watch:/watch
+    ```
+
+3. Make the folder belong to the user Lodestar runs as, so it can move files out. Lodestar does this for **Data** only. Use the `PUID` and `PGID` numbers from your file, or `65532` if you didn't set them:
+
+    ```bash
+    sudo chown 65532:65532 watch
+    ```
+
+4. Apply the change:
+
+    ```bash
+    docker compose up -d
+    ```
+
+   **Result:** The container restarts and the log shows "Watching a folder for .torrent files".
+
+On Unraid, edit the container, select **Add another Path, Port, Variable, Label or Device**, and add a **Path** with container path `/watch` and your host folder. Add it again as a **Variable** with key `LODESTAR_WATCH_DIR` and value `/watch`, then apply. The host folder must be writable by user `99` and group `100`.
+
+While the variable is set, the watch folder setting in the app is read-only and shows the variable. To change the folder, edit the variable and restart. To turn the watch off, remove the variable. An empty value counts as not set.
+
+If something is wrong with the folder, the log says why:
+
+- **Lodestar doesn't start** and the log shows `LODESTAR_WATCH_DIR: Use a full path`: the value doesn't start with `/`. Use the container path, such as `/watch`.
+- **The log shows "The watch folder is off until its setting is fixed"** with a reason. Lodestar checks again every 10 seconds, so a missing folder is picked up once it's there.
+  - `missing`: the folder isn't mapped, or Lodestar can't open it.
+  - `inside_data_dir` or `holds_data_dir`: the folder overlaps the data folder.
+  - `not_directory` or `link`: the path is a file or a link, not a folder.
+
 ## 2.5 Create the admin password
 <!-- index: setup token; admin password; first run; Legal Notice -->
 

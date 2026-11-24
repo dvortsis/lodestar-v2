@@ -40,6 +40,9 @@ pub struct Config {
     pub subscriptions: Subscriptions,
     pub updates: Updates,
     pub cluster: Cluster,
+    /// The watch folder (X-watch-env): the setting `watch.folder`, set in
+    /// the file or `LODESTAR_WATCH_DIR` too.
+    pub watch: WatchFolder,
     /// `LODESTAR_EXIT_ON_NETWORK_LOSS` (X-gluetun-restart-recover): exit
     /// when only `lo` is left for 30 s, so a restart policy reattaches a
     /// container that shares another's network. Environment only, off by
@@ -66,6 +69,7 @@ impl Default for Config {
             subscriptions: Subscriptions::default(),
             updates: Updates::default(),
             cluster: Cluster::default(),
+            watch: WatchFolder::default(),
             exit_on_network_loss: false,
         }
     }
@@ -124,6 +128,7 @@ pub const ENV_VARS: &[&str] = &[
     "LODESTAR_UPDATES_NOTIFY_BEFORE",
     "LODESTAR_UPDATES_NOTIFY_AFTER",
     "LODESTAR_UPDATES_NOTIFY_FAILURE",
+    "LODESTAR_WATCH_DIR",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -626,6 +631,44 @@ impl Cluster {
     }
 }
 
+/// The watch folder (UP-1, X-watch-env): `[watch] folder` here, or
+/// `LODESTAR_WATCH_DIR` for Docker, is the setting `watch.folder`
+/// (`settings::watch_folder`), with the registry's usual layering: a saved
+/// value beats the file's, and the variable beats both and makes the field
+/// read-only in the app. Empty, the default, is off. `after` stays an
+/// app-only setting.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WatchFolder {
+    /// An absolute path to a folder outside the data directory.
+    pub folder: String,
+}
+
+impl WatchFolder {
+    /// The setting's own load-time check (absolute or empty), so a value
+    /// from the file or the environment passes exactly what a saved one
+    /// must. What depends on the disk (there, a directory, not a link, the
+    /// data-directory rule) is checked where the watch applies it and on
+    /// every poll (`watch`), against the data directory the service
+    /// really uses: a problem there pauses the watch with its reason
+    /// (`watch.disabled`), and a share mounted after start is picked up.
+    fn check(&self, from_env: bool) -> Result<(), ConfigError> {
+        use crate::settings::Section;
+        let setting = crate::settings::watch_folder::Watch {
+            folder: self.folder.clone(),
+            ..Default::default()
+        };
+        setting.check("folder").map_err(|m| {
+            let name = if from_env {
+                "LODESTAR_WATCH_DIR"
+            } else {
+                "watch.folder"
+            };
+            ConfigError(format!("{name}: {m}"))
+        })
+    }
+}
+
 /// `off` (the default), `notify` (check and notify), `auto` (install
 /// automatically) or `image` (the container image updates it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -769,6 +812,9 @@ impl Config {
                 p.exists().then_some(p)
             }
         };
+        // A blank variable (a container template's empty field) is unset,
+        // so it neither turns the watch off nor locks the setting.
+        let watch_dir = env("LODESTAR_WATCH_DIR").filter(|v| !v.trim().is_empty());
         let mut file_table = toml::Table::new();
         let mut config: Config = match file {
             Some(p) => {
@@ -785,7 +831,10 @@ impl Config {
             env: ENV_VARS
                 .iter()
                 .copied()
-                .filter(|k| env(k).is_some())
+                .filter(|k| match *k {
+                    "LODESTAR_WATCH_DIR" => watch_dir.is_some(),
+                    _ => env(k).is_some(),
+                })
                 .collect(),
         };
         if let Some(dir) = data_dir {
@@ -901,9 +950,15 @@ impl Config {
             config.content.show_adult = v.parse().map_err(|_| parse("LODESTAR_SHOW_ADULT", &v))?;
         }
         config.updates_from_env(&env)?;
+        if let Some(v) = watch_dir {
+            config.watch.folder = v;
+        }
         config.ranking.check()?;
         config.updates.check()?;
         config.cluster.check()?;
+        config
+            .watch
+            .check(config.layers.in_env("LODESTAR_WATCH_DIR"))?;
         Ok(config)
     }
 
@@ -1866,5 +1921,85 @@ mod tests {
         assert!(load("enable = true").is_err());
         assert!(load("max_pending = -1").is_err());
         assert!(load("listen = \"nowhere\"").is_err());
+    }
+
+    /// X-watch-env: `[watch] folder` and `LODESTAR_WATCH_DIR` set the
+    /// watch folder, the variable over the file, each recorded in the
+    /// layers the settings registry reads.
+    #[test]
+    fn the_watch_folder_comes_from_the_file_or_the_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let from_file = dir.path().join("from-file");
+        let from_env = dir.path().join("from-env");
+        let (from_file, from_env) = (
+            from_file.to_string_lossy().into_owned(),
+            from_env.to_string_lossy().into_owned(),
+        );
+        let path = dir.path().join("config.toml");
+        // A literal TOML string, so a Windows path's `\` stays as it is.
+        std::fs::write(&path, format!("[watch]\nfolder = '{from_file}'\n")).unwrap();
+        // Off by default, and in neither layer.
+        let none = Config::load(None, no_env).unwrap();
+        assert_eq!(none.watch, WatchFolder::default());
+        assert!(!none.layers.in_file("watch.folder"));
+        assert!(!none.layers.in_env("LODESTAR_WATCH_DIR"));
+        // The file alone.
+        let c = Config::load(Some(&path), no_env).unwrap();
+        assert_eq!(c.watch.folder, from_file);
+        assert!(c.layers.in_file("watch.folder"));
+        assert!(!c.layers.in_env("LODESTAR_WATCH_DIR"));
+        // The variable alone, then over the file.
+        let env = |k: &str| (k == "LODESTAR_WATCH_DIR").then(|| from_env.clone());
+        let c = Config::load(None, env).unwrap();
+        assert_eq!(c.watch.folder, from_env);
+        assert!(c.layers.in_env("LODESTAR_WATCH_DIR"));
+        let c = Config::load(Some(&path), env).unwrap();
+        assert_eq!(c.watch.folder, from_env);
+        assert!(c.layers.in_file("watch.folder") && c.layers.in_env("LODESTAR_WATCH_DIR"));
+        // Unknown keys in the table are refused like every section's.
+        std::fs::write(&path, "[watch]\ndir = '/x'\n").unwrap();
+        assert!(Config::load(Some(&path), no_env).is_err());
+    }
+
+    /// A blank variable, which a container template's empty field passes,
+    /// is unset: the file's folder stays and the setting isn't locked.
+    #[test]
+    fn a_blank_watch_variable_is_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().to_string_lossy().into_owned();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, format!("[watch]\nfolder = '{folder}'\n")).unwrap();
+        for blank in ["", "   "] {
+            let env = |k: &str| (k == "LODESTAR_WATCH_DIR").then(|| blank.to_string());
+            let c = Config::load(Some(&path), env).unwrap();
+            assert_eq!(c.watch.folder, folder, "{blank:?}");
+            assert!(!c.layers.in_env("LODESTAR_WATCH_DIR"), "{blank:?}");
+            let c = Config::load(None, env).unwrap();
+            assert_eq!(c.watch.folder, "", "{blank:?}");
+        }
+    }
+
+    /// A relative folder is refused at start, naming where it came from,
+    /// as a saved one is refused on every load. Nothing on the disk is
+    /// looked at here: a missing folder (a share not mounted yet) loads,
+    /// and the watch reports it (`settings::watch_folder` tests).
+    #[test]
+    fn a_relative_watch_folder_is_refused_at_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for relative in ["drop", "relative/folder", "./incoming", "../incoming"] {
+            let env = |k: &str| (k == "LODESTAR_WATCH_DIR").then(|| relative.to_string());
+            let e = Config::load(None, env).expect_err(relative).0;
+            assert!(e.starts_with("LODESTAR_WATCH_DIR: "), "{relative}: {e}");
+            assert!(e.contains("full path"), "{e}");
+            // The variable is named, the value isn't quoted.
+            assert!(!e.contains(relative), "{e}");
+            std::fs::write(&path, format!("[watch]\nfolder = '{relative}'\n")).unwrap();
+            let e = Config::load(Some(&path), no_env).expect_err(relative).0;
+            assert!(e.starts_with("watch.folder: "), "{relative}: {e}");
+        }
+        let missing = dir.path().join("not-there").to_string_lossy().into_owned();
+        let env = |k: &str| (k == "LODESTAR_WATCH_DIR").then(|| missing.clone());
+        assert_eq!(Config::load(None, env).unwrap().watch.folder, missing);
     }
 }
