@@ -135,11 +135,17 @@ describe('Related', () => {
 		get.mockResolvedValue(siblings({ other_versions: group(hits) }));
 		show();
 		await waitFor(() => expect(screen.getAllByTestId('detail-related-pick')).toHaveLength(6), WAIT);
-		for (const box of screen.getAllByTestId('detail-related-pick')) await fireEvent.click(box);
+		const boxes = screen.getAllByTestId('detail-related-pick');
+		for (const box of boxes.slice(0, 4)) await fireEvent.click(box);
+		// The reason Compare stops is spoken: the same polite live region carries the count and the
+		// reason, so it stays in the page across the change.
+		const why = screen.getByTestId('detail-related-why');
+		expect(why.getAttribute('aria-live')).toBe('polite');
+		expect(text(why)).toBe('4 picked');
+		for (const box of boxes.slice(4)) await fireEvent.click(box);
 		expect((screen.getByTestId('detail-related-compare') as HTMLButtonElement).disabled).toBe(true);
-		expect(text(screen.getByTestId('detail-related-why'))).toBe(
-			'Compare shows at most 5 torrents: unpick 2.'
-		);
+		expect(screen.getByTestId('detail-related-why')).toBe(why);
+		expect(text(why)).toBe('Compare shows at most 5 torrents: unpick 2.');
 	});
 
 	it('opens a row in the drawer, and leaves it a plain link on the page', async () => {

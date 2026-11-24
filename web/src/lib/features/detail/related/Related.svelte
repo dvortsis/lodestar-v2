@@ -158,13 +158,6 @@
 						<Button dense disabled aria-describedby="{id}-why" data-testid="detail-related-compare"
 							>{m.detail_related_compare()}</Button
 						>
-						<p class="text-small text-muted-text" id="{id}-why" data-testid="detail-related-why">
-							{block === 'none'
-								? m.detail_related_compare_none()
-								: m.detail_related_compare_over({
-										count: formatCount(picked.length + 1 - COMPARE_MAX, locale)
-									})}
-						</p>
 					{:else}
 						<!-- eslint-disable svelte/no-navigation-without-resolve -- compareHref() resolves -->
 						<a
@@ -174,15 +167,22 @@
 							data-testid="detail-related-compare">{m.detail_related_compare()}</a
 						>
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
-						<p
-							class="text-small text-muted-text"
-							id="{id}-why"
-							aria-live="polite"
-							data-testid="detail-related-why"
-						>
-							{m.detail_related_compare_picked({ count: formatCount(picked.length, locale) })}
-						</p>
 					{/if}
+					<!-- One live region for both states, so a pick that disables Compare says why. -->
+					<p
+						class="text-small text-muted-text"
+						id="{id}-why"
+						aria-live="polite"
+						data-testid="detail-related-why"
+					>
+						{block === 'none'
+							? m.detail_related_compare_none()
+							: block === 'over'
+								? m.detail_related_compare_over({
+										count: formatCount(picked.length + 1 - COMPARE_MAX, locale)
+									})
+								: m.detail_related_compare_picked({ count: formatCount(picked.length, locale) })}
+					</p>
 				</div>{/if}
 			{#each shown as list (list.key)}
 				<div class="ls-detail-stack" data-testid="detail-related-list" data-list={list.key}>
