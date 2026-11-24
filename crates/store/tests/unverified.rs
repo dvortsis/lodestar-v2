@@ -1628,8 +1628,24 @@ fn a_purge_marks_the_torrents_that_lost_a_record_shaping_claim() {
             .put_unverified(&[item(&two.info_hash.0, other, Some(&c))])
             .unwrap();
         store.set_source_state(enr, SourceState::Disabled).unwrap();
+        // A backfill batch that read the claims before the purge.
+        let read_at = store.class_gen().unwrap();
         let (total, _) = purge_all(&mut store, enr, limit);
         assert_eq!(total.claims_deleted, 3, "limit {limit}");
+        let stale = lodestar_store::Enriched {
+            version: 7,
+            content_type: 0,
+            junk_score: 0,
+            comp: Vec::new(),
+            data: vec![0],
+        };
+        assert_eq!(
+            store
+                .set_enrichments_at(read_at, &[(ids[0], stale)], &[])
+                .unwrap(),
+            None,
+            "limit {limit}: the stale batch can't write the match back"
+        );
         for &id in &ids[..2] {
             assert_eq!(ver(&store, id), 0, "limit {limit}: {id} marked");
         }
@@ -1637,4 +1653,49 @@ fn a_purge_marks_the_torrents_that_lost_a_record_shaping_claim() {
         assert_eq!(ver(&store, ids[3]), 7, "limit {limit}: another source's");
         assert_eq!(store.torrent_claims(ids[1]).unwrap().len(), 1);
     }
+}
+
+/// A consented write (ENR-G) reads the plugin's consent record and stored
+/// credential names inside its own transaction, and writes nothing when
+/// the condition doesn't hold.
+#[test]
+fn a_consented_write_judges_consent_inside_its_transaction() {
+    let mut store = mem();
+    let (dht, enr, _) = sources(&mut store);
+    let p = prepared(&store, "one");
+    let id = store_torrent(&mut store, &p, dht);
+    let c = named("one");
+    let held = |_: Option<&str>, names: &[String]| names.iter().any(|n| n == "api_key");
+    // No credential stored: refused, nothing written.
+    let seen = std::cell::RefCell::new(None);
+    let record = |r: Option<&str>, names: &[String]| {
+        *seen.borrow_mut() = Some((r.map(str::to_owned), names.to_vec()));
+        held(r, names)
+    };
+    assert_eq!(
+        store
+            .put_claims_at_consented(id, enr, &c, false, T, "nyaa", &record)
+            .unwrap(),
+        None
+    );
+    assert_eq!(seen.take(), Some((None, Vec::new())));
+    assert!(claims_of(&store, id).is_empty());
+    // Stored: written, and the check saw the name.
+    store
+        .update_source_secrets(enr, &[("api_key", b"sealed")], &[], None)
+        .unwrap();
+    assert_eq!(
+        store
+            .put_claims_at_consented(id, enr, &c, false, T, "nyaa", &record)
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(seen.take().unwrap().1, ["api_key"]);
+    assert_eq!(claims_of(&store, id).len(), 1);
+    // A disabled source is still refused first (SRC-1).
+    store.set_source_state(enr, SourceState::Disabled).unwrap();
+    assert!(matches!(
+        store.put_claims_at_consented(id, enr, &c, false, T, "nyaa", &held),
+        Err(Error::Invalid(_))
+    ));
 }

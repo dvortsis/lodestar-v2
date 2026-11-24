@@ -203,6 +203,8 @@ fn flags(show_adult: bool, tripped: bool) -> Arc<Flags> {
 struct Wire {
     seen: Mutex<Vec<Request>>,
     replay: Option<Replayer>,
+    /// Runs as each request is sent, while the lookup is in flight.
+    during: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Wire {
@@ -217,6 +219,9 @@ impl Wire {
 impl Fetch for Wire {
     fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
         self.seen.lock().unwrap().push(req.clone());
+        if let Some(f) = &self.during {
+            f();
+        }
         Box::pin(async move {
             match &self.replay {
                 Some(r) => r.fetch(req).await,
@@ -502,9 +507,20 @@ async fn recorded_match(
     enr: SourceId,
     state: Arc<dyn PluginState>,
 ) -> Discovery {
+    recorded_match_during(store, enr, state, None).await
+}
+
+/// [`recorded_match`], running `during` while the lookup is in flight.
+async fn recorded_match_during(
+    store: Arc<Mutex<Store>>,
+    enr: SourceId,
+    state: Arc<dyn PluginState>,
+    during: Option<Box<dyn Fn() + Send + Sync>>,
+) -> Discovery {
     let replay = Replayer::load(&fixture("tpdb_match")).unwrap();
     let wire = Arc::new(Wire {
         replay: Some(replay),
+        during,
         ..Wire::default()
     });
     let id = store
@@ -769,6 +785,26 @@ async fn an_answer_written_after_consent_is_withdrawn_is_not_stored() {
     assert_eq!(ingest(&mut s, &bare(), &d).matched, vec![id]);
 }
 
+/// A match whose consent is withdrawn while it's looked up isn't cached:
+/// the writer refuses it, so once consent is back the item is asked
+/// again, not a hit's lifetime later.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_match_whose_consent_went_meanwhile_is_not_cached() {
+    let (mut s, dht, _, enr) = store_for(tpdb::ID);
+    put(&mut s, MATCHED, dht, 0);
+    let store = Arc::new(Mutex::new(s));
+    let state: Arc<dyn PluginState> = Arc::new(MemoryState::new());
+    let during = {
+        let store = store.clone();
+        Box::new(move || consent(&mut store.lock().unwrap(), enr, false))
+    };
+    recorded_match_during(store.clone(), enr, state.clone(), Some(during)).await;
+    consent(&mut store.lock().unwrap(), enr, true);
+    // Asked again with the same plugin state: a cached hit would be skipped
+    // and nothing emitted.
+    recorded_match(store, enr, state).await;
+}
+
 // ---- 6. purge --------------------------------------------------------------------
 
 /// Brief §6 (§18.1 purge, SRC-15b): purging ThePornDB removes the claim its
@@ -951,12 +987,16 @@ async fn an_unavailable_route_or_an_unchecked_one_whose_proxy_is_gone_sends_noth
 
 /// Brief §7, not yet built: nothing runs the adult-enrichment runtime, so
 /// nothing can look an item up, and no host implements its `Switches`.
-/// This fails as soon as any crate's source, outside the runtime's own
-/// module and the crates' unit tests, builds an `AdultEnrichSource` or
-/// implements those switches, under any import or alias. The wiring slice then adds its own test that
-/// its `kill_switch_tripped` is true for every route state but Up
-/// (Unchecked and Down included), lists it here, and adds its Show adult
-/// content and drawer-interest paths to this gate.
+/// A tripwire on spellings, not a proof: it scans every crate's `src`
+/// (skipping the runtime's own `adult_enrich.rs`, comment lines and a
+/// file's trailing `#[cfg(test)] mod`) and fails on a line with the
+/// literal `AdultEnrichSource::new`, or an `impl … Switches for` line in
+/// a file that names `adult_enrich`. A constructor or an impl spelled
+/// another way would pass it, so the wiring slice owes the kill-switch
+/// requirement whether or not this trips: its own test that
+/// `kill_switch_tripped` is true for every route state but Up (Unchecked
+/// and Down included), and its Show adult content and drawer-interest
+/// paths added to this gate.
 #[test]
 fn the_binary_wires_no_adult_enrichment_yet() {
     let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");

@@ -959,7 +959,9 @@ pub fn ingest(
         // about one, so an answer for it is stale or forged.
         let identification = c.adult.is_none() && is_identification(d, ctx.enrichers);
         // A listed adult-enrichment source's consent withdrawn since the
-        // lookup: nothing of its answer is stored (ENR-G).
+        // lookup: nothing of its answer is stored (ENR-G). Judged again
+        // inside the write's transaction below, so a withdrawal between
+        // the two can't let it through.
         if c.adult.is_some()
             && let Some(consent) = ctx.consent
             && !consent.met(store, d.source)?
@@ -1098,8 +1100,25 @@ pub fn ingest(
     // as an unverified item and never as a sighting: the source didn't
     // find the key, the runtime asked about it.
     for (d, c, id, identification) in matches {
-        let counter = match store.put_claims_at(id, d.source, &c, false, now) {
-            Ok(true) => {
+        let put = match ctx.consent {
+            Some(consent) if c.adult.is_some() => match consent.get(d.source) {
+                Some((m, spec)) => store.put_claims_at_consented(
+                    id,
+                    d.source,
+                    &c,
+                    false,
+                    now,
+                    m.id,
+                    &|record, names| crate::adult_enrich::consent_holds(m, spec, record, names),
+                ),
+                None => Ok(None),
+            },
+            _ => store.put_claims_at(id, d.source, &c, false, now).map(Some),
+        };
+        let counter = match put {
+            // Consent withdrawn since the check above.
+            Ok(None) => &stats.refused,
+            Ok(Some(true)) => {
                 let list = if identification {
                     &mut out.identified
                 } else {
@@ -1111,7 +1130,7 @@ pub fn ingest(
                 &stats.on_torrent
             }
             // Held meanwhile, or no longer stored.
-            Ok(false) => &stats.refused,
+            Ok(Some(false)) => &stats.refused,
             // Disabled or purged meanwhile (SRC-1).
             Err(lodestar_store::Error::Invalid(_)) => &stats.refused,
             Err(e) => return Err(e),

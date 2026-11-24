@@ -856,7 +856,7 @@ pub const MARK_CHUNK: usize = 10_000;
 
 const CLASS_GEN: &str = "class_rules_gen";
 
-fn bump_class_gen(conn: &rusqlite::Connection) -> Result<i64> {
+pub(crate) fn bump_class_gen(conn: &rusqlite::Connection) -> Result<i64> {
     let next = class_gen(conn)? + 1;
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)

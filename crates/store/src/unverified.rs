@@ -419,6 +419,9 @@ macro_rules! queue_of {
     };
 }
 
+/// Judges a write's consent on its own transaction ([`Store::put_claims_at_consented`]).
+type ConsentCheck<'a> = dyn FnMut(&Connection) -> Result<bool> + 'a;
+
 impl Store {
     /// Records keys sources found, in one transaction (see [`Put`]).
     /// Claims must be within the [`claims`] limits (`Error::Invalid`
@@ -486,7 +489,7 @@ impl Store {
         claims: &Claims,
         private_source: bool,
     ) -> Result<bool> {
-        self.put_one_claims(torrent_id, source, claims, private_source, None)
+        self.put_one_claims(torrent_id, source, claims, private_source, None, None)
     }
 
     /// [`put_claims`](Store::put_claims), stamped as written at `at` (Unix
@@ -499,7 +502,44 @@ impl Store {
         private_source: bool,
         at: i64,
     ) -> Result<bool> {
-        self.put_one_claims(torrent_id, source, claims, private_source, Some(at))
+        self.put_one_claims(torrent_id, source, claims, private_source, Some(at), None)
+    }
+
+    /// [`put_claims_at`](Store::put_claims_at) for an answer that needs
+    /// `plugin`'s consent (ENR-G): `consent` is given its consent record
+    /// and stored credential names, read inside the write's transaction,
+    /// and nothing is written unless it says the condition holds. A
+    /// withdrawal is a write too, so it can't land between the check and
+    /// the write. `None` when consent refused it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_claims_at_consented(
+        &mut self,
+        torrent_id: i64,
+        source: SourceId,
+        claims: &Claims,
+        private_source: bool,
+        at: i64,
+        plugin: &str,
+        consent: &dyn Fn(Option<&str>, &[String]) -> bool,
+    ) -> Result<Option<bool>> {
+        let mut refused = false;
+        let mut check = |conn: &Connection| -> Result<bool> {
+            let ok = consent(
+                crate::sources::consent_of(conn, plugin)?.as_deref(),
+                &crate::sources::secret_names_of(conn, plugin)?,
+            );
+            refused = !ok;
+            Ok(ok)
+        };
+        let put = self.put_one_claims(
+            torrent_id,
+            source,
+            claims,
+            private_source,
+            Some(at),
+            Some(&mut check),
+        )?;
+        Ok((!refused).then_some(put))
     }
 
     fn put_one_claims(
@@ -509,10 +549,16 @@ impl Store {
         claims: &Claims,
         private_source: bool,
         at: Option<i64>,
+        consent: Option<&mut ConsentCheck<'_>>,
     ) -> Result<bool> {
         let blob = encode(claims, self.config.compression_level)?;
         let tx = begin_write(&mut self.conn)?;
         check_running(&tx, source)?;
+        if let Some(consent) = consent
+            && !consent(&tx)?
+        {
+            return Ok(false);
+        }
         let Some(hashes) = torrent_hashes(&tx, torrent_id)? else {
             return Ok(false);
         };
@@ -1133,12 +1179,20 @@ impl Store {
                 let mut mark = tx.prepare_cached(
                     "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
                 )?;
+                let mut marked = false;
                 for (id, data) in &lost {
                     // One that doesn't decode is marked: deriving again is
                     // the safe side.
                     if !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record()) {
                         mark.execute(params![id])?;
+                        marked = true;
                     }
+                }
+                // A backfill batch that read these claims before the purge
+                // would write the old match back over the mark: moving the
+                // generation makes it rejected and run again (§20.9).
+                if marked {
+                    crate::rules::bump_class_gen(&tx)?;
                 }
                 scanned = lost.len();
                 step.claims_deleted = scanned;

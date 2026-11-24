@@ -196,7 +196,26 @@ pub fn consent_met(
     manifest: &Manifest,
     credentials: &[lodestar_sources::consent::CredentialSpec],
 ) -> Result<bool, lodestar_store::Error> {
-    Ok(lodestar_sources::consent::need_in_with(store, manifest, credentials)?.is_none())
+    Ok(consent_holds(
+        manifest,
+        credentials,
+        store.source_consent(manifest.id)?.as_deref(),
+        &store.source_secret_names(manifest.id)?,
+    ))
+}
+
+/// [`consent_met`] from what the store holds for the plugin: its consent
+/// record and its stored credential names (`need_in_with`'s reads). The
+/// writer judges it inside the transaction that stores an answer
+/// (`Store::put_claims_at_consented`).
+pub fn consent_holds(
+    manifest: &Manifest,
+    credentials: &[lodestar_sources::consent::CredentialSpec],
+    record: Option<&str>,
+    names: &[String],
+) -> bool {
+    let ack = record.and_then(lodestar_sources::consent::Ack::decode);
+    lodestar_sources::consent::need_with(manifest, credentials, ack.as_ref(), names).is_none()
 }
 
 /// What the writer needs to judge each listed adult-enrichment source's
@@ -238,10 +257,24 @@ impl EnricherConsent {
     /// `source`'s consent condition holds now ([`consent_met`]); false for
     /// a source it doesn't know.
     pub fn met(&self, store: &Store, source: SourceId) -> Result<bool, lodestar_store::Error> {
-        match self.0.iter().find(|(id, ..)| *id == source) {
-            Some((_, m, c)) => consent_met(store, m, c),
+        match self.get(source) {
+            Some((m, c)) => consent_met(store, m, c),
             None => Ok(false),
         }
+    }
+
+    /// `source`'s manifest and declared credentials, if it's listed.
+    pub fn get(
+        &self,
+        source: SourceId,
+    ) -> Option<(
+        &Manifest,
+        &'static [lodestar_sources::consent::CredentialSpec],
+    )> {
+        self.0
+            .iter()
+            .find(|(id, ..)| *id == source)
+            .map(|(_, m, c)| (m, *c))
     }
 }
 
@@ -801,6 +834,20 @@ impl AdultEnrichSource {
         }
     }
 
+    /// The plugin's consent condition holds now; false when the store
+    /// can't say.
+    async fn consented(&self) -> bool {
+        let store = self.store.clone();
+        let manifest = self.plugin.manifest().clone();
+        let credentials = self.plugin.policy().credentials;
+        tokio::task::spawn_blocking(move || {
+            let store = store.lock().unwrap_or_else(|e| e.into_inner());
+            consent_met(&store, &manifest, credentials)
+        })
+        .await
+        .is_ok_and(|r| r.unwrap_or(false))
+    }
+
     /// One item: the cache, the gate, the budget, then the plugin.
     async fn one(&self, ctx: &mut SourceCtx, kit: &Kit, state: &dyn PluginState, id: i64) -> Step {
         let now = crate::unix_now();
@@ -877,7 +924,13 @@ impl AdultEnrichSource {
                     sent = ctx.emitter.emit(found) => if sent.is_err() { return Step::Shutdown },
                 }
                 bump(&self.stats.matched);
-                Cache::remember(state, id, now.saturating_add(HIT_TTL_SECS), now).await;
+                // The writer refuses an answer whose consent was withdrawn
+                // meanwhile (ENR-G): one that's no longer consented to
+                // isn't cached either, so it's asked again once consent is
+                // back, not a hit's lifetime later.
+                if self.consented().await {
+                    Cache::remember(state, id, now.saturating_add(HIT_TTL_SECS), now).await;
+                }
             }
             Ok(Lookup::NoMatch) => {
                 bump(&self.stats.missed);
