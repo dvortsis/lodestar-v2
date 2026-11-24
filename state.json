@@ -12074,7 +12074,6 @@
   },
   "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge.",
   "runner_todo": [
-    "After #1117 merges: if its slices.yaml owns still lack crates/store/src/rules.rs and sources.rs (and the other fix files), add them in a runner records PR; wiring slice notes must carry the adult-enrichment kill-switch requirement.",
     "Runner docs PR for docs/metrics.md: (a) dht_sample_frontier can reach 40,000 with escalation (counts held), from rv-1112; (b) the 6 h restart-gate line is wrong after X-split-resume-gate merges. Land after X-split-resume-gate.",
     "After #1117 merges: put the kill-switch requirement in the ENR wiring slice's notes (runner PR)."
   ]
