@@ -386,26 +386,12 @@ impl Store {
 
     /// `plugin`'s consent record, as [`Store::enable_source`] stored it.
     pub fn source_consent(&self, plugin: &str) -> Result<Option<String>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = ?1",
-                [format!("{CONSENT_KEY}{plugin}")],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?)
+        consent_of(&self.conn, plugin)
     }
 
     /// The names of the credentials stored for `plugin`, sorted.
     pub fn source_secret_names(&self, plugin: &str) -> Result<Vec<String>> {
-        let prefix = secret_prefix(plugin);
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT substr(key, ?2 + 1) FROM settings
-             WHERE substr(key, 1, ?2) = ?1 ORDER BY key",
-        )?;
-        // `substr` counts characters, not bytes.
-        let rows = stmt.query_map(params![prefix, prefix.chars().count() as i64], |r| r.get(0))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        secret_names_of(&self.conn, plugin)
     }
 
     /// One sealed credential of `plugin`'s.
@@ -581,6 +567,30 @@ impl Store {
         })
         .collect()
     }
+}
+
+/// [`Store::source_consent`] on `conn`, so a write can read it inside its
+/// own transaction.
+pub(crate) fn consent_of(conn: &Connection, plugin: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [format!("{CONSENT_KEY}{plugin}")],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
+/// [`Store::source_secret_names`] on `conn`.
+pub(crate) fn secret_names_of(conn: &Connection, plugin: &str) -> Result<Vec<String>> {
+    let prefix = secret_prefix(plugin);
+    let mut stmt = conn.prepare_cached(
+        "SELECT substr(key, ?2 + 1) FROM settings
+         WHERE substr(key, 1, ?2) = ?1 ORDER BY key",
+    )?;
+    // `substr` counts characters, not bytes.
+    let rows = stmt.query_map(params![prefix, prefix.chars().count() as i64], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 #[cfg(test)]
