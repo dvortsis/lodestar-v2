@@ -294,31 +294,46 @@ fn valid_tag_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/'))
 }
 
-/// IRCv3 tag-value unescaping: `\:` `;`, `\s` space, `\\` `\`, `\r` CR,
-/// `\n` LF; any other escaped character stands for itself, and a lone
-/// final `\` is dropped.
+/// IRCv3 tag-value unescaping: `\:` `;`, `\s` space, `\\` `\`; any other
+/// escaped character stands for itself, and a lone final `\` is dropped.
+///
+/// **A value never holds `CR`, `LF` or `NUL`:** IRCv3's `\r` and `\n`
+/// escapes, and any of the three however it got there, become U+FFFD,
+/// so a tag value can't break a line or a log record wherever it ends
+/// up. (Like every parsed field, it can still hold other control and
+/// format characters.)
 pub fn unescape_tag(v: &str) -> String {
     let mut out = String::with_capacity(v.len());
     let mut chars = v.chars();
     while let Some(c) = chars.next() {
         if c != '\\' {
-            out.push(c);
+            out.push(no_break(c));
             continue;
         }
         match chars.next() {
             Some(':') => out.push(';'),
             Some('s') => out.push(' '),
             Some('\\') => out.push('\\'),
-            Some('r') => out.push('\r'),
-            Some('n') => out.push('\n'),
-            Some(other) => out.push(other),
+            Some('r' | 'n') => out.push(char::REPLACEMENT_CHARACTER),
+            Some(other) => out.push(no_break(other)),
             None => {}
         }
     }
     out
 }
 
-/// The inverse of [`unescape_tag`].
+/// `CR`, `LF` and `NUL` as U+FFFD, everything else as itself.
+fn no_break(c: char) -> char {
+    if matches!(c, '\r' | '\n' | '\0') {
+        char::REPLACEMENT_CHARACTER
+    } else {
+        c
+    }
+}
+
+/// The inverse of [`unescape_tag`] for a value without `CR`, `LF` or
+/// `NUL` (an outgoing value with them escapes them as IRCv3 says, and
+/// they come back as U+FFFD).
 pub fn escape_tag(v: &str) -> String {
     let mut out = String::with_capacity(v.len());
     for c in v.chars() {
@@ -783,8 +798,17 @@ mod tests {
     fn tag_escapes() {
         assert_eq!(
             unescape_tag("a\\:b\\sc\\\\d\\re\\nf\\xg\\"),
-            "a;b c\\d\re\nfxg"
+            "a;b c\\d\u{fffd}e\u{fffd}fxg"
         );
+        // Golden: no unescaped value holds CR, LF or NUL, whether escaped
+        // or (as a fuzzer or a future parser path could hand it) raw.
+        assert_eq!(unescape_tag("x\\r\\ny"), "x\u{fffd}\u{fffd}y");
+        assert_eq!(unescape_tag("x\ry\nz\0w"), "x\u{fffd}y\u{fffd}z\u{fffd}w");
+        assert_eq!(unescape_tag("x\\\ry\\\0z"), "x\u{fffd}y\u{fffd}z");
+        // Through the parser: a tag value can't break a line downstream.
+        let m = p("@a=one\\rtwo\\nthree;b=\\r\\n PING");
+        assert_eq!(m.tag("a"), Some("one\u{fffd}two\u{fffd}three"));
+        assert_eq!(m.tag("b"), Some("\u{fffd}\u{fffd}"));
         assert_eq!(escape_tag("a;b c\\d\re\n"), "a\\:b\\sc\\\\d\\re\\n");
     }
 
@@ -967,8 +991,19 @@ mod tests {
         }
 
         #[test]
-        fn tag_escape_roundtrip(v in "\\PC{0,40}|[;\\\\ \r\n a]{0,20}") {
-            prop_assert_eq!(unescape_tag(&escape_tag(&v)), v);
+        fn tag_escape_roundtrip(v in "\\PC{0,40}|[;\\\\ \r\n\0 a]{0,20}") {
+            let back = unescape_tag(&escape_tag(&v));
+            prop_assert!(!back.contains(['\r', '\n', '\0']));
+            let expect: String = v
+                .chars()
+                .map(|c| if matches!(c, '\r' | '\n' | '\0') { '\u{fffd}' } else { c })
+                .collect();
+            prop_assert_eq!(back, expect);
+        }
+
+        #[test]
+        fn unescaped_tags_never_break_lines(v in "[\\\\rn0\r\n\0a;s]{0,40}|\\PC{0,40}") {
+            prop_assert!(!unescape_tag(&v).contains(['\r', '\n', '\0']));
         }
 
         #[test]

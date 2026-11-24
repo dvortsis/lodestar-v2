@@ -659,8 +659,9 @@ pub enum Disconnect {
     RegisterTimeout,
     /// Every alternative nick was taken.
     NickInUse,
-    /// SASL is configured, but the server didn't offer PLAIN or registered
-    /// the client without it. The client never registers without SASL;
+    /// SASL is configured, but the server didn't offer PLAIN, refused it
+    /// with a 908 that lists other mechanisms and then a 904, or
+    /// registered the client without it. The client never registers without SASL;
     /// it drops the connection and tries again later, since networks drop
     /// the capability while services are split.
     SaslUnavailable,
@@ -1402,6 +1403,10 @@ pub(crate) struct Proto {
     nick_tries: u8,
     cap_lines: u8,
     sasl_offered: bool,
+    /// A 908 (`RPL_SASLMECHS`) in this login listed mechanisms without
+    /// PLAIN: the 904 that follows means PLAIN isn't available, not that
+    /// the password is wrong.
+    plain_refused: bool,
     /// Per configured channel.
     joined: Vec<bool>,
     join_sent: Vec<bool>,
@@ -1425,6 +1430,7 @@ impl Proto {
             nick_tries: 0,
             cap_lines: 0,
             sasl_offered: false,
+            plain_refused: false,
             joined: vec![false; n],
             join_sent: vec![false; n],
             out: VecDeque::new(),
@@ -1592,7 +1598,7 @@ impl Proto {
                 Handled::Emit(msg)
             }
             "900" | "901" | "902" | "903" | "904" | "905" | "906" | "907" | "908" => {
-                self.on_sasl_numeric(&msg.command);
+                self.on_sasl_numeric(&msg);
                 Handled::Internal
             }
             // A join that failed, so a later invitation may retry it.
@@ -1698,8 +1704,8 @@ impl Proto {
         self.phase = Phase::SaslResult;
     }
 
-    fn on_sasl_numeric(&mut self, code: &str) {
-        match code {
+    fn on_sasl_numeric(&mut self, msg: &Message) {
+        match msg.command.as_str() {
             "900" => {
                 if let Phase::Identifying(_) = self.phase {
                     self.join_all();
@@ -1709,6 +1715,22 @@ impl Proto {
             "903" | "907" if self.phase == Phase::SaslResult => {
                 self.send("CAP", &["END"]);
                 self.phase = Phase::Registering;
+            }
+            // `RPL_SASLMECHS`: the mechanisms the server does take, sent
+            // before the 904 that refuses the one asked for.
+            "908" if self.in_sasl() => {
+                let mechs = msg.param(1).unwrap_or("");
+                if !mechs
+                    .split(',')
+                    .any(|m| m.trim().eq_ignore_ascii_case("PLAIN"))
+                {
+                    self.plain_refused = true;
+                }
+            }
+            // PLAIN refused for want of the mechanism, not a wrong
+            // password: retried later like a server that didn't offer it.
+            "904" if self.in_sasl() && self.plain_refused => {
+                self.retry(Disconnect::SaslUnavailable);
             }
             "902" | "904" | "905" | "906" if self.in_sasl() => self.stop(Stop::AuthFailed),
             _ => {}
@@ -1965,6 +1987,24 @@ mod tests {
         // A wrong password.
         let mut p = acked(sasl(), true, now);
         p.on_message(msg("AUTHENTICATE +"), now);
+        p.on_message(msg(":s 904 lode :SASL authentication failed"), now);
+        assert_eq!(p.end, Some(End::Stop(Stop::AuthFailed)));
+        // A 908 listing mechanisms without PLAIN, then 904: PLAIN isn't
+        // available (now), so it's retried, not a failed login.
+        let mut p = acked(sasl(), true, now);
+        p.on_message(
+            msg(":s 908 lode EXTERNAL,SCRAM-SHA-256 :are available SASL mechanisms"),
+            now,
+        );
+        p.on_message(msg(":s 904 lode :SASL authentication failed"), now);
+        assert_eq!(p.end, unavailable);
+        // A 908 that does list PLAIN leaves the 904 a failed login.
+        let mut p = acked(sasl(), true, now);
+        p.on_message(msg("AUTHENTICATE +"), now);
+        p.on_message(
+            msg(":s 908 lode PLAIN,EXTERNAL :are available SASL mechanisms"),
+            now,
+        );
         p.on_message(msg(":s 904 lode :SASL authentication failed"), now);
         assert_eq!(p.end, Some(End::Stop(Stop::AuthFailed)));
         for code in ["902", "905", "906"] {
