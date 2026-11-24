@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T09:19Z",
+  "updated_at": "2026-11-24T09:36Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4344,6 +4344,12 @@
       "at": "2026-11-01T14:37Z",
       "by": "runner \u00a72.26",
       "what": "FX-1: Search index-state banners (on demand) 3.3 -> 4.1 KB (shared EmptyState now in cold-start chunk); Detail sections 37.3 -> 37.31 KB (4 B reshuffle). Net first-view savings: Discover -1.55, Logs -1.45, Alerts -1.58, drawer -0.23 KB."
+    },
+    {
+      "at": "2026-11-24T09:36Z",
+      "by": "runner holder",
+      "slice": "X-escalate-full-table",
+      "call": "owns widened by crates/dht/src/node/testing.rs (one pub use for a testing-feature-only SamplerCapacity seam so the sim can fill the 200k table); slice PR edits its own slices.yaml owns; extra changes stay behind dht.sample_backoff_escalate, default off"
     }
   ],
   "runner_notes": {
@@ -10737,7 +10743,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T09:19Z",
+    "updated": "2026-11-24T09:36Z",
     "items": [
       {
         "slot": 1,
@@ -10754,7 +10760,7 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "Starting: sampler backoff escalation reaches a struck node on a full table with the split off (brief briefs/X-escalate-full-table.md).",
+        "doing": "Building: escalation reaches a struck node on a full table with the split off. Sim test fails on old main and passes on the fix; workspace checks running.",
         "since": "2026-11-24T09:19Z"
       },
       {
