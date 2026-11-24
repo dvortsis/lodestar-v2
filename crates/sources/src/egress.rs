@@ -21,6 +21,10 @@
 //!   checks, and the kill switch's in-flight abort goes on covering the
 //!   body after the headers. Their timeout and byte cap are the plugin's,
 //!   held to `net`'s own ceiling.
+//! - **WebSocket** sessions ([`WsConnect`], NOS-2b) take the same route,
+//!   endpoint policy, source state and kill switch: the connection is
+//!   NOS-2a's routed TCP connect, and an open session stays under the
+//!   switch ([`crate::ws`]).
 //! - **Credentials** for a SOCKS5 proxy come from [`EgressCredentials`]
 //!   (the per-source credential store, SRC-4) and never appear in a log,
 //!   an error or a `Debug` string.
@@ -32,13 +36,13 @@
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 pub use lodestar_integrations::net::SocksDns;
 use lodestar_integrations::net::{
-    self, AddrClass, Exchange, GuardedClient, NetError, NetPolicy, Resolve, Route, Socks5Route,
-    SocksAuth, SystemResolver,
+    self, AddrClass, Exchange, GuardedClient, KillSwitch, NetError, NetPolicy, Resolve, Route,
+    Socks5Route, SocksAuth, SystemResolver, TcpRouteError,
 };
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -49,6 +53,7 @@ use crate::http::{
 };
 use crate::manifest::Endpoint;
 use crate::plugin::BoxFuture;
+use crate::ws::{self, Roots, RouteWatch, WsConnect, WsError, WsLimits, WsStream, WsTarget};
 
 /// How a plugin's traffic leaves the machine.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -208,12 +213,22 @@ struct Origin {
 }
 
 impl Origin {
-    /// The origin of an `http`/`https` URL; `None` for any other URL.
+    /// The origin of an `http`, `https` or `wss` URL; `None` for any
+    /// other URL. A `wss` origin is keyed on the same host as `https`
+    /// (port 443 by default), but only matches `wss`.
     fn of(url: &str) -> Option<Origin> {
         let parsed = url::Url::parse(url).ok()?;
         let scheme = match parsed.scheme() {
             "http" => "http",
             "https" => "https",
+            "wss" => {
+                let target = ws::parse_url(url).ok()?;
+                return Some(Origin {
+                    scheme: "wss",
+                    host: host_key(target.https.as_str())?,
+                    port: target.port,
+                });
+            }
             _ => return None,
         };
         Some(Origin {
@@ -226,14 +241,14 @@ impl Origin {
 
 impl Endpoints {
     /// A plugin's built-in public endpoints: public addresses only, and
-    /// only the `http`/`https` hosts its manifest declares (exactly, no
-    /// subdomains), each over the scheme it's declared with, on that
+    /// only the `http`/`https`/`wss` hosts its manifest declares (exactly,
+    /// no subdomains), each over the scheme it's declared with, on that
     /// scheme's default port.
     pub fn manifest(endpoints: &[Endpoint]) -> Endpoints {
         let origins = endpoints
             .iter()
             .filter_map(|e| {
-                let scheme = ["http", "https"]
+                let scheme = ["http", "https", "wss"]
                     .into_iter()
                     .find(|s| e.protocol.eq_ignore_ascii_case(s))?;
                 Origin::of(&format!("{scheme}://{}/", e.host))
@@ -258,17 +273,21 @@ impl Endpoints {
 
     /// Narrows these endpoints to the origins of the given URLs: each
     /// one's scheme, host and port (the scheme's default when it names
-    /// none). A URL that isn't `http`/`https` adds nothing.
+    /// none). A URL that isn't `http`, `https` or `wss` adds nothing.
     pub fn only_origins<S: AsRef<str>>(mut self, urls: &[S]) -> Endpoints {
         self.origins = Some(urls.iter().filter_map(|u| Origin::of(u.as_ref())).collect());
         self
     }
 
-    /// Whether a request to `url` passes these endpoints' DNS-free checks:
-    /// the guard's URL rules and the origin list. What [`PluginEgress`]
-    /// checks first; a resolved address can still be refused after.
+    /// Whether a request to `url` (or a WebSocket session, for a `wss`
+    /// URL) passes these endpoints' DNS-free checks: the guard's URL rules
+    /// and the origin list. What [`PluginEgress`] checks first; a resolved
+    /// address can still be refused after.
     pub fn permits(&self, url: &str) -> bool {
-        self.check(url).is_ok()
+        match url::Url::parse(url) {
+            Ok(u) if u.scheme() == "wss" => self.check_ws(url).is_ok(),
+            _ => self.check(url).is_ok(),
+        }
     }
 
     pub fn policy(&self) -> NetPolicy {
@@ -285,6 +304,21 @@ impl Endpoints {
     fn check(&self, url: &str) -> Result<(), NetError> {
         let parsed = url::Url::parse(url).map_err(|_| NetError::InvalidUrl("it doesn't parse"))?;
         net::check_url(&parsed, self.policy)?;
+        self.check_origin(url)
+    }
+
+    /// Checks a WebSocket URL before anything is resolved or connected:
+    /// `wss://` only, then the guard's DNS-free checks on the same origin
+    /// over `https`, and the host list (a `wss` entry). The target to
+    /// connect to when it passes.
+    fn check_ws(&self, url: &str) -> Result<WsTarget, NetError> {
+        let target = ws::parse_url(url).map_err(NetError::InvalidUrl)?;
+        net::check_url(&target.https, self.policy)?;
+        self.check_origin(url)?;
+        Ok(target)
+    }
+
+    fn check_origin(&self, url: &str) -> Result<(), NetError> {
         if let Some(origins) = &self.origins {
             let origin = Origin::of(url).ok_or(NetError::InvalidUrl("it has no host"))?;
             if !origins.contains(&origin) {
@@ -447,6 +481,8 @@ pub struct EgressFactory {
     resolver: Arc<dyn Resolve>,
     credentials: Arc<dyn EgressCredentials>,
     timeout: Duration,
+    /// What WebSocket sessions' TLS trusts.
+    roots: Roots,
 }
 
 impl fmt::Debug for EgressFactory {
@@ -471,7 +507,15 @@ impl EgressFactory {
             resolver,
             credentials,
             timeout: DEFAULT_TIMEOUT,
+            roots: Roots::Platform,
         }
+    }
+
+    /// The certificates WebSocket sessions trust: the platform's by
+    /// default; tests name their own CA.
+    pub fn with_roots(mut self, roots: Roots) -> EgressFactory {
+        self.roots = roots;
+        self
     }
 
     /// The per-request timeout, clamped to [`MIN_TIMEOUT`]..=[`MAX_TIMEOUT`].
@@ -490,11 +534,23 @@ impl EgressFactory {
             Egress::Interface(name) => Probe::Interface(name.clone()),
             Egress::Socks5 { proxy, .. } => Probe::Socks(*proxy),
         };
-        let client = self.client(plugin, egress, endpoints.policy).await;
+        let policy = endpoints.policy;
+        let route = self.route(plugin, egress).await;
+        let client = route
+            .as_ref()
+            .map_err(|r| *r)
+            .and_then(|route| self.client(route, policy));
         let mut built =
             PluginEgress::new(plugin, egress.kind(), client, Arc::new(probe), endpoints);
         built.notice = notice(egress);
         built.states = Some(Arc::clone(&self.credentials));
+        if let (Ok(route), Ok(_)) = (route, &built.client) {
+            built.tcp = Some(TcpEgress {
+                resolver: Arc::clone(&self.resolver),
+                route,
+                roots: self.roots.clone(),
+            });
+        }
         built
     }
 
@@ -552,13 +608,9 @@ impl EgressFactory {
         )
     }
 
-    async fn client(
-        &self,
-        plugin: &str,
-        egress: &Egress,
-        policy: NetPolicy,
-    ) -> Result<GuardedClient, DownReason> {
-        let route = match egress {
+    /// The route `egress` describes, with the proxy's credentials.
+    async fn route(&self, plugin: &str, egress: &Egress) -> Result<Route, DownReason> {
+        Ok(match egress {
             Egress::Direct => Route::Direct,
             // Off Windows (weak host model: Linux, macOS, BSD) the routing
             // table, not the bound address, picks the interface, so a downed
@@ -580,16 +632,31 @@ impl EgressFactory {
                     auth,
                 })
             }
-        };
-        GuardedClient::with_route(policy, self.timeout, Arc::clone(&self.resolver), &route).map_err(
-            |e| match e {
-                net::RouteError::Unsupported(_) => DownReason::Unsupported,
-                net::RouteError::InvalidInterface => DownReason::InvalidInterface,
-                net::RouteError::InvalidCredentials => DownReason::CredentialsUnavailable,
-                net::RouteError::Build => DownReason::ClientUnavailable,
-            },
-        )
+        })
     }
+
+    fn client(&self, route: &Route, policy: NetPolicy) -> Result<GuardedClient, DownReason> {
+        GuardedClient::with_route(policy, self.timeout, Arc::clone(&self.resolver), route)
+            .map_err(route_down)
+    }
+}
+
+/// Why a route can't be used, as the kill switch reports it.
+fn route_down(e: net::RouteError) -> DownReason {
+    match e {
+        net::RouteError::Unsupported(_) => DownReason::Unsupported,
+        net::RouteError::InvalidInterface => DownReason::InvalidInterface,
+        net::RouteError::InvalidCredentials => DownReason::CredentialsUnavailable,
+        net::RouteError::Build => DownReason::ClientUnavailable,
+    }
+}
+
+/// What a plugin's WebSocket sessions connect with: the route its HTTP
+/// client was built for, and the factory's resolver and roots.
+struct TcpEgress {
+    resolver: Arc<dyn Resolve>,
+    route: Route,
+    roots: Roots,
 }
 
 /// How the kill switch checks a route.
@@ -729,6 +796,11 @@ pub struct PluginEgress {
     /// Where the source's stored state is read before each request
     /// ([`EgressCredentials::source_enabled`]); set by the factory.
     states: Option<Arc<dyn EgressCredentials>>,
+    /// What WebSocket sessions connect with; set by the factory when the
+    /// route could be built. Without it every session is refused.
+    tcp: Option<TcpEgress>,
+    /// The WebSocket TLS connector, kept once built.
+    tls: OnceLock<tokio_rustls::TlsConnector>,
 }
 
 impl fmt::Debug for PluginEgress {
@@ -763,6 +835,8 @@ impl PluginEgress {
             down_streak: Default::default(),
             not_ready_streak: Default::default(),
             states: None,
+            tcp: None,
+            tls: OnceLock::new(),
         };
         match egress.client {
             Err(reason) => egress.publish(RouteState::Down(reason)),
@@ -869,6 +943,12 @@ impl PluginEgress {
             Counters::bump(&self.counters.policy_refusals);
             return Err(refused(&e));
         }
+        self.admit_route(pace_by).await
+    }
+
+    /// The kill switch and the source's state, once the endpoint policy
+    /// let a request (or a WebSocket session) through.
+    async fn admit_route(&self, pace_by: Option<Instant>) -> Result<&GuardedClient, HttpError> {
         match self.gate().await {
             Ok(c) => {
                 self.down_streak.store(0, Ordering::Relaxed);
@@ -1239,6 +1319,306 @@ impl Fetch for PluginEgress {
     }
 }
 
+impl PluginEgress {
+    /// The WebSocket TLS connector for this plugin's roots.
+    fn tls(&self, tcp: &TcpEgress) -> Result<tokio_rustls::TlsConnector, WsError> {
+        // Only a connector that built is kept: a failure (the platform's
+        // roots not loading) is tried again next time.
+        if let Some(c) = self.tls.get() {
+            return Ok(c.clone());
+        }
+        let c = ws::tls_connector(&tcp.roots)?;
+        Ok(self.tls.get_or_init(|| c).clone())
+    }
+
+    /// Opens a WebSocket session (NOS-2b): the endpoint policy (a `wss`
+    /// URL, on the host list), the kill switch and the source's state, as
+    /// for a request; then NOS-2a's routed connect under the switch, TLS
+    /// with the platform's verifier, and the upgrade, all within the
+    /// connect timeout. The open session stays under the switch.
+    async fn open_ws(&self, url: &str, limits: WsLimits) -> Result<Box<dyn WsStream>, WsError> {
+        let limits = limits.clamped();
+        let target = self.endpoints.check_ws(url).map_err(|e| {
+            Counters::bump(&self.counters.policy_refusals);
+            WsError::Connect(refused(&e))
+        })?;
+        let started = Instant::now();
+        let deadline = started + limits.connect;
+        // Half the connect timeout, as for a streamed request: a paced
+        // refusal comes back well inside the plugin's own deadline.
+        let pace_by = started + limits.connect / 2;
+        // A trip from here on (down and up again) ends the attempt.
+        let trips = self.counters.trips.load(Ordering::Relaxed);
+        self.admit_route(Some(pace_by))
+            .await
+            .map_err(WsError::Connect)?;
+        let Some(tcp) = &self.tcp else {
+            return Err(WsError::Connect(HttpError::NoEgress));
+        };
+        let tls = self.tls(tcp)?;
+        let mut watch = EgressWatch::new(
+            self.state.subscribe(),
+            Arc::clone(&self.probe),
+            Arc::clone(&self.counters),
+        );
+        watch.trips = trips;
+        let opened = {
+            let open = self.connect_ws(tcp, &tls, &target, limits, deadline, pace_by);
+            tokio::select! {
+                biased;
+                reason = watch.wait() => Err(WsError::Connect(HttpError::EgressDown(reason))),
+                () = tokio::time::sleep_until(deadline) => {
+                    Counters::bump(&self.counters.transport_failures);
+                    Err(WsError::Connect(HttpError::Transport(
+                        "timed out connecting".into(),
+                    )))
+                }
+                r = open => r,
+            }
+        };
+        let ws = opened?;
+        Counters::bump(&self.counters.answered);
+        self.not_ready_streak.store(0, Ordering::Relaxed);
+        Ok(Box::new(ws::Socket::new(ws, limits, Box::new(watch))))
+    }
+
+    async fn connect_ws(
+        &self,
+        tcp: &TcpEgress,
+        tls: &tokio_rustls::TlsConnector,
+        target: &WsTarget,
+        limits: WsLimits,
+        deadline: Instant,
+        pace_by: Instant,
+    ) -> Result<tokio_tungstenite::WebSocketStream<ws::BoxIo>, WsError> {
+        let switch = RouteSwitch(self.state.subscribe());
+        let budget = deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1));
+        let stream = match net::connect_tcp_routed(
+            &*tcp.resolver,
+            &target.host,
+            target.port,
+            self.endpoints.policy,
+            &tcp.route,
+            Some(&switch),
+            budget,
+        )
+        .await
+        {
+            Ok(stream) => stream,
+            Err(e) => return Err(WsError::Connect(self.tcp_failed(e, pace_by).await)),
+        };
+        // Small frames (pings, requests) shouldn't wait for Nagle.
+        let _ = stream.set_nodelay(true);
+        let Ok(name) = rustls::pki_types::ServerName::try_from(target.host.clone()) else {
+            Counters::bump(&self.counters.policy_refusals);
+            return Err(WsError::Connect(HttpError::BadUrl));
+        };
+        let stream = match tls.connect(name, stream).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                let why = ws::tls_failed(&e);
+                return Err(WsError::Connect(self.lost(why).await));
+            }
+        };
+        match ws::handshake(Box::new(stream), target, limits).await {
+            Ok(ws) => Ok(ws),
+            Err(e) => {
+                if matches!(e, WsError::Handshake(Some(_))) {
+                    Counters::bump(&self.counters.answered);
+                } else {
+                    Counters::bump(&self.counters.transport_failures);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// What a failed routed connect means: the guard's refusals and a
+    /// failed connection as for a request ([`Self::failed`]); the kill
+    /// switch's and the route's own as the switch's.
+    async fn tcp_failed(&self, e: TcpRouteError, pace_by: Instant) -> HttpError {
+        match e {
+            TcpRouteError::Net(e) => self.failed(e, Some(pace_by)).await,
+            TcpRouteError::KillSwitch => {
+                Counters::bump(&self.counters.kill_switch_aborts);
+                let reason = match *self.state.borrow() {
+                    RouteState::Down(r) => r,
+                    _ => DownReason::ClientUnavailable,
+                };
+                HttpError::EgressDown(format!("went down in flight: {reason}"))
+            }
+            TcpRouteError::Route(e) => {
+                Counters::bump(&self.counters.kill_switch_refusals);
+                HttpError::EgressDown(route_down(e).to_string())
+            }
+            TcpRouteError::Socks(e) => {
+                self.lost(HttpError::Transport(format!("SOCKS5: {e}")))
+                    .await
+            }
+        }
+    }
+
+    /// A connection that failed after it was admitted: on a checked route
+    /// it re-probes, so a route that just went down reads as the kill
+    /// switch's error and not the server's.
+    async fn lost(&self, why: HttpError) -> HttpError {
+        if self.probe.ttl().is_some()
+            && let RouteState::Down(reason) = self.check_now().await
+        {
+            Counters::bump(&self.counters.kill_switch_aborts);
+            return HttpError::EgressDown(format!("went down in flight: {reason}"));
+        }
+        Counters::bump(&self.counters.transport_failures);
+        why
+    }
+}
+
+impl WsConnect for PluginEgress {
+    fn connect<'a>(
+        &'a self,
+        url: &'a str,
+        limits: WsLimits,
+    ) -> BoxFuture<'a, Result<Box<dyn WsStream>, WsError>> {
+        Box::pin(self.open_ws(url, limits))
+    }
+}
+
+/// The kill switch as NOS-2a's routed connect takes it: up only while the
+/// route is published up. A closed channel is down, so a lost switch
+/// fails closed.
+struct RouteSwitch(watch::Receiver<RouteState>);
+
+impl KillSwitch for RouteSwitch {
+    fn is_up(&self) -> bool {
+        self.0.has_changed().is_ok() && *self.0.borrow() == RouteState::Up
+    }
+
+    fn went_down(&self) -> BoxFuture<'_, ()> {
+        let mut rx = self.0.clone();
+        Box::pin(async move {
+            let _ = rx.wait_for(|s| *s != RouteState::Up).await;
+        })
+    }
+}
+
+/// An open WebSocket session's hold on its plugin's kill switch, as
+/// [`EgressBody`]'s for a streamed body: a published outage ends the
+/// session at once, and on a checked route it also probes the route
+/// itself every [`BODY_REPROBE`] (or the probe's TTL) while the session
+/// is waited on. A probe in progress survives the wait being dropped (a
+/// frame arrived first), so steady traffic can't starve it. A route that
+/// went down and came back while nobody waited ends the session too: the
+/// egress's trip count moved.
+struct EgressWatch {
+    down: watch::Receiver<RouteState>,
+    probe: Arc<dyn RouteProbe>,
+    counters: Arc<Counters>,
+    /// The egress's trip count when the session was admitted.
+    trips: u64,
+    next_probe: Instant,
+    probing: Option<BoxFuture<'static, Result<(), DownReason>>>,
+    /// Why the route went down, once seen: every later wait ends at once.
+    gone: Option<String>,
+}
+
+impl EgressWatch {
+    fn new(
+        down: watch::Receiver<RouteState>,
+        probe: Arc<dyn RouteProbe>,
+        counters: Arc<Counters>,
+    ) -> EgressWatch {
+        EgressWatch {
+            trips: counters.trips.load(Ordering::Relaxed),
+            next_probe: Instant::now() + reprobe_every(&*probe),
+            down,
+            probe,
+            counters,
+            probing: None,
+            gone: None,
+        }
+    }
+
+    /// Resolves once the route is down, with why. Cancel-safe.
+    async fn wait(&mut self) -> String {
+        if let Some(reason) = &self.gone {
+            return reason.clone();
+        }
+        let checked = self.probe.ttl().is_some();
+        let every = reprobe_every(&*self.probe);
+        let reason = loop {
+            let EgressWatch {
+                down,
+                probe,
+                counters,
+                trips,
+                next_probe,
+                probing,
+                ..
+            } = &mut *self;
+            let lost = route_lost(down, counters, *trips);
+            match probing.as_mut() {
+                Some(running) => {
+                    tokio::select! {
+                        biased;
+                        r = lost => break r,
+                        r = running => {
+                            *probing = None;
+                            match r {
+                                Err(r) => break r.to_string(),
+                                Ok(()) => *next_probe = Instant::now() + every,
+                            }
+                        }
+                    }
+                }
+                None if checked => {
+                    tokio::select! {
+                        biased;
+                        r = lost => break r,
+                        () = tokio::time::sleep_until(*next_probe) => {
+                            let probe = Arc::clone(probe);
+                            *probing = Some(Box::pin(async move { probe.probe().await }));
+                        }
+                    }
+                }
+                None => break lost.await,
+            }
+        };
+        Counters::bump(&self.counters.kill_switch_aborts);
+        let reason = format!("went down in flight: {reason}");
+        self.gone = Some(reason.clone());
+        reason
+    }
+}
+
+/// Resolves once the route is published down, has tripped since `trips`
+/// (it went down and came back while nobody looked), or can no longer be
+/// watched (the egress is gone): fails closed. Cancel-safe.
+async fn route_lost(
+    rx: &mut watch::Receiver<RouteState>,
+    counters: &Counters,
+    trips: u64,
+) -> String {
+    loop {
+        if let RouteState::Down(r) = *rx.borrow_and_update() {
+            return r.to_string();
+        }
+        if counters.trips.load(Ordering::Relaxed) != trips {
+            return "the route went down and came back".into();
+        }
+        if rx.changed().await.is_err() {
+            return DownReason::ClientUnavailable.to_string();
+        }
+    }
+}
+
+impl RouteWatch for EgressWatch {
+    fn down(&mut self) -> BoxFuture<'_, String> {
+        Box::pin(self.wait())
+    }
+}
+
 /// The headers a redirect to another origin keeps: content negotiation and
 /// the body's description, none of which can carry a credential. Every
 /// other header goes (an allow list, so a credential header under a name
@@ -1307,3 +1687,204 @@ pub async fn send_following<F: Fetch>(
 #[cfg(test)]
 #[path = "egress_tests.rs"]
 mod tests;
+
+/// The WebSocket half (NOS-2b); the rest is in `egress_tests.rs`, and the
+/// whole path against a real TLS server in `tests/ws.rs`.
+#[cfg(test)]
+mod ws_tests {
+    use super::*;
+
+    struct Fails;
+
+    impl RouteProbe for Fails {
+        fn probe(&self) -> BoxFuture<'_, Result<(), DownReason>> {
+            Box::pin(async { Err(DownReason::InterfaceDown) })
+        }
+
+        fn ttl(&self) -> Option<Duration> {
+            Some(Duration::ZERO)
+        }
+    }
+
+    /// A probe that takes 5 s and counts the probes that finished.
+    struct Slow(Arc<AtomicU32>);
+
+    impl RouteProbe for Slow {
+        fn probe(&self) -> BoxFuture<'_, Result<(), DownReason>> {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+
+        fn ttl(&self) -> Option<Duration> {
+            Some(Duration::ZERO)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_session_probes_its_route_and_sees_it_go_down() {
+        let (_tx, rx) = watch::channel(RouteState::Up);
+        let counters = Arc::new(Counters::default());
+        let mut w = EgressWatch::new(rx, Arc::new(Fails), Arc::clone(&counters));
+        let start = Instant::now();
+        let reason = w.wait().await;
+        assert_eq!(Instant::now() - start, BODY_REPROBE);
+        assert!(reason.contains("interface is down"), "{reason}");
+        assert_eq!(counters.snapshot().kill_switch_aborts, 1);
+        // Seen once, counted once.
+        assert_eq!(w.wait().await, reason);
+        assert_eq!(counters.snapshot().kill_switch_aborts, 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_published_outage_or_a_lost_switch_ends_the_wait() {
+        let (tx, rx) = watch::channel(RouteState::Up);
+        let mut w = EgressWatch::new(rx, Arc::new(Probe::Direct), Arc::default());
+        let down = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            tx.send(RouteState::Down(DownReason::ProxyUnreachable))
+                .unwrap();
+        };
+        let (reason, ()) = tokio::join!(w.wait(), down);
+        assert!(reason.contains("proxy isn't reachable"), "{reason}");
+        let (tx, rx) = watch::channel(RouteState::Up);
+        let mut w = EgressWatch::new(rx, Arc::new(Probe::Direct), Arc::default());
+        drop(tx);
+        assert!(w.wait().await.contains("went down"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_in_progress_survives_a_dropped_wait() {
+        let (_tx, rx) = watch::channel(RouteState::Up);
+        let done = Arc::new(AtomicU32::new(0));
+        let mut w = EgressWatch::new(rx, Arc::new(Slow(Arc::clone(&done))), Arc::default());
+        let start = Instant::now();
+        // A frame every second drops the wait; the probe started at
+        // BODY_REPROBE still finishes 5 s later.
+        while done.load(Ordering::SeqCst) == 0 {
+            let _ = tokio::time::timeout(Duration::from_secs(1), w.wait()).await;
+            assert!(Instant::now() - start <= Duration::from_secs(10));
+        }
+        assert_eq!(
+            Instant::now() - start,
+            BODY_REPROBE + Duration::from_secs(5)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_routed_connect_sees_the_switch_as_published() {
+        let (tx, rx) = watch::channel(RouteState::Unchecked);
+        let switch = RouteSwitch(rx);
+        assert!(!switch.is_up());
+        tx.send(RouteState::Up).unwrap();
+        assert!(switch.is_up());
+        tx.send(RouteState::Down(DownReason::InterfaceDown))
+            .unwrap();
+        assert!(!switch.is_up());
+        switch.went_down().await;
+        tx.send(RouteState::Up).unwrap();
+        drop(tx);
+        assert!(!switch.is_up(), "a lost switch is down");
+        switch.went_down().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_route_that_went_down_and_came_back_ends_the_wait() {
+        let (_tx, rx) = watch::channel(RouteState::Up);
+        let counters = Arc::new(Counters::default());
+        let mut w = EgressWatch::new(rx, Arc::new(Probe::Direct), Arc::clone(&counters));
+        // Down and up again while nobody waited: only the trip count shows it.
+        Counters::bump(&counters.trips);
+        let reason = tokio::time::timeout(Duration::from_secs(1), w.wait())
+            .await
+            .expect("the flap went unseen");
+        assert!(reason.contains("came back"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn the_route_going_down_mid_handshake_ends_the_connect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("wss://127.0.0.1:{}/", listener.local_addr().unwrap().port());
+        let client = GuardedClient::with_route(
+            NetPolicy::download_client(),
+            Duration::from_secs(15),
+            Arc::new(SystemResolver),
+            &Route::Direct,
+        )
+        .unwrap();
+        let mut egress = PluginEgress::new(
+            "p",
+            RouteKind::Direct,
+            Ok(client),
+            Arc::new(Probe::Direct),
+            Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[&url]),
+        );
+        egress.tcp = Some(TcpEgress {
+            resolver: Arc::new(SystemResolver),
+            route: Route::Direct,
+            roots: Roots::Platform,
+        });
+        // The server accepts and never answers the TLS hello; once it has
+        // the connection, the route goes down.
+        let down = async {
+            let (_tcp, _) = listener.accept().await.unwrap();
+            egress.publish(RouteState::Down(DownReason::InterfaceDown));
+            std::future::pending::<()>().await;
+        };
+        let limits = WsLimits::default();
+        let r = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::select! {
+                r = egress.open_ws(&url, limits) => r,
+                () = down => unreachable!(),
+            }
+        })
+        .await
+        .expect("the connect outlived the route");
+        assert!(
+            matches!(r, Err(WsError::Connect(HttpError::EgressDown(_)))),
+            "{:?}",
+            r.err()
+        );
+        assert!(egress.status().counters.kill_switch_aborts >= 1);
+    }
+
+    #[test]
+    fn websocket_urls_take_their_own_entries_on_the_host_list() {
+        let e = Endpoints::user_entered(NetPolicy::download_client())
+            .only_origins(&["wss://Relay.LAN:7447/sub", "https://web.lan/"]);
+        assert!(e.check_ws("wss://relay.lan:7447/x?y=1").is_ok());
+        assert!(e.permits("WSS://relay.lan:7447/"));
+        for url in [
+            "wss://relay.lan/",
+            "wss://relay.lan:7448/",
+            "wss://web.lan/",
+            "ws://relay.lan:7447/",
+            "wss://u:p@relay.lan:7447/",
+        ] {
+            assert!(!e.permits(url), "{url}");
+        }
+        // A wss entry lets no HTTP through, and an https entry no wss.
+        assert!(!e.permits("https://relay.lan:7447/"));
+        assert!(e.permits("https://web.lan/"));
+        // A manifest declares wss hosts on port 443, public only.
+        let e = Endpoints::manifest(&[Endpoint {
+            protocol: "wss",
+            host: "relay.example",
+        }]);
+        assert!(e.permits("wss://relay.example/"));
+        assert!(e.permits("wss://relay.example:443/"));
+        assert!(!e.permits("wss://relay.example:7447/"));
+        assert!(!e.permits("https://relay.example/"));
+        let open = Endpoints::user_entered(NetPolicy::notification(false));
+        assert!(matches!(
+            open.check_ws("wss://127.0.0.1/"),
+            Err(NetError::Blocked(_))
+        ));
+        assert!(matches!(
+            open.check_ws("wss://[::1]:7447/"),
+            Err(NetError::Blocked(_))
+        ));
+    }
+}
