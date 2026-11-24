@@ -1648,6 +1648,7 @@ name = "lodestar-sources-irc"
 version = "0.5.0"
 dependencies = [
  "lodestar-integrations",
+ "regex",
  "rustls",
  "rustls-platform-verifier",
  "tokio",
