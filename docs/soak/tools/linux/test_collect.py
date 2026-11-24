@@ -1137,6 +1137,21 @@ class PublicationTests(Base):
         self.assertNotIn('family="ipv4"', clean)
         self.assertFalse({"dht_routing_nodes", "dht_routing_good_nodes"} & set(collect.REQUIRED))
 
+    def test_snapshots_keep_the_soft_timeout_pair_without_requiring_it(self):
+        """X-soft-key: CR-SOFT-TIMEOUT's pair, which the analyzer's soft report reads."""
+        extra = "lodestar_dht_soft_timeouts_total 40\nlodestar_dht_soft_timeout_late_replies_total 3\n"
+        clean = collect.sanitize_snapshot(metrics_text(100, extra=extra))
+        self.assertIn("lodestar_dht_soft_timeouts_total 40\n", clean)
+        self.assertIn("lodestar_dht_soft_timeout_late_replies_total 3\n", clean)
+        self.assertFalse(set(collect.SOFT.values()) & set(collect.REQUIRED))  # absent from older binaries
+
+    def test_soft_is_a_stacked_treatment_of_the_soft_timeout_switch(self):
+        """X-soft-key: `soft` turns on soft_timeout alone and, like lc, hint and split, takes winners."""
+        self.assertEqual(collect.TREATMENT_SWITCHES["soft"], ("soft_timeout",))
+        self.assertIn("soft", collect.STACKED)
+        self.assertEqual(collect.SWITCH_ENV["soft_timeout"], "LODESTAR_DHT_SOFT_TIMEOUT")
+        self.assertEqual(collect.STACKED, frozenset(("lc", "hint", "split", "soft")))
+
     def test_snapshots_keep_first_window_timeouts_by_transport(self):
         extra = ('lodestar_fetch_first_window_timeouts_total{transport="tcp"} 3\n'
                  'lodestar_fetch_first_window_timeouts_total{transport="utp"} 1\n'

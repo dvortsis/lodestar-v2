@@ -67,7 +67,7 @@ VERIFY_SHARE = 0.05
 RATE_SLACK_SECONDS = 2.0
 A1_SLOTS = 32
 LEDGER = collect.LEDGER
-HINT, SPLIT = collect.HINT, collect.SPLIT
+HINT, SPLIT, SOFT = collect.HINT, collect.SPLIT, collect.SOFT
 # CR-COL-6: the hint-first tier's series every scrape of a hint segment carries, in both arms.
 HINT_SERIES = tuple(HINT.values())
 CR_ADM = "coordinated_admission"
@@ -688,6 +688,8 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treat
     # reported in every segment, their series listed absent where the binary lacks them.
     out["hint_first"] = hint_first(checks, window, switches, treatment == "hint")
     out["sampler_split"] = sampler_split(checks, window, switches, hourly, treatment == "split")
+    if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair over sampling minutes; reported, never decided on
+        out["soft_timeout"] = soft_timeout(window, switches)
     # CR-LEDGER's W, q and y; absent series are reported absent (older binaries).
     out["ledger"] = {"window": ledger(t_s, end),
                      "hourly": [ledger(a, b) for a, b in zip(bounds, bounds[1:])]}
@@ -845,6 +847,59 @@ def sampler_split(checks, window, switches, hourly, judged):
                        None if spilled else {"table_filled_after_seconds": out["table_filled_after_seconds"],
                                              "max_table_entries": out["max_table_entries"]})
     return out
+
+
+def interval_stall(a, b):
+    """X-soft-key (the runner's definition, 2026-11-24): why the scrape interval a..b is
+    stalled, or None when it samples. It's stalled when the start suppression
+    (`dht_sample_suppression_seconds`) reads above 0 at either end ("suppressed"), or when
+    sampler-full time (rule 6.4's `dht_sample_full_seconds_total`) grew in it ("sampler_full").
+    With sampler-full time absent, stalled can't be told from sampling, so it samples."""
+    if any((get(r["snap"], "dht_sample_suppression_seconds") or 0) > 0 for r in (a, b)):
+        return "suppressed"
+    if (optional_delta(a, b, SPLIT["full_seconds"]) or 0) > 0:
+        return "sampler_full"
+    return None
+
+
+def soft_timeout(window, switches):
+    """X-soft-key: CR-SOFT-TIMEOUT's pair (docs/metrics.md) in a soft segment, split into
+    sampling and stalled minutes (interval_stall), each interval whole. The headline figures
+    (soft and late per hour, late ÷ soft, soft ÷ peer-lookup queries) are over sampling minutes
+    only; `stalled` gives the same soft and late figures over the stalled minutes. Reported,
+    never decided on; an absent series reads absent, and a part with no minutes reads null."""
+    names = {"soft": (SOFT["soft"], {}), "late": (SOFT["late"], {}),
+             "peer_lookup_queries": (LEDGER["queries"], {"purpose": collect.LEDGER_PEER_PURPOSE})}
+    sums = {part: {k: 0 for k in names} for part in ("sampling", "stalled")}
+    minutes = {"sampling": 0.0, "stalled": 0.0}
+    absent = set()
+    for a, b in zip(window, window[1:]):
+        if optional_delta(a, b, SPLIT["full_seconds"]) is None:
+            absent.add("sampler_full_seconds")
+        part = "sampling" if interval_stall(a, b) is None else "stalled"
+        minutes[part] += (b["e"] - a["e"]) / 60
+        for k, (name, labels) in names.items():
+            d = optional_delta(a, b, name, **labels)
+            if d is None:
+                absent.add(k)
+            else:
+                sums[part][k] += d
+
+    def figures(part):
+        # No minute in the part means nothing was observed there: null counts, never zeros.
+        got = {k: (None if k in absent or not minutes[part] else v) for k, v in sums[part].items()}
+        soft, late, hours = got["soft"], got["late"], minutes[part] / 60
+        return got, {"soft_per_hour": soft / hours if soft is not None and hours else None,
+                     "late_per_hour": late / hours if late is not None and hours else None,
+                     "late_per_soft": late / soft if late is not None and soft else None}
+    parts, rates = figures("sampling")
+    queries = parts["peer_lookup_queries"]
+    st_parts, st_rates = figures("stalled")
+    return {"on": bool(switches.get("soft_timeout")), "sampling_minutes": round(minutes["sampling"], 3),
+            "stalled_minutes": round(minutes["stalled"], 3), **parts, **rates,
+            "soft_per_peer_query": parts["soft"] / queries if parts["soft"] is not None and queries else None,
+            "stalled": {"soft": st_parts["soft"], "late": st_parts["late"], **st_rates},
+            "absent": sorted(absent)}
 
 
 def mechanism_deltas(a, b):
@@ -1040,6 +1095,15 @@ def markdown(report):
                   + (f"; {split['spill_check'].replace('_', ' ')}" if "spill_check" in split else "")
                   + f"; sampler-full {f(split['sampler_full_seconds'])} s; peak spill slots {f(split['max_spill_slots'])}"
                   + (f"; absent: {', '.join(split['absent'])}" if split["absent"] else "") + ".", ""]
+    soft = report.get("soft_timeout")
+    if report.get("treatment") == "soft" and soft:
+        lines += ["## Soft timeout", "", f"On: {str(soft['on']).lower()}; over {f(soft['sampling_minutes'])} sampling "
+                  f"min ({f(soft['stalled_minutes'])} stalled): soft {f(soft['soft_per_hour'])}/h, late "
+                  f"{f(soft['late_per_hour'])}/h, late ÷ soft {f(soft['late_per_soft'], 4)}, soft ÷ peer-lookup "
+                  f"queries {f(soft['soft_per_peer_query'], 4)}"
+                  + f"; stalled: soft {f(soft['stalled']['soft_per_hour'])}/h, late {f(soft['stalled']['late_per_hour'])}/h, "
+                  f"late ÷ soft {f(soft['stalled']['late_per_soft'], 4)}"
+                  + (f"; absent: {', '.join(soft['absent'])}" if soft["absent"] else "") + ".", ""]
     num = report.get("numerator")
     if num:
         w = num["window"]
@@ -1156,7 +1220,9 @@ def segment_view(report):
             "clean_stop": report.get("clean_stop"), "guardrails": report.get("guardrails") or {},
             "minutes": w.get("minutes"), "winners": report.get("winners"),
             "ledger": (report.get("ledger") or {}).get("window"),
-            "hint_first": report.get("hint_first"), "sampler_split": report.get("sampler_split")}
+            "hint_first": report.get("hint_first"), "sampler_split": report.get("sampler_split"),
+            # X-soft-key: a soft segment's only, so every other view stays byte-identical.
+            **({"soft_timeout": report["soft_timeout"]} if "soft_timeout" in report else {})}
 
 
 # A block's recorded order (block.env's MODE, X-fleet-baab) as the arm letters; infra/fleet's
@@ -1322,6 +1388,12 @@ def analyze_effect(treatment, block_reports, winners=None, designs=None, aa=Fals
         out["split_not_exercised_b_segments"] = len(idle)
         if out["sampler_split_by_arm"]["B"] and len(idle) == len(out["sampler_split_by_arm"]["B"]):
             out["warnings"] = [SPLIT_NOT_EXERCISED]
+    if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair per arm, over sampling minutes; never decided on
+        out["soft_timeout_by_arm"] = stage3_by_arm(valid, "soft_timeout",
+                                                   ("sampling_minutes", "stalled_minutes", "soft", "late",
+                                                    "soft_per_hour",
+                                                    "late_per_hour", "late_per_soft", "soft_per_peer_query",
+                                                    "stalled", "absent"))
     if len(controls) > 1:
         out.update(outcome="invalid", decided=False,
                    reason="the control's switch set differs between blocks of this treatment (r5.1 A2)")
@@ -1399,7 +1471,7 @@ def ledger_by_arm(blocks):
 
 def stage3_by_arm(blocks, key, fields):
     """Stage 3's per-segment report fields for each valid segment, by arm. Reported, not fitted."""
-    return {arm: [{k: (s[key] or {}).get(k) for k in fields}
+    return {arm: [{k: (s.get(key) or {}).get(k) for k in fields}
                   for b in blocks for s, a in zip(b["segments"], b["order"]) if a == arm and s["verdict"] == "valid"]
             for arm in "AB"}
 

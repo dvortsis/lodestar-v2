@@ -221,6 +221,13 @@ LABELLED.update({
 })
 PLAIN = PLAIN | frozenset((HINT["marked"], HINT["keys"], HINT["ignored"], HINT["waits"], HINT["lookups"],
                            HINT["waiting"], SPLIT["full_seconds"], SPLIT["spill"]))
+# CR-SOFT-TIMEOUT's pair (docs/metrics.md, its section; #1091), always exported, 0 with the
+# switch off: the analyzer's soft report (X-soft-key) reads late ÷ soft from them.
+SOFT = {
+    "soft": "dht_soft_timeouts_total",                  # lookup queries that went soft
+    "late": "dht_soft_timeout_late_replies_total",      # of those, the ones answered late
+}
+PLAIN = PLAIN | frozenset(SOFT.values())
 MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 300
 KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE) | frozenset(LABELLED) | PLAIN
 NUMBER = r"[0-9]+(?:\.[0-9]+)?"
@@ -1145,8 +1152,10 @@ TREATMENTS = {"adm": "coordinated_admission", "utp": "utp", "route": "route_back
 # is one treatment with both switches on in B (A1).
 TREATMENT_SWITCHES = {**{t: (s,) for t, s in TREATMENTS.items()}, "lc": ("lookup_end", "preset_slots"),
                       # CR-COL-6: stage 3, each stacked on the winners so far (r5.1's stages, item 3).
-                      "hint": ("hint_first",), "split": ("sampler_cooldown_split",)}
-STACKED = frozenset(("lc", "hint", "split"))
+                      "hint": ("hint_first",), "split": ("sampler_cooldown_split",),
+                      # X-soft-key: CR-SOFT-TIMEOUT, stacked like stage 3 (it may take winners).
+                      "soft": ("soft_timeout",)}
+STACKED = frozenset(("lc", "hint", "split", "soft"))
 # The switches every CR-COL-3 collector records; a stage-1 run.json may hold only these.
 STAGE1_SWITCHES = ("safe_restart", "coordinated_admission", "responder_hints", "streaming_peers",
                    "target_prefixes", "utp", "route_backoff")
@@ -1167,7 +1176,7 @@ SWITCH_ENV = {
     "sampler_cooldown_split": "LODESTAR_DHT_SAMPLER_COOLDOWN_SPLIT",
     # CR-SAMPLE-BACKOFF-ESCALATE (#1029): recorded, off unless set; not in a treatment yet.
     "sample_backoff_escalate": "LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE",
-    # CR-SOFT-TIMEOUT (#1091): recorded, off unless set; not in a treatment yet.
+    # CR-SOFT-TIMEOUT (#1091): recorded, off unless set; the `soft` treatment (X-soft-key).
     "soft_timeout": "LODESTAR_DHT_SOFT_TIMEOUT",
 }
 # LODESTAR_DHT_* variables that aren't switches. Any other is reported by name (never its

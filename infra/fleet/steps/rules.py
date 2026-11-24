@@ -12,8 +12,8 @@ JSON with exactly these keys (the optional ones as noted):
       "lodestar_image": "ghcr.io/dvortsis/lodestar-v2@sha256:<64 hex>",
       "lodestar_commit": "<40 hex>",             # the source commit the image was built from
       "spec_commit": "<40 hex>",                 # the collector's --spec-commit (CR-SPEC in force)
-      "treatment": "adm",                        # adm | utp | route | lc | hint | split
-      "winners": [],                             # optional, non-empty for lc/hint/split only: earlier winners
+      "treatment": "adm",                        # adm | utp | route | lc | hint | split | soft
+      "winners": [],                             # optional, non-empty for lc/hint/split/soft only: earlier winners
       "mode": "abba",                            # optional: abba (the default) | baab | on
       "purpose": "screen",                       # optional: screen (with on) | aa (with abba or baab)
       "segment_hours": 2,                        # 2 or 3 (screen rule 3)
@@ -34,7 +34,7 @@ the winners). `"purpose": "screen"` goes only with `"mode": "on"`. Any other com
 refuses; start-block refuses it again (block-lib.sh mode_check).
 
 `winners` (X-fleet-stacked-arms) lists treatment keys, each at most once and
-none the treatment: a stacked stage (lc, hint or split) tests its treatment on
+none the treatment: a stacked stage (lc, hint, split or soft) tests its treatment on
 top of them. Only those take winners: a stage-1 treatment runs against the
 shipped defaults (r5.1 A2). It's optional; absent or empty, the arms differ
 only in the treatment, as before.
@@ -64,9 +64,9 @@ KEYS = {"version", "screen", "lodestar_image", "lodestar_commit", "spec_commit",
 OPTIONAL = {"winners", "mode", "purpose"}
 MODES = ("abba", "baab", "on")
 # The treatment keys (block-lib.sh's TREATMENT_KEYS; the collector's TREATMENT_SWITCHES).
-TREATMENTS = ("adm", "utp", "route", "lc", "hint", "split")
+TREATMENTS = ("adm", "utp", "route", "lc", "hint", "split", "soft")
 # The stacked ones (the collector's STACKED): only they take winners (r5.1 A2).
-STACKED = ("lc", "hint", "split")
+STACKED = ("lc", "hint", "split", "soft")
 MAX_BYTES = 4096
 
 
