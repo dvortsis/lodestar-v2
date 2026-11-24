@@ -112,11 +112,12 @@
 	// "Skip to results" (WCAG 2.4.1): at x-large the facet rail comes before the results, a tab stop
 	// per value. The link is the first focusable in the page content (after the shell's skip link and
 	// navigation) and goes to the list's active row, or to the region itself while there is no list
-	// (the empty state, a skeleton, an error).
+	// (the empty state, a skeleton, an error). The list is a grid, or a tree grid while versions
+	// are grouped (GS-5).
 	function focusResults() {
 		const region = document.getElementById('results');
 		if (!region) return;
-		const row = region.querySelector<HTMLElement>('[role="grid"] [role="row"][tabindex="0"]');
+		const row = region.querySelector<HTMLElement>('[role$=grid] [role=row][tabindex="0"]');
 		if (row) return row.focus();
 		region.setAttribute('tabindex', '-1');
 		region.focus();
