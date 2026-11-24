@@ -9272,6 +9272,20 @@
       "model": "opus",
       "added": "2026-11-24",
       "note": "with X-purge-rederive"
+    },
+    {
+      "id": "X-restart-fuzz-v2",
+      "from": "X-split-resume-gate (slot 2) 2026-11-24T18:55Z",
+      "owns": [
+        "fuzz/fuzz_targets/*restart*",
+        "crates/dht/src/restart/**"
+      ],
+      "items": [
+        "restart snapshot fuzz target only reaches snapshot version 1; extend it to the new version and old->new migration"
+      ],
+      "model": "opus",
+      "added": "2026-11-24",
+      "note": "after X-split-resume-gate merges; on-disk format parser, Opus only"
     }
   ],
   "main_health": {
@@ -11045,7 +11059,7 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "starting (brief briefs/X-split-resume-gate.md)",
+        "doing": "green locally (~1,250 lines); holds push until ENR-G #1117 merges",
         "since": "2026-11-24T17:25Z",
         "thread": "cmsg_01NSSK1erQ8P6b2pdCDdthC3DsUfzgoadHjfcTG4SEtHXw"
       },
@@ -12060,6 +12074,7 @@
   },
   "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge.",
   "runner_todo": [
-    "After #1117 merges: if its slices.yaml owns still lack crates/store/src/rules.rs and sources.rs (and the other fix files), add them in a runner records PR; wiring slice notes must carry the adult-enrichment kill-switch requirement."
+    "After #1117 merges: if its slices.yaml owns still lack crates/store/src/rules.rs and sources.rs (and the other fix files), add them in a runner records PR; wiring slice notes must carry the adult-enrichment kill-switch requirement.",
+    "Runner docs PR for docs/metrics.md: (a) dht_sample_frontier can reach 40,000 with escalation (counts held), from rv-1112; (b) the 6 h restart-gate line is wrong after X-split-resume-gate merges. Land after X-split-resume-gate."
   ]
 }
