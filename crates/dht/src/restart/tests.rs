@@ -69,6 +69,38 @@ fn snapshot() -> Snapshot {
                 remaining_s: 3600,
             },
         ],
+        spill: None,
+    }
+}
+
+/// A spill section with `words` (block, word), blocks in order.
+fn spilled(words: &[(usize, u32)]) -> Spilled {
+    let mut raw = Vec::new();
+    for b in 0..SPILL_BLOCKS {
+        let here: Vec<u32> = words.iter().filter(|w| w.0 == b).map(|w| w.1).collect();
+        raw.push(here.len() as u8);
+        for w in here {
+            raw.extend_from_slice(&w.to_be_bytes());
+        }
+    }
+    Spilled { key: [7; 16], raw }
+}
+
+/// A tag (above the minute bits) and minutes left.
+fn word(tag: u32, minutes: u32) -> u32 {
+    tag << SPILL_MINUTE_BITS | minutes
+}
+
+/// `snapshot()` with a few spilled cooldowns (version 2).
+fn spill_snapshot() -> Snapshot {
+    Snapshot {
+        spill: Some(spilled(&[
+            (0, word(0x8_0001, 1)),
+            (0, word(0xF_FFFF, spill_max_minutes(H))),
+            (5, word(0x4_0000, 60)),
+            (SPILL_BLOCKS - 1, word(0x1_0000, 360)),
+        ])),
+        ..snapshot()
     }
 }
 
@@ -145,6 +177,238 @@ fn formats_roundtrip() {
     }
     let w = witness();
     assert_eq!(Witness::decode(&w.encode()).unwrap(), w);
+    // A spill section: version 2, and back as it was.
+    let s = spill_snapshot();
+    let bytes = s.encode();
+    assert_eq!(&bytes[8..12], &SNAPSHOT_SPILL_VERSION.to_le_bytes());
+    assert_eq!(Snapshot::decode(&bytes).unwrap().0, s);
+}
+
+/// X-split-resume-gate's migration: with nothing spilled, a snapshot is
+/// written byte for byte as CR-0d wrote it (version 1, its nine keys), and
+/// one CR-0d wrote still decodes and resumes with its gate, which then
+/// held any spilled cooldowns for the next run.
+#[test]
+fn version_1_is_unchanged_and_still_resumes_with_its_gate() {
+    let entry = r4([198, 51, 100, 1], 6881, 60);
+    let v1 = snapshot_with(|d| {
+        d.entry(b"at").int(1_700_000_000_000);
+        d.entry(b"dir_id").bytes(&[1; 16]);
+        d.entry(b"gate").int(3600);
+        d.entry(b"gen").int(7);
+        d.entry(b"horizon").int(i64::from(H));
+        d.entry(b"ids").bytes(&[2; 32]);
+        d.entry(b"r4").bytes(&entry);
+        d.entry(b"r6").bytes(&[]);
+        d.entry(b"run_id").bytes(&[3; 16]);
+    });
+    assert_eq!(&v1[8..12], &1u32.to_le_bytes());
+    let (s, _) = Snapshot::decode(&v1).unwrap();
+    assert_eq!(s.spill, None);
+    assert_eq!(s.gate_s, 3600);
+    assert_eq!(s.encode(), v1, "written exactly as before");
+    // An empty spill section writes version 1 too.
+    let empty = capture_with_spill(
+        run(),
+        [],
+        None,
+        Some(spilled(&[])),
+        Instant::now(),
+        Duration::from_secs(1),
+        H,
+    )
+    .unwrap();
+    assert_eq!(empty.spill, None);
+    assert_eq!(&empty.encode()[8..12], &1u32.to_le_bytes());
+    // It resumes, and the gate it carries still holds.
+    let (mut loaded, here) = resumable();
+    let (s, sum) = Snapshot::decode(&v1).unwrap();
+    loaded.snapshot = Found::Ok((s.clone(), sum));
+    if let Found::Ok(m) = &mut loaded.marker {
+        m.state = MarkerState::Clean {
+            snap: sum,
+            state_bin: [5; 32],
+        };
+        m.at_ms = s.at_ms;
+    }
+    loaded.state_bin = Some([5; 32]);
+    let Decision::Resume(seeded) = plan(&loaded, &here).decision else {
+        panic!("a version 1 snapshot resumes");
+    };
+    assert_eq!(seeded.spill, None);
+    let gate = seeded.gate_until.expect("its gate is kept");
+    let wall_of_gate = here.wall0 + gate.duration_since(here.mono0);
+    assert!(wall_of_gate >= Duration::from_millis(s.at_ms + 3_600_000));
+}
+
+/// A version 2 section is exactly what the filter writes, or rejected.
+#[test]
+fn spill_rules() {
+    let ok = |s: &Snapshot| Snapshot::decode(&s.encode()).map(|_| ());
+    assert_eq!(ok(&spill_snapshot()), Ok(()));
+    let with = |raw: Vec<u8>| Snapshot {
+        spill: Some(Spilled { key: [7; 16], raw }),
+        ..snapshot()
+    };
+    let base = spill_snapshot().spill.unwrap().raw;
+    // No slot: that's version 1.
+    assert_eq!(
+        ok(&with(vec![0; SPILL_BLOCKS])),
+        Err(Fault::Corrupt("spill empty"))
+    );
+    // Truncated, a missing block, a trailing byte.
+    assert_eq!(
+        ok(&with(base[..base.len() - 1].to_vec())),
+        Err(Fault::Corrupt("spill length"))
+    );
+    let mut longer = base.clone();
+    longer.push(0);
+    assert_eq!(ok(&with(longer)), Err(Fault::Corrupt("spill length")));
+    // A block over its 64 slots.
+    let mut over = vec![0u8; SPILL_BLOCKS];
+    over[0] = 65;
+    let words: Vec<u8> = (0..65)
+        .flat_map(|_| word(0x8_0000, 1).to_be_bytes())
+        .collect();
+    over.splice(1..1, words);
+    assert_eq!(ok(&with(over)), Err(Fault::Corrupt("spill block")));
+    // A full block is fine.
+    let full: Vec<(usize, u32)> = (0..SPILL_BLOCK).map(|_| (3, word(0x8_0000, 1))).collect();
+    assert_eq!(ok(&with(spilled(&full).raw)), Ok(()));
+    // A tag whose top byte is 0, and minutes of 0 or past the horizon.
+    for (w, why) in [
+        (word(0x0_0FFF, 1), "spill tag"),
+        (word(0x8_0000, 0), "spill remaining"),
+        (word(0x8_0000, spill_max_minutes(H) + 1), "spill remaining"),
+    ] {
+        assert_eq!(
+            ok(&with(spilled(&[(1, w)]).raw)),
+            Err(Fault::Corrupt(why)),
+            "{w:#x}"
+        );
+    }
+    // The keys: both spill keys in version 2, neither in version 1.
+    let v2_without = |drop: &[u8]| {
+        let mut body = Vec::new();
+        Encoder::new(&mut body).dict(|d| {
+            fields(0, i64::from(H), &[], &[])(d);
+            if drop != b"spill" {
+                d.entry(b"spill").bytes(&base);
+            }
+            if drop != b"spill_key" {
+                d.entry(b"spill_key").bytes(&[7; 16]);
+            }
+        });
+        Snapshot::decode(&seal_at(MAGIC_SNAPSHOT, SNAPSHOT_SPILL_VERSION, &body))
+    };
+    assert!(v2_without(b"none").is_ok());
+    assert_eq!(v2_without(b"spill").unwrap_err(), Fault::Corrupt("keys"));
+    assert_eq!(
+        v2_without(b"spill_key").unwrap_err(),
+        Fault::Corrupt("keys")
+    );
+    let mut body = Vec::new();
+    Encoder::new(&mut body).dict(|d| {
+        fields(0, i64::from(H), &[], &[])(d);
+        d.entry(b"spill").bytes(&base);
+        d.entry(b"spill_key").bytes(&[7; 15]);
+    });
+    assert_eq!(
+        Snapshot::decode(&seal_at(MAGIC_SNAPSHOT, SNAPSHOT_SPILL_VERSION, &body)),
+        Err(Fault::Corrupt("spill_key"))
+    );
+    let mut body = Vec::new();
+    Encoder::new(&mut body).dict(|d| {
+        fields(0, i64::from(H), &[], &[])(d);
+        d.entry(b"spill").bytes(&base);
+        d.entry(b"spill_key").bytes(&[7; 16]);
+    });
+    assert_eq!(
+        Snapshot::decode(&seal(MAGIC_SNAPSHOT, &body)),
+        Err(Fault::Corrupt("keys")),
+        "version 1 has no spill"
+    );
+    // Capture refuses what decode would.
+    let bad = spilled(&[(1, word(0x8_0000, spill_max_minutes(H) + 1))]);
+    assert_eq!(
+        capture_with_spill(
+            run(),
+            [],
+            None,
+            Some(bad),
+            Instant::now(),
+            Duration::ZERO,
+            H
+        ),
+        Err(CaptureError::Spill)
+    );
+}
+
+/// The largest section (every slot of every block) fits the read bound.
+#[test]
+fn the_largest_spill_section_decodes() {
+    let mut raw = Vec::with_capacity(MAX_SPILL_RAW);
+    for _ in 0..SPILL_BLOCKS {
+        raw.push(SPILL_BLOCK as u8);
+        for _ in 0..SPILL_BLOCK {
+            raw.extend_from_slice(&word(0x8_0000, 1).to_be_bytes());
+        }
+    }
+    assert_eq!(raw.len(), MAX_SPILL_RAW);
+    let s = Snapshot {
+        spill: Some(Spilled { key: [7; 16], raw }),
+        ..snapshot()
+    };
+    let bytes = s.encode();
+    assert!(bytes.len() <= HEADER + MAX_SNAPSHOT_BODY + TRAILER);
+    let (back, _) = Snapshot::decode(&bytes).unwrap();
+    assert_eq!(back.spill.map(|s| s.raw.len()), Some(MAX_SPILL_RAW));
+}
+
+/// Seeding a section: each slot's end on this run's clock is at or after
+/// the one it records, ended ones are dropped, and an `at` so large the
+/// largest deadline overflows is corrupt.
+#[test]
+fn seeding_a_spill_section_never_moves_an_end_earlier() {
+    let (_, here) = resumable();
+    let s = spill_snapshot();
+    let now = s.at_ms + 61_000;
+    let seeded = seed(&s, now, &here).unwrap();
+    let sp = seeded.spill.expect("seeded");
+    assert_eq!(sp.key(), [7; 16]);
+    let slots: Vec<_> = sp.slots().collect();
+    // The one-minute slot ended before `now`.
+    assert_eq!(slots.len(), 3);
+    for (b, tag, until) in &slots {
+        let w = s.spill.as_ref().unwrap().raw.clone();
+        let recorded = Spilled::words(&w)
+            .find(|(bb, ww)| bb == b && ww & !SPILL_MINUTE_MASK == *tag)
+            .map(|(_, ww)| ww & SPILL_MINUTE_MASK)
+            .unwrap();
+        let deadline = Duration::from_millis(s.at_ms + u64::from(recorded) * 60_000);
+        let left = deadline - Duration::from_millis(now);
+        assert!(*until - here.mono0 >= left.min(Duration::from_secs(u64::from(H))));
+        assert!(*until - here.mono0 <= Duration::from_secs(u64::from(H)));
+    }
+    // Only the spill section's largest deadline overflows here.
+    let huge = Snapshot {
+        at_ms: u64::MAX - 60_000,
+        gate_s: 0,
+        entries: vec![],
+        ..spill_snapshot()
+    };
+    assert!(
+        seed(
+            &Snapshot {
+                spill: None,
+                ..huge.clone()
+            },
+            0,
+            &here
+        )
+        .is_ok()
+    );
+    assert_eq!(seed(&huge, 0, &here).unwrap_err(), Reason::Corrupt);
 }
 
 type Decodes = fn(&[u8]) -> bool;
@@ -193,8 +457,17 @@ fn every_bit_flip_and_truncation_is_rejected() {
 fn magic_and_version() {
     let mut b = snapshot().encode();
     assert_eq!(Marker::decode(&b), Err(Fault::Corrupt("magic")));
+    b[8] = 3;
+    assert_eq!(Snapshot::decode(&b), Err(Fault::Version(3)));
+    // Version 2 is a snapshot's alone, and the checksum covers it.
     b[8] = 2;
-    assert_eq!(Snapshot::decode(&b), Err(Fault::Version(2)));
+    assert_eq!(Snapshot::decode(&b), Err(Fault::Corrupt("checksum")));
+    let mut m = marker(MarkerState::Dirty).encode();
+    m[8] = 2;
+    assert_eq!(Marker::decode(&m), Err(Fault::Version(2)));
+    let mut w = witness().encode();
+    w[8] = 2;
+    assert_eq!(Witness::decode(&w), Err(Fault::Version(2)));
 }
 
 /// Seals a hand-built snapshot body.
@@ -472,10 +745,14 @@ fn assert_capture_then_seed_never_early(
     let true_deadline = wall_a + Duration::from_nanos(offset_ns);
     // S10: monotonic first (mono_a), the wall a little later.
     let wall_s10 = wall_a + Duration::from_nanos(s10_lag_ns);
-    let s = capture(
+    // The spill filter writes the minutes left after `mono_a`, rounded up.
+    let minutes = offset_ns.div_ceil(60_000_000_000) as u32;
+    let spill = (minutes <= spill_max_minutes(H)).then(|| spilled(&[(9, word(0x8_0000, minutes))]));
+    let s = capture_with_spill(
         run(),
         [(addr("1.2.3.4:5"), until)],
         Some(until),
+        spill,
         mono_a,
         wall_s10,
         H,
@@ -497,7 +774,24 @@ fn assert_capture_then_seed_never_early(
         assert_eq!(seeded.entries.len(), 1, "a live entry was dropped");
         assert!(seeded.gate_until.is_some(), "a live gate was dropped");
     }
-    for until in seeded.entries.iter().map(|e| e.1).chain(seeded.gate_until) {
+    let spill = seeded
+        .spill
+        .iter()
+        .flat_map(|sp| sp.slots().map(|x| x.2).collect::<Vec<_>>());
+    if true_deadline > wall0 && s.spill.is_some() {
+        assert_eq!(
+            seeded.spill.as_ref().map(|sp| sp.slots().count()),
+            Some(1),
+            "a live slot was dropped"
+        );
+    }
+    for until in seeded
+        .entries
+        .iter()
+        .map(|e| e.1)
+        .chain(seeded.gate_until)
+        .chain(spill)
+    {
         let wall_of_until = wall0 + until.duration_since(mono0);
         assert!(
             wall_of_until >= true_deadline,
@@ -1289,7 +1583,7 @@ fn the_clock_readers_take_their_reads_in_the_required_order() {
     );
     assert_eq!(here.dir_path, path_digest("/srv/lodestar"));
     c.0.lock().unwrap().clear();
-    capture_now(&c, run(), [], None, H).unwrap();
+    capture_now(&c, run(), [], None, |_| None, H).unwrap();
     let _ = stamp_after_capture(&c);
     assert_eq!(
         *c.0.lock().unwrap(),
@@ -1403,6 +1697,7 @@ fn any_snapshot() -> impl Strategy<Value = Snapshot> {
                 horizon_s,
                 gate_s: gate % (horizon_s + 1),
                 entries,
+                spill: None,
             }
         })
 }

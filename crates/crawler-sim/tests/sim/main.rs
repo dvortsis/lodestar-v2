@@ -253,6 +253,40 @@ fn restart_honoured_matches_golden() {
     check_golden(&scenario::restart_honoured());
 }
 
+/// X-split-resume-gate (owner §2.77): the same restart with
+/// `dht.sampler_cooldown_split` on and a table small enough that leg 1
+/// moves cooldowns to the spill filter. Leg 2 rebuilds the filter from the
+/// snapshot, so the run's own checks hold as with the split off: sampling
+/// resumes within 60 s of the start, and no node is sampled before its
+/// restored cooldown ends, listed or spilled. Before this slice the next
+/// run sampled no one until the last spilled cooldown could have ended.
+#[test]
+fn restart_from_a_spilled_state_samples_at_once() {
+    let mut s = scenario::restart_honoured();
+    s.minutes = 20;
+    s.switches.sampler_cooldown_split = true;
+    let _capacity = lodestar_dht::node::testing::SamplerCapacity::set(200);
+    let r = simulate(&s);
+    assert_eq!(
+        r.dht.sample_suppression_reason,
+        lodestar_dht::restart::Reason::Resumed,
+        "{}",
+        r.text
+    );
+    let spilled: u64 = r
+        .text
+        .split("spill_slots_at_stop=")
+        .nth(1)
+        .and_then(|t| t.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .expect("the leg 1 line");
+    assert!(spilled > 0, "leg 1 never spilled:\n{}", r.text);
+    assert!(
+        r.dht.sample_spill_slots > 0,
+        "leg 2 kept no spilled cooldown"
+    );
+}
+
 /// The negative control: the same restart with `dht.safe_restart` off in
 /// leg 2 suppresses in full, and no node is sampled in leg 2.
 #[test]
