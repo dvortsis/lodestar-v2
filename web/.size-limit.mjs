@@ -271,7 +271,9 @@ const bodyMaps = {
 	// Companions (CMP-9a) reads none either.
 	CompanionsScreen: [],
 	// Outputs (OUT-2) reads `content` with a plain GET, not through the engine.
-	OutputsScreen: []
+	OutputsScreen: [],
+	// Add torrent files (UP-2): its watch part reads `watch`, loaded after the upload part paints.
+	UploadScreen: ['watch']
 };
 // A generated screen can show any section no hand-built body names, so a new section's map joins the
 // worst case the moment it lands.
@@ -394,7 +396,7 @@ const settingsSecurity = [
 	/features\/settings\/security\/icon\.ts$/
 ];
 const securityLoader = [
-	/features\/(?:settings\/(?:security|logging|about|updates|companions|outputs)|filters|jobs|blocklists|sources)\/body\.ts$/
+	/features\/(?:settings\/(?:security|logging|about|updates|companions|outputs)|filters|jobs|blocklists|sources|upload)\/body\.ts$/
 ];
 // Security part 2 (M-security-settings-2): the key manager, the proxy section and the secret's
 // reveal dialog load after the first view; gated on their own below.
@@ -426,6 +428,9 @@ const settingsCompanionsParts = [
 // 18+ dialog and Security's key flows (through `key-flows.ts`) load on the first press that needs them.
 const settingsOutputsModules = [/features\/settings\/outputs\/icon\.ts$/];
 const settingsOutputsParts = [/features\/settings\/outputs\/(AdultDialog\.svelte|key-flows\.ts)$/];
+// Add torrent files (UP-2): the watch part (its form, with the engine) loads in `onMount`, after
+// the upload part paints, like Logging's later parts; gated on its own below.
+const settingsUploadWatch = [/features\/upload\/WatchFolder\.svelte$/];
 const settingsUpdatesAdvanced = [/features\/settings\/updates\/Advanced\.svelte$/];
 const settingsUpdatesParts = [
 	/features\/settings\/updates\/Releases\.svelte$/,
@@ -482,6 +487,7 @@ const settingsFirstView = [
 	...settingsCompanionsParts,
 	...settingsOutputsModules,
 	...settingsOutputsParts,
+	...settingsUploadWatch,
 	...securityLoader,
 	...settingsLogging,
 	...settingsLoggingFiles,
@@ -715,6 +721,7 @@ const settingsHandBuilt = bodyKeys.map((key) => ({
 					...settingsCompanionsParts,
 					...settingsOutputsModules,
 					...settingsOutputsParts,
+					...settingsUploadWatch,
 					...settingsLogging,
 					...settingsLoggingFiles,
 					...settingsLoggingNames,
@@ -751,6 +758,20 @@ const settingsSecurityLaterLazy = requireMeasuredJs(
 		)
 	]
 );
+// What Add torrent files' watch part adds to its first view (UP-2): the form and the engine.
+const uploadFirstView = settingsHandBuilt.find(({ name }) => name === 'UploadScreen')?.files ?? [];
+const settingsUploadWatchLazy = requireMeasuredJs('Settings upload watch part (on demand)', [
+	...new Set(
+		Object.keys(manifest)
+			.filter((key) => settingsUploadWatch.some((re) => re.test(key)))
+			.flatMap((key) =>
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...mapsLeftOut(['watch'])], false, [
+					...settingsShellView,
+					...uploadFirstView
+				])
+			)
+	)
+]);
 // What About's parts add to its first view (the body is loaded when they load).
 const aboutFirstView = settingsHandBuilt.find(({ name }) => name === 'AboutScreen')?.files ?? [];
 const settingsAboutPartsLazy = requireMeasuredJs('Settings about parts (on demand)', [
@@ -1484,7 +1505,9 @@ export default [
 	// OUT-2 (runner §2.26): back under the §10.1 cap (44.98 KB measured) after the registry's
 	// default-only glob; it had been 45.1 KB at 45.06 KB measured.
 	// X-session-draft-keep (runner §2.26): 45 → 45.5 KB, measured 45.45, for the same safety code.
-	routeEntry('Settings section (own JS + CSS)', settingsSectionView, '32.44 KB'),
+	// UP-2 (runner §2.26): 32.44 → 32.55 KB, measured 32,542 B, for the Add torrent files registry
+	// entry and the watch section's group heading.
+	routeEntry('Settings section (own JS + CSS)', settingsSectionView, '32.55 KB'),
 	// The engine's on-demand code on a Settings screen, still gated: 34.34 KB with S-settings-1's
 	// screen (limit = measured + 10%). The production screen now uses it: missing chunks fail.
 	entry('Settings controls (on demand)', settingsLazy, '38 KB'),
@@ -1496,7 +1519,9 @@ export default [
 	// runner §2.26, UP-1: measured 4220 B, the watch labels.
 	// X-web-build-determinism (runner §2.26): 4,259 B on stable chunk names, 4,247 B with content
 	// hashes; the names are measurement-only, their offset is −18 to +32 B.
-	entry('Settings messages (on demand)', settingsMessagesLazy, '4.26 KB'),
+	// UP-2 (runner §2.26): 4.26 → 4.8 KB, measured 4,798 B, for the watch section's labels and group
+	// heading in en and zh.
+	entry('Settings messages (on demand)', settingsMessagesLazy, '4.8 KB'),
 	entry('Settings connection messages (on demand)', settingsConnectionMaps, '4.3 KB'),
 	entry('Settings connection screens (on demand)', settingsConnectionsLazy, '14.2 KB'),
 	// Security's password dialog, lock-out banner and navigation icon: measured + 10%.
@@ -1547,6 +1572,9 @@ export default [
 	}),
 	// S-logs-2b: the outputs, the preview, the log files and the Danger zone, measured 9.81 KB.
 	entry('Settings logging files and preview (on demand)', settingsLoggingFilesLazy, '10.8 KB'),
+	// UP-2 (runner §2.26): Add torrent files' watch part (its form and the engine), loaded after the
+	// upload part paints; measured 25,216 B, limit rounded up to the next 0.01 KB.
+	entry('Settings upload watch part (on demand)', settingsUploadWatchLazy, '25.22 KB'),
 	// Each hand-built screen's first view (the route without the form, plus its body), against the
 	// 45 KB route cap (§10.1).
 	// A new registry entry adds ≈ 65–85 B to every one of these and to "Settings section" (its
@@ -1585,12 +1613,19 @@ export default [
 	// the lazy nav icons) and the two I18 fixes cost 88 to 117 B on each of these, measured on main
 	// at 45.55 (Section), 31.51 (Filters), 34.04 (Sources), 45.63 (Notifications), 45.41 (Insights)
 	// and 45.24 KB (Language, 45.2 before). Limits = measured, rounded up to 0.01 KB.
+	// UP-2 (runner §2.26): the Add torrent files registry entry and the watch section's labels (its
+	// group heading) in every first view, measured and rounded up to the next 0.01 KB: Filters 31.64
+	// → 31.72 (31,712 B), Sources 34.15 → 34.23 (34,223 B), Notifications 45.78 → 45.87 (45,870 B),
+	// Insights 45.56 → 45.67 (45,663 B), Language 45.33 → 45.43 (45,430 B), Logging 45 → 45.06
+	// (45,059 B), Integrations 45 → 45.04 (45,038 B). Add torrent files' own first view: 27.42 KB
+	// (27,415 B), its watch part on demand (below). Also Settings section 32.44 → 32.55, Settings
+	// messages 4.26 → 4.8 and Settings find 5.87 → 6 KB (the `import` navigation icon).
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
 			`Settings ${name} (first view)`,
 			files,
 			name === 'FiltersScreen'
-				? '31.64 KB'
+				? '31.72 KB'
 				: name === 'JobsScreen'
 					? '28.5 KB'
 					: name === 'BlocklistsScreen'
@@ -1598,14 +1633,20 @@ export default [
 						: name === 'CompanionsScreen'
 							? '33 KB'
 							: name === 'SourcesScreen'
-								? '34.15 KB'
+								? '34.23 KB'
 								: name === 'NotificationsScreen'
-									? '45.78 KB'
+									? '45.87 KB'
 									: name === 'InsightsScreen'
-										? '45.56 KB'
+										? '45.67 KB'
 										: name === 'LanguageScreen'
-											? '45.33 KB'
-											: '45 KB'
+											? '45.43 KB'
+											: name === 'LoggingScreen'
+												? '45.06 KB'
+												: name === 'IntegrationsScreen'
+													? '45.04 KB'
+													: name === 'UploadScreen'
+														? '27.42 KB'
+														: '45 KB'
 		)
 	),
 	// Appearance's theme picker and custom theme editor, each beyond the screen's first view.
@@ -1673,7 +1714,7 @@ export default [
 		'29.4 KB'
 	),
 	entry('Settings screen icons (on demand)', settingsIconsLazy, '1.66 KB'),
-	entry('Settings find (on demand)', settingsFindLazy, '5.87 KB'),
+	entry('Settings find (on demand)', settingsFindLazy, '6 KB'),
 	// The dialogs' on-demand code (Bits UI overlays, Dialog, both dialogs), still gated.
 	entry(
 		'Alert dialogs (on demand)',
