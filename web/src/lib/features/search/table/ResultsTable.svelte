@@ -90,9 +90,9 @@
 		);
 	}
 
-	// A new query starts at the first row again (the list does the same through its resetKey). A row
-	// that keeps focus through the change (a re-sort answered while a row has focus) stays the active
-	// one instead, so j/k carry on from the focused row, as the arrows do.
+	// A new query starts at the first row again, as the list does through its resetKey. Unlike the
+	// list (so far), a row that keeps focus through the change (a re-sort answered while a row has
+	// focus) stays the active one instead, so j/k carry on from the focused row, as the arrows do.
 	$effect(() => {
 		void results.shown;
 		active = untrack(focusedRow) ?? 0;

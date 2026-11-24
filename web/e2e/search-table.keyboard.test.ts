@@ -1,8 +1,7 @@
 // S-search-5 keyboard-only: table mode's header sort, row focus and Enter, `x` and the bulk bar.
 // No pointer events are allowed (the kbd fixture fails the test).
 import type { Request } from '@playwright/test';
-import { body, expect, hashOf, hits, print, server } from './search-results.fixtures';
-import type { Ast } from './search-results.fixtures';
+import { type Ast, body, expect, hashOf, hits, print, server } from './search-results.fixtures';
 import { test } from './support/test';
 
 test.beforeEach(({ mock }) => server(mock, () => body(hits(5), { total: 5 })));
@@ -44,15 +43,14 @@ test('a re-sort that lands after the arrows keeps j on the focused row', async (
 	await go('/search?q=lantern&view=table');
 	await expect(page.getByTestId('table-row-1')).toBeVisible();
 	await expect(page.locator('[data-keys-ready]')).toBeAttached();
-	let asked!: () => void;
-	const held = new Promise<void>((r) => (asked = r));
+	let asked = false;
 	let release!: () => void;
 	const gate = new Promise<void>((r) => (release = r));
 	mock.on('searchPost', async (request: Request) => {
 		const sent = request.postDataJSON() as { ast: Ast; limit: number; sort?: string };
 		if (sent.limit === 1) return body([], { canonical: print(sent.ast) });
 		if (sent.sort?.includes('size')) {
-			asked();
+			asked = true;
 			await gate;
 		}
 		return body(hits(5), { total: 5 });
@@ -60,11 +58,14 @@ test('a re-sort that lands after the arrows keeps j on the focused row', async (
 
 	await kbd.tabTo(page.getByTestId('table-th-size').getByRole('button'));
 	await kbd.press('Enter');
-	await held;
-	await kbd.tabTo(page.getByTestId('table-row-1'));
-	await kbd.press('ArrowDown');
-	await expect(page.getByTestId('table-row-2')).toBeFocused();
-	release();
+	await expect.poll(() => asked).toBe(true);
+	try {
+		await kbd.tabTo(page.getByTestId('table-row-1'));
+		await kbd.press('ArrowDown');
+		await expect(page.getByTestId('table-row-2')).toBeFocused();
+	} finally {
+		release(); // never leave the sorted request hanging into teardown
+	}
 	await expect(page.getByTestId('results-refining')).toHaveCount(0);
 	await expect(page.getByTestId('table-row-2')).toBeFocused();
 	await expect(page.getByTestId('table-row-2')).toHaveAttribute('tabindex', '0');
@@ -76,6 +77,7 @@ test('a re-sort that lands after the arrows keeps j on the focused row', async (
 
 test('x selects the focused row and the bulk bar appears', async ({ page, go, kbd }) => {
 	await go('/search?q=lantern&view=table');
+	await expect(page.locator('[data-keys-ready]')).toBeAttached();
 	await kbd.tabTo(page.getByTestId('table-row-1'));
 	await kbd.press('x');
 	await expect(page.getByTestId('bulk-count')).toHaveText('1 selected');
