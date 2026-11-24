@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T11:20Z",
+  "updated_at": "2026-11-24T11:21Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10804,7 +10804,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T11:20Z",
+    "updated": "2026-11-24T11:21Z",
     "items": [
       {
         "slot": 1,
@@ -10830,7 +10830,7 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "Building the IRC announce matcher: tracker definitions turn announce lines into name, size and category, and passkeyed links are never stored. Its PR waits for NOS-2b, since both change the Rust lockfiles.",
+        "doing": "PR #1111 at 420cbe9c (main with #1110 merged in); CI running; runner holder's fresh Opus + security review running.",
         "since": "2026-11-24T06:27:00Z"
       },
       {
@@ -11828,5 +11828,6 @@
   ],
   "catch_ups": {
     "ENR-11": 1
-  }
+  },
+  "merge_order_note": "2026-11-24T11:21Z: #1111 (IRC-1) merges first, then #1112 (X-escalate-full-table) brings main in again (both Rust)."
 }
