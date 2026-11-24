@@ -10546,6 +10546,12 @@
       "sha": "4321071e",
       "at": "2026-11-24T11:15Z",
       "reviewed_head": "6aaf3a6b"
+    },
+    {
+      "slice": "IRC-1",
+      "pr": 1111,
+      "sha": "7f079fe1094180e1b8aa81c1d7393bc49fdbc464",
+      "at": "2026-11-24T12:28Z"
     }
   ],
   "active_sessions": {
@@ -10816,7 +10822,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T11:21Z",
+    "updated": "2026-11-24T12:30Z",
     "items": [
       {
         "slot": 1,
@@ -10838,12 +10844,12 @@
       },
       {
         "slot": 3,
-        "slice": "IRC-1",
+        "slice": "X-cmp-egress-ui",
         "role": "build",
         "model": "opus",
-        "agent": "claude",
-        "doing": "PR #1111 at 420cbe9c (main with #1110 merged in); CI running; runner holder's fresh Opus + security review running.",
-        "since": "2026-11-24T06:27:00Z"
+        "doing": "starting: brief briefs/X-cmp-egress-ui.md",
+        "since": "2026-11-24T12:30Z",
+        "status": "active"
       },
       {
         "slot": 4,
@@ -11841,5 +11847,5 @@
   "catch_ups": {
     "ENR-11": 1
   },
-  "merge_order_note": "2026-11-24T11:21Z: #1111 (IRC-1) merges first, then #1112 (X-escalate-full-table) brings main in again (both Rust)."
+  "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge."
 }
