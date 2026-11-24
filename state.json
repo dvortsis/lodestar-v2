@@ -4377,6 +4377,11 @@
         "Related always shows all four lists (other versions, identical clones, same file, similar payloads), even when empty (\u00a72.19 refinement)",
         "size raises (runner \u00a72.26): Detail Related section 5.4 KB new entry; /t own view 15.48->15.69 KB; Detail sections 47.49->47.87 KB"
       ]
+    },
+    {
+      "slice": "ENR-G",
+      "pr": 1117,
+      "flag": "\u00a72.19: content-safety tightenings in-PR: purge removes derived records and re-arms a running server; consent checked inside the write transaction; consent-refused hits not cached; narrower mark."
     }
   ],
   "decisions_log": [
@@ -4539,29 +4544,10 @@
     }
   },
   "landing_lane": {
-    "pr": {
-      "slice": "ENR-G",
-      "entered": "2026-11-24T17:25Z",
-      "areas": [
-        "rust",
-        "web"
-      ],
-      "reason": "1,567 lines",
-      "ready_local": "308fb54a0bf546498697c052f1d32e74dbf3bacd",
-      "holds": [
-        "ENR-terms-api",
-        "X-split-resume-gate",
-        "GS-4 #1116 (web)"
-      ],
-      "pr": 1117,
-      "head": "3b632ad182a896becc7f2e58625d6cc7df09a20b"
-    },
+    "pr": null,
     "last": {
-      "pr": 1112,
-      "slice": "X-escalate-full-table",
-      "entered": "2026-11-24T15:45Z",
-      "exited": "2026-11-24T17:20Z",
-      "merged_as": "dde6436f927f9e1c35d8b7470b6639e2866cca96"
+      "pr": 1117,
+      "merged_as": "182d49fe"
     }
   },
   "landing_order_web": [
@@ -9204,20 +9190,6 @@
       "note": "can fold into X-cmp-egress-follows (API follows list) as one slice"
     },
     {
-      "id": "X-purge-rederive",
-      "from": "ENR-G thread 2026-11-24T15:28Z",
-      "owns": [
-        "crates/store/src/unverified.rs"
-      ],
-      "items": [
-        "purge Torrents stage Fate::Keep clears a source bit without re-deriving: a torrent only an always-adult source made Adult may stay Adult after that source is purged",
-        "decide whether purged plain feed claims (non-enrichment) should re-derive the record, and at what cost (whole-catalogue reindex on a feed purge)"
-      ],
-      "model": "opus",
-      "added": "2026-11-24",
-      "note": "after ENR-G merges; content-safety, /security-review"
-    },
-    {
       "id": "X-list-active-reset",
       "from": "X-flake-search-keyboard-2 #1115",
       "owns": [
@@ -9257,21 +9229,6 @@
       "model": "sonnet",
       "added": "2026-11-24",
       "note": "can fold with GS-5-followups"
-    },
-    {
-      "id": "ENR-G-followups",
-      "from": "rv-1117b",
-      "owns": [
-        "crates/pipeline/tests/**",
-        "crates/store/src/unverified.rs"
-      ],
-      "items": [
-        "test that ingest uses put_claims_at_consented: hook withdraws consent on another connection between the early check and the write",
-        "purge Claims: set marked only when the UPDATE matched rows (avoid needless class_gen bump)"
-      ],
-      "model": "opus",
-      "added": "2026-11-24",
-      "note": "with X-purge-rederive"
     },
     {
       "id": "X-restart-fuzz-v2",
@@ -10771,6 +10728,13 @@
       "head": "68bdd628de0c9f7a73d46b728cbf44b21ce536b1",
       "at": "2026-11-24T17:20Z",
       "note": "reviewed b308aa62; catch-up verified pure main (PR diff unchanged)"
+    },
+    {
+      "pr": 1117,
+      "slice": "ENR-G",
+      "merged_as": "182d49fe2b61784fb37c22a14eee5ba4f45090cf",
+      "head": "3b632ad182a896becc7f2e58625d6cc7df09a20b",
+      "at": "2026-11-24T20:34Z"
     }
   ],
   "active_sessions": {
@@ -11041,7 +11005,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T17:32Z",
+    "updated": "2026-11-24T20:40Z",
     "items": [
       {
         "slot": 1,
@@ -11049,7 +11013,7 @@
         "role": "build",
         "model": "opus",
         "agent": "sonnet",
-        "doing": "PR #1116 reviewed MERGE on 036f1246 (rv-1116); after ENR-G lane: catch-up + aria-live fix, then merge on green",
+        "doing": "#1116 not fresh (#1115, #1117 touched web): catch-up + aria-live fix, then ready",
         "since": "2026-11-24T15:12Z",
         "session": "session_01MMjhnA8jZVGAa6zftpoAe9"
       },
@@ -11059,25 +11023,25 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "green locally (~1,250 lines); holds push until ENR-G #1117 merges",
+        "doing": "released to push 20:34Z (ENR-G merged); catch-up + Opus review next",
         "since": "2026-11-24T17:25Z",
         "thread": "cmsg_01NSSK1erQ8P6b2pdCDdthC3DsUfzgoadHjfcTG4SEtHXw"
       },
       {
         "slot": 3,
-        "slice": "ENR-G",
+        "slice": "X-purge-rederive",
         "role": "build",
         "model": "opus",
-        "doing": "#1117 at 3b632ad1 (CRLF test fix + owns line, delta accepted); merges on green",
-        "since": "2026-11-24T14:30Z",
-        "status": "active",
-        "agent": "opus"
+        "agent": "opus",
+        "doing": "brief written (briefs/X-purge-rederive.md); coordinator starting it",
+        "since": "2026-11-24T20:40Z",
+        "status": "active"
       },
       {
         "slot": 4,
         "slice": "ENR-terms-api",
         "role": "build",
-        "doing": "ready locally (79622641); holds Rust push until ENR-G merges",
+        "doing": "released to push 20:34Z (ENR-G merged); catch-up + review next",
         "since": "2026-11-24T15:40Z",
         "status": "active",
         "agent": "opus"
@@ -11187,7 +11151,7 @@
     }
   ],
   "heartbeat": "2026-11-24T03:39:06Z",
-  "updated": "2026-11-20T09:04Z",
+  "updated": "2026-11-24T20:40Z",
   "pause": {
     "build_slices": false,
     "since": "2026-11-23T06:09Z",
