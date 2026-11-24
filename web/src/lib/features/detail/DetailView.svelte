@@ -9,6 +9,7 @@
 	import { showBidi } from '$lib/util/bidi';
 	import { whenVisible } from './visible';
 	import Provenance from './provenance/Provenance.svelte';
+	import RelatedMount from './related/RelatedMount.svelte';
 	import Summary from './summary/Summary.svelte';
 	import { resolvedVia } from './parsed/labels';
 	import type { DetailModel } from './model.svelte';
@@ -146,7 +147,8 @@
 		<div use:whenVisible={loadTechnical}>
 			{#if Technical}<Technical {detail} {hit} />{:else}<Skeleton lines={1} />{/if}
 		</div>
-		<!-- Slots for Related and Notes & labels (follow-ups), in story order. -->
+		<RelatedMount {detail} {hit} {level} {mode} />
+		<!-- Slot for Notes & labels (a follow-up), in story order. -->
 	{:else if !error}
 		<div role="status" aria-busy="true" aria-label={m.detail_loading()}>
 			<Skeleton lines={6} />
