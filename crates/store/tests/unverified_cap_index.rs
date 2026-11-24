@@ -144,131 +144,188 @@ proptest! {
     /// deletes, each network's kept count is its `count(*)`.
     #[test]
     fn the_kept_count_matches_the_rows(ops in proptest::collection::vec(op(), 1..60)) {
-        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
-        let dht = store.register_source("dht", "1", T).unwrap();
-        let src = [
-            store.register_source("nyaa", "1", T).unwrap(),
-            store.register_source("prowlarr", "1", T).unwrap(),
-        ];
-        let mut purged = false;
-        let ts: Vec<Prepared> = (0..KEYS).map(|n| prepared(&store, n)).collect();
-        let uk: Vec<UsenetKey> = (0..KEYS)
-            .map(|n| UsenetKey::new("7", &format!("guid-{n}")).unwrap())
-            .collect();
-        let claims = Claims { name: Some("x".into()), ..Claims::default() };
-        let id_of = |store: &Store, network: Network, key: &[u8]| {
-            store.unverified(network, key).unwrap().map(|i| i.id)
-        };
-        for op in ops {
-            match op {
-                Op::FindBt(n, s, with) => {
-                    if s == 1 && purged {
-                        continue;
-                    }
-                    store.put_unverified(&[NewUnverified {
+        run(ops)?;
+    }
+}
+
+/// The case proptest shrank to (X-flake-cap-index-move): a key moved to
+/// usenet, found again on BitTorrent, then moved again. The second move
+/// would make a second `(usenet, key)` row, which `UNIQUE(network, key)`
+/// forbids, so the model skips it rather than ask for an impossible state.
+#[test]
+fn a_key_found_again_after_a_move_is_not_moved_twice() {
+    let store = run(vec![
+        Op::FindBt(0, 0, true),
+        Op::Move(0),
+        Op::FindBt(0, 0, true),
+        Op::Move(0),
+    ])
+    .unwrap();
+    // The first move stands and the second was skipped: one row each.
+    assert_eq!(store.unverified_count(Network::Bt).unwrap(), 1);
+    assert_eq!(store.unverified_count(Network::Usenet).unwrap(), 1);
+}
+
+/// Runs `ops` against a fresh store, checking the counts after each one,
+/// and returns the store.
+fn run(ops: Vec<Op>) -> Result<Store, TestCaseError> {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let dht = store.register_source("dht", "1", T).unwrap();
+    let src = [
+        store.register_source("nyaa", "1", T).unwrap(),
+        store.register_source("prowlarr", "1", T).unwrap(),
+    ];
+    let mut purged = false;
+    let ts: Vec<Prepared> = (0..KEYS).map(|n| prepared(&store, n)).collect();
+    let uk: Vec<UsenetKey> = (0..KEYS)
+        .map(|n| UsenetKey::new("7", &format!("guid-{n}")).unwrap())
+        .collect();
+    let claims = Claims {
+        name: Some("x".into()),
+        ..Claims::default()
+    };
+    let id_of = |store: &Store, network: Network, key: &[u8]| {
+        store.unverified(network, key).unwrap().map(|i| i.id)
+    };
+    for op in ops {
+        match op {
+            Op::FindBt(n, s, with) => {
+                if s == 1 && purged {
+                    continue;
+                }
+                store
+                    .put_unverified(&[NewUnverified {
                         network: Network::Bt,
                         key: &ts[n as usize].info_hash.0,
                         source: src[s as usize],
                         private_source: false,
                         claims: with.then_some(&claims),
                         at: T,
-                    }]).unwrap();
+                    }])
+                    .unwrap();
+            }
+            Op::FindUsenet(n, s) => {
+                if s == 1 && purged {
+                    continue;
                 }
-                Op::FindUsenet(n, s) => {
-                    if s == 1 && purged {
-                        continue;
-                    }
-                    store.put_unverified(&[NewUnverified {
+                store
+                    .put_unverified(&[NewUnverified {
                         network: Network::Usenet,
                         key: uk[n as usize].as_bytes(),
                         source: src[s as usize],
                         private_source: true,
                         claims: Some(&claims),
                         at: T,
-                    }]).unwrap();
-                }
-                Op::Hold(n, how) => {
-                    let hashes = [ts[n as usize].info_hash.0];
-                    match how {
-                        0 | 1 => {
-                            let held = if how == 0 { Held::Tombstone } else { Held::Quarantine };
-                            store.write(&WriteBatch {
+                    }])
+                    .unwrap();
+            }
+            Op::Hold(n, how) => {
+                let hashes = [ts[n as usize].info_hash.0];
+                match how {
+                    0 | 1 => {
+                        let held = if how == 0 {
+                            Held::Tombstone
+                        } else {
+                            Held::Quarantine
+                        };
+                        store
+                            .write(&WriteBatch {
                                 filtered: &[filtered(&hashes, held)],
                                 ..WriteBatch::default()
-                            }).unwrap();
-                        }
-                        _ => store.add_cs_hashes(&hashes, 1, T).unwrap(),
+                            })
+                            .unwrap();
                     }
-                }
-                Op::Refile(n, held) => {
-                    let hashes = [ts[n as usize].info_hash.0];
-                    let ids = [
-                        id_of(&store, Network::Bt, &hashes[0]),
-                        id_of(&store, Network::Usenet, uk[n as usize].as_bytes()),
-                    ];
-                    let r: Vec<RefiledUnverified<'_>> = ids
-                        .into_iter()
-                        .flatten()
-                        .map(|id| RefiledUnverified {
-                            id,
-                            filtered: held.then(|| filtered(&hashes, Held::Quarantine)),
-                        })
-                        .collect();
-                    store.refile_unverified(&r, || true).unwrap();
-                }
-                Op::Promote(n) => {
-                    let p = &ts[n as usize];
-                    if let Some(id) = id_of(&store, Network::Bt, &p.info_hash.0) {
-                        store.promote(id, &pt(p, dht), CODES, T).unwrap();
-                    }
-                }
-                Op::Crawl(n) => {
-                    store.write(&WriteBatch {
-                        prepared: &[pt(&ts[n as usize], dht)],
-                        ..WriteBatch::default()
-                    }).unwrap();
-                }
-                Op::PurgeUsenet(limit) => {
-                    let mut after = 0;
-                    loop {
-                        let step = store.purge_network(Network::Usenet, after, limit).unwrap();
-                        match step.next {
-                            Some(next) => after = next,
-                            None => break,
-                        }
-                    }
-                }
-                Op::PurgeSource => {
-                    if purged {
-                        continue;
-                    }
-                    purged = true;
-                    store.set_source_state(src[1], SourceState::Disabled).unwrap();
-                    let mut cursor = PurgeCursor::START;
-                    loop {
-                        let step = store.purge_source(src[1], cursor, 2).unwrap();
-                        match step.next {
-                            Some(c) => cursor = c,
-                            None => break,
-                        }
-                    }
-                }
-                Op::Move(n) => {
-                    store.connection().execute(
-                        "UPDATE unverified_items SET network = 4 WHERE network = 0 AND key = ?1",
-                        [&ts[n as usize].info_hash.0[..]],
-                    ).unwrap();
-                }
-                Op::Delete(n) => {
-                    store.connection().execute(
-                        "DELETE FROM unverified_items WHERE key IN (?1, ?2)",
-                        [&ts[n as usize].info_hash.0[..], &uk[n as usize].as_bytes()[..]],
-                    ).unwrap();
+                    _ => store.add_cs_hashes(&hashes, 1, T).unwrap(),
                 }
             }
-            assert_counts_agree(&store)?;
+            Op::Refile(n, held) => {
+                let hashes = [ts[n as usize].info_hash.0];
+                let ids = [
+                    id_of(&store, Network::Bt, &hashes[0]),
+                    id_of(&store, Network::Usenet, uk[n as usize].as_bytes()),
+                ];
+                let r: Vec<RefiledUnverified<'_>> = ids
+                    .into_iter()
+                    .flatten()
+                    .map(|id| RefiledUnverified {
+                        id,
+                        filtered: held.then(|| filtered(&hashes, Held::Quarantine)),
+                    })
+                    .collect();
+                store.refile_unverified(&r, || true).unwrap();
+            }
+            Op::Promote(n) => {
+                let p = &ts[n as usize];
+                if let Some(id) = id_of(&store, Network::Bt, &p.info_hash.0) {
+                    store.promote(id, &pt(p, dht), CODES, T).unwrap();
+                }
+            }
+            Op::Crawl(n) => {
+                store
+                    .write(&WriteBatch {
+                        prepared: &[pt(&ts[n as usize], dht)],
+                        ..WriteBatch::default()
+                    })
+                    .unwrap();
+            }
+            Op::PurgeUsenet(limit) => {
+                let mut after = 0;
+                loop {
+                    let step = store.purge_network(Network::Usenet, after, limit).unwrap();
+                    match step.next {
+                        Some(next) => after = next,
+                        None => break,
+                    }
+                }
+            }
+            Op::PurgeSource => {
+                if purged {
+                    continue;
+                }
+                purged = true;
+                store
+                    .set_source_state(src[1], SourceState::Disabled)
+                    .unwrap();
+                let mut cursor = PurgeCursor::START;
+                loop {
+                    let step = store.purge_source(src[1], cursor, 2).unwrap();
+                    match step.next {
+                        Some(c) => cursor = c,
+                        None => break,
+                    }
+                }
+            }
+            Op::Move(n) => {
+                // A key already moved and then found again has a row on
+                // both networks; moving it again would ask for a second
+                // `(usenet, key)` row, which `UNIQUE(network, key)` forbids.
+                // Skip that key; any other error still fails the test.
+                store
+                    .connection()
+                    .execute(
+                        "UPDATE unverified_items SET network = 4 WHERE network = 0 AND key = ?1
+                         AND NOT EXISTS (
+                             SELECT 1 FROM unverified_items WHERE network = 4 AND key = ?1)",
+                        [&ts[n as usize].info_hash.0[..]],
+                    )
+                    .unwrap();
+            }
+            Op::Delete(n) => {
+                store
+                    .connection()
+                    .execute(
+                        "DELETE FROM unverified_items WHERE key IN (?1, ?2)",
+                        [
+                            &ts[n as usize].info_hash.0[..],
+                            &uk[n as usize].as_bytes()[..],
+                        ],
+                    )
+                    .unwrap();
+            }
         }
+        assert_counts_agree(&store)?;
     }
+    Ok(store)
 }
 
 /// The paths one at a time, each checked against `count(*)`: an insert
