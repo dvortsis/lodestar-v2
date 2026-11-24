@@ -127,6 +127,8 @@ pub(crate) struct Proof {
     gate_until: Option<Instant>,
     /// Seeded restrictions waiting for the actor to apply them.
     seed: Option<Vec<(std::net::SocketAddr, Instant)>>,
+    /// The seeded spill filter, likewise (X-split-resume-gate).
+    seed_spill: Option<restart::SeededSpill>,
     /// The restored count, for the gauge.
     restored: u64,
 }
@@ -184,6 +186,7 @@ impl Proof {
             retrying: None,
             gate_until: None,
             seed: None,
+            seed_spill: None,
             restored: 0,
         }
     }
@@ -273,11 +276,7 @@ impl Proof {
             self.rerun_at = None;
             self.start(ids);
         }
-        if let Some(seed) = self.seed.take() {
-            for (addr, until) in seed {
-                sampler.restore(addr, until);
-            }
-        }
+        self.apply_seed(sampler, now);
         self.retry_invalidation(now, stats);
         let (live, refused, honoured) = sampler.restored_counts();
         stats
@@ -299,6 +298,23 @@ impl Proof {
                 .unwrap_or(0) as u64,
             Ordering::Relaxed,
         );
+    }
+
+    /// Seeds what a resume restored into the sampler, once: the listed
+    /// restrictions, then the spill filter. A filter that can't be rebuilt
+    /// holds sampling until the last of its cooldowns ends, so none is
+    /// shortened.
+    fn apply_seed(&mut self, sampler: &mut Sampler, now: Instant) {
+        if let Some(seed) = self.seed.take() {
+            for (addr, until) in seed {
+                sampler.restore(addr, until);
+            }
+        }
+        if let Some(spill) = self.seed_spill.take()
+            && let Some(end) = sampler.restore_spill(&spill, now)
+        {
+            self.gate_until = Some(self.gate_until.map_or(end, |g| g.max(end)));
+        }
     }
 
     /// Opening the lock file and a non-blocking `flock`/`LockFileEx` run on
@@ -377,7 +393,7 @@ impl Proof {
         });
     }
 
-    fn land(&mut self, started: Started, stats: &Stats) {
+    fn land(&mut self, mut started: Started, stats: &Stats) {
         for (e, kind) in &started.errors {
             fail(stats, *e, *kind);
         }
@@ -404,10 +420,12 @@ impl Proof {
         } else {
             Reason::InvalidateFailed
         };
-        self.gate_until = match (&self.mode, &started.decision) {
+        self.gate_until = match (&self.mode, &mut started.decision) {
             (Mode::On, Decision::Resume(seeded)) => {
                 self.restored = seeded.entries.len() as u64;
                 self.seed = Some(seeded.entries.clone());
+                // Moved, not copied: it can be tens of MB.
+                self.seed_spill = seeded.spill.take();
                 seeded.gate_until
             }
             (Mode::On, Decision::Suppress(_)) => Some(started.start + self.horizon),
@@ -545,11 +563,7 @@ impl Proof {
         self.drain(stats);
         // A start job that landed in the drain may have restrictions to
         // seed: they must be in the table before it's captured.
-        if let Some(seed) = self.seed.take() {
-            for (addr, until) in seed {
-                sampler.restore(addr, until);
-            }
-        }
+        self.apply_seed(sampler, Instant::now());
         let started = self.started.as_ref()?;
         if !matches!(self.mode, Mode::On) || self.lock.is_none() || !started.invalidated {
             return None;
@@ -579,22 +593,17 @@ impl Proof {
             // The gate: a suppressed run passes on its own window; a
             // resumed one carries forward what it inherited (N1).
             let now = clock.mono();
-            // X-sampler-cooldown-split: cooldowns in the spill filter can't
-            // be listed, so the next run samples no one until the last of
-            // them ends, bounded like the listed ones (WK-10e): never
-            // past `now + H`.
-            let spilled = sampler
-                .spill_end(now)
-                .map(|end| end.min(now + self.horizon));
-            let gate = match (self.gate_until, spilled) {
-                (Some(g), Some(s)) => Some(g.max(s)),
-                (g, s) => g.or(s),
-            };
+            // X-split-resume-gate: the spill filter's cooldowns go in the
+            // snapshot as they are, bounded like the listed ones (WK-10e):
+            // never past the capture plus H. They hold only their own
+            // nodes, so the next run samples everyone else at once.
+            let horizon = self.horizon;
             let snapshot = restart::capture_now(
                 clock.as_ref(),
                 run,
                 sampler.restrictions(now).collect::<Vec<_>>(),
-                gate,
+                self.gate_until,
+                |mono| sampler.spill_export(mono, horizon),
                 self.horizon_s,
             )
             .map_err(|_| (PersistStep::Snapshot, io::ErrorKind::InvalidData))?;

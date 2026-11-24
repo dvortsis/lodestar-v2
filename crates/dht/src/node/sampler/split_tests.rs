@@ -28,6 +28,13 @@ fn node(addr: SocketAddr) -> NodeInfo {
     }
 }
 
+/// The filter's snapshot section at `now`, as (block, word).
+fn exported(f: &Spill, now: Instant, horizon: Duration) -> Vec<(usize, u32)> {
+    f.export(now, horizon).map_or_else(Vec::new, |s| {
+        crate::restart::Spilled::words(&s.raw).collect()
+    })
+}
+
 #[test]
 fn a_spilled_cooldown_never_ends_early_and_ends_within_a_minute() {
     let base = Instant::now();
@@ -39,9 +46,17 @@ fn a_spilled_cooldown_never_ends_early_and_ends_within_a_minute() {
         assert!(f.contains(&wide(1), now), "{secs}");
         assert!(f.contains(&wide(1), until - NS), "{secs}");
         assert!(!f.contains(&wide(1), until + MINUTE), "{secs}");
-        let last = f.last_end(now).unwrap();
-        assert!(last >= until && last < until + MINUTE, "{secs}");
-        assert_eq!(f.last_end(until + MINUTE), None);
+        // The restart snapshot keeps it to at least its end, and less
+        // than two minutes past it (the filter's minute, then the
+        // snapshot's).
+        let words = exported(&f, now, Duration::from_secs(49 * 3600));
+        assert_eq!(words.len(), 1, "{secs}");
+        let kept = Duration::from_secs(u64::from(words[0].1 & 0xFFF) * 60);
+        assert!(
+            kept >= until - now && kept < until - now + 2 * MINUTE,
+            "{secs}"
+        );
+        assert!(f.export(until + MINUTE, MINUTE).is_none(), "{secs}");
     }
     let mut f = Spill::new(base);
     // Past the horizon: refused, so it stays in the table.
@@ -51,6 +66,137 @@ fn a_spilled_cooldown_never_ends_early_and_ends_within_a_minute() {
     assert!(f.insert(&wide(1), base, base));
     assert_eq!(f.counts(), (0, 0));
     assert!(!f.contains(&wide(1), base));
+}
+
+/// The restart snapshot's section, through its encoding and seeding, on a
+/// run whose clock reads `now` (no time between the two runs).
+fn seeded(sp: crate::restart::Spilled, now: Instant, h: Duration) -> crate::restart::SeededSpill {
+    let horizon_s = crate::restart::horizon_s(h);
+    let wall = Duration::from_secs(1_700_000_000);
+    let at_ms = crate::restart::floor_ms(wall);
+    let snap = crate::restart::Snapshot {
+        run: crate::restart::RunHeader {
+            generation: 1,
+            dir_id: [1; 16],
+            ids: [2; 32],
+            run_id: [3; 16],
+        },
+        at_ms,
+        horizon_s,
+        gate_s: 0,
+        entries: vec![],
+        spill: Some(sp),
+    };
+    let (snap, _) = crate::restart::Snapshot::decode(&snap.encode()).expect("decodes");
+    let here = crate::restart::Here {
+        path: String::new(),
+        dir_path: [0; 32],
+        ids: [2; 32],
+        horizon_s,
+        wall0: wall,
+        mono0: now,
+    };
+    crate::restart::seed(&snap, at_ms, &here)
+        .expect("seeds")
+        .spill
+        .expect("a section")
+}
+
+/// The filter's hash is SipHash-2-4 with the reference vectors, so the
+/// next binary places a restored slot where this one looks for it.
+#[test]
+fn siphash_is_the_reference_function() {
+    let keys = [0x0706_0504_0302_0100, 0x0f0e_0d0c_0b0a_0908];
+    assert_eq!(spill::siphash(keys, &[]), 0x726f_db47_dd0e_0e31);
+    let msg: Vec<u8> = (0..15).collect();
+    assert_eq!(spill::siphash(keys, &msg), 0xa129_ca61_49be_45e5);
+}
+
+/// Where an address's slot goes, pinned. A restored filter is looked up by
+/// the next binary, so a change to the hashed bytes, the shares
+/// (`limits::network`, the allocation) or the tag would free restored
+/// cooldowns early: it needs a new snapshot version, not a new golden.
+#[test]
+fn placement_is_pinned_for_a_restored_filter() {
+    let now = Instant::now();
+    let v4: SocketAddr = "198.51.100.7:6881".parse().unwrap();
+    let v6: SocketAddr = "[2001:db8:1234:5678::9]:51413".parse().unwrap();
+    let mut got = Vec::new();
+    for a in [v4, v6] {
+        let mut f = Spill::with_keys(now, [0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210]);
+        assert!(f.insert(&a, now + MINUTE * 10, now));
+        let w = exported(&f, now, MINUTE * 60);
+        got.push((w[0].0, w[0].1 >> 12));
+    }
+    assert_eq!(got, GOLDEN_PLACEMENT, "{got:x?}");
+}
+
+const GOLDEN_PLACEMENT: [(usize, u32); 2] = [(0xb673, 0x8_a7d5), (0x1_4397, 0xb_a95b)];
+
+/// A restart keeps every spilled cooldown to its end (capped at the
+/// horizon, as listed ones are) and every share it holds.
+#[test]
+fn the_filter_survives_a_restart_whole() {
+    let now = Instant::now();
+    let h = MAX_INTERVAL + Duration::from_secs(4);
+    let mut f = Spill::new(now);
+    let crowd = |i: u32| SocketAddr::from(([10, 1, 2, i as u8], 6000 + i as u16));
+    let mut ends = Vec::new();
+    for i in 0..40u32 {
+        for a in [wide(i), crowd(i + 1)] {
+            let until = now + Duration::from_secs(60 + 517 * u64::from(i));
+            assert!(f.insert(&a, until, now));
+            ends.push((a, until));
+        }
+    }
+    // IPv6: one /48 with several /64s, and its addresses.
+    for i in 0..12u16 {
+        let a = SocketAddr::from(([0x2001, 0xdb8, 7, i % 4, 0, 0, 0, i + 1], 7000 + i));
+        let until = now + Duration::from_secs(120 + 900 * u64::from(i));
+        assert!(f.insert(&a, until, now));
+        ends.push((a, until));
+    }
+    let far = (wide(1000), now + Duration::from_secs(10 * 3600));
+    assert!(f.insert(&far.0, far.1, now));
+    ends.push(far);
+    let sp = seeded(f.export(now, h).expect("live slots"), now, h);
+    let g = Spill::restore(&sp, now).expect("rebuilt");
+    let sorted = |f: &Spill| {
+        let mut w = exported(f, now, h);
+        w.sort_unstable();
+        w
+    };
+    assert_eq!(sorted(&g), sorted(&f), "the same slots, the same minutes");
+    for (a, until) in &ends {
+        let kept = (*until).min(now + h);
+        assert!(g.contains(a, kept - NS), "{a} ended early");
+        assert_eq!(g.shares(a, now), f.shares(a, now), "{a}");
+        // Past its end it answers as the old filter did (a crowded block
+        // can misfire, the same way in both).
+        for t in [*until + MINUTE, *until + 2 * MINUTE] {
+            if *until <= now + h {
+                assert_eq!(g.contains(a, t), f.contains(a, t), "{a}");
+            }
+        }
+    }
+    assert!(g.shares(&crowd(1), now).1 >= 40, "the /24 keeps its share");
+}
+
+/// If the section can't join the filter (one is already in use), the
+/// start holds every sample until the last restored end instead.
+#[test]
+fn a_filter_that_cant_be_rebuilt_holds_until_its_last_end() {
+    let now = Instant::now();
+    let h = MAX_INTERVAL + Duration::from_secs(4);
+    let mut f = Spill::new(now);
+    assert!(f.insert(&wide(1), now + Duration::from_secs(600), now));
+    assert!(f.insert(&wide(2), now + Duration::from_secs(1200), now));
+    let sp = seeded(f.export(now, h).expect("live"), now, h);
+    let mut s = Sampler::split_with_capacity(8);
+    assert_eq!(s.restore_spill(&sp, now), None);
+    let hold = s.restore_spill(&sp, now).expect("held");
+    assert!(hold >= now + Duration::from_secs(1200));
+    assert!(hold < now + Duration::from_secs(1200) + MINUTE);
 }
 
 #[test]
@@ -462,8 +608,10 @@ fn few(i: u16) -> SocketAddr {
 }
 
 /// What the restart proof does with the sampler at shutdown and start
-/// (proof.rs): seal what's in flight, list the table, gate on the filter,
-/// restore into a fresh sampler.
+/// (proof.rs): seal what's in flight (the caller), list the table, keep
+/// the filter, and restore both into a fresh sampler through the
+/// snapshot's encoding and seeding, with no time between. Returns the
+/// hold the start must keep: none, unless the filter couldn't be rebuilt.
 fn restart(
     s: &Sampler,
     now: Instant,
@@ -471,13 +619,40 @@ fn restart(
     cap: usize,
     escalate: bool,
 ) -> (Sampler, Option<Instant>) {
-    let gate = s.spill_end(now).map(|e| e.min(now + h));
-    let listed: Vec<_> = s.restrictions(now).collect();
+    let horizon_s = crate::restart::horizon_s(h);
+    let wall = Duration::from_secs(1_700_000_000);
+    let run = crate::restart::RunHeader {
+        generation: 1,
+        dir_id: [1; 16],
+        ids: [2; 32],
+        run_id: [3; 16],
+    };
+    let snap = crate::restart::capture_with_spill(
+        run,
+        s.restrictions(now).collect::<Vec<_>>(),
+        None,
+        s.spill_export(now, h),
+        now,
+        wall,
+        horizon_s,
+    )
+    .expect("the sampler's state always captures");
+    let (snap, _) = crate::restart::Snapshot::decode(&snap.encode()).expect("decodes");
+    let here = crate::restart::Here {
+        path: String::new(),
+        dir_path: [0; 32],
+        ids: [2; 32],
+        horizon_s,
+        wall0: wall,
+        mono0: now,
+    };
+    let seeded = crate::restart::seed(&snap, crate::restart::floor_ms(wall), &here).expect("seeds");
     let mut next = Sampler::split_with_capacity(cap).with_escalation(escalate);
-    for (a, until) in listed {
+    for (a, until) in seeded.entries {
         next.restore(a, until);
     }
-    (next, gate)
+    let hold = seeded.spill.and_then(|sp| next.restore_spill(&sp, now));
+    (next, hold)
 }
 
 proptest! {
@@ -493,7 +668,6 @@ proptest! {
         let mut now = Instant::now();
         let mut token = 0u64;
         let mut flying: Vec<(SocketAddr, u64)> = vec![];
-        let mut gate: Option<Instant> = None;
         // The true end of each node's cooldown, and whether it came from a
         // sample's answer (a wire token, which the snapshot may bound to
         // `MAX_INTERVAL` ahead, WK-10e) or from the proof.
@@ -502,12 +676,11 @@ proptest! {
             truth.get(a).is_none_or(|(end, _)| *end <= now)
         };
         for op in ops {
-            let may_sample = gate.is_none_or(|g| now >= g);
             match op {
                 Op::Offer(i) => {
                     s.offer(node(few(i)), now);
                 }
-                Op::Next if may_sample => {
+                Op::Next => {
                     if let Some(n) = s.next(now) {
                         token += 1;
                         if s.reserve(n.addr, token, now) {
@@ -516,7 +689,7 @@ proptest! {
                         }
                     }
                 }
-                Op::Reserve(i) if may_sample => {
+                Op::Reserve(i) => {
                     token += 1;
                     if s.reserve(few(i), token, now) {
                         prop_assert!(free(&truth, &few(i), now), "{} reserved early", few(i));
@@ -567,12 +740,11 @@ proptest! {
                         }
                         *wire = false;
                     }
-                    let (next, spilled) = restart(&s, now, h, cap, escalate);
+                    let (next, hold) = restart(&s, now, h, cap, escalate);
                     s = next;
-                    gate = match (gate, spilled) {
-                        (Some(g), Some(x)) => Some(g.max(x)),
-                        (g, x) => g.or(x),
-                    };
+                    // X-split-resume-gate: the filter comes back whole, so
+                    // nothing holds the next run.
+                    prop_assert_eq!(hold, None, "the filter was rebuilt");
                 }
                 _ => {}
             }

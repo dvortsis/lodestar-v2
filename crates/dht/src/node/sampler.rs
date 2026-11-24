@@ -691,6 +691,11 @@ impl Sampler {
     pub fn prune(&mut self, now: Instant) {
         if let Some(spill) = &mut self.spill {
             spill.sweep(now);
+            // With the switch off, only restored cooldowns were ever in it
+            // (X-split-resume-gate); once they've ended it's freed.
+            if !self.split && spill.used() == 0 {
+                self.spill = None;
+            }
         }
         for _ in 0..RECLAIM_PER_TICK {
             let Some(&(until, token, addr)) = self.expiry.first() else {
@@ -840,11 +845,37 @@ impl Sampler {
         })
     }
 
-    /// The latest end the spill filter may hold a live cooldown to, if any:
-    /// the snapshot can't list them, so the restart proof gates sampling
-    /// until then (switch on only).
-    pub fn spill_end(&self, now: Instant) -> Option<Instant> {
-        self.spill.as_ref().and_then(|s| s.last_end(now))
+    /// The spill filter for the restart snapshot (X-split-resume-gate):
+    /// every live cooldown in it, with the minutes left after `mono`,
+    /// capped at `horizon` as the listed ones are. `None` when nothing in
+    /// it is live (always with the switch off).
+    pub fn spill_export(
+        &self,
+        mono: Instant,
+        horizon: Duration,
+    ) -> Option<crate::restart::Spilled> {
+        self.spill.as_ref().and_then(|s| s.export(mono, horizon))
+    }
+
+    /// Rebuilds the spill filter from the restart snapshot's
+    /// (X-split-resume-gate), whatever the switch: with it off, the filter
+    /// only refuses its restored cooldowns and holds their shares until
+    /// they end, and nothing new moves in. Sampling waits for seeding, so
+    /// the filter is still empty; if it ever weren't, or the section
+    /// couldn't be rebuilt, the restored cooldowns can't be kept one by
+    /// one: this returns the latest of their ends, and no sample may go to
+    /// anyone before it (the hold the snapshot used to carry).
+    pub fn restore_spill(
+        &mut self,
+        seeded: &crate::restart::SeededSpill,
+        now: Instant,
+    ) -> Option<Instant> {
+        let empty = self.spill.as_ref().is_none_or(|s| s.used() == 0);
+        if let Some(filter) = empty.then(|| spill::Spill::restore(seeded, now)).flatten() {
+            self.spill = Some(filter);
+            return None;
+        }
+        seeded.slots().map(|(_, _, until)| until).max()
     }
 
     /// Restored records still cooling, candidates they turned away, and
@@ -1035,17 +1066,17 @@ fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u32>, key: K) {
 /// before that; and if one ever did read as live, it would only skip a
 /// node.
 pub(crate) mod spill {
-    use std::collections::hash_map::RandomState;
-    use std::hash::BuildHasher;
+    use std::hash::Hasher as _;
     use std::net::{IpAddr, SocketAddr};
     use std::time::Duration;
 
     use tokio::time::Instant;
 
-    use super::super::limits::{allocation, network};
+    use super::super::limits::{Network, allocation, network};
+    use crate::restart::{SPILL_BLOCK, SPILL_BLOCKS, SPILL_MINUTE_BITS, SeededSpill, Spilled};
 
     const MINUTE_NANOS: u128 = 60_000_000_000;
-    const MINUTE_BITS: u32 = 12;
+    const MINUTE_BITS: u32 = SPILL_MINUTE_BITS;
     const MINUTE_MASK: u32 = (1 << MINUTE_BITS) - 1;
     /// The tag, above the minute: 8 bits of the block's key, 4 of the
     /// IPv6 /64 (0 on IPv4), 4 (IPv6) or 8 (IPv4) of the IP, and 4 of the
@@ -1057,9 +1088,10 @@ pub(crate) mod spill {
     /// The furthest a stored end may lie ahead of the current minute: the
     /// longest cooldown (`MAX_INTERVAL` × `MAX_SCALE`, 48 h) and a minute.
     pub const HORIZON_MIN: u32 = 48 * 60 + 1;
-    /// A block holds the widest share's cap (64) twice over.
-    const BLOCK: usize = 64;
-    const BLOCKS: usize = 1 << 17;
+    /// A block holds the widest share's cap (64) twice over. The restart
+    /// snapshot keeps the filter in this shape (`restart::Spilled`).
+    const BLOCK: usize = SPILL_BLOCK;
+    const BLOCKS: usize = SPILL_BLOCKS;
     /// 2^23 slots of 4 bytes: 32 MiB. Balanced (100 samples a second)
     /// keeps about 2.2 million cooldowns live at WK-10e scale 1 and about
     /// 5.2 million at scale 8 (a fifth answered, cooling 48 h); the usable
@@ -1072,9 +1104,10 @@ pub(crate) mod spill {
     #[cfg(test)]
     pub const BYTES: usize = SLOTS * 4;
 
-    #[derive(Debug)]
     pub struct Spill {
-        hasher: RandomState,
+        /// SipHash-2-4 keys: per process, or restored with the filter, so
+        /// a restarted run finds the fingerprints a snapshot kept.
+        keys: [u64; 2],
         /// Minute `m` ends at `base + m` minutes.
         base: Instant,
         /// Empty until the first insert.
@@ -1082,8 +1115,73 @@ pub(crate) mod spill {
         /// Slots holding a tag, ended or not.
         used: usize,
         cursor: usize,
-        /// The latest end ever stored: an upper bound on every live one.
-        last: Option<Instant>,
+    }
+
+    impl std::fmt::Debug for Spill {
+        // The keys stay out of logs: they decide where an address lands.
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("Spill")
+                .field("base", &self.base)
+                .field("used", &self.used)
+                .field("cursor", &self.cursor)
+                .finish_non_exhaustive()
+        }
+    }
+
+    /// Fresh keys: random, or fixed under `testing` so the simulator's runs
+    /// repeat (as the seen filter's are).
+    fn fresh_keys() -> [u64; 2] {
+        #[cfg(not(feature = "testing"))]
+        {
+            [rand::random(), rand::random()]
+        }
+        #[cfg(feature = "testing")]
+        {
+            [0x5370_696c_6c4b_6579, 0x6c6f_6465_7374_6172]
+        }
+    }
+
+    /// SipHash-2-4 over `bytes`. std's `SipHasher` is deprecated only in
+    /// favour of `DefaultHasher`, whose algorithm may change between
+    /// releases; a restored filter needs the same hash in the next binary,
+    /// so this one is pinned (`siphash_is_the_reference_function`).
+    #[allow(deprecated)]
+    pub(super) fn siphash(keys: [u64; 2], bytes: &[u8]) -> u64 {
+        let mut h = std::hash::SipHasher::new_with_keys(keys[0], keys[1]);
+        h.write(bytes);
+        h.finish()
+    }
+
+    /// The bytes hashed for each level: a domain byte, then the value in a
+    /// fixed byte order, so the hash doesn't hang on std's `Hash` impls.
+    fn net_bytes(domain: u8, n: Network) -> [u8; 10] {
+        let mut out = [0; 10];
+        out[0] = domain;
+        out[1] = n.0;
+        out[2..].copy_from_slice(&n.1.to_be_bytes());
+        out
+    }
+
+    fn ip_bytes(domain: u8, ip: IpAddr, port: Option<u16>) -> ([u8; 20], usize) {
+        let mut out = [0; 20];
+        out[0] = domain;
+        let mut n = match ip {
+            IpAddr::V4(v4) => {
+                out[1] = 4;
+                out[2..6].copy_from_slice(&v4.octets());
+                6
+            }
+            IpAddr::V6(v6) => {
+                out[1] = 6;
+                out[2..18].copy_from_slice(&v6.octets());
+                18
+            }
+        };
+        if let Some(p) = port {
+            out[n..n + 2].copy_from_slice(&p.to_be_bytes());
+            n += 2;
+        }
+        (out, n)
     }
 
     /// Where an address's slots live, and its tag (above the minute).
@@ -1096,13 +1194,25 @@ pub(crate) mod spill {
     impl Spill {
         pub fn new(base: Instant) -> Spill {
             Spill {
-                hasher: RandomState::new(),
+                keys: fresh_keys(),
                 base,
                 slots: Box::default(),
                 used: 0,
                 cursor: 0,
-                last: None,
             }
+        }
+
+        /// A filter with the given keys (tests pin placement with it).
+        #[cfg(test)]
+        pub fn with_keys(base: Instant, keys: [u64; 2]) -> Spill {
+            Spill {
+                keys,
+                ..Spill::new(base)
+            }
+        }
+
+        fn hash(&self, bytes: &[u8]) -> u64 {
+            siphash(self.keys, bytes)
         }
 
         fn since_base(&self, t: Instant) -> u128 {
@@ -1127,14 +1237,16 @@ pub(crate) mod spill {
             let net = network(ip);
             let widest = allocation(ip).unwrap_or(net);
             // One keyed hash per level, each in its own domain.
-            let hk = self.hasher.hash_one((0u8, widest));
-            let hi = self.hasher.hash_one((1u8, ip));
-            let ha = self.hasher.hash_one((3u8, addr));
+            let hk = self.hash(&net_bytes(0, widest));
+            let (b, n) = ip_bytes(1, ip, None);
+            let hi = self.hash(&b[..n]);
+            let (b, n) = ip_bytes(3, ip, Some(addr.port()));
+            let ha = self.hash(&b[..n]);
             let v4 = matches!(ip, IpAddr::V4(_));
             let mid = if v4 {
                 (hi & 0xFF) as u32
             } else {
-                let hn = self.hasher.hash_one((2u8, net));
+                let hn = self.hash(&net_bytes(2, net));
                 ((hn & 0xF) << 4 | (hi & 0xF)) as u32
             };
             // The key's byte is never 0, so a used slot is never 0.
@@ -1196,8 +1308,6 @@ pub(crate) mod spill {
                 self.used += 1;
             }
             self.slots[i] = place.tag | (end as u32 & MINUTE_MASK);
-            let end = self.base + Duration::from_secs(end.saturating_mul(60));
-            self.last = Some(self.last.map_or(end, |l| l.max(end)));
             true
         }
 
@@ -1258,11 +1368,104 @@ pub(crate) mod spill {
                 }
                 self.cursor = (self.cursor + 1) % SLOTS;
             }
+            // Drained: nothing placed with the old keys is left, so new
+            // ones are drawn and keys carried across restarts don't live
+            // forever.
+            if self.used == 0 {
+                self.keys = fresh_keys();
+            }
         }
 
-        /// The latest end stored, if it's still ahead of `now`.
-        pub fn last_end(&self, now: Instant) -> Option<Instant> {
-            self.last.filter(|l| *l > now)
+        /// The filter for the restart snapshot (X-split-resume-gate): every
+        /// slot live at `mono`, in its block, with the whole minutes left
+        /// until its end, rounded up and capped at `horizon` as the listed
+        /// entries are (WK-10e). `None` when no slot is live.
+        pub fn export(&self, mono: Instant, horizon: Duration) -> Option<Spilled> {
+            if self.used == 0 {
+                return None;
+            }
+            let first = self.first_live(mono);
+            let cap = mono + horizon;
+            let mut raw = Vec::with_capacity(BLOCKS + 4 * self.used);
+            let mut any = false;
+            for b in 0..BLOCKS {
+                let count_at = raw.len();
+                raw.push(0u8);
+                let mut n = 0u8;
+                for slot in self.block(b) {
+                    if !Spill::live(*slot, first) {
+                        continue;
+                    }
+                    // The slot's minute, unwrapped: live means it's within
+                    // `HORIZON_MIN` of `first`.
+                    let minute = first + u64::from(slot.wrapping_sub(first as u32) & MINUTE_MASK);
+                    let end = (self.base + Duration::from_secs(minute.saturating_mul(60))).min(cap);
+                    let left = end.saturating_duration_since(mono).as_nanos();
+                    // Live means its minute ends after `mono`; `cap` is
+                    // after it too, so at least one minute is written.
+                    let minutes = u32::try_from(left.div_ceil(MINUTE_NANOS))
+                        .unwrap_or(u32::MAX)
+                        .max(1);
+                    debug_assert!(minutes <= MINUTE_MASK);
+                    raw.extend_from_slice(&((slot & TAG_MASK) | minutes).to_be_bytes());
+                    n += 1;
+                }
+                raw[count_at] = n;
+                any |= n > 0;
+            }
+            let mut key = [0; 16];
+            key[..8].copy_from_slice(&self.keys[0].to_le_bytes());
+            key[8..].copy_from_slice(&self.keys[1].to_le_bytes());
+            any.then_some(Spilled { key, raw })
+        }
+
+        /// A filter rebuilt from a restart snapshot's (X-split-resume-gate),
+        /// with its keys, its clock starting at `now`. Each slot keeps its
+        /// block and tag and ends at the first whole minute at or after its
+        /// seeded end, so it's never shorter. `None` changes nothing: a
+        /// block held more than it can, which a checked snapshot can't.
+        pub fn restore(seeded: &SeededSpill, now: Instant) -> Option<Spill> {
+            let key = seeded.key();
+            let keys = [
+                u64::from_le_bytes(key[..8].try_into().expect("8 bytes")),
+                u64::from_le_bytes(key[8..].try_into().expect("8 bytes")),
+            ];
+            let mut spill = Spill {
+                keys,
+                base: now,
+                slots: Box::default(),
+                used: 0,
+                cursor: 0,
+            };
+            // Slots come block by block, and every block starts empty.
+            let mut block = usize::MAX;
+            let mut fill = 0;
+            for (b, tag, until) in seeded.slots() {
+                if until <= now {
+                    continue;
+                }
+                let end = u64::try_from(spill.since_base(until).div_ceil(MINUTE_NANOS))
+                    .unwrap_or(u64::MAX);
+                // Seeded ends are within the restart horizon (hours), far
+                // inside the filter's 48 h.
+                if end >= u64::from(HORIZON_MIN) || tag & MINUTE_MASK != 0 || tag == 0 {
+                    return None;
+                }
+                if spill.slots.is_empty() {
+                    spill.slots = vec![0; SLOTS].into_boxed_slice();
+                }
+                if b != block {
+                    block = b;
+                    fill = 0;
+                }
+                if fill == BLOCK {
+                    return None;
+                }
+                spill.slots[b * BLOCK + fill] = tag | end as u32;
+                fill += 1;
+                spill.used += 1;
+            }
+            Some(spill)
         }
 
         /// Whether there's likely room: below 15/16 of the slots used. An
