@@ -9272,6 +9272,13 @@
         "fix": "X-flake-cap-index-move (queued, no PR yet)",
         "rule": "\u00a72.18: doesn't block PRs that don't touch crates/store/tests; cite the fix slice"
       }
+    ],
+    "watch": [
+      {
+        "test": "web DetailActions.test.ts",
+        "seen": "2026-11-24 rv-1116 local: 3 failed once, 2 reruns passed",
+        "status": "watch; act if it repeats in CI"
+      }
     ]
   },
   "ops": [
@@ -11008,7 +11015,7 @@
         "role": "build",
         "model": "opus",
         "agent": "sonnet",
-        "doing": "PR #1116 green on 036f1246; fresh Opus review running (rv-1116); not fresh (#1115 web); catch-up after ENR-G lane",
+        "doing": "PR #1116 reviewed MERGE on 036f1246 (rv-1116); after ENR-G lane: catch-up + aria-live fix, then merge on green",
         "since": "2026-11-24T15:12Z",
         "session": "session_01MMjhnA8jZVGAa6zftpoAe9"
       },
