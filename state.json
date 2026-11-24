@@ -4357,6 +4357,14 @@
         "Show all opens the details until GS-4 builds Related"
       ],
       "added": "2026-11-24"
+    },
+    {
+      "slice": "X-cmp-egress-ui",
+      "items": [
+        "size raises: companions parts 29 -> 29.5 kB, new route editor entry 6 kB, Sources companion chip 27 -> 27.5 kB (\u00a72.26)",
+        "Sources screen has no route editor; companion route editor offers direct and SOCKS5 only"
+      ],
+      "added": "2026-11-24"
     }
   ],
   "decisions_log": [
@@ -4384,6 +4392,11 @@
       "by": "runner holder",
       "slice": "X-escalate-full-table",
       "call": "owns widened by crates/dht/src/node/testing.rs (one pub use for a testing-feature-only SamplerCapacity seam so the sim can fill the 200k table); slice PR edits its own slices.yaml owns; extra changes stay behind dht.sample_backoff_escalate, default off"
+    },
+    {
+      "at": "2026-11-24T13:02Z",
+      "slice": "X-cmp-egress-ui",
+      "what": "size (\u00a72.26): new entry \"Settings companions route editor (on demand)\" 6 kB; companions parts 29 -> 29.5 kB; parts entry stops at Security password dialog; Sources companion chip and setup 27 -> 27.5 kB; shared edit of web/.size-limit.mjs after #1108 merges"
     }
   ],
   "runner_notes": {
@@ -10870,7 +10883,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T12:33Z",
+    "updated": "2026-11-24T13:02Z",
     "items": [
       {
         "slot": 1,
@@ -10895,7 +10908,7 @@
         "slice": "X-cmp-egress-ui",
         "role": "build",
         "model": "opus",
-        "doing": "starting (coordinator 12:30Z), brief briefs/X-cmp-egress-ui.md; /security-review before merge",
+        "doing": "built locally, holding for #1108 lane; size calls approved 13:02Z",
         "since": "2026-11-24T12:30Z",
         "status": "active"
       },
