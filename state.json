@@ -4552,7 +4552,7 @@
       "exited_at": "2026-11-24T11:15Z",
       "exit": "merged as 4321071e"
     },
-    "ci_note": "12:48Z playwright core failed on the known search-table j/k flake (X-flake-search-keyboard-2); re-run of failed jobs once the run finishes (one re-run per \u00a72.18)"
+    "ci_note": "e2e-ok green on re-run (13:08Z, the known search-table flake did not repeat); CI (ci-ok) still running on 504987ec"
   },
   "landing_order_web": [
     "S-compare",
@@ -9170,6 +9170,12 @@
       ],
       "model": "sonnet",
       "added": "2026-11-24"
+    },
+    {
+      "id": "X-cmp-egress-follows",
+      "from": "X-cmp-egress-ui self-review polish 9",
+      "what": "Companion GET does not say which route kinds a companion can follow, so the editor offers qBittorrent SOCKS5 and the PUT refuses cant_follow_route. Add a follows list to Companion (API) and filter the editor by it.",
+      "added": "2026-11-24"
     }
   ],
   "main_health": {
@@ -10883,7 +10889,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T13:02Z",
+    "updated": "2026-11-24T13:30Z",
     "items": [
       {
         "slot": 1,
@@ -10908,7 +10914,7 @@
         "slice": "X-cmp-egress-ui",
         "role": "build",
         "model": "opus",
-        "doing": "built locally, holding for #1108 lane; size calls approved 13:02Z",
+        "doing": "committed locally 27866428; holding for #1108 lane",
         "since": "2026-11-24T12:30Z",
         "status": "active"
       },
