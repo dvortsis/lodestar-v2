@@ -69,11 +69,9 @@ export function failureWords(e: unknown): string {
 export const isHealth = (h: unknown): h is 'unknown' | 'healthy' | 'unhealthy' =>
 	h === 'unknown' || h === 'healthy' || h === 'unhealthy';
 
-/** Companions whose traffic is Prowlarr's or rides with it (FlareSolverr). */
-export const prowlarrFamily = (id: string) => id === 'prowlarr' || id === 'flaresolverr';
-
-/** Where the route notes apply: the companions that take a route (Q18). */
-export const hasRoute = (id: string) => id === 'qbittorrent' || prowlarrFamily(id);
+/** Prowlarr's saved route is SOCKS5: its email, FlareSolverr and indexer-proxy traffic leaves outside it. */
+export const prowlarrOnSocks = (items: Companion[]) =>
+	items.find((x) => x.id === 'prowlarr')?.egress?.setting?.route === 'socks5';
 
 const UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'] as const;
 const digitsFor = (unit: number, v: number) => (unit === 0 ? 0 : v < 10 ? 2 : v < 100 ? 1 : 0);
