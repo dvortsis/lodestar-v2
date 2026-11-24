@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T06:45:47Z",
+  "updated_at": "2026-11-24T06:47:24Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10696,7 +10696,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T06:45:47Z",
+    "updated": "2026-11-24T06:47:24Z",
     "items": [
       {
         "slot": 1,
@@ -11697,9 +11697,10 @@
   ],
   "size_file_holder": {
     "path": "web/.size-limit.mjs",
-    "holder": "X-detail-depth-compare (in-house, slot 2 after #1085)",
-    "since": "2026-11-23T04:05:35Z",
-    "next": "X-size-own-modules (API lane, front of order)"
+    "holder": "UP-2 (#1106, API lane)",
+    "since": "2026-11-24T06:47:24Z",
+    "scope": "securityLoader upload; WatchFolder on demand + bodyMaps.UploadScreen; UP-2 (runner 2.26) raises to measured, rounded up to 0.01 kB; stop if UploadScreen first view > 45 kB",
+    "next": "whichever running slice next needs it (GS-5 likely); none edits it until #1106 merges"
   },
   "handover": {
     "file": "HANDOVER.md",
@@ -11707,5 +11708,13 @@
     "since": "2026-11-24T06:44Z",
     "by": "owner, Duet chat 06:30Z 'Perfect. Thanks!' (approving pause + handover) and 06:44Z 'I paused it'",
     "runner_session_kept": "runner_session still names the paused runner, so it reads HANDOVER.md on any return; the watchdog stands down while HANDOVER.md exists"
-  }
+  },
+  "api_lane_answers": [
+    {
+      "at": "2026-11-24T06:47:24Z",
+      "pr": 1106,
+      "q": "how to do the .size-limit.mjs lines",
+      "a": "file handed to UP-2; securityLoader + WatchFolder on demand; remaining overs raised to measured under runner 2.26, recorded in its decisions file"
+    }
+  ]
 }
