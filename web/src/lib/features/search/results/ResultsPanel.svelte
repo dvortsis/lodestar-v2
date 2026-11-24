@@ -34,6 +34,10 @@
 	import { results, type ResultsQuery } from './results.svelte';
 	import ResultRow, { type Density, type SearchHit } from './ResultRow.svelte';
 	import { selection } from '../bulk/selection.svelte';
+	import { groupedIn, grouping } from '../collapse/grouping.svelte';
+	import Others from '../collapse/Others.svelte';
+	import { groupsCount } from '../collapse/count';
+	import type { Expand } from '../collapse/expand.svelte';
 
 	interface Props {
 		/** Focus the query bar (the empty state's next step). */
@@ -79,6 +83,38 @@
 			void import('../bulk/RowPick.svelte').then((mod) => (Pick = mod.default));
 	});
 	const hashes = $derived(results.hits.map((h) => h.hash));
+
+	// GS-5: a grouped row shows "+N other versions" (Others, with the panel); opening a group loads
+	// the rest (collapse/rows.ts) and adds its rows under the best version. Until a group is first
+	// opened, and whenever none is open, the rows are the hits.
+	let G = $state.raw<typeof import('../collapse/rows')>();
+	let expand = $state.raw<Expand>();
+	let expanding: Promise<Expand | undefined> | undefined;
+	/** Runs `run` once the group part is in; a press while it loads waits for the same load. */
+	function withExpand(run: (x: Expand) => void) {
+		if (expand) return run(expand);
+		const shown = results.shown;
+		expanding ??= import('../collapse/rows').then(
+			(mod) => {
+				G = mod;
+				expand = mod.createExpand({ onsettled: (text) => (said = text) });
+				expand.follow(results.shown);
+				return expand;
+			},
+			() => ((expanding = undefined), undefined) // offline: the next press tries again
+		);
+		void expanding.then((x) => {
+			// Pressed for rows a newer query has replaced: nothing to open.
+			if (x && results.shown === shown) run(x);
+		});
+	}
+	$effect(() => expand?.follow(results.shown));
+	// Groups open in the List only; Table and Cards show one row per group and a Versions count.
+	const rows = $derived(expand && !tableView && !cards ? expand.rows(results.hits) : results.hits);
+	const hitAt = (i: number) => {
+		const r = rows[i];
+		return r && G ? G.hitOf(r) : (r as SearchHit | undefined);
+	};
 	// A new query starts a new selection; a new page (the same query) keeps it.
 	$effect(() => selection.follow(results.shown));
 
@@ -90,8 +126,16 @@
 			sort: search.sort,
 			hidden: search.hidden,
 			exact: search.exact,
-			browse: search.browse
+			browse: search.browse,
+			collapse: false
 		};
+		// The account's choice as this browser knew it when this search started: a late answer, or a
+		// change of view, never re-runs the rows on screen (grouping.svelte.ts `pin`).
+		const key = JSON.stringify([q.ast, q.sort, q.hidden, q.exact, q.browse]);
+		q.collapse = groupedIn(
+			qs,
+			untrack(() => grouping.pin(key))
+		);
 		if (search.q && !search.queryReady) return;
 		void results.load(q);
 	});
@@ -255,8 +299,8 @@
 				next: () => move(1),
 				previous: () => move(-1),
 				select: () => {
-					const hit = results.hits[active];
-					if (hit) selection.toggle(hit.hash);
+					const r = rows[active];
+					if (r && !G?.isGroupRow(r)) selection.toggle((r as SearchHit).hash);
 				}
 			});
 			// c/o come from the detail chain; ready means every list key is in.
@@ -296,13 +340,16 @@
 		);
 	});
 	function move(by: 1 | -1) {
-		const n = results.hits.length;
+		const n = rows.length;
 		if (!n) return;
 		if ('detail' in page.state) {
 			// §10.5: with the drawer open, the drawer follows and focus stays in it (so Esc still
 			// closes it and goes back to the row).
-			active = Math.min(n - 1, Math.max(0, active + by));
-			const hit = results.hits[active];
+			// A group's Show all, loading, failed or empty line has no torrent of its own: step over it.
+			let i = active + by;
+			while (i > 0 && i < n - 1 && isStateRow(rows[i]!)) i += by;
+			active = Math.min(n - 1, Math.max(0, i));
+			const hit = hitAt(active);
 			if (hit) void open(hit);
 			return;
 		}
@@ -352,6 +399,42 @@
 		});
 	}
 
+	const isStateRow = (r: (typeof rows)[number]) => 'row' in r && r.row !== 'version';
+
+	/** A grouped List is a tree grid: a row with versions says whether they're open; theirs are level 2. */
+	function treeAttrs(r: (typeof rows)[number]) {
+		if ('row' in r) return { 'aria-level': 2 };
+		const hit = r as SearchHit;
+		return {
+			'aria-level': 1,
+			'aria-expanded': hit.others ? (expand?.isOpen(hit.hash) ?? false) : undefined
+		};
+	}
+
+	/** Enter or a click on a row: a torrent opens its drawer; a group's own rows act for it (GS-5). */
+	function activate(r: (typeof rows)[number]) {
+		if (!G || !G.isGroupRow(r)) return void open(r as SearchHit);
+		if (r.row === 'failed') expand?.expand(r.parent);
+		else if (r.row === 'version' || r.row === 'more') void open(G.hitOf(r));
+	}
+	/** → opens a group, ← closes it; from a version row, focus goes back to the best row. */
+	function groupKey(event: KeyboardEvent, ctx: { item: (typeof rows)[number]; onRow: boolean }) {
+		if (!ctx.onRow) return;
+		if (!expand) {
+			// Nothing opened yet, so every row is a torrent: → loads the group's part and opens it.
+			const hit = ctx.item as SearchHit;
+			const plain = !(event.altKey || event.ctrlKey || event.metaKey || event.shiftKey);
+			if (event.key === 'ArrowRight' && plain && hit.others) {
+				event.preventDefault();
+				withExpand((x) => x.expand(hit));
+			}
+			return;
+		}
+		const back = expand.key(event, ctx.item);
+		if (back !== undefined)
+			void tick().then(() => list?.moveTo(rows.findIndex((x) => G?.keyOf(x) === back)));
+	}
+
 	/** §10.14: what happened, then what to do. */
 	function errorText(e: ApiError): string {
 		if (e.status === 429 || e.status === 503)
@@ -395,6 +478,9 @@
 	function announcement(): string | null {
 		if (results.status !== 'ready') return null;
 		const n = results.hits.length === 0 ? 0 : results.total;
+		const g = results.grouped;
+		if (g.collapsed && g.groups !== undefined && n > 0)
+			return groupsCount(g.groups, !!g.groups_approx, n, results.totalApprox, locale);
 		const count = formatCount(n, locale);
 		return n === 0
 			? m.search_results_none()
@@ -569,30 +655,53 @@
 				{:else}
 					<VirtualList
 						bind:this={list}
-						items={results.hits}
-						role="grid"
-						getKey={(h) => h.hash}
+						items={rows}
+						role={results.grouped.collapsed ? 'treegrid' : 'grid'}
+						itemAttrs={results.grouped.collapsed ? treeAttrs : undefined}
+						getKey={(r) => (G ? G.keyOf(r) : (r as SearchHit).hash)}
 						label={m.search_results_label()}
 						estimateSize={rowHeight}
 						resetKey={results.shown ?? ''}
 						bind:activeIndex={active}
-						onActivate={(_i, hit) => void open(hit)}
+						onActivate={(_i, r) => activate(r)}
+						onKey={groupKey}
 						hasMore={results.hasMore}
 						loadingMore={results.loadingMore}
 						onLoadMore={() => void results.loadMore()}
 						loadMoreLabel={m.search_results_loading_more()}
 					>
-						{#snippet row(hit)}
-							<div role="gridcell" class="rp-cell" data-hash={hit.hash}>
-								{#if Pick && (selection.mode || selection.count > 0)}
-									<Pick {hit} rows={hashes} />
-								{/if}
-								<ResultRow {hit} {density} {matched} testid="result-{hit.hash}">
-									{#snippet actions(h)}
-										{#if Actions}<Actions hit={h} {density} testid="result-{h.hash}" />{/if}
-									{/snippet}
-								</ResultRow>
-							</div>
+						{#snippet row(r)}
+							{#if G && G.isGroupRow(r)}
+								<div role="gridcell" class="rp-cell" data-hash={G.hitOf(r).hash}>
+									<G.VersionRow row={r} testid="result-{r.key}" />
+								</div>
+							{:else}
+								{@const hit = r as SearchHit}
+								{#snippet others()}
+									<Others
+										others={hit.others ?? 0}
+										open={expand?.isOpen(hit.hash) ?? false}
+										testid="result-{hit.hash}"
+										ontoggle={() => withExpand((x) => x.toggle(hit))}
+									/>
+								{/snippet}
+								<div role="gridcell" class="rp-cell" data-hash={hit.hash}>
+									{#if Pick && (selection.mode || selection.count > 0)}
+										<Pick {hit} rows={hashes} />
+									{/if}
+									<ResultRow
+										{hit}
+										{density}
+										{matched}
+										testid="result-{hit.hash}"
+										extra={hit.others && results.grouped.collapsed ? others : undefined}
+									>
+										{#snippet actions(h)}
+											{#if Actions}<Actions hit={h} {density} testid="result-{h.hash}" />{/if}
+										{/snippet}
+									</ResultRow>
+								</div>
+							{/if}
 						{/snippet}
 					</VirtualList>
 				{/if}

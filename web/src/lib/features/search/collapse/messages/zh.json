@@ -1,0 +1,19 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"search_collapse_toggle": "合并版本",
+	"search_collapse_unavailable": "结果尚未合并：Lodestar 仍在将种子归入版本组。",
+	"search_collapse_count": "{groups} 个组 · {torrents} 个种子",
+	"search_collapse_count_one": "1 个组 · {torrents} 个种子",
+	"search_collapse_others_one": "另有 1 个版本",
+	"search_collapse_others_other": "另有 {count} 个版本",
+	"search_collapse_show_all": "显示全部 {count} 个",
+	"search_collapse_loading": "正在加载其他版本…",
+	"search_collapse_failed": "无法加载其他版本。",
+	"search_collapse_retry": "重试",
+	"search_collapse_none": "目前没有其他可用版本。",
+	"search_collapse_version_of": "{title} 的其他版本",
+	"search_collapse_versions": "版本",
+	"search_collapse_shown_one": "已显示 1 个其他版本",
+	"search_collapse_shown_other": "已显示 {count} 个其他版本",
+	"search_collapse_count_single": "1 个组 · 1 个种子"
+}

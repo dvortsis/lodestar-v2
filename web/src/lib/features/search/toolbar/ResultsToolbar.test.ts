@@ -25,7 +25,8 @@ const results = vi.hoisted(() => ({
 	status: 'ready',
 	hits: [] as unknown[],
 	total: 0,
-	totalApprox: false
+	totalApprox: false,
+	grouped: {} as Record<string, unknown>
 }));
 vi.mock('../results/results.svelte', () => ({ results }));
 
@@ -39,7 +40,13 @@ beforeEach(() => {
 	replaceState.mockClear();
 	search.setSort.mockReset();
 	search.sort = 'relevance';
-	Object.assign(results, { status: 'ready', hits: [hit(1)], total: 1284, totalApprox: false });
+	Object.assign(results, {
+		status: 'ready',
+		hits: [hit(1)],
+		total: 1284,
+		totalApprox: false,
+		grouped: {}
+	});
 });
 
 const count = () => screen.getByTestId('results-count').textContent?.trim();

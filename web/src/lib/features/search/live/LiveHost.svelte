@@ -27,7 +27,9 @@
 	};
 	$effect(() => () => cancelAnimationFrame(frame));
 	const locale = $derived(currentLocale());
-	const grid = () => document.querySelector<HTMLElement>('#results [role="grid"]');
+	// A grouped List is a tree grid (GS-5).
+	const grid = () =>
+		document.querySelector<HTMLElement>('#results [role="grid"], #results [role="treegrid"]');
 
 	const queryShown = (): ResultsQuery => ({
 		ast: search.q ? search.ast : search.browse ? { op: 'all' } : null,
