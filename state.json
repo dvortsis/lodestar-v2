@@ -4535,32 +4535,25 @@
   },
   "landing_lane": {
     "pr": {
-      "pr": 1112,
-      "slice": "X-escalate-full-table",
-      "entered": "2026-11-24T15:45Z",
+      "slice": "ENR-G",
+      "entered": "2026-11-24T17:25Z",
       "areas": [
-        "rust"
+        "rust",
+        "web"
       ],
-      "reason": "3rd catch-up (#1113 Rust merged after base 4689737c)",
-      "reviewed_head": "b308aa622d9871fcde7a4a0f769c24eee73602f7",
+      "reason": "1,567 lines",
+      "ready_local": "308fb54a0bf546498697c052f1d32e74dbf3bacd",
       "holds": [
-        "ENR-G",
-        "ENR-terms-api"
+        "ENR-terms-api",
+        "X-split-resume-gate"
       ]
     },
     "last": {
-      "pr": 1108,
-      "slice": "GS-5",
-      "entered": "2026-11-24T12:31Z",
-      "exited": "2026-11-24T13:52Z",
-      "merged_as": "4689737c3a2e6ce15f46da6517b464910bf02d01"
-    },
-    "next": {
-      "slice": "ENR-G",
-      "lines": 1567,
-      "note": "enters the lane when #1112 merges (over ~1,500); holding pushes until then",
-      "ready_local": "308fb54a0bf546498697c052f1d32e74dbf3bacd",
-      "review_note": "security-review conf-3 note: withdrawn-consent answer dropped before the core judges its text (same outcome as no lookup); fresh review to confirm"
+      "pr": 1112,
+      "slice": "X-escalate-full-table",
+      "entered": "2026-11-24T15:45Z",
+      "exited": "2026-11-24T17:20Z",
+      "merged_as": "dde6436f927f9e1c35d8b7470b6639e2866cca96"
     }
   },
   "landing_order_web": [
@@ -10726,6 +10719,14 @@
       "head": "0802cc8f9645282af2cbd59074896fe2e08fc2aa",
       "at": "2026-11-24T15:3xZ",
       "note": "merged by the coordinator side; fresh Opus review clean; 50x repeat x2 passed in CI"
+    },
+    {
+      "slice": "X-escalate-full-table",
+      "pr": 1112,
+      "sha": "dde6436f927f9e1c35d8b7470b6639e2866cca96",
+      "head": "68bdd628de0c9f7a73d46b728cbf44b21ce536b1",
+      "at": "2026-11-24T17:20Z",
+      "note": "reviewed b308aa62; catch-up verified pure main (PR diff unchanged)"
     }
   ],
   "active_sessions": {
@@ -10996,7 +10997,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T16:08Z",
+    "updated": "2026-11-24T17:25Z",
     "items": [
       {
         "slot": 1,
@@ -11010,12 +11011,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-escalate-full-table",
+        "slice": "X-split-resume-gate",
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "PR #1112 in lane; reviewed MERGE on b308aa62 (rv-1112); bringing main in; merges on green",
-        "since": "2026-11-24T09:19Z"
+        "doing": "starting (brief briefs/X-split-resume-gate.md)",
+        "since": "2026-11-24T17:25Z"
       },
       {
         "slot": 3,
