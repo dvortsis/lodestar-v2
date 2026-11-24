@@ -10684,7 +10684,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T06:25:00Z",
+    "updated": "2026-11-24T06:22:30Z",
     "items": [
       {
         "slot": 1,
@@ -10712,8 +10712,11 @@
       },
       {
         "slot": 4,
-        "model": "opus",
-        "status": "idle"
+        "slice": "GS-5",
+        "role": "build",
+        "agent": "thread session standing in for the runner (owner 2026-11-24)",
+        "doing": "Building the search Group versions toggle and the +N other versions rows",
+        "since": "2026-11-24T06:22:30Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared)."
