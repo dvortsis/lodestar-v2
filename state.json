@@ -4354,7 +4354,10 @@
         "switch moves into More below a 52 rem toolbar",
         "size raises: search results lazy 40.86->43.51 KB, toolbar 4.6->5.02 KB, cards 8.01->8.15 KB, new collapse rows entry 3.02 KB (\u00a72.26)",
         "in-place rows from /siblings (all versions), not only query matches",
-        "Show all opens the details until GS-4 builds Related"
+        "Show all opens the details until GS-4 builds Related",
+        "owner call: does search collapse stay on by default, under the G-v07-scale gate (\u00a72.66)? If G-v07-scale fails the keyword p95 with collapse on, the default falls back to off and comes back to the owner",
+        "PR size about 1,950 changed lines, over the ~1,500 guide (about half tests; splitting would ship a switch without rows)",
+        "merged #1108 as 4689737c, 2026-11-24 13:52Z; small issues tracked as GS-5-followups"
       ],
       "added": "2026-11-24"
     },
