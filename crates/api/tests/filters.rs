@@ -1054,6 +1054,8 @@ async fn every_filters_route_needs_a_session_and_errors_use_the_envelope() {
         "x (network:bt | y)",
         "-sig:7a9f3c12dd0e44b1",
         "x sig:0123456789abcdef0123456789abcdef01234567",
+        "imdb:tt0111161",
+        "-tmdb:278",
     ] {
         let (status, body) = apply(
             &f,

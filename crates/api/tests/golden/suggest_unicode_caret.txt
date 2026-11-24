@@ -1,2 +1,2 @@
 200
-{"items":[{"insert":"age:","kind":"field","replace":{"end":6,"start":3},"text":"age:"},{"insert":"audio:","kind":"field","replace":{"end":6,"start":3},"text":"audio:"},{"insert":"ambiguous:","kind":"field","replace":{"end":6,"start":3},"text":"ambiguous:"}]}
+{"items":[{"insert":"age:","kind":"field","replace":{"end":6,"start":3},"text":"age:"},{"insert":"audio:","kind":"field","replace":{"end":6,"start":3},"text":"audio:"},{"insert":"anidb:","kind":"field","replace":{"end":6,"start":3},"text":"anidb:"},{"insert":"anilist:","kind":"field","replace":{"end":6,"start":3},"text":"anilist:"}]}
