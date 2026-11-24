@@ -41,7 +41,8 @@ fn sweep_pass(f: &mut Spill, now: Instant) {
 #[test]
 fn ended_cooldowns_stop_counting_before_they_are_swept() {
     let base = Instant::now();
-    let mut f = Spill::new(base);
+    // Fixed keys, so the /24 below has two distinct blocks.
+    let mut f = Spill::with_keys(base, [7, 11]);
     let until = base + HOUR;
     for i in 0..10_000 {
         assert!(f.insert(&wide(i), until, base), "{i}");
@@ -140,14 +141,20 @@ fn at_the_fallback_the_sampler_waits_and_nothing_ends_early() {
     assert!(s.reserve(newcomer, 11, t(30 * MINUTE)));
     assert!(s.complete(newcomer, 11, MAX_INTERVAL, t(30 * MINUTE)));
     assert!(s.saturated(), "full again");
+    // The line is hard: with the table full again, nothing more moves out
+    // and the next newcomer waits, in the same tick and later.
+    let waiting = free(spilled + 100, &s);
+    s.offer(node(waiting), t(30 * MINUTE));
+    assert_eq!(s.next(t(30 * MINUTE)), None, "nothing moves past the line");
+    assert_eq!(s.next(t(HOUR - NS)), None, "still at the line");
+    assert!(s.spill.as_ref().is_some_and(|f| !f.has_room()));
     // The spilled hour ends: free from that tick, before any slot is swept.
     s.prune(t(HOUR + MINUTE));
     assert!(!s.saturated(), "ended cooldowns free the filter");
     assert_eq!(s.spill_used(), 0, "the gauge reads live cooldowns");
-    let next = free(spilled + 1_000, &s);
-    assert!(s.offer(node(next), t(HOUR + MINUTE)));
-    assert_eq!(s.next(t(HOUR + MINUTE)), Some(node(next)));
-    assert!(s.reserve(next, 12, t(HOUR + MINUTE)));
+    // The newcomer that waited is the next out.
+    assert_eq!(s.next(t(HOUR + MINUTE)), Some(node(waiting)));
+    assert!(s.reserve(waiting, 12, t(HOUR + MINUTE)));
     assert_eq!(s.spill_used(), 1, "a listed cooldown moved out");
     // Listed nodes are still refused to their own end.
     for a in 0..3 {
@@ -161,6 +168,7 @@ struct Day {
     sent: u64,
     full: Duration,
     live: Vec<usize>,
+    live_max: usize,
     used_max: usize,
     known_max: usize,
     bytes: usize,
@@ -180,6 +188,7 @@ async fn day(s: Sampler, rate: usize, hours: u64, answered: u64, scale: u8) -> D
         sent: 0,
         full: Duration::ZERO,
         live: vec![],
+        live_max: 0,
         used_max: 0,
         known_max: 0,
         bytes: 0,
@@ -214,6 +223,7 @@ async fn day(s: Sampler, rate: usize, hours: u64, answered: u64, scale: u8) -> D
             }
         }
         out.used_max = out.used_max.max(s.spill.as_ref().map_or(0, Spill::used));
+        out.live_max = out.live_max.max(s.spill_used());
         out.known_max = out.known_max.max(s.known());
         if sec % 3600 == 0 {
             out.live.push(s.spill_used());
@@ -260,7 +270,8 @@ async fn a_day_at_r17s_rate_never_reaches_the_fallback() {
     );
     // Live: the last 6 h of samples, short of the table's 2,000.
     let six_hours = rate * 6 * 3600;
-    let peak = *on.live.iter().max().expect("24 hours");
+    // The fullest it got at any tick, not only on the hour.
+    let peak = on.live_max;
     // At most the last 6 h of samples, and the minute each end is rounded
     // up to.
     assert!(peak <= six_hours + rate * 60, "{peak} live at most");
@@ -300,7 +311,7 @@ async fn steady_state_memory() {
         (200, 60, 5, 8),
     ] {
         let d = day(Sampler::new(true), rate, hours, answered, scale).await;
-        let peak = d.live.iter().max().copied().unwrap_or(0);
+        let peak = d.live_max;
         println!(
             "rate {rate}/s scale {scale} over {hours} h: sent {} full {} s; live by hour {:?}; peak live {peak}, peak in use {}, table {}, filter bytes {}",
             d.sent,
@@ -323,16 +334,16 @@ enum Op {
 
 fn arb_op() -> impl Strategy<Value = Op> {
     prop_oneof![
-        6 => (0..600u16, 1..(48 * 3600u32)).prop_map(|(i, s)| Op::Insert(i, s)),
-        3 => (0..(6 * 3600u32)).prop_map(Op::Advance),
+        24 => (0..500u16, 1..(48 * 3600u32)).prop_map(|(i, s)| Op::Insert(i, s)),
+        1 => (0..(6 * 3600u32)).prop_map(Op::Advance),
         2 => (1..64u16).prop_map(Op::Sweep),
     ]
 }
 
-/// A few hundred addresses, many to a /24, so both of a /24's blocks fill
-/// and inserts get refused.
+/// Five hundred addresses in two /24s, so a /24's blocks fill and inserts
+/// get refused (in about two cases in five).
 fn crowded(i: u16) -> SocketAddr {
-    SocketAddr::from(([11, (i / 300) as u8, (i % 300 / 2) as u8, 1], 1000 + i))
+    SocketAddr::from(([11, 0, (i % 2) as u8, 1 + (i / 2 % 250) as u8], 1000 + i))
 }
 
 proptest! {
@@ -345,7 +356,7 @@ proptest! {
     /// with a pass at least every 20 h as the 1 s tick gives (17 minutes).
     #[test]
     fn ageing_never_frees_a_live_cooldown_and_counts_exactly(
-        ops in proptest::collection::vec(arb_op(), 1..200),
+        ops in proptest::collection::vec(arb_op(), 300..700),
     ) {
         let base = Instant::now();
         let mut now = base;

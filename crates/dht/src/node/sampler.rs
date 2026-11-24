@@ -244,6 +244,13 @@ impl Sampler {
             tries.sort_unstable();
             // The filter's clock starts at its first move.
             let spill = self.spill.get_or_insert_with(|| spill::Spill::new(now));
+            // The fallback's line is hard (X-split-spill-horizon): at
+            // [`spill::FALLBACK`] live cooldowns nothing more moves out, so
+            // one tick's budget can't carry the filter past it. The
+            // cooldown stays in the table, never shortened.
+            if !spill.has_room() {
+                return false;
+            }
             // The soonest that fits: a refusal (both its groups full) is
             // rare, so a few tries find room if there is any.
             let Some(&(end, token, addr)) = tries
@@ -1444,8 +1451,9 @@ pub(crate) mod spill {
             }
             self.live = self.count_live(first);
             // Drained: nothing placed with the old keys is left, so new
-            // ones are drawn and keys carried across restarts don't live
-            // forever.
+            // ones are drawn. With the split on in steady state the filter
+            // rarely drains, so keys restored from a snapshot can last
+            // many restarts.
             if self.used == 0 {
                 self.keys = fresh_keys();
             }
