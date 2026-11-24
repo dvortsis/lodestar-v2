@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T06:27:51Z",
+  "updated_at": "2026-11-24T06:30:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10696,7 +10696,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T06:27:51Z",
+    "updated": "2026-11-24T06:30:19Z",
     "items": [
       {
         "slot": 1,
@@ -10843,7 +10843,14 @@
     "build_slices": false,
     "since": "2026-11-23T06:09Z",
     "lifted": "2026-11-24T06:19Z",
-    "lifted_by": "owner, Claude Duet chat 2026-11-24T06:19Z: the 2026-11-23 no-new-builds hold was only to conserve credit; 'You can ignore those instructions.' Build slices resume in the 4 build slots (phase_total 4, unchanged)."
+    "lifted_by": "owner, Claude Duet chat 2026-11-24T06:19Z: the 2026-11-23 no-new-builds hold was only to conserve credit; 'You can ignore those instructions.' Build slices resume in the 4 build slots (phase_total 4, unchanged).",
+    "runner": {
+      "paused": true,
+      "since": "2026-11-24T06:30:19Z",
+      "by": "owner",
+      "words": "pause the agent runner until further notice",
+      "effect": "no merges, no reviews, no launches, heartbeat disabled; resumes only on the owner's word"
+    }
   },
   "owner_queue_pending": [
     {
@@ -11681,6 +11688,11 @@
       "resume": "only on the owner's explicit command: re-enable watchdog trig_0172BngAUoA4NRaRWBYiRWVf and heartbeat trig_01U8KNWyDovQ9omwvZi8cuLW, record the pause in owner-decisions, then the pending runner PR",
       "resumed_at": "2026-11-11T04:06Z",
       "resumed_by": "owner, 2026-11-11: \"We reset credit. Continue with up to 8 sessions in one time,\""
+    },
+    {
+      "at": "2026-11-24T06:30:19Z",
+      "what": "runner paused",
+      "by": "owner"
     }
   ],
   "size_file_holder": {
