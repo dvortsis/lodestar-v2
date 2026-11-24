@@ -274,13 +274,15 @@ fn query(text: &str) -> ApiResult<Node> {
     })?;
     // The judge doesn't know an item's provenance: claims and fetched
     // metadata are judged alike, and its sources aren't known yet
-    // (SRC-3). A rule on them would silently never match, or with `-`,
+    // (SRC-3), nor which sources identified it (ENR-11). A rule on them
+    // would silently never match, or with `-`,
     // match everything.
     if node.mentions_provenance() {
         return Err(bad(
             "provenance_in_rule",
-            "Rules can't test verified:, source:, network:, sig: or a /regex/. Filters judge what a \
-             torrent says it is, before search knows where it came from or what it's a copy of.",
+            "Rules can't test verified:, source:, network:, sig:, a catalogue ID (imdb:, tmdb:, …) or \
+             a /regex/. Filters judge what a torrent says it is, before search knows where it came \
+             from or what it's a copy of.",
         ));
     }
     Ok(node)

@@ -402,6 +402,67 @@ fn the_sweep_logs_torrents_holding_answers_resumably() {
     assert!(again.done && again.read == 0 && again.logged == 0);
 }
 
+/// A batch that ends partway through the last torrent's rows doesn't end
+/// the sweep: the later row is still read and logs the torrent.
+#[test]
+fn the_sweep_reads_every_row_of_the_last_torrent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::open(tmp.path().join("s.db"), StoreConfig::default()).unwrap();
+    let dht = store.register_source("dht", "1", 1).unwrap();
+    let open = store.register_source("wikidata", "1", 1).unwrap();
+    let raws: Vec<Vec<u8>> = (0..2).map(|i| torrent(i, false)).collect();
+    let infos: Vec<Info> = raws.iter().map(|t| Info::parse(t).unwrap()).collect();
+    let batch: Vec<NewTorrent<'_>> = infos
+        .iter()
+        .zip(&raws)
+        .map(|(info, raw)| NewTorrent {
+            info,
+            raw_info: Some(raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_001,
+            extra_flags: 0,
+            source: dht,
+        })
+        .collect();
+    let ids: Vec<i64> = store
+        .insert(&batch)
+        .unwrap()
+        .into_iter()
+        .map(|i| i.id())
+        .collect();
+    assert!(dht.get() < open.get());
+    let a = answer(Some(90), &[("imdb", "tt0119177")], "Gattaca");
+    let v1 = Claims {
+        name: Some("Gattaca".into()),
+        ..Claims::default()
+    };
+    assert!(store.put_claims(ids[0], dht, &v1, false).unwrap());
+    // The last torrent's first row is through a private source, so only
+    // its second row logs it.
+    assert!(store.put_claims(ids[1], dht, &a, true).unwrap());
+    assert!(store.put_claims(ids[1], open, &a, false).unwrap());
+    let mut logged = 0;
+    for _ in 0..10 {
+        let step = store.identify_sweep_step(1).unwrap();
+        logged += step.logged;
+        if step.done {
+            break;
+        }
+    }
+    assert!(store.identify_sweep_state().unwrap().is_done());
+    assert_eq!(logged, 1);
+}
+
+/// Every enrichment scheme has its field, and every ID field is a scheme.
+#[test]
+fn the_id_fields_are_the_enrichment_schemes() {
+    let fields: Vec<&str> = TagKey::IDS.iter().map(|k| k.as_str()).collect();
+    assert_eq!(fields, lodestar_store::claims::ENRICHMENT_SCHEMES);
+    for s in lodestar_store::claims::ENRICHMENT_SCHEMES {
+        assert_eq!(TagKey::id(s).map(TagKey::as_str), Some(s));
+    }
+}
+
 #[test]
 fn an_empty_store_sweeps_at_once() {
     let tmp = tempfile::tempdir().unwrap();
@@ -470,7 +531,22 @@ proptest! {
 
     /// Any terms record bytes read the same here as in the harness.
     #[test]
-    fn any_record_reads_as_the_harness_reads_it(v in prop::collection::vec(any::<u8>(), 0..14)) {
+    fn any_record_reads_as_the_harness_reads_it(
+        v in prop_oneof![
+            prop::collection::vec(any::<u8>(), 0..14),
+            // Well-formed records, so the readable branch is reached.
+            (any::<u8>(), any::<u64>()).prop_map(|(flags, secs)| {
+                let mut v = vec![1, flags];
+                v.extend(secs.to_be_bytes());
+                v
+            }),
+            (0u8..8, any::<u64>()).prop_map(|(flags, secs)| {
+                let mut v = vec![1, flags];
+                v.extend(secs.to_be_bytes());
+                v
+            }),
+        ]
+    ) {
         let tmp = tempfile::tempdir().unwrap();
         let mut store = Store::open(tmp.path().join("s.db"), StoreConfig::default()).unwrap();
         let s = store.register_source("wikidata", "1", 1).unwrap();

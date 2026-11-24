@@ -452,7 +452,7 @@ sig:7a9f3c12 => use all 16 hex digits of a payload signature
 
 ## Finding a release by its catalogue ID
 
-An **identification source** is a plugin that matches a release to an entry in a catalogue such as IMDb or MusicBrainz. When one has matched a torrent, you can search by that entry's ID, and `title:` also finds the catalogue's title and up to eight of its other titles (other languages, other spellings).
+An **identification source** is a plugin that matches a release to an entry in a catalogue such as IMDb or MusicBrainz. When one has matched a torrent, you can search by that entry's ID, and `title:` also finds the catalogue's titles: its main title and its other titles (other languages, other spellings), up to eight in all.
 
 | Field | Catalogue | Example |
 |---|---|---|
@@ -481,7 +481,7 @@ wikidata:q42
 - These fields find nothing until an identification source is set up and has matched torrents. Lodestar uses a source's answers only when its terms allow passing them on.
 - Answers never apply to private torrents, to anything that arrived through a private source, or to Adult torrents.
 - Filter rules can't use these fields.
-- Apps that search Lodestar through Torznab (Sonarr, Radarr and the like) can send IMDb, TMDB and TVDB IDs. They find the same torrents.
+- Apps that search Lodestar through Torznab (Sonarr, Radarr and the like) can send IMDb, TMDB and TVDB IDs. A torrent matching any one of the IDs they send is found.
 
 An ID in the wrong form is an error:
 

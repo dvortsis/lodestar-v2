@@ -14,6 +14,9 @@
 //! - from a source whose terms record (`enr10/terms`) allows passing its
 //!   answers on. A missing or unreadable record doesn't.
 //!
+//! The torrent check is stricter than `stored_title`, which doesn't read
+//! the torrent's flags: a private torrent's answers are never served.
+//!
 //! **The sweep** ([`Store::identify_sweep_step`]): torrents enriched
 //! after ENR-11 reach the index through the backfill's `reindex_log`
 //! entries (ENR-10). Those enriched before it hold version 3 claims the
@@ -40,6 +43,9 @@ const CURSOR_TORRENT: &str = "identify_sweep.cursor_torrent";
 const CURSOR_SOURCE: &str = "identify_sweep.cursor_source";
 const HIGH: &str = "identify_sweep.high";
 const DONE: &str = "identify_sweep.done";
+/// The last torrent logged, so a torrent whose rows span two steps is
+/// logged once.
+const LAST_LOGGED: &str = "identify_sweep.last_logged";
 
 /// One identification answer search may serve
 /// ([`Store::served_identifications`]).
@@ -210,6 +216,7 @@ impl Store {
         );
         let mut step = SweepStep::default();
         let mut logged: Vec<i64> = Vec::new();
+        let mut last = get(LAST_LOGGED)?;
         {
             let mut stmt = tx.prepare_cached(
                 "SELECT torrent_id, source_id, flags = 0 AND substr(data, 1, 1) = ?4
@@ -238,14 +245,17 @@ impl Store {
                 let (t, s, wanted) = row?;
                 step.read += 1;
                 (torrent, source) = (t, s);
-                if wanted && !logged.contains(&t) {
+                if wanted && last != Some(t) {
                     log.execute([t])?;
                     logged.push(t);
+                    last = Some(t);
                 }
             }
         }
         step.logged = logged.len();
-        step.done = step.read < limit || torrent >= high;
+        // The walk is bounded by `high`, so only a short read ends it: a
+        // full batch may stop partway through torrent `high`'s rows.
+        step.done = step.read < limit;
         let mut set = tx.prepare_cached(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -253,6 +263,9 @@ impl Store {
         set.execute(params![HIGH, high])?;
         set.execute(params![CURSOR_TORRENT, torrent])?;
         set.execute(params![CURSOR_SOURCE, source])?;
+        if let Some(t) = last {
+            set.execute(params![LAST_LOGGED, t])?;
+        }
         if step.done {
             set.execute(params![DONE, 1])?;
         }

@@ -1377,7 +1377,17 @@ pub(crate) fn tag_value(key: TagKey, v: &str) -> Option<String> {
         TagKey::Codec => "vcodec",
         TagKey::Audio => "acodec",
         TagKey::Lang => "lang",
-        _ => return None,
+        TagKey::Imdb
+        | TagKey::Tmdb
+        | TagKey::Tvdb
+        | TagKey::Anidb
+        | TagKey::Anilist
+        | TagKey::Mbid
+        | TagKey::Olid
+        | TagKey::Igdb
+        | TagKey::Discogs
+        | TagKey::Steam
+        | TagKey::Wikidata => return id_value(key, v),
     };
     // Read the value the way the parser reads it in a name, so aliases
     // (`x265`, `4k`, `dovi`, `french`) land on the stored form.

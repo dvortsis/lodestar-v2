@@ -199,7 +199,7 @@ pub fn parse(query: Option<&str>) -> Result<Request, Refused> {
                 }
                 return Err(refused(
                     NOT_AVAILABLE,
-                    "Function not available: searching by ID isn't supported yet",
+                    "Function not available: searching by this ID isn't supported",
                 ));
             }
             // `apikey` (read by the guard), `extended`, `o`, `attrs` and
@@ -355,10 +355,21 @@ impl Request {
                 word: w.clone(),
             })
             .collect();
-        of.extend(self.ids.iter().map(|(key, v)| Node::Tag {
-            key: *key,
-            any: vec![v.clone()],
-        }));
+        // The IDs name one work, and a torrent's answers may carry only
+        // some of its schemes, so any one of them matches.
+        let mut ids: Vec<Node> = self
+            .ids
+            .iter()
+            .map(|(key, v)| Node::Tag {
+                key: *key,
+                any: vec![v.clone()],
+            })
+            .collect();
+        match ids.len() {
+            0 => {}
+            1 => of.append(&mut ids),
+            _ => of.push(Node::Or { of: ids }),
+        }
         match (self.season, self.ep) {
             (Some(year), Some(Episode::Daily { month, day })) => of.push(Node::Phrase {
                 field: TextField::Any,
@@ -611,6 +622,25 @@ mod tests {
             name: "private_source".into(),
             value: false
         }));
+        // Several IDs name one work: any of them matches.
+        let r = ok("t=tvsearch&tvdbid=81189&imdbid=tt0903747&tmdbid=1396");
+        let Some(Node::And { of }) = r.ast(Mode::Tv) else {
+            panic!()
+        };
+        let tag = |key, v: &str| Node::Tag {
+            key,
+            any: vec![v.into()],
+        };
+        assert_eq!(
+            of[0],
+            Node::Or {
+                of: vec![
+                    tag(TagKey::Imdb, "tt0903747"),
+                    tag(TagKey::Tmdb, "1396"),
+                    tag(TagKey::Tvdb, "81189"),
+                ]
+            }
+        );
     }
 
     #[test]
