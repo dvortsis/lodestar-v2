@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T10:00Z",
+  "updated_at": "2026-11-24T10:11Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4323,6 +4323,13 @@
       "pr": 1109,
       "flag": "Runner's calls in docs/decisions/2026-11-24-NOS-2b.md: WebSocket message/frame cap 128 KiB (131,072 B, plan's '128 KB' read in binary); ping 60 s default, plugin may go down to a 30 s minimum; idle timeout 150 s default (2x ping..600 s), connect timeout 15 s default (1-60 s); host list keys wss entries on their own (wss lets no HTTP through and https no WebSocket); lodestar-sources adds direct deps incl. futures-util =0.3.34 (no crate new to the lockfile; 'no new crate' read as none new to the tree)",
       "send": "next owner digest (\u00a72.19)"
+    },
+    {
+      "at": "2026-11-24T10:11Z",
+      "slice": "ENR-11",
+      "pr": 1110,
+      "flag": "Torznab caps advertise imdb/tmdb/tvdb ID search unconditionally. Harmless now; once identification is on, partial coverage could stop Sonarr/Radarr falling back to title search, so unidentified releases go missing. Runner's call: the host-wiring slice gates the caps on identification being on and its sweep done. Changes TZ-0's decision.",
+      "send": "next owner digest (\u00a72.19)"
     }
   ],
   "decisions_log": [
@@ -4475,8 +4482,15 @@
       "X-escalate-full-table (Rust)",
       "GS-5 (web)"
     ],
-    "merge_needs": "fresh Opus review + /security-review on the newest head (none recorded on the PR yet; runner holder running it), ci-ok green, freshness",
-    "previous": null
+    "merge_needs": "ci-ok and web-ok green on 6aaf3a6b (CI running at 10:10Z); the runner holder merges",
+    "previous": null,
+    "review": {
+      "head": "6aaf3a6b",
+      "verdict": "MERGE",
+      "security": "PASS",
+      "file": "reviews/rv-1110.md",
+      "at": "2026-11-24T10:11Z"
+    }
   },
   "landing_order_web": [
     "S-compare",
@@ -9062,6 +9076,11 @@
       "id": "NOS-3-notes",
       "note": "From NOS-2b (#1109): NOS-3 adds the plugin's WsConnect to its Kit (crates/sources/src/plugin.rs, a shared one-line edit NOS-3 claims; PL-2 also owns plugin.rs, so not beside it); with several relays open, share one kill-switch route probe per plugin egress across relays instead of one per session; NOS-3's own caps (30 s to 1 h back-off, one connection per relay per 30 s, Q-r11) go on top of Reconnect. Put these in NOS-3's brief and its slices.yaml notes at launch.",
       "added": "2026-11-24T09:19Z"
+    },
+    {
+      "id": "ENR-11-host-wiring",
+      "note": "From #1110's review (reviews/rv-1110.md): the slice that wires identification into the host must (a) call identify_sweep_step until done and show the 'results may be incomplete' notice, (b) gate the Torznab caps' ID params (only when a redistributing identification source is on and the sweep is done) or decide it explicitly, (c) measure size-report with identified torrents (synth has no v3 claims; 10 B left under 560 B). Also place UI review 02 \u00a75.5 items (matched title in imdb:/tmdb: autocomplete; 'matched an alternate title' on rows) in ENR-12 or a new slice.",
+      "added": "2026-11-24T10:11Z"
     }
   ],
   "main_health": {
