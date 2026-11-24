@@ -17,7 +17,8 @@
 - Spend stops and hard rules are the runner heartbeat's, unchanged.
 
 **Claims** (`<slice> · <agent> · <branch> · <owned paths> · <date> · <state>`):
-- ENR-11 · Duet thread cse_01MMjhnBQhGk9LHSMPPEyyEr · slice/ENR-11 · slices.yaml owns · 2026-11-24 · building
+- ENR-11 · merged #1110 (4321071e), 2026-11-24 · slot 1 freed
+- X-flake-cap-index-move · slot 1 · slice/X-flake-cap-index-move · brief briefs/X-flake-cap-index-move.md · 2026-11-24 · starting
 - NOS-2b · merged #1109 (32396391), 2026-11-24 · slot 2 freed
 - X-escalate-full-table · slot 2 · slice/X-escalate-full-table · brief briefs/X-escalate-full-table.md · 2026-11-24 · starting
 - IRC-1 · Duet thread cse_01MMjhnD539Mu5nKX1dp6JLD · slice/IRC-1 · slices.yaml owns · 2026-11-24 · building (PR after NOS-2b, shared lockfiles)

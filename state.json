@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T10:11Z",
+  "updated_at": "2026-11-24T11:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4467,29 +4467,34 @@
     }
   },
   "landing_lane": {
-    "pr": 1110,
-    "slice": "ENR-11",
-    "areas": [
-      "Rust",
-      "web"
-    ],
-    "entered_at": "2026-11-24T09:58Z",
-    "catch_ups": 1,
-    "reason": "over ~1,500 changed lines (1,551) and not fresh after #1109",
-    "head_after_catch_up": "6aaf3a6b",
-    "holding": [
-      "IRC-1 (Rust)",
-      "X-escalate-full-table (Rust)",
-      "GS-5 (web)"
-    ],
-    "merge_needs": "ci-ok and web-ok green on 6aaf3a6b (CI running at 10:10Z); the runner holder merges",
-    "previous": null,
-    "review": {
-      "head": "6aaf3a6b",
-      "verdict": "MERGE",
-      "security": "PASS",
-      "file": "reviews/rv-1110.md",
-      "at": "2026-11-24T10:11Z"
+    "pr": null,
+    "last": {
+      "pr": 1110,
+      "slice": "ENR-11",
+      "areas": [
+        "Rust",
+        "web"
+      ],
+      "entered_at": "2026-11-24T09:58Z",
+      "catch_ups": 1,
+      "reason": "over ~1,500 changed lines (1,551) and not fresh after #1109",
+      "head_after_catch_up": "6aaf3a6b",
+      "holding": [
+        "IRC-1 (Rust)",
+        "X-escalate-full-table (Rust)",
+        "GS-5 (web)"
+      ],
+      "merge_needs": "ci-ok and web-ok green on 6aaf3a6b (CI running at 10:10Z); the runner holder merges",
+      "previous": null,
+      "review": {
+        "head": "6aaf3a6b",
+        "verdict": "MERGE",
+        "security": "PASS",
+        "file": "reviews/rv-1110.md",
+        "at": "2026-11-24T10:11Z"
+      },
+      "exited_at": "2026-11-24T11:15Z",
+      "exit": "merged as 4321071e"
     }
   },
   "landing_order_web": [
@@ -10510,6 +10515,13 @@
         "NOS-3 (still needs ext:owner-v08-q1, X-sources-restructure)",
         "PL-2"
       ]
+    },
+    {
+      "pr": 1110,
+      "slice": "ENR-11",
+      "sha": "4321071e",
+      "at": "2026-11-24T11:15Z",
+      "reviewed_head": "6aaf3a6b"
     }
   ],
   "active_sessions": {
@@ -10594,7 +10606,7 @@
       "what": "Fix the random proptest failure in crates/store/tests/unverified_cap_index.rs the_kept_count_matches_the_rows (shrunk [FindBt(0,0,true),Move(0),FindBt(0,0,true),Move(0)]; second Move's UPDATE hits UNIQUE(network,key); test bug). Test code only, Opus. Brief: briefs/X-flake-cap-index-move.md. First in line for the next free build slot (slot 1, after ENR-11 #1110 merges).",
       "from": "ENR-11 #1110 via the coordinator",
       "at": "2026-11-24T08:50Z",
-      "status": "queued"
+      "status": "slot 1 at 2026-11-24T11:15Z"
     },
     {
       "id": "F-suggest-adult-field",
@@ -10780,16 +10792,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T10:00Z",
+    "updated": "2026-11-24T11:15Z",
     "items": [
       {
         "slot": 1,
-        "slice": "ENR-11",
+        "slice": "X-flake-cap-index-move",
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "Building search enrichment: alternate titles and IMDb/TMDB-style IDs become searchable, plus Torznab ID searches.",
-        "since": "2026-11-24T06:22:10Z"
+        "doing": "Starting: fix the store cap-index proptest flake (test code only; brief briefs/X-flake-cap-index-move.md).",
+        "since": "2026-11-24T11:15Z"
       },
       {
         "slot": 2,
