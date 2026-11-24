@@ -11707,7 +11707,8 @@
     "holder": "owner's Claude Duet chat (coordinator session_01MMjhn8V1uDvWKEpC8V3BHU; bookkeeping thread session_01MMjhnCpMMYF4uEW49L9SpF)",
     "since": "2026-11-24T06:44Z",
     "by": "owner, Duet chat 06:30Z 'Perfect. Thanks!' (approving pause + handover) and 06:44Z 'I paused it'",
-    "runner_session_kept": "runner_session still names the paused runner, so it reads HANDOVER.md on any return; the watchdog stands down while HANDOVER.md exists"
+    "runner_session_kept": "runner_session still names the paused runner, so it reads HANDOVER.md on any return; the watchdog stands down while HANDOVER.md exists",
+    "message_to": "session_01MMjhnCpMMYF4uEW49L9SpF"
   },
   "api_lane_answers": [
     {

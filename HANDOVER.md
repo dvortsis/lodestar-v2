@@ -1,5 +1,7 @@
 # Handover: the build is held by the owner's Claude Duet chat
 
+**Send runner messages to: `session_01MMjhnCpMMYF4uEW49L9SpF`** (the same session as `cse_01MMjhnCpMMYF4uEW49L9SpF`). This is the holder's bookkeeping thread. It answers for the runner: slice and PR readiness, X-test-vm and API-lane questions. Don't message the paused runner session `session_01EYhgh4JX3AmHzKXPjYCoUg`.
+
 **Holder:** the owner's Claude Duet chat. Its coordinator session (`session_01MMjhn8V1uDvWKEpC8V3BHU`) starts one thread session per build slot; its bookkeeping thread (`session_01MMjhnCpMMYF4uEW49L9SpF`) keeps `state.json`, the dashboard, API-lane answers, X-test-vm support and the merge gate.
 **Since:** 2026-11-24T06:44Z.
 **Why:** the owner moved the runner's work to the Duet chat to save standard-plan credit. Owner, 2026-11-24T06:19Z: "Yes, behave as the runner does." Owner, 06:30Z, approving the coordinator's proposal to pause the runner, take on all of its work (API lane and cloud testing included) and mark the build handed over: "Perfect. Thanks!" Owner, 06:44Z: "I paused it."
