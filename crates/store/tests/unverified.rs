@@ -12,8 +12,8 @@ use lodestar_store::unverified::{
     PurgePreview, PurgeStep, Put, RefiledClaims, RefiledUnverified, UnverifiedRefiled,
 };
 use lodestar_store::{
-    Error, Filtered, Held, Prepared, PreparedTorrent, SourceId, SourceState, Store, StoreConfig,
-    WriteBatch, flags,
+    AdultMark, ClassCorrection, Error, Filtered, Held, Prepared, PreparedTorrent, SourceId,
+    SourceState, Store, StoreConfig, WriteBatch, flags,
 };
 use rusqlite::params;
 
@@ -834,6 +834,7 @@ fn purge_all(store: &mut Store, source: SourceId, limit: usize) -> (PurgeStep, u
         total.torrents_kept += s.torrents_kept;
         total.state_deleted += s.state_deleted;
         total.queue_deleted += s.queue_deleted;
+        total.rederive |= s.rederive;
         match s.next {
             Some(c) => cursor = c,
             None => return (total, steps),
@@ -1698,4 +1699,240 @@ fn a_consented_write_judges_consent_inside_its_transaction() {
         store.put_claims_at_consented(id, enr, &c, false, T, "nyaa", &held),
         Err(Error::Invalid(_))
     ));
+}
+
+/// The stored content-type code the always-adult tests treat as Adult (the
+/// store is told it, as the pipeline tells it `ContentType::Adult`).
+const ADULT: u8 = 9;
+
+fn bit(s: SourceId) -> u64 {
+    1 << s.get()
+}
+
+fn parser_ver(store: &Store, id: i64) -> Option<i64> {
+    store
+        .connection()
+        .query_row(
+            "SELECT parser_ver FROM torrent_parsed WHERE torrent_id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .ok()
+}
+
+/// What the backfill leaves once it has derived a torrent: its stored
+/// type and an up-to-date record.
+fn derived(store: &Store, id: i64, content_type: u8) {
+    let c = store.connection();
+    c.execute(
+        "UPDATE torrents SET content_type = ?2 WHERE id = ?1",
+        params![id, content_type],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO torrent_parsed (torrent_id, parser_ver, data) VALUES (?1, 7, x'00')
+         ON CONFLICT (torrent_id) DO UPDATE SET parser_ver = 7",
+        [id],
+    )
+    .unwrap();
+}
+
+/// X-purge-rederive: a kept torrent that only the purged always-adult
+/// source made Adult is marked to be derived again, and the generation
+/// moves so a batch that read its old sources can't store it Adult. One
+/// another always-adult source keeps, one stored as something else, one
+/// Adult by detection alone and every torrent of a plain source's purge
+/// are left as they are.
+#[test]
+fn a_purge_rederives_what_only_an_always_adult_source_made_adult() {
+    for limit in [1, 100] {
+        let mut store = mem();
+        let (dht, adult, plain) = sources(&mut store);
+        let adult2 = store.register_source("sukebei2", "1", T).unwrap();
+        let mut ids = Vec::new();
+        // (name, extra finders, stored type, enriched)
+        let rows: [(&str, &[SourceId], u8, bool); 7] = [
+            ("only", &[adult], ADULT, true),
+            ("both", &[adult, adult2], ADULT, true),
+            ("not adult", &[adult], 2, true),
+            ("detected", &[plain], ADULT, true),
+            ("pending", &[adult], ADULT, false),
+            ("plain only", &[plain, adult], ADULT, true),
+            ("alone", &[], 2, true),
+        ];
+        for (name, by, ty, enriched) in rows {
+            let p = prepared(&store, name);
+            let id = store_torrent(&mut store, &p, dht);
+            for s in by {
+                store
+                    .put_unverified(&[item(&p.info_hash.0, *s, None)])
+                    .unwrap();
+            }
+            if enriched {
+                derived(&store, id, ty);
+            }
+            ids.push(id);
+        }
+        // "plain only" is the plain source's purge, below.
+        store.set_adult_mark(AdultMark {
+            sources: bit(adult) | bit(adult2),
+            content_type: ADULT,
+        });
+        store
+            .set_source_state(adult, SourceState::Disabled)
+            .unwrap();
+        let read_at = store.class_gen().unwrap();
+        let (total, _) = purge_all(&mut store, adult, limit);
+        assert!(total.rederive, "limit {limit}");
+        assert_eq!(total.torrents_kept, 5, "limit {limit}");
+        assert_eq!(parser_ver(&store, ids[0]), Some(0), "limit {limit}: only");
+        assert_eq!(parser_ver(&store, ids[1]), Some(7), "limit {limit}: both");
+        assert_eq!(
+            parser_ver(&store, ids[2]),
+            Some(7),
+            "limit {limit}: not adult"
+        );
+        assert_eq!(
+            parser_ver(&store, ids[3]),
+            Some(7),
+            "limit {limit}: detected"
+        );
+        assert_eq!(parser_ver(&store, ids[4]), None, "limit {limit}: pending");
+        assert_eq!(
+            parser_ver(&store, ids[5]),
+            Some(0),
+            "limit {limit}: plain + adult"
+        );
+        assert_eq!(parser_ver(&store, ids[6]), Some(7), "limit {limit}: alone");
+        // A backfill batch that read "pending" with the purged bit (or the
+        // writer's adult step) is refused: it reruns under the new sources.
+        let stale = lodestar_store::Enriched {
+            version: 7,
+            content_type: ADULT,
+            junk_score: 0,
+            comp: Vec::new(),
+            data: vec![0],
+        };
+        assert_eq!(
+            store
+                .set_enrichments_at(read_at, &[(ids[4], stale)], &[])
+                .unwrap(),
+            None,
+            "limit {limit}"
+        );
+        assert_eq!(
+            store.content_type(ids[0]).unwrap(),
+            Some(ADULT),
+            "until derived"
+        );
+
+        // A plain source's purge derives nothing and keeps the generation.
+        store
+            .set_source_state(plain, SourceState::Disabled)
+            .unwrap();
+        derived(&store, ids[5], ADULT);
+        let gen_before = store.class_gen().unwrap();
+        let (total, _) = purge_all(&mut store, plain, limit);
+        assert_eq!(total.torrents_kept, 2, "limit {limit}");
+        assert!(!total.rederive, "limit {limit}");
+        assert_eq!(store.class_gen().unwrap(), gen_before, "limit {limit}");
+        assert_eq!(parser_ver(&store, ids[3]), Some(7), "limit {limit}");
+        assert_eq!(parser_ver(&store, ids[5]), Some(7), "limit {limit}");
+    }
+}
+
+/// Without the always-adult mark (a connection the pipeline never told),
+/// an always-adult source's purge marks nothing: the mark is what names
+/// it. The pipeline's purge sets it (`Control::purge_step`).
+#[test]
+fn a_purge_without_the_adult_mark_marks_nothing() {
+    let mut store = mem();
+    let (dht, adult, _) = sources(&mut store);
+    let p = prepared(&store, "only");
+    let id = store_torrent(&mut store, &p, dht);
+    store
+        .put_unverified(&[item(&p.info_hash.0, adult, None)])
+        .unwrap();
+    derived(&store, id, ADULT);
+    store
+        .set_source_state(adult, SourceState::Disabled)
+        .unwrap();
+    let gen_before = store.class_gen().unwrap();
+    let (total, _) = purge_all(&mut store, adult, 100);
+    assert!(!total.rederive);
+    assert_eq!(store.class_gen().unwrap(), gen_before);
+    assert_eq!(parser_ver(&store, id), Some(7));
+}
+
+/// Your own Is adult correction keeps a torrent Adult whatever is purged:
+/// it's derived again (the backfill applies the correction), never
+/// cleared by the purge itself.
+#[test]
+fn a_purge_never_changes_the_stored_type_itself() {
+    let mut store = mem();
+    let (dht, adult, _) = sources(&mut store);
+    let p = prepared(&store, "yours");
+    let id = store_torrent(&mut store, &p, dht);
+    store
+        .put_unverified(&[item(&p.info_hash.0, adult, None)])
+        .unwrap();
+    derived(&store, id, ADULT);
+    let is_adult = ClassCorrection {
+        adult: Some(true),
+        not_junk: false,
+    };
+    assert!(store.set_correction(id, is_adult).unwrap());
+    derived(&store, id, ADULT);
+    store.set_adult_mark(AdultMark {
+        sources: bit(adult),
+        content_type: ADULT,
+    });
+    store
+        .set_source_state(adult, SourceState::Disabled)
+        .unwrap();
+    purge_all(&mut store, adult, 100);
+    assert_eq!(store.content_type(id).unwrap(), Some(ADULT));
+    assert_eq!(store.correction(id).unwrap(), Some(is_adult));
+}
+
+/// A purge's Claims stage moves the generation only when it marked a
+/// torrent: plain feed claims, or a torrent already marked, leave it.
+#[test]
+fn a_claims_purge_that_marks_nothing_keeps_the_generation() {
+    let matched = Claims {
+        adult: Some(AdultEnrichment {
+            scene_id: "1".into(),
+            kind: Some(AdultKind::Scene),
+            title: None,
+            studio: None,
+            released: None,
+            performers: Vec::new(),
+            performers_truncated: false,
+        }),
+        ..Claims::default()
+    };
+    let mut store = mem();
+    let (dht, feed, enr) = sources(&mut store);
+    let a = prepared(&store, "plain");
+    let a_id = store_torrent(&mut store, &a, dht);
+    let c = named("plain");
+    store
+        .put_unverified(&[item(&a.info_hash.0, feed, Some(&c))])
+        .unwrap();
+    derived(&store, a_id, 2);
+    // A match on a torrent with no record yet: nothing to mark.
+    let b = prepared(&store, "unenriched");
+    let b_id = store_torrent(&mut store, &b, dht);
+    store
+        .put_unverified(&[item(&b.info_hash.0, enr, Some(&matched))])
+        .unwrap();
+    assert_eq!(parser_ver(&store, b_id), None);
+    for s in [feed, enr] {
+        store.set_source_state(s, SourceState::Disabled).unwrap();
+        let gen_before = store.class_gen().unwrap();
+        let (total, _) = purge_all(&mut store, s, 100);
+        assert_eq!(total.claims_deleted, 1);
+        assert!(!total.rederive);
+        assert_eq!(store.class_gen().unwrap(), gen_before);
+    }
 }

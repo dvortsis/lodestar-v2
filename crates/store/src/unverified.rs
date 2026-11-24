@@ -340,6 +340,9 @@ pub struct PurgeStep {
     pub state_deleted: usize,
     /// Persisted fetch-queue keys of this source dropped.
     pub queue_deleted: usize,
+    /// Kept torrents were marked to be derived again: the backfill should
+    /// start another pass.
+    pub rederive: bool,
 }
 
 /// What [`Store::purge_source`] would remove for a source if it ran now,
@@ -1093,6 +1096,9 @@ impl Store {
     ///
     /// The source must be disabled or purged first (`Error::Invalid`
     /// otherwise), so nothing it finds meanwhile slips past the purge.
+    ///
+    /// When this connection's adult mark ([`Store::set_adult_mark`]) names
+    /// `source`, a kept torrent it alone made Adult is derived again.
     pub fn purge_source(
         &mut self,
         source: SourceId,
@@ -1182,9 +1188,11 @@ impl Store {
                 let mut marked = false;
                 for (id, data) in &lost {
                     // One that doesn't decode is marked: deriving again is
-                    // the safe side.
-                    if !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record()) {
-                        mark.execute(params![id])?;
+                    // the safe side. Only a row the UPDATE changed counts,
+                    // so a purge that marks nothing leaves the generation.
+                    if !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record())
+                        && mark.execute(params![id])? > 0
+                    {
                         marked = true;
                     }
                 }
@@ -1193,6 +1201,7 @@ impl Store {
                 // generation makes it rejected and run again (§20.9).
                 if marked {
                     crate::rules::bump_class_gen(&tx)?;
+                    step.rederive = true;
                 }
                 scanned = lost.len();
                 step.claims_deleted = scanned;
@@ -1211,6 +1220,26 @@ impl Store {
                     tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
                 let mut clear =
                     tx.prepare_cached("UPDATE torrents SET sources = sources & ~?2 WHERE id = ?1")?;
+                // An always-adult source made every torrent it found Adult
+                // (X-source-adult, [`Store::set_adult_mark`]). One it found
+                // that others keep, with no always-adult finder left, is
+                // derived again when it's stored Adult: the backfill applies
+                // detection, your correction and your rules as for any
+                // torrent. Holds and the core's flag marks are never
+                // touched (§20.5). Plain sources decide nothing in a
+                // derivation, so their torrents aren't marked
+                // (docs/decisions/2026-11-24-X-purge-rederive.md).
+                let adult = self.adult_mark;
+                let rederive = adult.sources & bit as u64 != 0;
+                let mut mark = tx.prepare_cached(
+                    "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1
+                     AND EXISTS (SELECT 1 FROM torrents WHERE id = ?1 AND content_type = ?2)",
+                )?;
+                // Any such torrent moves the generation, marked or not: a
+                // backfill batch (or the writer's adult step) that read its
+                // old sources would otherwise store it Adult, and one not
+                // enriched yet has nothing to mark.
+                let mut moved = false;
                 for (id, sources) in rows {
                     scanned += 1;
                     last = id;
@@ -1224,8 +1253,16 @@ impl Store {
                         Fate::Keep => {
                             clear.execute(params![id, bit])?;
                             step.torrents_kept += 1;
+                            if rederive && (sources & !bit) as u64 & adult.sources == 0 {
+                                mark.execute(params![id, adult.content_type])?;
+                                moved = true;
+                            }
                         }
                     }
+                }
+                if moved {
+                    crate::rules::bump_class_gen(&tx)?;
+                    step.rederive = true;
                 }
             }
             Stage::State => {
