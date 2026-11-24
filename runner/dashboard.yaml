@@ -490,6 +490,7 @@ placement:
   - X-leaktest-vpn-held-down
   - X-flake-states-clock
   - X-flake-e2e-expect-timeout
+  - X-flake-search-keyboard-2
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
   - X-natural-wording

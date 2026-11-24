@@ -621,3 +621,100 @@ fn a_spilled_cooldown_leaves_its_reason() {
     assert_eq!(reasons(&s), [("interval", 1)]);
     assert!(s.spill_used() >= 2);
 }
+
+/// X-escalate-full-table: split off, a full table still hands out a struck
+/// node, whose sample replaces its own record, and its failure cools in
+/// full. A newcomer still waits for a free place, as before.
+#[test]
+fn split_off_a_full_table_still_samples_a_struck_node() {
+    let mut s = Sampler::with_capacity(2).with_escalation(true);
+    let t0 = Instant::now();
+    sample(&mut s, wide(1), 1, t0);
+    s.fail(wide(1), 1, FULL, t0);
+    sample(&mut s, wide(2), 2, t0);
+    s.fail(wide(2), 2, FULL, t0);
+    let t1 = t0 + FIRST_FAILURE_BACKOFF;
+    s.prune(t1);
+    assert!(s.saturated());
+    // A newcomer queues first and still waits...
+    assert!(s.offer(node(wide(3)), t1));
+    assert_eq!(s.next(t1), None);
+    // ...but a struck node goes ahead of it, full table or not.
+    assert!(s.offer(node(wide(1)), t1));
+    assert!(!s.saturated());
+    assert_eq!(s.frontier_len(), 2);
+    assert_eq!(s.next(t1), Some(node(wide(1))));
+    assert!(s.reserve(wide(1), 3, t1));
+    assert_eq!(s.known(), 2);
+    s.fail(wide(1), 3, FULL, t1);
+    assert_eq!(eligible_at(&s, wide(1), t1), t1 + FULL);
+    assert_eq!(s.struck(), 1);
+    assert!(s.saturated());
+    assert_eq!(s.next(t1), None, "the newcomer still waits");
+    assert_eq!(s.frontier_len(), 1);
+}
+
+/// A struck node is queued even when the frontier is full: it waits apart,
+/// so a frontier stuck behind a full table doesn't keep it out.
+#[test]
+fn a_full_frontier_doesnt_keep_a_struck_node_out() {
+    let mut s = Sampler::with_capacity(1).with_escalation(true);
+    let t0 = Instant::now();
+    sample(&mut s, wide(0), 1, t0);
+    s.fail(wide(0), 1, FULL, t0);
+    let mut i = 1;
+    while s.frontier.len() < MAX_FRONTIER {
+        s.offer(node(wide(i)), t0);
+        i += 1;
+    }
+    let t1 = t0 + FIRST_FAILURE_BACKOFF;
+    s.prune(t1);
+    assert!(!s.offer(node(wide(i)), t1), "the frontier is full");
+    assert!(s.offer(node(wide(0)), t1));
+    assert_eq!(s.next(t1), Some(node(wide(0))));
+}
+
+/// A held node whose record leaves while it waits (its streak ended) is a
+/// newcomer again: it takes the frontier's path and needs a free place.
+#[test]
+fn a_held_node_whose_streak_ends_is_a_newcomer_again() {
+    let mut s = Sampler::with_capacity(2).with_escalation(true);
+    let t0 = Instant::now();
+    sample(&mut s, wide(1), 1, t0);
+    s.fail(wide(1), 1, FULL, t0);
+    let t1 = t0 + FIRST_FAILURE_BACKOFF;
+    s.prune(t1);
+    // A plain cooldown fills the other place.
+    sample(&mut s, wide(2), 2, t1);
+    s.complete(wide(2), 2, FULL, t1);
+    assert!(s.offer(node(wide(1)), t1));
+    // The streak ends while wide(1) waits.
+    let t2 = t0 + FULL;
+    s.prune(t2);
+    assert_eq!((s.known(), s.struck()), (1, 0));
+    assert!(s.tracked(&wide(1)), "still queued");
+    // Room for one: it's handed out as a newcomer, not from the held queue.
+    assert_eq!(s.next(t2), Some(node(wide(1))));
+    assert!(s.held.is_empty());
+    assert!(s.reserve(wide(1), 3, t2));
+    // A fresh first failure: the old streak is gone.
+    s.fail(wide(1), 3, FULL, t2);
+    assert_eq!(eligible_at(&s, wide(1), t2), t2 + FIRST_FAILURE_BACKOFF);
+}
+
+/// With the switch off, nothing is held: a node with a record that may be
+/// sampled queues on the frontier as before, and a full table hands out
+/// no one.
+#[test]
+fn with_the_switch_off_nothing_is_held() {
+    let mut s = Sampler::with_capacity(1);
+    let t0 = Instant::now();
+    sample(&mut s, wide(1), 1, t0);
+    s.complete(wide(1), 1, MIN_INTERVAL, t0);
+    let t1 = t0 + MIN_INTERVAL;
+    // Its cooldown ended but wasn't pruned: it may be sampled.
+    assert!(s.offer(node(wide(1)), t1));
+    assert!(s.held.is_empty());
+    assert!(s.saturated());
+    assert_eq!(s.next(t1), None);
+}

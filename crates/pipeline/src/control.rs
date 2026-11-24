@@ -1635,14 +1635,17 @@ impl Control {
     }
 
     /// One step of the purge: at most `MAX_PURGE_STEP` rows, in one
-    /// transaction (`Store::purge_source`).
+    /// transaction (`Store::purge_source`). A step that removed claims
+    /// marked their torrents for deriving again, so the running writer's
+    /// backfill starts another pass (ENR-G): a purged enrichment match
+    /// leaves the record and the index without waiting for a restart.
     pub async fn purge_step(
         &self,
         id: SourceId,
         from: lodestar_store::unverified::PurgeCursor,
     ) -> Result<lodestar_store::unverified::PurgeStep, SourceError> {
         let store = self.inner.store.clone();
-        tokio::task::spawn_blocking(move || {
+        let step = tokio::task::spawn_blocking(move || {
             store.lock().expect("store lock").purge_source(
                 id,
                 from,
@@ -1651,7 +1654,14 @@ impl Control {
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))?
-        .map_err(SourceError::from)
+        .map_err(SourceError::from)?;
+        if step.claims_deleted > 0 {
+            self.inner
+                .monitor
+                .reenrich
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        Ok(step)
     }
 
     /// Ends the purge once every step is done: the source Purged and its
