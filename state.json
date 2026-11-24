@@ -9210,20 +9210,26 @@
         "crates/dht/src/restart/**"
       ],
       "items": [
-        "restart snapshot fuzz target only reaches snapshot version 1; extend it to the new version and old->new migration"
+        "dht_restart fuzz target seals only at VERSION (fuzz_targets/dht_restart.rs:21); also seal at SNAPSHOT_SPILL_VERSION so the v2 spill parser is fuzzed, plus old->new migration"
       ],
       "model": "opus",
       "added": "2026-11-24",
-      "note": "after X-split-resume-gate merges; on-disk format parser, Opus only"
+      "note": "ready now (#1118 merged); on-disk format parser, Opus only; owns fuzz/fuzz_targets/dht_restart.rs (+ restart test seeds); not beside a slice editing restart.rs"
     },
     {
-      "id": "X-restart-fuzz-v2-seal",
-      "from": "X-split-resume-gate #1118",
-      "items": [
-        "fuzz/fuzz_targets/dht_restart.rs should also seal SNAPSHOT_SPILL_VERSION"
+      "id": "X-split-restart-metrics",
+      "from": "rv-1118",
+      "owns": [
+        "crates/dht/src/node/sampler.rs",
+        "docs/metrics.md"
       ],
-      "note": "fold into X-restart-fuzz-v2",
-      "added": "2026-11-24"
+      "items": [
+        "restart_obligations_* omit spilled cooldowns restored after a restart, and a filter refusal does not bump restored_refused (sampler.rs:213, :868): count them or document",
+        "nits: restart.rs:1175 seeding clones the spill (move it); apply_seed uses Instant::now() vs clock.mono(); sim restart.rs:486 cross-check loose; reword \"restored keys do not live forever\" (keys redrawn only on full drain)"
+      ],
+      "model": "opus",
+      "added": "2026-11-24",
+      "note": "fold into X-split-spill-horizon if it stays small, else after it"
     }
   ],
   "main_health": {
@@ -10723,6 +10729,13 @@
       "merged_as": "760dbc17c1624e01d37539c22514ed06275cc03b",
       "head": "901ce247594504fd23d3f934fd860e6a22d52708",
       "at": "2026-11-24T21:10Z"
+    },
+    {
+      "pr": 1118,
+      "slice": "X-split-resume-gate",
+      "merged_as": "16fa8c8c96220907c34fd15866f3383cdbbbb4d3",
+      "head": "2c988fb250cf518f92e3b0f4ff927eb3e6e6d2b4",
+      "at": "2026-11-24T21:58Z"
     }
   ],
   "active_sessions": {
@@ -10993,7 +11006,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T21:15Z",
+    "updated": "2026-11-24T22:00Z",
     "items": [
       {
         "slot": 1,
@@ -11007,14 +11020,13 @@
       },
       {
         "slot": 2,
-        "slice": "X-split-resume-gate",
+        "slice": "X-split-spill-horizon",
         "role": "build",
         "model": "opus",
-        "agent": "claude",
-        "doing": "#1118 ready at 2c988fb2 (all green); fresh Opus review incl. snapshot format running",
-        "since": "2026-11-24T17:25Z",
-        "thread": "cmsg_01NSSK1erQ8P6b2pdCDdthC3DsUfzgoadHjfcTG4SEtHXw",
-        "pr": 1118
+        "agent": "opus",
+        "doing": "brief written (briefs/X-split-spill-horizon.md); coordinator starting it",
+        "since": "2026-11-24T22:00Z",
+        "status": "active"
       },
       {
         "slot": 3,
@@ -11143,7 +11155,7 @@
     }
   ],
   "heartbeat": "2026-11-24T03:39:06Z",
-  "updated": "2026-11-24T21:40Z",
+  "updated": "2026-11-24T22:00Z",
   "pause": {
     "build_slices": false,
     "since": "2026-11-23T06:09Z",
@@ -12030,8 +12042,8 @@
   },
   "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge.",
   "runner_todo": [
-    "Runner docs PR for docs/metrics.md: (a) dht_sample_frontier can reach 40,000 with escalation (counts held), from rv-1112; (b) the 6 h restart-gate line is wrong after X-split-resume-gate merges. Land after X-split-resume-gate.",
-    "After #1117 merges: put the kill-switch requirement in the ENR wiring slice's notes (runner PR)."
+    "After #1117 merges: put the kill-switch requirement in the ENR wiring slice's notes (runner PR).",
+    "Runner docs PR for docs/metrics.md (now unblocked, #1118 merged): (a) dht_sample_frontier can reach 40,000 with escalation (rv-1112); (b) drop the ~6 h restart-gate sentence (:676); (c) dht_sample_spill_slots (:677): not 0 with the split off after restoring a v2 snapshot, and not only allocated at first fill (rv-1118)."
   ],
   "owns_locks": [
     {
