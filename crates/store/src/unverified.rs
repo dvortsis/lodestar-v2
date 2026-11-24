@@ -1114,13 +1114,33 @@ impl Store {
                 }
             }
             Stage::Claims => {
-                scanned = tx
+                // A torrent that loses a claim that shaped its record is
+                // derived again (ENR-G): a purged enrichment match or
+                // identification must not stay in its record or its index
+                // entry. RETURNING pairs the marks with exactly the rows
+                // deleted. Plain feed claims never shape the record, so
+                // their torrents aren't marked.
+                let lost: Vec<(i64, Vec<u8>)> = tx
                     .prepare_cached(concat!(
                         "DELETE FROM torrent_claims WHERE rowid IN (SELECT rowid FROM ",
                         claims_of!(),
-                        " LIMIT ?2)"
+                        " LIMIT ?2) RETURNING torrent_id, data"
                     ))?
-                    .execute(params![source.get(), limit as i64])?;
+                    .query_map(params![source.get(), limit as i64], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
+                let mut mark = tx.prepare_cached(
+                    "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
+                )?;
+                for (id, data) in &lost {
+                    // One that doesn't decode is marked: deriving again is
+                    // the safe side.
+                    if !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record()) {
+                        mark.execute(params![id])?;
+                    }
+                }
+                scanned = lost.len();
                 step.claims_deleted = scanned;
             }
             Stage::Torrents => {

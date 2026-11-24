@@ -306,7 +306,16 @@ fn with_match(
 pub fn mark_matched(store: &mut Store, ids: &[i64]) -> Result<Vec<i64>, lodestar_store::Error> {
     let mut marked = Vec::new();
     for &id in ids {
-        if !marked.contains(&id) && (stored_match(store, id)?.is_some() || identified(store, id)?) {
+        if marked.contains(&id) {
+            continue;
+        }
+        // The claims that can shape a record, as the purge judges them
+        // (`Claims::shapes_the_record`); then whether they do for this one.
+        let shaped = store
+            .torrent_claims(id)?
+            .iter()
+            .any(|c| c.claims.as_ref().is_some_and(|c| c.shapes_the_record()));
+        if shaped && (stored_match(store, id)?.is_some() || identified(store, id)?) {
             marked.push(id);
         }
     }

@@ -4,7 +4,9 @@
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
-use lodestar_store::claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
+use lodestar_store::claims::{
+    AdultEnrichment, AdultKind, ClaimedFile, Claims, Confidence, ExternalId, Provenance,
+};
 use lodestar_store::unverified::{
     ClaimsRefiled, MAX_PAGE, MAX_ROW, Network, NewUnverified, PAGE_BYTES, PurgeCursor,
     PurgePreview, PurgeStep, Put, RefiledClaims, RefiledUnverified, UnverifiedRefiled,
@@ -1560,4 +1562,79 @@ fn a_promotion_ignores_a_stopped_finders_public_mark() {
     store.promote(id, &fetch, CODES, T).unwrap();
     let row = store.torrent(id).unwrap().unwrap();
     assert_ne!(row.flags & flags::PRIVATE_SOURCE, 0, "stored private");
+}
+
+/// ENR-G: purging a source marks for re-derivation (`parser_ver = 0`) each
+/// torrent that lost a claim that shaped its record (an adult match naming
+/// a kind, here), so a purged match doesn't stay in the record or the
+/// index. A torrent that lost only a plain feed claim, or that only another
+/// source claims, keeps its version. One row a step pairs every mark with
+/// its delete.
+#[test]
+fn a_purge_marks_the_torrents_that_lost_a_record_shaping_claim() {
+    let ver = |store: &Store, id: i64| -> i64 {
+        store
+            .connection()
+            .query_row(
+                "SELECT parser_ver FROM torrent_parsed WHERE torrent_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    let matched = |_: &str| Claims {
+        adult: Some(AdultEnrichment {
+            scene_id: "1".into(),
+            kind: Some(AdultKind::Scene),
+            title: None,
+            studio: None,
+            released: None,
+            performers: Vec::new(),
+            performers_truncated: false,
+        }),
+        ..Claims::default()
+    };
+    for limit in [1, 100] {
+        let mut store = mem();
+        let (dht, enr, other) = sources(&mut store);
+        let mut ids = Vec::new();
+        for (name, by, adult) in [
+            ("one", enr, true),
+            ("two", enr, true),
+            ("three", enr, false),
+            ("four", other, true),
+        ] {
+            let p = prepared(&store, name);
+            let id = store_torrent(&mut store, &p, dht);
+            let c = if adult { matched(name) } else { named(name) };
+            store
+                .put_unverified(&[item(&p.info_hash.0, by, Some(&c))])
+                .unwrap();
+            // What the enrichment backfill writes once it has derived it.
+            store
+                .connection()
+                .execute(
+                    "INSERT INTO torrent_parsed (torrent_id, parser_ver, data) VALUES (?1, 7, x'00')",
+                    [id],
+                )
+                .unwrap();
+            ids.push(id);
+        }
+        // "two" is claimed by both: it loses the purged source's match and
+        // keeps the other's plain claims.
+        let two = store.torrent(ids[1]).unwrap().unwrap();
+        let c = named("two");
+        store
+            .put_unverified(&[item(&two.info_hash.0, other, Some(&c))])
+            .unwrap();
+        store.set_source_state(enr, SourceState::Disabled).unwrap();
+        let (total, _) = purge_all(&mut store, enr, limit);
+        assert_eq!(total.claims_deleted, 3, "limit {limit}");
+        for &id in &ids[..2] {
+            assert_eq!(ver(&store, id), 0, "limit {limit}: {id} marked");
+        }
+        assert_eq!(ver(&store, ids[2]), 7, "limit {limit}: a plain feed claim");
+        assert_eq!(ver(&store, ids[3]), 7, "limit {limit}: another source's");
+        assert_eq!(store.torrent_claims(ids[1]).unwrap().len(), 1);
+    }
 }

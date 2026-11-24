@@ -820,6 +820,11 @@ pub struct Ctx<'a> {
     pub filter: Option<&'a Handle>,
     /// Raised when matches were left for the backfill, so it runs.
     pub reenrich: Option<&'a AtomicBool>,
+    /// Each listed enrichment source's consent, judged again before its
+    /// answer is stored (ENR-G): one looked up before consent was
+    /// withdrawn and written after is refused. The writer always sets it;
+    /// `None` skips the check (tests of other paths).
+    pub consent: Option<&'a crate::adult_enrich::EnricherConsent>,
 }
 
 impl std::fmt::Debug for Ctx<'_> {
@@ -953,6 +958,15 @@ pub fn ingest(
         // and is refused on a private torrent too: the runtime never asks
         // about one, so an answer for it is stale or forged.
         let identification = c.adult.is_none() && is_identification(d, ctx.enrichers);
+        // A listed adult-enrichment source's consent withdrawn since the
+        // lookup: nothing of its answer is stored (ENR-G).
+        if c.adult.is_some()
+            && let Some(consent) = ctx.consent
+            && !consent.met(store, d.source)?
+        {
+            UnverifiedStats::add(&stats.refused, 1);
+            continue;
+        }
         // An adult-enrichment match (ENR-1) is only ever about a stored,
         // verified torrent, looked up by the enrichment runtime: one for
         // any other key, or through a private source, is refused.

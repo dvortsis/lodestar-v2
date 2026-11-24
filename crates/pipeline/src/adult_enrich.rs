@@ -187,6 +187,64 @@ impl EnrichSources {
     }
 }
 
+/// Whether `manifest`'s consent condition holds now (Account: its required
+/// credentials stored, SRC-4), as the gate judges it before a lookup
+/// ([`check_with`]) and the writer again before it stores an answer
+/// ([`EnricherConsent`]). Blocking: reads the store.
+pub fn consent_met(
+    store: &Store,
+    manifest: &Manifest,
+    credentials: &[lodestar_sources::consent::CredentialSpec],
+) -> Result<bool, lodestar_store::Error> {
+    Ok(lodestar_sources::consent::need_in_with(store, manifest, credentials)?.is_none())
+}
+
+/// What the writer needs to judge each listed adult-enrichment source's
+/// consent again when it stores an answer (ENR-G): withdrawing consent
+/// between a lookup and its write must store nothing. A listed source it
+/// doesn't know fails closed.
+#[derive(Debug, Clone, Default)]
+pub struct EnricherConsent(
+    Arc<
+        [(
+            SourceId,
+            Manifest,
+            &'static [lodestar_sources::consent::CredentialSpec],
+        )],
+    >,
+);
+
+impl EnricherConsent {
+    /// The listed ones among registered `(id, manifest, credentials)`.
+    pub fn of<'a>(
+        registered: impl IntoIterator<
+            Item = (
+                SourceId,
+                &'a Manifest,
+                &'static [lodestar_sources::consent::CredentialSpec],
+            ),
+        >,
+        enrichers: EnrichSources,
+    ) -> EnricherConsent {
+        EnricherConsent(
+            registered
+                .into_iter()
+                .filter(|(id, ..)| enrichers.has(*id))
+                .map(|(id, m, c)| (id, m.clone(), c))
+                .collect(),
+        )
+    }
+
+    /// `source`'s consent condition holds now ([`consent_met`]); false for
+    /// a source it doesn't know.
+    pub fn met(&self, store: &Store, source: SourceId) -> Result<bool, lodestar_store::Error> {
+        match self.0.iter().find(|(id, ..)| *id == source) {
+            Some((_, m, c)) => consent_met(store, m, c),
+            None => Ok(false),
+        }
+    }
+}
+
 /// A manifest whose source may attach adult sections: an enrichment
 /// source that isn't always adult.
 pub(crate) fn admitted(m: &Manifest) -> bool {
@@ -357,8 +415,7 @@ pub fn check_with(
             .sources()?
             .iter()
             .any(|s| s.id == ctx.source && s.state == SourceState::Enabled);
-        g.consent_met =
-            lodestar_sources::consent::need_in_with(store, ctx.manifest, credentials)?.is_none();
+        g.consent_met = consent_met(store, ctx.manifest, credentials)?;
     }
     let item_wide = Gate {
         stored: true,
