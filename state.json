@@ -10684,16 +10684,12 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T00:38:33Z",
+    "updated": "2026-11-24T01:08:22Z",
     "items": [
       {
         "slot": 1,
         "model": "opus",
-        "slice": "X-soft-key",
-        "role": "build",
-        "agent": "session_01MMjhnA5T7k66ekhtDJK66s (opus)",
-        "doing": "for X-test-vm: soft treatment key (block-lib, rules, collector, analyze_cr soft report)",
-        "since": "2026-11-23T23:26:12Z"
+        "status": "idle"
       },
       {
         "slot": 2,
