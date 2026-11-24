@@ -2077,6 +2077,7 @@ version = "0.5.0"
 dependencies = [
  "lodestar-integrations",
  "proptest",
+ "regex",
  "rustls",
  "rustls-platform-verifier",
  "tokio",

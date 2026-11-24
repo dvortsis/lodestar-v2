@@ -449,7 +449,7 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// RFC 2812 nicks, up to 30 characters.
-fn valid_nick(n: &str) -> bool {
+pub(crate) fn valid_nick(n: &str) -> bool {
     let special = |b: u8| {
         matches!(
             b,
@@ -520,36 +520,9 @@ fn has_control(s: &str) -> bool {
 
 /// Whether `s` has a Unicode format character (general category Cf):
 /// bidi controls, zero-width characters, the soft hyphen, tag characters
-/// and the rest. Unicode 16's full list, written out so no dependency is
-/// needed; they render invisibly or reorder the text around them.
+/// and the rest ([`line::is_format_char`]).
 fn has_format(s: &str) -> bool {
-    const CF: &[(u32, u32)] = &[
-        (0x00AD, 0x00AD),
-        (0x0600, 0x0605),
-        (0x061C, 0x061C),
-        (0x06DD, 0x06DD),
-        (0x070F, 0x070F),
-        (0x0890, 0x0891),
-        (0x08E2, 0x08E2),
-        (0x180E, 0x180E),
-        (0x200B, 0x200F),
-        (0x202A, 0x202E),
-        (0x2060, 0x2064),
-        (0x2066, 0x206F),
-        (0xFEFF, 0xFEFF),
-        (0xFFF9, 0xFFFB),
-        (0x110BD, 0x110BD),
-        (0x110CD, 0x110CD),
-        (0x13430, 0x1343F),
-        (0x1BCA0, 0x1BCA3),
-        (0x1D173, 0x1D17A),
-        (0xE0001, 0xE0001),
-        (0xE0020, 0xE007F),
-    ];
-    s.chars().any(|c| {
-        let c = u32::from(c);
-        CF.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
-    })
+    s.chars().any(line::is_format_char)
 }
 
 fn server_name(host: &str) -> Result<ServerName<'static>, ConfigError> {
@@ -1717,8 +1690,10 @@ impl Proto {
                 self.phase = Phase::Registering;
             }
             // `RPL_SASLMECHS`: the mechanisms the server does take, sent
-            // before the 904 that refuses the one asked for.
-            "908" if self.in_sasl() => {
+            // before the 904 that refuses the one asked for. It counts
+            // only in answer to `AUTHENTICATE PLAIN`, before the
+            // credentials go: after them, a 904 is a failed login.
+            "908" if self.phase == Phase::SaslMech => {
                 let mechs = msg.param(1).unwrap_or("");
                 if !mechs
                     .split(',')
@@ -1729,7 +1704,7 @@ impl Proto {
             }
             // PLAIN refused for want of the mechanism, not a wrong
             // password: retried later like a server that didn't offer it.
-            "904" if self.in_sasl() && self.plain_refused => {
+            "904" if self.phase == Phase::SaslMech && self.plain_refused => {
                 self.retry(Disconnect::SaslUnavailable);
             }
             "902" | "904" | "905" | "906" if self.in_sasl() => self.stop(Stop::AuthFailed),
@@ -2000,9 +1975,18 @@ mod tests {
         assert_eq!(p.end, unavailable);
         // A 908 that does list PLAIN leaves the 904 a failed login.
         let mut p = acked(sasl(), true, now);
-        p.on_message(msg("AUTHENTICATE +"), now);
         p.on_message(
             msg(":s 908 lode PLAIN,EXTERNAL :are available SASL mechanisms"),
+            now,
+        );
+        p.on_message(msg(":s 904 lode :SASL authentication failed"), now);
+        assert_eq!(p.end, Some(End::Stop(Stop::AuthFailed)));
+        // A 908 without PLAIN after the credentials went out doesn't
+        // turn a failed login into a retry.
+        let mut p = acked(sasl(), true, now);
+        p.on_message(msg("AUTHENTICATE +"), now);
+        p.on_message(
+            msg(":s 908 lode EXTERNAL :are available SASL mechanisms"),
             now,
         );
         p.on_message(msg(":s 904 lode :SASL authentication failed"), now);
