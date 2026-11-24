@@ -4405,6 +4405,11 @@
       "at": "2026-11-24T14:45Z",
       "slice": "ENR-G",
       "what": "Approved fix outside owns: crates/store/src/unverified.rs purge_source Stage::Claims marks the deleted claims torrents for the backfill (DELETE ... RETURNING torrent_id, then parser_ver = 0), plus a store unit test. Hole found by the gate: purge left torrent_parsed with the purged adult match. Content-safety tightening; no owner call."
+    },
+    {
+      "at": "2026-11-24T15:32Z",
+      "slice": "ENR-G",
+      "what": "Approved 3 more fixes outside owns (gate found): (1) pipeline control.rs purge_step sets reenrich when claims are deleted, so a running server re-derives; (2) purge marks only claims with an adult section or identification details (shared predicate with mark_matched); (3) pipeline ingest drops an adult-enrichment Discovery when its consent no longer holds (race: emitted before key removal, written after). All content-safety tightenings; no owner call. ENR-G fixes its own owns line (spec is web/e2e/adult-enrichment.routes.test.ts)."
     }
   ],
   "runner_notes": {
@@ -9162,6 +9167,20 @@
       "model": "sonnet",
       "added": "2026-11-24",
       "note": "can fold into X-cmp-egress-follows (API follows list) as one slice"
+    },
+    {
+      "id": "X-purge-rederive",
+      "from": "ENR-G thread 2026-11-24T15:28Z",
+      "owns": [
+        "crates/store/src/unverified.rs"
+      ],
+      "items": [
+        "purge Torrents stage Fate::Keep clears a source bit without re-deriving: a torrent only an always-adult source made Adult may stay Adult after that source is purged",
+        "decide whether purged plain feed claims (non-enrichment) should re-derive the record, and at what cost (whole-catalogue reindex on a feed purge)"
+      ],
+      "model": "opus",
+      "added": "2026-11-24",
+      "note": "after ENR-G merges; content-safety, /security-review"
     }
   ],
   "main_health": {
@@ -10894,7 +10913,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T15:12Z",
+    "updated": "2026-11-24T15:32Z",
     "items": [
       {
         "slot": 1,
@@ -10919,7 +10938,7 @@
         "slice": "ENR-G",
         "role": "build",
         "model": "opus",
-        "doing": "building; store purge fix approved 14:45Z",
+        "doing": "building; 3 more fixes approved 15:32Z (control reenrich, narrow mark, ingest consent drop)",
         "since": "2026-11-24T14:30Z",
         "status": "active",
         "agent": "opus"
