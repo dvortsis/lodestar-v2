@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T06:47:24Z",
+  "updated_at": "2026-11-24T08:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -9028,14 +9028,26 @@
       "added": "2026-11-23T04:15Z"
     }
   ],
-  "main_health": [
-    "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
-    "2026-10-30T07:46Z main 42779e4a CI: ubuntu shutdown.rs stall race (fix/shutdown-stall), macOS toolchain download infra failure; a84c3681 macOS log_canary run_4 (fix in #187); filter budget props::budget (F-filters-neutral-perf scope?)",
-    "2026-10-30T07:47Z filter budget red on main = cross-CPU calibration variance (Intel 8573C), not a code regression (diff empty b4d80387..a84c3681 in filter/search/classify/release-parser) -> F-filters-xcpu",
-    "2026-10-30T08:19Z main fafe2f89: #187 (macOS canary) + #191 (shutdown race) in; filter budget variance -> F-filters-xcpu; percolator -> #193",
-    "2026-10-30T09:03Z main macOS red: aria2 refused_addr hang (#181 regression). Lesson: PRs touching cross-platform test helpers get full-ci.",
-    "2026-11-02T17:14:49Z main red 7d4724c9 -> a5e7074e: #394 added Policy::max_agents, #397 merged after with a Policy literal lacking it (E0063); fixed by runner PR #398 (Opus review MERGE). Lesson: two PRs touching a shared struct and its users need the second to bring main in before merge."
-  ],
+  "main_health": {
+    "previous": [
+      "2026-10-30T07:40Z main a84c3681 CI red: macOS log_canary run_4_keys_tokens_and_the_proxy_user_never_show_either; filter budget props::budget. 42779e4a run pending.",
+      "2026-10-30T07:46Z main 42779e4a CI: ubuntu shutdown.rs stall race (fix/shutdown-stall), macOS toolchain download infra failure; a84c3681 macOS log_canary run_4 (fix in #187); filter budget props::budget (F-filters-neutral-perf scope?)",
+      "2026-10-30T07:47Z filter budget red on main = cross-CPU calibration variance (Intel 8573C), not a code regression (diff empty b4d80387..a84c3681 in filter/search/classify/release-parser) -> F-filters-xcpu",
+      "2026-10-30T08:19Z main fafe2f89: #187 (macOS canary) + #191 (shutdown race) in; filter budget variance -> F-filters-xcpu; percolator -> #193",
+      "2026-10-30T09:03Z main macOS red: aria2 refused_addr hang (#181 regression). Lesson: PRs touching cross-platform test helpers get full-ci.",
+      "2026-11-02T17:14:49Z main red 7d4724c9 -> a5e7074e: #394 added Policy::max_agents, #397 merged after with a Policy literal lacking it (E0063); fixed by runner PR #398 (Opus review MERGE). Lesson: two PRs touching a shared struct and its users need the second to bring main in before merge."
+    ],
+    "known_flakes": [
+      {
+        "at": "2026-11-24T08:50Z",
+        "flake": "store unverified_cap_index::the_kept_count_matches_the_rows",
+        "seen_on": "#1110 (ENR-11)",
+        "cause": "test's Move op asks for a duplicate (4,key) row",
+        "fix": "X-flake-cap-index-move (queued, no PR yet)",
+        "rule": "\u00a72.18: doesn't block PRs that don't touch crates/store/tests; cite the fix slice"
+      }
+    ]
+  },
   "ops": [
     "2026-10-30T08:00Z Local disk filled twice from shared runner-target (23 GB, bisect builds). Wiped. Policy: Rust review builds go to cloud review sessions, not local agents.",
     {
@@ -10513,6 +10525,13 @@
   },
   "queued_followups": [
     {
+      "id": "X-flake-cap-index-move",
+      "what": "Fix the random proptest failure in crates/store/tests/unverified_cap_index.rs the_kept_count_matches_the_rows (shrunk [FindBt(0,0,true),Move(0),FindBt(0,0,true),Move(0)]; second Move's UPDATE hits UNIQUE(network,key); test bug). Test code only, Opus. Brief: briefs/X-flake-cap-index-move.md. First in line for the next free build slot (slot 1, after ENR-11 #1110 merges).",
+      "from": "ENR-11 #1110 via the coordinator",
+      "at": "2026-11-24T08:50Z",
+      "status": "queued"
+    },
+    {
       "id": "F-suggest-adult-field",
       "what": "/suggest field_names offers `adult:` (and maybe adult values) while Show adult is off; /search/fields already hides it. Content-safety tightening (Opus, /security-review). Small.",
       "from": "#335",
@@ -10571,7 +10590,7 @@
     "gluetun": "NOT approved; owner decides after baseline ends",
     "watch": "Antigravity task-668 3-hourly; confirms survival after 11-02 11:00Z"
   },
-  "queue_note": "Next as slots free: openapi-example-size (Sonnet, now unblocked), X-strip-format-chars (Opus, small), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2,Q15), SRC-10e (Q7), SRC-13 (Q3), SRC-15b (Q1), adult stand-in release (q-adult-standin-release). Blocked on release cut: SRC-1. Seven-day usage warning active.",
+  "queue_note": "2026-11-24T08:50Z: Next as build slots free: X-flake-cap-index-move (flake, first), then X-escalate-full-table, then X-cmp-egress-ui, ENR-G, GS-4, ENR-terms-api. X-split-resume-gate and X-split-spill-horizon share sampler.rs with X-escalate-full-table, so one at a time. Previous: Next as slots free: openapi-example-size (Sonnet, now unblocked), X-strip-format-chars (Opus, small), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2,Q15), SRC-10e (Q7), SRC-13 (Q3), SRC",
   "plan_ref": "build-plan \u00a70.5 Path to 100 (r5/r5.1, PR #970, owner 2026-11-20)",
   "v051_gate": {
     "upgrade_test": "SATISFIED per owner-decisions \u00a72.28 (#371): r1 upgraded the Oct 22 volume V3->V12 cleanly; crates/store is byte-identical between v0.5.1-rc.1 and v0.5.1-rc.2 (git diff --quiet v0.5.1-rc.1 v0.5.1-rc.2 -- crates/store/), so the migration code matches whichever rc r1 ran. Runner-verified 2026-11-02T03:20Z."
@@ -10696,7 +10715,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T06:47:24Z",
+    "updated": "2026-11-24T08:50Z",
     "items": [
       {
         "slot": 1,
