@@ -284,13 +284,9 @@ impl Endpoints {
     /// and the origin list. What [`PluginEgress`] checks first; a resolved
     /// address can still be refused after.
     pub fn permits(&self, url: &str) -> bool {
-        if url
-            .get(..6)
-            .is_some_and(|s| s.eq_ignore_ascii_case("wss://"))
-        {
-            self.check_ws(url).is_ok()
-        } else {
-            self.check(url).is_ok()
+        match url::Url::parse(url) {
+            Ok(u) if u.scheme() == "wss" => self.check_ws(url).is_ok(),
+            _ => self.check(url).is_ok(),
         }
     }
 
@@ -803,8 +799,8 @@ pub struct PluginEgress {
     /// What WebSocket sessions connect with; set by the factory when the
     /// route could be built. Without it every session is refused.
     tcp: Option<TcpEgress>,
-    /// The WebSocket TLS connector, built on first use.
-    tls: OnceLock<Result<tokio_rustls::TlsConnector, WsError>>,
+    /// The WebSocket TLS connector, kept once built.
+    tls: OnceLock<tokio_rustls::TlsConnector>,
 }
 
 impl fmt::Debug for PluginEgress {
@@ -1326,9 +1322,13 @@ impl Fetch for PluginEgress {
 impl PluginEgress {
     /// The WebSocket TLS connector for this plugin's roots.
     fn tls(&self, tcp: &TcpEgress) -> Result<tokio_rustls::TlsConnector, WsError> {
-        self.tls
-            .get_or_init(|| ws::tls_connector(&tcp.roots))
-            .clone()
+        // Only a connector that built is kept: a failure (the platform's
+        // roots not loading) is tried again next time.
+        if let Some(c) = self.tls.get() {
+            return Ok(c.clone());
+        }
+        let c = ws::tls_connector(&tcp.roots)?;
+        Ok(self.tls.get_or_init(|| c).clone())
     }
 
     /// Opens a WebSocket session (NOS-2b): the endpoint policy (a `wss`
@@ -1347,6 +1347,8 @@ impl PluginEgress {
         // Half the connect timeout, as for a streamed request: a paced
         // refusal comes back well inside the plugin's own deadline.
         let pace_by = started + limits.connect / 2;
+        // A trip from here on (down and up again) ends the attempt.
+        let trips = self.counters.trips.load(Ordering::Relaxed);
         self.admit_route(Some(pace_by))
             .await
             .map_err(WsError::Connect)?;
@@ -1359,6 +1361,7 @@ impl PluginEgress {
             Arc::clone(&self.probe),
             Arc::clone(&self.counters),
         );
+        watch.trips = trips;
         let opened = {
             let open = self.connect_ws(tcp, &tls, &target, limits, deadline, pace_by);
             tokio::select! {
@@ -1505,11 +1508,15 @@ impl KillSwitch for RouteSwitch {
 /// session at once, and on a checked route it also probes the route
 /// itself every [`BODY_REPROBE`] (or the probe's TTL) while the session
 /// is waited on. A probe in progress survives the wait being dropped (a
-/// frame arrived first), so steady traffic can't starve it.
+/// frame arrived first), so steady traffic can't starve it. A route that
+/// went down and came back while nobody waited ends the session too: the
+/// egress's trip count moved.
 struct EgressWatch {
     down: watch::Receiver<RouteState>,
     probe: Arc<dyn RouteProbe>,
     counters: Arc<Counters>,
+    /// The egress's trip count when the session was admitted.
+    trips: u64,
     next_probe: Instant,
     probing: Option<BoxFuture<'static, Result<(), DownReason>>>,
     /// Why the route went down, once seen: every later wait ends at once.
@@ -1523,6 +1530,7 @@ impl EgressWatch {
         counters: Arc<Counters>,
     ) -> EgressWatch {
         EgressWatch {
+            trips: counters.trips.load(Ordering::Relaxed),
             next_probe: Instant::now() + reprobe_every(&*probe),
             down,
             probe,
@@ -1543,19 +1551,22 @@ impl EgressWatch {
             let EgressWatch {
                 down,
                 probe,
+                counters,
+                trips,
                 next_probe,
                 probing,
                 ..
             } = &mut *self;
+            let lost = route_lost(down, counters, *trips);
             match probing.as_mut() {
                 Some(running) => {
                     tokio::select! {
                         biased;
-                        r = went_down(down) => break r,
+                        r = lost => break r,
                         r = running => {
                             *probing = None;
                             match r {
-                                Err(r) => break r,
+                                Err(r) => break r.to_string(),
                                 Ok(()) => *next_probe = Instant::now() + every,
                             }
                         }
@@ -1564,20 +1575,41 @@ impl EgressWatch {
                 None if checked => {
                     tokio::select! {
                         biased;
-                        r = went_down(down) => break r,
+                        r = lost => break r,
                         () = tokio::time::sleep_until(*next_probe) => {
                             let probe = Arc::clone(probe);
                             *probing = Some(Box::pin(async move { probe.probe().await }));
                         }
                     }
                 }
-                None => break went_down(down).await,
+                None => break lost.await,
             }
         };
         Counters::bump(&self.counters.kill_switch_aborts);
         let reason = format!("went down in flight: {reason}");
         self.gone = Some(reason.clone());
         reason
+    }
+}
+
+/// Resolves once the route is published down, has tripped since `trips`
+/// (it went down and came back while nobody looked), or can no longer be
+/// watched (the egress is gone): fails closed. Cancel-safe.
+async fn route_lost(
+    rx: &mut watch::Receiver<RouteState>,
+    counters: &Counters,
+    trips: u64,
+) -> String {
+    loop {
+        if let RouteState::Down(r) = *rx.borrow_and_update() {
+            return r.to_string();
+        }
+        if counters.trips.load(Ordering::Relaxed) != trips {
+            return "the route went down and came back".into();
+        }
+        if rx.changed().await.is_err() {
+            return DownReason::ClientUnavailable.to_string();
+        }
     }
 }
 
@@ -1756,6 +1788,66 @@ mod ws_tests {
         drop(tx);
         assert!(!switch.is_up(), "a lost switch is down");
         switch.went_down().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_route_that_went_down_and_came_back_ends_the_wait() {
+        let (_tx, rx) = watch::channel(RouteState::Up);
+        let counters = Arc::new(Counters::default());
+        let mut w = EgressWatch::new(rx, Arc::new(Probe::Direct), Arc::clone(&counters));
+        // Down and up again while nobody waited: only the trip count shows it.
+        Counters::bump(&counters.trips);
+        let reason = tokio::time::timeout(Duration::from_secs(1), w.wait())
+            .await
+            .expect("the flap went unseen");
+        assert!(reason.contains("came back"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn the_route_going_down_mid_handshake_ends_the_connect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("wss://127.0.0.1:{}/", listener.local_addr().unwrap().port());
+        let client = GuardedClient::with_route(
+            NetPolicy::download_client(),
+            Duration::from_secs(15),
+            Arc::new(SystemResolver),
+            &Route::Direct,
+        )
+        .unwrap();
+        let mut egress = PluginEgress::new(
+            "p",
+            RouteKind::Direct,
+            Ok(client),
+            Arc::new(Probe::Direct),
+            Endpoints::user_entered(NetPolicy::download_client()).only_origins(&[&url]),
+        );
+        egress.tcp = Some(TcpEgress {
+            resolver: Arc::new(SystemResolver),
+            route: Route::Direct,
+            roots: Roots::Platform,
+        });
+        // The server accepts and never answers the TLS hello; once it has
+        // the connection, the route goes down.
+        let down = async {
+            let (_tcp, _) = listener.accept().await.unwrap();
+            egress.publish(RouteState::Down(DownReason::InterfaceDown));
+            std::future::pending::<()>().await;
+        };
+        let limits = WsLimits::default();
+        let r = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::select! {
+                r = egress.open_ws(&url, limits) => r,
+                () = down => unreachable!(),
+            }
+        })
+        .await
+        .expect("the connect outlived the route");
+        assert!(
+            matches!(r, Err(WsError::Connect(HttpError::EgressDown(_)))),
+            "{:?}",
+            r.err()
+        );
+        assert!(egress.status().counters.kill_switch_aborts >= 1);
     }
 
     #[test]

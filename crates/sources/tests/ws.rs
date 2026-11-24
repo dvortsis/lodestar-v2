@@ -265,6 +265,12 @@ async fn a_public_only_plugin_cant_reach_loopback() {
     // On the list, but it resolves to loopback: refused after the lookup.
     let err = connect(&egress, "wss://mail.test/").await.err().unwrap();
     assert!(err.to_string().contains("loopback"), "{err}");
+    // The server's own port isn't on the list (a manifest's wss is 443).
+    let err = connect(&egress, &server.url()).await.err().unwrap();
+    assert!(
+        err.to_string().contains("refused by the endpoint policy"),
+        "{err}"
+    );
     assert_eq!(server.accepted(), 0);
 }
 

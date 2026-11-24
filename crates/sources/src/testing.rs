@@ -78,13 +78,16 @@
 //!
 //! - The first line is `CONNECT <url>`; the URL must match exactly.
 //!   `REFUSED <message>` or `HANDSHAKE <status>` as the only line after it
-//!   records a connection that failed or an upgrade the server refused.
+//!   records a connection that failed or an upgrade the server refused;
+//!   `REFUSED-DOWN <reason>` one the plugin's kill switch refused
+//!   ([`WsError::route_fault`]).
 //! - `> text` is a text message the plugin must send, exactly (`>b <hex>`
 //!   for binary); `< text` is one the server sends (`<b <hex>`). The text
 //!   is everything after the one space.
 //! - The session ends with `CLOSE` (the server closed it), `ERROR <message>`
-//!   (the connection failed), `IDLE` (the idle timeout) or `DOWN <reason>`
-//!   (the kill switch). A transcript that ends without one stays open: the
+//!   (the connection failed), `IDLE` (the idle timeout, which takes the
+//!   session's idle time, so run the test on the paused clock) or
+//!   `DOWN <reason>` (the kill switch). A transcript that ends without one stays open: the
 //!   next receive waits for ever, as on a quiet connection.
 //! - Blank lines and lines starting with `#` are ignored; lines may end in
 //!   `\r\n`.
@@ -747,6 +750,7 @@ impl WsReplayer {
                 limits: limits.clamped(),
                 recv_at: 0,
                 ended: None,
+                idle_at: None,
             })),
         }
     }
@@ -772,6 +776,15 @@ struct WsReplay {
     /// Set once the session ended: `None` for a close, the error
     /// otherwise.
     ended: Option<Option<WsError>>,
+    /// When a recorded idle timeout fires, once a receive reached it.
+    idle_at: Option<Instant>,
+}
+
+/// What a receive does next.
+enum Next {
+    Now(Result<Option<WsMessage>, WsError>),
+    Until(Instant),
+    Never,
 }
 
 impl WsReplay {
@@ -811,11 +824,11 @@ impl WsReplay {
         Err(WsError::Unrecorded(e))
     }
 
-    /// The next step a receive plays, `None` to wait for ever.
-    fn next_recv(&mut self) -> Option<Result<Option<WsMessage>, WsError>> {
+    /// The next step a receive plays.
+    fn next_recv(&mut self) -> Next {
         match &self.ended {
-            Some(None) => return Some(Ok(None)),
-            Some(Some(_)) => return Some(Err(WsError::Closed)),
+            Some(None) => return Next::Now(Ok(None)),
+            Some(Some(_)) => return Next::Now(Err(WsError::Closed)),
             None => {}
         }
         let replayer = self.replayer.clone();
@@ -829,16 +842,24 @@ impl WsReplay {
             if let WsStep::Send(_) = step {
                 if !log.played[self.session][i] {
                     // The server waits for the plugin's message.
-                    return None;
+                    return Next::Never;
                 }
                 self.recv_at += 1;
                 continue;
+            }
+            if let WsStep::Idle = step {
+                let at = *self
+                    .idle_at
+                    .get_or_insert_with(|| Instant::now() + self.limits.idle);
+                if Instant::now() < at {
+                    return Next::Until(at);
+                }
             }
             log.played[self.session][i] = true;
             self.recv_at += 1;
             let result = match step {
                 WsStep::Recv(m) if m.len() > self.limits.max_message => Err(WsError::TooLarge),
-                WsStep::Recv(m) => return Some(Ok(Some(m.clone()))),
+                WsStep::Recv(m) => return Next::Now(Ok(Some(m.clone()))),
                 WsStep::Close => Ok(None),
                 WsStep::Error(e) => Err(WsError::Transport(e.clone())),
                 WsStep::Idle => Err(WsError::Idle),
@@ -847,15 +868,18 @@ impl WsReplay {
             };
             drop(log);
             self.ended = Some(result.as_ref().err().cloned());
-            return Some(result);
+            return Next::Now(result);
         }
-        None
+        Next::Never
     }
 
     async fn recv_msg(&mut self) -> Result<Option<WsMessage>, WsError> {
-        match self.next_recv() {
-            Some(r) => r,
-            None => std::future::pending().await,
+        loop {
+            match self.next_recv() {
+                Next::Now(r) => return r,
+                Next::Until(at) => tokio::time::sleep_until(at).await,
+                Next::Never => std::future::pending().await,
+            }
         }
     }
 }
@@ -906,6 +930,13 @@ pub fn parse_transcript(text: &str) -> Result<WsTranscript, String> {
             open = Some(WsError::Connect(HttpError::Transport(msg.to_owned())));
             continue;
         }
+        if let Some(reason) = line.strip_prefix("REFUSED-DOWN ") {
+            if !steps.is_empty() {
+                return Err(at("REFUSED-DOWN must follow CONNECT".into()));
+            }
+            open = Some(WsError::Connect(HttpError::EgressDown(reason.to_owned())));
+            continue;
+        }
         if let Some(status) = line.strip_prefix("HANDSHAKE ") {
             if !steps.is_empty() {
                 return Err(at("HANDSHAKE must follow CONNECT".into()));
@@ -954,7 +985,7 @@ pub fn parse_transcript(text: &str) -> Result<WsTranscript, String> {
 
 fn hex(text: &str) -> Result<Vec<u8>, String> {
     let text = text.trim();
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return Err("odd number of hex digits".into());
     }
     (0..text.len())
@@ -1069,6 +1100,8 @@ CLOSE
             t.open,
             Err(WsError::Connect(HttpError::Transport("no route".into())))
         );
+        let t = parse_transcript("CONNECT wss://r/\nREFUSED-DOWN the VPN is down\n").unwrap();
+        assert!(t.open.unwrap_err().route_fault());
         let t = parse_transcript("CONNECT wss://r/\n>\n<b\nIDLE\n").unwrap();
         assert_eq!(t.open.unwrap().len(), 3);
         for bad in [
@@ -1120,6 +1153,25 @@ CLOSE
             Err(WsError::Unrecorded(_))
         ));
         assert!(r.finish().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_recorded_idle_timeout_takes_the_idle_time() {
+        let r = WsReplayer::new(vec![
+            parse_transcript("CONNECT wss://a/\n< hi\nIDLE\n").unwrap(),
+        ]);
+        let mut s = r.connect("wss://a/", WsLimits::default()).await.unwrap();
+        assert_eq!(s.recv().await, Ok(Some(text("hi"))));
+        let start = Instant::now();
+        // A receive dropped part way doesn't restart the wait.
+        assert!(
+            tokio::time::timeout(Duration::from_secs(100), s.recv())
+                .await
+                .is_err()
+        );
+        assert_eq!(s.recv().await, Err(WsError::Idle));
+        assert_eq!(Instant::now() - start, crate::ws::IDLE_TIMEOUT);
+        r.finish().unwrap();
     }
 
     #[tokio::test]

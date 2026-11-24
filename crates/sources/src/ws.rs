@@ -46,8 +46,9 @@ use crate::plugin::BoxFuture;
 pub const MAX_MESSAGE: usize = 128 * 1024;
 /// How often a ping goes out, at the most.
 pub const PING_EVERY: Duration = Duration::from_secs(60);
-/// The shortest ping interval a plugin may ask for.
-pub const MIN_PING: Duration = Duration::from_secs(1);
+/// The shortest ping interval a plugin may ask for: relays are someone
+/// else's servers.
+pub const MIN_PING: Duration = Duration::from_secs(30);
 /// The default idle timeout: two missed pings and some slack.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(150);
 /// The longest idle timeout.
@@ -491,8 +492,17 @@ impl Socket {
         self.ended = Some(error);
     }
 
-    async fn send_msg(&mut self, msg: WsMessage) -> Result<(), WsError> {
+    /// Whether the session has ended; drops a socket a cancelled close
+    /// left behind.
+    fn has_ended(&mut self) -> bool {
         if self.ended.is_some() {
+            self.ws = None;
+        }
+        self.ended.is_some()
+    }
+
+    async fn send_msg(&mut self, msg: WsMessage) -> Result<(), WsError> {
+        if self.has_ended() {
             return Err(WsError::Closed);
         }
         if msg.len() > self.limits.max_message {
@@ -531,10 +541,11 @@ impl Socket {
 
     async fn recv_msg(&mut self) -> Result<Option<WsMessage>, WsError> {
         loop {
-            match &self.ended {
-                Some(None) => return Ok(None),
-                Some(Some(_)) => return Err(WsError::Closed),
-                None => {}
+            if self.has_ended() {
+                return match &self.ended {
+                    Some(Some(_)) => Err(WsError::Closed),
+                    _ => Ok(None),
+                };
             }
             let wake = {
                 let Socket {
@@ -547,12 +558,15 @@ impl Socket {
                 let Some(ws) = ws.as_mut() else {
                     return Err(WsError::Closed);
                 };
+                // The kill switch first; then a frame that has already
+                // arrived, so a plugin that was busy elsewhere past the
+                // idle timeout still reads it; then the timers.
                 tokio::select! {
                     biased;
                     reason = watch.down() => Wake::Down(reason),
+                    m = ws.next() => Wake::Read(m),
                     () = tokio::time::sleep_until(*idle_by) => Wake::Idle,
                     () = tokio::time::sleep_until(*next_ping) => Wake::Ping,
-                    m = ws.next() => Wake::Read(m),
                 }
             };
             match wake {
@@ -574,24 +588,18 @@ impl Socket {
                 }
                 Wake::Read(read) => {
                     let msg = match read {
-                        // The socket ended without a close frame.
+                        // tokio-tungstenite ends the stream once the close
+                        // handshake is done; a connection that dropped
+                        // without one is an error first.
                         None => {
-                            let e = WsError::Transport("the connection closed".into());
+                            self.end(None);
+                            return Ok(None);
+                        }
+                        Some(Err(e)) => {
+                            let e = read_error(&e);
                             self.end(Some(e.clone()));
                             return Err(e);
                         }
-                        Some(Err(e)) => match e {
-                            tungstenite::Error::ConnectionClosed
-                            | tungstenite::Error::AlreadyClosed => {
-                                self.end(None);
-                                return Ok(None);
-                            }
-                            e => {
-                                let e = read_error(&e);
-                                self.end(Some(e.clone()));
-                                return Err(e);
-                            }
-                        },
                         Some(Ok(m)) => m,
                     };
                     self.idle_by = Instant::now() + self.limits.idle;
@@ -610,8 +618,11 @@ impl Socket {
                         }
                         Message::Pong(_) | Message::Frame(_) => {}
                         Message::Close(_) => {
-                            // tungstenite answers the close; give it a
-                            // moment to go out, then drop the socket.
+                            // Ended first, so a receive cancelled during the
+                            // flush still reads a close. tungstenite answers
+                            // the close; give it a moment to go out, then
+                            // drop the socket.
+                            self.ended = Some(None);
                             let _ = tokio::time::timeout(CLOSE_WAIT, self.flush()).await;
                             self.end(None);
                             return Ok(None);
@@ -638,16 +649,26 @@ impl Socket {
         }
     }
 
+    /// A normal close, best effort: under the kill switch like every
+    /// write (a route that's down gets nothing, the socket is just
+    /// dropped), within [`CLOSE_WAIT`].
     async fn close_session(&mut self) {
-        if self.ended.is_some() {
+        if self.has_ended() {
             return;
         }
-        if let Some(ws) = self.ws.as_mut() {
+        // Ended first, so a close cancelled part way still ends it.
+        self.ended = Some(None);
+        let Socket { ws, watch, .. } = self;
+        if let Some(ws) = ws.as_mut() {
             let frame = tungstenite::protocol::CloseFrame {
                 code: CloseCode::Normal,
                 reason: Default::default(),
             };
-            let _ = tokio::time::timeout(CLOSE_WAIT, ws.close(Some(frame))).await;
+            tokio::select! {
+                biased;
+                _ = watch.down() => {}
+                _ = tokio::time::timeout(CLOSE_WAIT, ws.close(Some(frame))) => {}
+            }
         }
         self.end(None);
     }
@@ -657,7 +678,11 @@ impl Socket {
 fn read_error(e: &tungstenite::Error) -> WsError {
     use tungstenite::Error as E;
     match e {
-        E::Capacity(_) | E::WriteBufferFull(_) => WsError::TooLarge,
+        E::Capacity(_) => WsError::TooLarge,
+        E::WriteBufferFull(_) => WsError::Transport("the send buffer is full".into()),
+        E::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake) => {
+            WsError::Transport("the connection closed without a close frame".into())
+        }
         E::Protocol(_) | E::Utf8(_) | E::AttackAttempt => WsError::Protocol,
         E::Io(e) => WsError::Transport(format!("connection error: {}", e.kind())),
         E::Tls(_) => WsError::Transport("TLS error".into()),
@@ -954,6 +979,52 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(client.recv().await, Err(WsError::TooLarge));
+        // Two frames each under the frame cap, together over the message cap.
+        use tungstenite::protocol::frame::Frame;
+        use tungstenite::protocol::frame::coding::{Data, OpCode};
+        let (mut client, mut server) = pair(Box::new(NeverDown)).await;
+        let half = vec![0u8; MAX_MESSAGE * 3 / 4];
+        server
+            .send(Message::Frame(Frame::message(
+                half.clone(),
+                OpCode::Data(Data::Binary),
+                false,
+            )))
+            .await
+            .unwrap();
+        server
+            .send(Message::Frame(Frame::message(
+                half,
+                OpCode::Data(Data::Continue),
+                true,
+            )))
+            .await
+            .unwrap();
+        assert_eq!(client.recv().await, Err(WsError::TooLarge));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn nothing_is_written_while_the_route_is_down() {
+        // A send: refused, and the server reads no message.
+        let (tx, rx) = watch::channel(true);
+        let (mut client, mut server) = pair(Box::new(Flag(rx))).await;
+        assert_eq!(
+            client.send(WsMessage::Text("leak".into())).await,
+            Err(WsError::EgressDown("the test took the route down".into()))
+        );
+        let got = server.next().await;
+        assert!(
+            !matches!(got, Some(Ok(ref m)) if m.is_text() || m.is_binary()),
+            "{got:?}"
+        );
+        // A close: the socket is dropped, no close frame goes out.
+        let (_tx2, rx) = watch::channel(true);
+        let (mut client, mut server) = pair(Box::new(Flag(rx))).await;
+        client.close().await;
+        let got = server.next().await;
+        assert!(!matches!(got, Some(Ok(Message::Close(_)))), "{got:?}");
+        assert_eq!(client.recv().await, Ok(None));
+        drop(tx);
     }
 
     #[tokio::test(start_paused = true)]
