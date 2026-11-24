@@ -309,8 +309,7 @@ pub fn check_with(
             .sources()?
             .iter()
             .any(|s| s.id == ctx.source && s.state == SourceState::Enabled);
-        g.consent_met =
-            lodestar_sources::consent::need_in_with(store, ctx.manifest, credentials)?.is_none();
+        g.consent_met = crate::adult_enrich::consent_met(store, ctx.manifest, credentials)?;
     }
     let plugin_wide = Gate { stored: true, ..g };
     if let Err(why) = eligible(&plugin_wide) {
