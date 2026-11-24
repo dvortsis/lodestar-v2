@@ -260,9 +260,15 @@ export function createResults() {
 		get expired() {
 			return expired;
 		},
-		/** The rows answer this query (false while a different query refines, or after an error). */
+		/**
+		 * The rows answer this query (false while a different query refines, or after an error). A
+		 * query that leaves `collapse` out (the live banner, which counts torrents either way) matches
+		 * the rows grouped or not.
+		 */
 		showing(q: ResultsQuery) {
-			return shownKey === keyOf(q);
+			return (
+				shownKey === keyOf(q.collapse === undefined ? { ...q, collapse: current?.collapse } : q)
+			);
 		},
 		load,
 		loadMore: () => untrack(loadMore),

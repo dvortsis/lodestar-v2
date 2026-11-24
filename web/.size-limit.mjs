@@ -1747,11 +1747,11 @@ export default [
 	// X-pseudo-text-gaps (runner §2.26): 40.84 → 40.85 KB. 40,822 → 40,841 B: RelativeTime passes the
 	// catalogue's `common_just_now`, about 19 B in each chunk that uses it.
 	// +0.01 kB: hashed chunk-name compression noise (X-hit-resolution: a renamed table chunk costs Results 3 B; no code moved). Runner, r14.
-	// GS-5 (runner §2.26): 40,832 B on main → 43.48 KB. Grouped results paint with "+N other versions"
+	// GS-5 (runner §2.26): 40,832 B on main → 43.5 KB. Grouped results paint with "+N other versions"
 	// (Others and its styles), the account's Group versions choice the first request needs (grouping,
-	// the groups count and their messages), and the tree grid's attributes; opening a group is its own
-	// on-demand entry below. Rounded up to 0.01 KB.
-	entry('Search results (lazy)', resultsFirst, '43.49 KB'),
+	// the groups count and their messages), the tree grid's attributes and the live banner's match of
+	// a grouped answer; opening a group is its own on-demand entry below. Rounded up to 0.01 KB.
+	entry('Search results (lazy)', resultsFirst, '43.51 KB'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1777,9 +1777,10 @@ export default [
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
 	// X-alert-search-headroom: 4.65 → 4.6 KB. Save search's preload list moved to save-dialog.ts
 	// (−0.31 KB); measured 4.29 KB. Import the dialog only through save-dialog.ts.
-	// GS-5 (runner §2.26): 4.6 → 4.94 KB, the Group versions switch (twice: wide, and in the narrow
-	// More popover), its note and the URL write with Back.
-	entry('Results toolbar (lazy)', toolbarLazy, '4.94 KB'),
+	// GS-5 (runner §2.26): 4.6 → 5.01 KB, the Group versions switch (twice: among the controls, and in
+	// More whenever the toolbar is too narrow for it, a container query), its note and the URL write
+	// with Back.
+	entry('Results toolbar (lazy)', toolbarLazy, '5.02 KB'),
 	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
 	// chunk); the limit falls to the measured size, rounded up at 0.01 kB, so the bytes aren't respent.
 	// GS-5 (runner §2.26): +1 B of shared-chunk noise (no live-banner code changed), rounded up to 0.01 KB.

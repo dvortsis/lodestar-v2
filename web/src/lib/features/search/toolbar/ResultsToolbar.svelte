@@ -136,7 +136,7 @@
 			<GroupToggle
 				on={grouped}
 				describedby={unavailable ? `${id}-ungrouped` : undefined}
-				class="tb-wide"
+				class="tb-group"
 				onchange={(on) => void setGrouped(on)}
 			/>
 			<label class="tb-lbl" for="{id}-sort">
@@ -161,7 +161,8 @@
 				/>
 			</label>
 			<!-- From 640 px Select and Save show; below it they sit in a disclosure (a native popover:
-			     Tab moves through it, Escape closes it and returns focus). CSS picks one (toolbar.css). -->
+			     Tab moves through it, Escape closes it and returns focus). Group versions joins them there
+			     whenever the toolbar is too narrow for it. CSS picks (toolbar.css). -->
 			<Button
 				dense
 				aria-pressed={selection.mode}
@@ -180,10 +181,15 @@
 						describedby={unavailable ? `${id}-ungrouped` : undefined}
 						onchange={(on) => void setGrouped(on)}
 					/>
-					<Button dense aria-pressed={selection.mode} onclick={(e) => (toggle(), shut(e))}
-						>{m.search_bulk_mode()}</Button
+					<Button
+						dense
+						aria-pressed={selection.mode}
+						class="tb-phone"
+						onclick={(e) => (toggle(), shut(e))}>{m.search_bulk_mode()}</Button
 					>
-					<Button dense onclick={(e) => (void save(), shut(e))}>{m.search_toolbar_save()}</Button>
+					<Button dense class="tb-phone" onclick={(e) => (void save(), shut(e))}
+						>{m.search_toolbar_save()}</Button
+					>
 				</div>
 			</div>
 		</div>

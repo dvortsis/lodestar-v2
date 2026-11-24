@@ -345,6 +345,10 @@ describe('grouping versions (GS-5)', () => {
 			groups_approx: false,
 			collapse_unavailable: undefined
 		});
+		// A query that leaves grouping out (the live banner's) matches the rows either way; one that
+		// says otherwise doesn't.
+		expect(r.showing(query('lantern'))).toBe(true);
+		expect(r.showing(query('lantern', { collapse: false }))).toBe(false);
 		post.mockResolvedValueOnce(page([3]));
 		await r.loadMore();
 		expect(sent(1).collapse).toBe('group');
