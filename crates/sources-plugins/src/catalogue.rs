@@ -158,13 +158,16 @@ mod tests {
     }
 
     /// Plugins in module `m` that declare terms: a `fn terms(&self)`
-    /// returning the module's own `TERMS` const.
+    /// returning the module's own `TERMS` const. Whitespace is collapsed
+    /// first, so line endings (CRLF on a Windows checkout) and layout
+    /// don't matter.
     fn with_terms(src: &Path, m: &str) -> usize {
-        let text = module_text(src, m);
+        let text = module_text(src, m)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         let declared = text.matches("fn terms(&self)").count();
-        let own = text
-            .matches("fn terms(&self) -> &Terms {\n        &TERMS\n    }")
-            .count();
+        let own = text.matches("fn terms(&self) -> &Terms { &TERMS }").count();
         assert_eq!(declared, own, "{m}: a `fn terms` that isn't `&TERMS`");
         declared
     }
