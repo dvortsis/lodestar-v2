@@ -4545,7 +4545,8 @@
       "ready_local": "308fb54a0bf546498697c052f1d32e74dbf3bacd",
       "holds": [
         "ENR-terms-api",
-        "X-split-resume-gate"
+        "X-split-resume-gate",
+        "GS-4 #1116 (web)"
       ]
     },
     "last": {
@@ -10997,7 +10998,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T17:25Z",
+    "updated": "2026-11-24T17:32Z",
     "items": [
       {
         "slot": 1,
@@ -11005,7 +11006,7 @@
         "role": "build",
         "model": "opus",
         "agent": "sonnet",
-        "doing": "PR #1116 (198bfb4b, 1,139 lines) CI running; baselines commit to come; ready -> fresh review -> merge",
+        "doing": "PR #1116 green on 036f1246; fresh Opus review running (rv-1116); not fresh (#1115 web); catch-up after ENR-G lane",
         "since": "2026-11-24T15:12Z",
         "session": "session_01MMjhnA8jZVGAa6zftpoAe9"
       },
@@ -11016,7 +11017,8 @@
         "model": "opus",
         "agent": "claude",
         "doing": "starting (brief briefs/X-split-resume-gate.md)",
-        "since": "2026-11-24T17:25Z"
+        "since": "2026-11-24T17:25Z",
+        "thread": "cmsg_01NSSK1erQ8P6b2pdCDdthC3DsUfzgoadHjfcTG4SEtHXw"
       },
       {
         "slot": 3,
@@ -11032,7 +11034,7 @@
         "slot": 4,
         "slice": "ENR-terms-api",
         "role": "build",
-        "doing": "starting (brief briefs/ENR-terms-api.md)",
+        "doing": "ready locally (79622641); holds Rust push until ENR-G merges",
         "since": "2026-11-24T15:40Z",
         "status": "active",
         "agent": "opus"
