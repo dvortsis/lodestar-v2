@@ -10,7 +10,7 @@
 //!
 //! The curve maths is RustCrypto's `k256` (pure Rust, `schnorr` only); this
 //! module only adapts it. [`verify`] is BIP-340's verification over any
-//! message; [`event_signed`] applies it to an event's id; [`parse_signed`]
+//! message; [`event_signed`] recomputes an event's id and checks it; [`parse_signed`]
 //! is [`nostr::parse`] with the check, the entry point for relay messages.
 //! None of them panic on any input: a key that isn't an x coordinate on
 //! the curve, an `r` at or above the field size or an `s` at or above the
@@ -51,15 +51,18 @@ pub fn verify(pubkey: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
     key.verify_raw(msg, &sig).is_ok()
 }
 
-/// True only when the event's signature verifies over its id (NIP-01: the
-/// signed message is the 32-byte id itself).
+/// True only when the event's id is the hash of its fields and its
+/// signature verifies over that id (NIP-01: the signed message is the
+/// 32-byte id itself).
 ///
-/// The id is taken as given. [`nostr::parse`] only returns events whose id
-/// it recomputed, so an event from it (or from [`parse_signed`]) is fully
-/// checked; an [`Event`] built by hand is not.
+/// The id is recomputed here rather than trusted, because [`Event`]'s
+/// fields are public: an event edited or rebuilt after parsing, still
+/// carrying its old id and signature, is refused. That costs one SHA-256,
+/// small beside the signature check.
 #[must_use]
 pub fn event_signed(e: &Event) -> bool {
-    verify(&e.pubkey, &e.id, &e.sig)
+    nostr::event_id(&e.pubkey, e.created_at, e.kind, &e.tags, &e.content) == e.id
+        && verify(&e.pubkey, &e.id, &e.sig)
 }
 
 /// One relay message, as [`nostr::parse`] reads it, with an `EVENT`'s

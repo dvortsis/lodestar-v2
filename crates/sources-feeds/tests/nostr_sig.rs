@@ -34,6 +34,8 @@ struct V {
 /// BIP-340 is licensed BSD-2-Clause (its reference code BSD-2-Clause OR
 /// MIT OR CC0-1.0); these are its published test data, reproduced
 /// unchanged.
+///
+/// The long hex runs below are verbatim BIP-340 data: don't reformat them.
 const VECTORS: &[V] = &[
     V {
         index: 0,
@@ -451,7 +453,10 @@ fn forged_publisher_is_dropped() {
 fn tampered_signature_is_dropped() {
     let sk = test_key();
     let msg = signed_msg(&sk, &own_key(&sk), "tampered");
-    let at = msg.find(r#""sig":""#).unwrap() + 7 + 70;
+    // Skip the 7 bytes of `"sig":"`, then go 70 hex digits in: a digit in
+    // the signature's `s` half (digits 64 to 127).
+    const SIG_KEY: usize = r#""sig":""#.len();
+    let at = msg.find(r#""sig":""#).unwrap() + SIG_KEY + 70;
     let mut b = msg.into_bytes();
     b[at] = if b[at] == b'0' { b'1' } else { b'0' };
     assert_eq!(parse_signed(&b, &LIMITS), Err(Rejected::BadSignature));
@@ -466,6 +471,20 @@ fn edited_content_is_refused() {
         parse_signed(msg.as_bytes(), &LIMITS),
         Err(Rejected::Refused(Refused::IdMismatch))
     );
+}
+
+/// An event edited after parsing, keeping its original id and signature:
+/// `event_signed` recomputes the id and refuses it.
+#[test]
+fn event_signed_refuses_edited_event_with_stale_id() {
+    let sk = test_key();
+    let msg = signed_msg(&sk, &own_key(&sk), "original");
+    let Ok(Message::Event { mut event, .. }) = parse_signed(msg.as_bytes(), &LIMITS) else {
+        panic!("a correctly signed event is kept");
+    };
+    assert!(event_signed(&event));
+    event.content = "edited!!".to_string();
+    assert!(!event_signed(&event));
 }
 
 /// A key that isn't on the curve, with a well-formed id: a failed check,
@@ -547,6 +566,31 @@ proptest! {
     #[test]
     fn arbitrary_messages_never_panic(s in "\\PC{0,256}") {
         let _ = parse_signed(s.as_bytes(), &LIMITS);
+    }
+
+    /// A well-formed `EVENT` with an arbitrary key and signature and a
+    /// recomputed id, so it gets past the id check and reaches the
+    /// signature check: `Ok` or `BadSignature`, never a panic.
+    #[test]
+    fn arbitrary_key_and_sig_reach_the_check(
+        pk in any::<[u8; 32]>(),
+        sig in proptest::collection::vec(any::<u8>(), 64),
+        content in "[a-zA-Z0-9 .,]{0,64}",
+    ) {
+        let tags: Vec<Vec<String>> = vec![vec!["t".to_string(), "test".to_string()]];
+        let id = event_id(&pk, 1_700_000_000, KIND_TORRENT, &tags, &content);
+        let msg = format!(
+            r#"["EVENT","sub1",{{"id":"{}","pubkey":"{}","created_at":1700000000,"kind":{KIND_TORRENT},"tags":[["t","test"]],"content":{},"sig":"{}"}}]"#,
+            hex(&id),
+            hex(&pk),
+            js(&content),
+            hex(&sig)
+        );
+        let r = parse_signed(msg.as_bytes(), &LIMITS);
+        prop_assert!(
+            matches!(r, Ok(Message::Event { .. }) | Err(Rejected::BadSignature)),
+            "{r:?}"
+        );
     }
 
     /// A valid signature of a 32-byte id fails once any single bit of the
