@@ -744,8 +744,9 @@ placement:
   - X-trigram-switch
   - X-regex-lazy-verify
   - X-regex-permit
-  - X-lease-client-key
   - X-ast-regex-roundtrip
+  - X-sec-S8-16
+  - X-sec-S8-18
   - GS-3
   - X-gs3-nits
   - X-search-param-errors
@@ -985,7 +986,7 @@ state_override:
   G-v051: done
   R-rc3-cut: done
   SRC-10b: closed
-  ENR-debrid: closed  # skipped, no provider qualifies (decisions/2026-11-23-ENR-debrid.md, #1103; runner records r17)
+  ENR-debrid: closed  # dropped, no provider qualifies (decisions/2026-11-23-ENR-debrid.md, #1103; runner records r17)
 conditions:
   owner-cr-spec:
     met: true
@@ -2183,7 +2184,7 @@ notes:
   updated: '2026-11-24'
   now:
   - label: The sampler split pauses sampling after a restart
-    text: 'On the real network the sampler split (dht.sampler_cooldown_split) ends the full-table stall, but after a clean restart from a spilled state it held sampling for 5 h 25 min, as its decision allows (up to 6 h). So the cloud''s stage-3 split A/B runs between paired instances instead of switching one instance (runner, r17). Before the split ships on by default, X-split-resume-gate shortens or removes that hold, so a user with the split on doesn''t lose hours of sampling after every restart.'
+    text: 'On the real network the sampler split (dht.sampler_cooldown_split) ends the full-table stall, but after a clean restart from a spilled state it held sampling for 5 h 25 min. That conflicts with your §2.77 (no sampling wait after any start, and no blanket gate carried across a restart) for anyone who turns the split on; the split is off by default. The cloud''s stage-3 split A/B therefore runs between paired instances instead of switching one instance (runner, r17). §2.77 requires X-split-resume-gate, which shortens or removes that hold, before the split can ship on by default, and in the runner''s reading before it''s offered as a setting at all. Flagged to you.'
   - label: The runner decides the owner queue, except the filters (§2.69)
     text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto. You chose FILTER-01 and FILTER-03 (§2.70). Crawler tests on the Unraid box need no booking now (§2.68). The API credit now funds the owner-run build lane, whose enrichment PRs are landing (seven combined in #971), and the operator is unfunded (§2.75).'
   - label: B1 and B2 first (§2.66)
