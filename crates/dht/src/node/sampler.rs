@@ -12,7 +12,9 @@
 //! node's first failed sample in a row cools for [`FIRST_FAILURE_BACKOFF`]
 //! and starts a streak that lasts as long as the full cooldown it replaces,
 //! holding that cooldown's table place and shares; a second failure within
-//! it cools in full.
+//! it cools in full. A node that holds a table record waits for its sample
+//! apart from the frontier and goes first (X-escalate-full-table): its
+//! sample replaces its own record, so a full table doesn't hold it up.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -96,6 +98,14 @@ pub(crate) struct Sampler {
     states: Map<SocketAddr, State>,
     expiry: BTreeSet<(Instant, u64, SocketAddr)>,
     frontier: VecDeque<NodeInfo>,
+    /// Candidates that hold a table record, escalation on only
+    /// (X-escalate-full-table): a streak whose short cooldown ended, or a
+    /// cooldown not yet pruned. Each one's sample replaces its own record,
+    /// so it needs no free place: [`Sampler::next`] hands these out first,
+    /// a full table included. At most [`MAX_FRONTIER`], apart from the
+    /// frontier's own bound. Always empty with the switch off.
+    held: VecDeque<NodeInfo>,
+    /// Every queued address, in `frontier` or `held`.
     queued: Set<SocketAddr>,
     /// How many addresses each IP and each block holds, queued or in
     /// `states` (an address in both counts once).
@@ -145,11 +155,12 @@ impl Sampler {
             states: Map::default(),
             expiry: BTreeSet::new(),
             frontier: VecDeque::new(),
+            held: VecDeque::new(),
             queued: Set::default(),
             per_ip: Map::default(),
             per_network: Map::default(),
             per_allocation: Map::default(),
-            capacity: MAX_KNOWN,
+            capacity: initial_capacity(),
             next_proof: 0,
             restored_live: 0,
             restored_refused: 0,
@@ -368,6 +379,21 @@ impl Sampler {
             self.restored_refused += 1;
         }
         let was = self.tracked(&node.addr);
+        // X-escalate-full-table: with escalation on, a node that holds a
+        // record waits apart, so neither a full frontier nor a full table
+        // holds it up. It's already tracked, so its shares don't change.
+        if self.escalate && self.states.contains_key(&node.addr) {
+            if self.held.len() < MAX_FRONTIER
+                && !self.queued.contains(&node.addr)
+                && self.table_eligible(&node.addr, now)
+                && !self.spilled(&node.addr, now)
+            {
+                self.queued.insert(node.addr);
+                self.held.push_back(node);
+                return true;
+            }
+            return false;
+        }
         if self.frontier.len() < MAX_FRONTIER
             && !self.queued.contains(&node.addr)
             && self.table_eligible(&node.addr, now)
@@ -383,6 +409,11 @@ impl Sampler {
     }
 
     pub fn next(&mut self, now: Instant) -> Option<NodeInfo> {
+        // A node that holds a record goes first, full table or not: its
+        // sample replaces that record (`reserve`), so it needs no place.
+        if let Some(n) = self.next_held(now) {
+            return Some(n);
+        }
         // Saturation leaves candidates queued. A later maintenance tick
         // reclaims capacity; callers never spin looking for a free slot.
         // With the split on, a full table first moves cooldowns out.
@@ -396,6 +427,27 @@ impl Sampler {
             if self.eligible(&n.addr, now) {
                 return Some(n);
             }
+        }
+        None
+    }
+
+    /// The first held candidate that still holds a record and may be
+    /// sampled (X-escalate-full-table). One whose record left while it
+    /// waited (its streak ended, or it moved to the spill filter) is a
+    /// newcomer again: it's offered as one, to the frontier. One that may
+    /// not be sampled is dropped, as the frontier drops one.
+    fn next_held(&mut self, now: Instant) -> Option<NodeInfo> {
+        while let Some(n) = self.held.pop_front() {
+            self.queued.remove(&n.addr);
+            if self.states.contains_key(&n.addr) {
+                // Still tracked by its record: its shares don't change.
+                if self.eligible(&n.addr, now) {
+                    return Some(n);
+                }
+                continue;
+            }
+            self.recount(&n.addr, true);
+            self.offer(n, now);
         }
         None
     }
@@ -802,8 +854,9 @@ impl Sampler {
         )
     }
 
+    /// Queued candidates: the frontier and the held ones.
     pub fn frontier_len(&self) -> usize {
-        self.frontier.len()
+        self.frontier.len() + self.held.len()
     }
     pub fn known(&self) -> usize {
         self.states.len()
@@ -843,9 +896,13 @@ impl Sampler {
     /// with the split on, no cooldown can move to the filter. With the
     /// split on, "likely room" is judged by the filter's fill; if all
     /// [`SPILL_TRIES`] inserts are refused below that fill (very rare),
-    /// `next` admits no one that tick without this saying so.
+    /// `next` admits no one that tick without this saying so. A held
+    /// candidate (escalation on) needs no free place, so while any waits
+    /// the sampler isn't saturated; one whose record left meanwhile makes
+    /// `next` admit no one once, and `next` drops it from the held queue.
     pub fn saturated(&self) -> bool {
-        self.known() >= self.capacity
+        self.held.is_empty()
+            && self.known() >= self.capacity
             && !(self.split
                 && !(self.expiry.is_empty() && self.struck.is_empty())
                 && self.spill.as_ref().is_none_or(spill::Spill::has_room))
@@ -875,6 +932,45 @@ impl Sampler {
     #[cfg(test)]
     pub fn spill_counts(&self) -> (usize, usize) {
         self.spill.as_ref().map_or((0, 0), spill::Spill::counts)
+    }
+}
+
+/// The table's bound for a new sampler: [`MAX_KNOWN`], or the simulator's
+/// override on this thread (feature `testing` only).
+fn initial_capacity() -> usize {
+    #[cfg(feature = "testing")]
+    if let Some(c) = TEST_CAPACITY.with(std::cell::Cell::get) {
+        return c;
+    }
+    MAX_KNOWN
+}
+
+#[cfg(feature = "testing")]
+thread_local! {
+    static TEST_CAPACITY: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The simulator's seam (feature `testing`, never in a production build):
+/// samplers made on this thread while the guard lives hold at most
+/// `capacity` records, so a run of a few thousand nodes can fill the
+/// table. The simulator runs the node on its own current-thread runtime,
+/// on the test's thread.
+#[cfg(feature = "testing")]
+#[derive(Debug)]
+#[must_use = "the capacity holds only while the guard lives"]
+pub struct TestCapacity(Option<usize>);
+
+#[cfg(feature = "testing")]
+impl TestCapacity {
+    pub fn set(capacity: usize) -> TestCapacity {
+        TestCapacity(TEST_CAPACITY.with(|c| c.replace(Some(capacity))))
+    }
+}
+
+#[cfg(feature = "testing")]
+impl Drop for TestCapacity {
+    fn drop(&mut self) {
+        TEST_CAPACITY.with(|c| c.set(self.0));
     }
 }
 
@@ -1501,6 +1597,7 @@ mod tests {
         Offer(SocketAddr),
         Next,
         Complete(u8),
+        Fail(u8),
         Abort(u8),
         Restore(SocketAddr),
         Advance(u16),
@@ -1521,6 +1618,7 @@ mod tests {
             6 => arb_addr().prop_map(Op::Offer),
             3 => Just(Op::Next),
             1 => any::<u8>().prop_map(Op::Complete),
+            1 => any::<u8>().prop_map(Op::Fail),
             1 => any::<u8>().prop_map(Op::Abort),
             1 => arb_addr().prop_map(Op::Restore),
             1 => (0..400u16).prop_map(Op::Advance),
@@ -1532,10 +1630,22 @@ mod tests {
     proptest! {
         /// Whatever the sequence, the share counts match the frontier and
         /// table, and outside restored records no IP, block or IPv6
-        /// allocation holds more than its share.
+        /// allocation holds more than its share. With escalation on, the
+        /// held queue too (X-escalate-full-table), a full table included.
         #[test]
-        fn shares_hold_under_any_sequence(ops in proptest::collection::vec(arb_op(), 1..600)) {
-            let mut s = Sampler::default();
+        fn shares_hold_under_any_sequence(
+            escalate in any::<bool>(),
+            small in any::<bool>(),
+            split in any::<bool>(),
+            ops in proptest::collection::vec(arb_op(), 1..600),
+        ) {
+            let capacity = if small { 8 } else { MAX_KNOWN };
+            let mut s = if split {
+                Sampler::split_with_capacity(capacity)
+            } else {
+                Sampler::with_capacity(capacity)
+            }
+            .with_escalation(escalate);
             let mut now = Instant::now();
             let mut token = 0u64;
             let mut flying: Vec<(SocketAddr, u64)> = vec![];
@@ -1557,6 +1667,10 @@ mod tests {
                         let (a, t) = flying.remove(usize::from(i) % flying.len());
                         s.complete(a, t, MIN_INTERVAL, now);
                     }
+                    Op::Fail(i) if !flying.is_empty() => {
+                        let (a, t) = flying.remove(usize::from(i) % flying.len());
+                        s.fail(a, t, MAX_INTERVAL, now);
+                    }
                     Op::Abort(i) if !flying.is_empty() => {
                         let (a, t) = flying.remove(usize::from(i) % flying.len());
                         s.abort(a, t);
@@ -1570,6 +1684,17 @@ mod tests {
                         s.prune(now);
                     }
                     _ => {}
+                }
+                // Every queued address is in the frontier or held, once.
+                let queued: Set<SocketAddr> =
+                    s.frontier.iter().chain(&s.held).map(|n| n.addr).collect();
+                prop_assert_eq!(queued.len(), s.frontier.len() + s.held.len());
+                prop_assert_eq!(&queued, &s.queued);
+                if !escalate {
+                    prop_assert!(s.held.is_empty());
+                }
+                if !restored {
+                    prop_assert!(s.known() <= capacity);
                 }
                 let (ips, nets, allocs) = recounted(&s);
                 prop_assert_eq!(&s.per_ip, &ips);
