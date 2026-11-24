@@ -9254,6 +9254,22 @@
       ],
       "model": "sonnet",
       "added": "2026-11-24"
+    },
+    {
+      "id": "ENR-terms-followups",
+      "from": "rv-1119",
+      "owns": [
+        "crates/store/src/identify_sweep.rs (tests)",
+        "crates/api/src/torrents.rs",
+        "crates/sources-plugins/src/catalogue.rs"
+      ],
+      "items": [
+        "exhaustive pure test: record_redistributes vs Terms::from_record over every version x flags byte x lengths 9-11 and round trip",
+        "terms_closed: count a plugin with build terms as governed even without a stored record (has_terms on PluginName), fail closed on unrecorded",
+        "nits: fn record doc comment on closing (torrents.rs:1695); read TERMS_KEY once per source; ENR-terms-ui brief: credit renders as text, link href only after https check"
+      ],
+      "model": "opus",
+      "added": "2026-11-25"
     }
   ],
   "main_health": {
@@ -11078,7 +11094,7 @@
         "slot": 4,
         "slice": "ENR-terms-api",
         "role": "build",
-        "doing": "#1119 ready at 5ffdaec2 (all green); fresh Opus + security review running; catch-up after #1120 merges",
+        "doing": "#1119 rv-1119 MERGE / SECURITY PASS on 5ffdaec2; catch-up after #1120 merges, then merge if pure main",
         "since": "2026-11-24T15:40Z",
         "status": "active",
         "agent": "opus",
