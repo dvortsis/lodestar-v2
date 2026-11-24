@@ -9257,6 +9257,21 @@
       "model": "sonnet",
       "added": "2026-11-24",
       "note": "can fold with GS-5-followups"
+    },
+    {
+      "id": "ENR-G-followups",
+      "from": "rv-1117b",
+      "owns": [
+        "crates/pipeline/tests/**",
+        "crates/store/src/unverified.rs"
+      ],
+      "items": [
+        "test that ingest uses put_claims_at_consented: hook withdraws consent on another connection between the early check and the write",
+        "purge Claims: set marked only when the UPDATE matched rows (avoid needless class_gen bump)"
+      ],
+      "model": "opus",
+      "added": "2026-11-24",
+      "note": "with X-purge-rederive"
     }
   ],
   "main_health": {
@@ -11039,7 +11054,7 @@
         "slice": "ENR-G",
         "role": "build",
         "model": "opus",
-        "doing": "PR #1117 fixes pushed d3812761 (1,852 lines); delta review running (rv-1117b); merges on green + MERGE",
+        "doing": "PR #1117 d3812761 reviewed MERGE, security PASS (rv-1117b); merges on green",
         "since": "2026-11-24T14:30Z",
         "status": "active",
         "agent": "opus"
