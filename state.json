@@ -11035,7 +11035,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1120 rv-1120 FIX / SECURITY PASS (1 blocking: test for gen bump on unmarked kept torrent losing last always-adult finder); fix + catch-up, then delta review",
+        "doing": "#1120 at cf7e908d: delta accepted (catch-up pure main + fixes); merges when ci-ok green",
         "since": "2026-11-24T20:40Z",
         "status": "active",
         "owns_extra": [
