@@ -167,6 +167,15 @@ fn the_filter_survives_a_restart_whole() {
         w
     };
     assert_eq!(sorted(&g), sorted(&f), "the same slots, the same minutes");
+    // X-split-spill-horizon: the rebuilt filter counts its restored
+    // cooldowns as live at once, and the count stays exact as they end.
+    assert_eq!((g.live_count(), g.used()), (ends.len(), ends.len()));
+    let mut g = g;
+    let mid = now + Duration::from_secs(3 * 3600);
+    g.sweep(mid);
+    assert_eq!(g.live_count(), g.scan_live(mid));
+    assert!(g.live_count() < ends.len() && g.live_count() > 0);
+    let g = g;
     for (a, until) in &ends {
         let kept = (*until).min(now + h);
         assert!(g.contains(a, kept - NS), "{a} ended early");
@@ -242,14 +251,10 @@ fn the_filter_is_bounded_keeps_every_key_and_rarely_misfires() {
     );
     let (used, bytes) = f.counts();
     assert_eq!(bytes, spill::BYTES, "the slots, allocated once");
-    assert_eq!(spill::BYTES, 32 << 20);
-    // Two addresses sharing a group and a fingerprint share a slot (the
-    // later end): rare, and only ever a longer cooldown.
+    assert_eq!(spill::BYTES, (32 << 20) + (16 << 10), "32 MiB and 16 KiB");
+    // Every stored cooldown has a slot of its own: nothing is merged.
     let stored = most as usize - refused;
-    assert!(
-        used <= stored && used * 1000 > stored * 999,
-        "{used} of {stored}"
-    );
+    assert_eq!(used, stored);
     for i in (0..half).step_by(31) {
         assert!(f.contains(&wide(i), until - NS), "{i}");
     }

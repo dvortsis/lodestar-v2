@@ -928,8 +928,11 @@ impl Sampler {
     }
     /// Whether the sampler can't admit anyone: the table is full and,
     /// with the split on, no cooldown can move to the filter. With the
-    /// split on, "likely room" is judged by the filter's fill; if all
-    /// [`SPILL_TRIES`] inserts are refused below that fill (very rare),
+    /// split on, "likely room" is judged by the filter's live cooldowns
+    /// (X-split-spill-horizon): past [`spill::FALLBACK`] it's full, and
+    /// the actor sends no sample until a table place frees or enough
+    /// spilled cooldowns end. Ended ones never count, swept or not. If all
+    /// [`SPILL_TRIES`] inserts are refused below that line (very rare),
     /// `next` admits no one that tick without this saying so. A held
     /// candidate (escalation on) needs no free place, so while any waits
     /// the sampler isn't saturated. If every held one lost its record
@@ -957,9 +960,14 @@ impl Sampler {
         self.full
     }
 
-    /// Spill filter slots in use (0 with the switch off), for the gauge.
+    /// Live cooldowns in the spill filter as of the last [`prune`]
+    /// (X-split-spill-horizon), for the gauge: ended ones don't count, swept
+    /// or not, so the gauge reads what the fallback judges. 0 with no
+    /// filter.
+    ///
+    /// [`prune`]: Self::prune
     pub fn spill_used(&self) -> usize {
-        self.spill.as_ref().map_or(0, spill::Spill::used)
+        self.spill.as_ref().map_or(0, spill::Spill::live_count)
     }
 
     /// Spill slots in use and the filter's heap bytes (0, 0 with the
@@ -1051,7 +1059,8 @@ fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u32>, key: K) {
 ///   per-source shares count them until they end. Every stored cooldown has
 ///   its own slot (none is merged into another), so a count is never low;
 ///   tag collisions only make it high, which only skips a node.
-/// - **Bounded.** [`SLOTS`] slots, 32 MiB, allocated on the first spill.
+/// - **Bounded.** [`SLOTS`] slots, 32 MiB, and a count of slots per end
+///   minute, 16 KiB, both allocated on the first spill.
 ///   When both blocks are full of live cooldowns, [`Spill::insert`]
 ///   refuses and the cooldown stays in the sampler's table: the sampler is
 ///   then no worse than with the switch off.
@@ -1065,6 +1074,15 @@ fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u32>, key: K) {
 /// [`Spill::sweep`] clears ended slots in a pass every 17 minutes, long
 /// before that; and if one ever did read as live, it would only skip a
 /// node.
+///
+/// **Ageing (X-split-spill-horizon).** A cooldown stops counting towards
+/// the fallback ([`FALLBACK`], 15/16 of the slots) in the tick its minute
+/// ends, before its slot is swept, and an insert takes an ended slot as
+/// readily as a free one. Nothing live is ever evicted. So the filter holds
+/// at most the cooldowns moved out in the last cooldown length (6 h at
+/// WK-10e scale 1) plus those ended since a sweep last passed, and reaches
+/// the fallback in steady state only when that is more than 15/16 of the
+/// slots.
 pub(crate) mod spill {
     use std::hash::Hasher as _;
     use std::net::{IpAddr, SocketAddr};
@@ -1100,9 +1118,17 @@ pub(crate) mod spill {
     /// Slots cleared of ended cooldowns per [`Spill::sweep`] (8,192): a
     /// full pass every 1,024 sweeps, about 17 minutes at the 1 s tick.
     pub const SWEEP: usize = SLOTS / 1024;
-    /// The filter's heap bytes once allocated: the slots and nothing else.
+    /// End minutes, modulo 4,096: [`Spill::ends`] counts the used slots
+    /// that end in each.
+    const MINUTES: usize = 1 << MINUTE_BITS;
+    /// Past this many live cooldowns (15/16 of the slots, 7,864,320) the
+    /// filter reports no room ([`Spill::has_room`]), and the sampler falls
+    /// back to its table alone until enough of them end.
+    pub const FALLBACK: usize = SLOTS / 16 * 15;
+    /// The filter's heap bytes once allocated: the slots and the end-minute
+    /// counts (16 KiB), nothing else.
     #[cfg(test)]
-    pub const BYTES: usize = SLOTS * 4;
+    pub const BYTES: usize = SLOTS * 4 + MINUTES * 4;
 
     pub struct Spill {
         /// SipHash-2-4 keys: per process, or restored with the filter, so
@@ -1112,8 +1138,16 @@ pub(crate) mod spill {
         base: Instant,
         /// Empty until the first insert.
         slots: Box<[u32]>,
+        /// Used slots by their stored minute (X-split-spill-horizon), so
+        /// the live ones can be counted without a scan. Empty until the
+        /// first insert, as `slots` is.
+        ends: Box<[u32]>,
         /// Slots holding a tag, ended or not.
         used: usize,
+        /// Live slots: counted from `ends` at each sweep, plus each insert
+        /// since. Never fewer than truly live; a slot that ended since the
+        /// last sweep still counts until the next one.
+        live: usize,
         cursor: usize,
     }
 
@@ -1123,6 +1157,7 @@ pub(crate) mod spill {
             f.debug_struct("Spill")
                 .field("base", &self.base)
                 .field("used", &self.used)
+                .field("live", &self.live)
                 .field("cursor", &self.cursor)
                 .finish_non_exhaustive()
         }
@@ -1197,7 +1232,9 @@ pub(crate) mod spill {
                 keys: fresh_keys(),
                 base,
                 slots: Box::default(),
+                ends: Box::default(),
                 used: 0,
+                live: 0,
                 cursor: 0,
             }
         }
@@ -1262,6 +1299,42 @@ pub(crate) mod spill {
             &self.slots[b * BLOCK..(b + 1) * BLOCK]
         }
 
+        /// The slots and their end counts, made once, on the first store.
+        fn allocate(&mut self) {
+            if self.slots.is_empty() {
+                self.slots = vec![0; SLOTS].into_boxed_slice();
+                self.ends = vec![0; MINUTES].into_boxed_slice();
+            }
+        }
+
+        /// Puts `word` (a tag and its minute) in slot `i`, keeping `used`,
+        /// `ends` and `live` exact. The slot holds nothing live: it's free,
+        /// or its cooldown ended and isn't swept yet.
+        fn store(&mut self, i: usize, word: u32) {
+            let old = self.slots[i];
+            if old == 0 {
+                self.used += 1;
+            } else {
+                self.ends[(old & MINUTE_MASK) as usize] -= 1;
+            }
+            self.slots[i] = word;
+            self.ends[(word & MINUTE_MASK) as usize] += 1;
+            self.live += 1;
+        }
+
+        /// Used slots whose minute is live from `first`: the minutes
+        /// `first .. first + HORIZON_MIN`, read the way [`Spill::live`]
+        /// reads one slot.
+        fn count_live(&self, first: u64) -> usize {
+            if self.ends.is_empty() {
+                return 0;
+            }
+            let from = first as usize & MINUTE_MASK as usize;
+            (0..HORIZON_MIN as usize)
+                .map(|k| self.ends[(from + k) & (MINUTES - 1)] as usize)
+                .sum()
+        }
+
         /// Remembers that `addr` cools until `until`, in a slot of its own.
         /// False, changing nothing, when both its blocks are full of live
         /// cooldowns or `until` is past the horizon; true without storing
@@ -1279,9 +1352,7 @@ pub(crate) mod spill {
             if ahead >= u64::from(HORIZON_MIN) {
                 return false;
             }
-            if self.slots.is_empty() {
-                self.slots = vec![0; SLOTS].into_boxed_slice();
-            }
+            self.allocate();
             let place = self.place(addr);
             // Per block: its first free slot and how many are free.
             let mut free = [(0, 0); 2];
@@ -1304,10 +1375,7 @@ pub(crate) mod spill {
             if n == 0 {
                 return false;
             }
-            if self.slots[i] == 0 {
-                self.used += 1;
-            }
-            self.slots[i] = place.tag | (end as u32 & MINUTE_MASK);
+            self.store(i, place.tag | (end as u32 & MINUTE_MASK));
             true
         }
 
@@ -1353,21 +1421,28 @@ pub(crate) mod spill {
             }
         }
 
-        /// Clears ended slots, [`SWEEP`] of them from where the last
-        /// sweep stopped.
+        /// Ages the filter (X-split-spill-horizon): recounts the live
+        /// slots, so a cooldown stops counting towards the fallback in the
+        /// tick its minute ends, and clears ended slots, [`SWEEP`] of them
+        /// from where the last sweep stopped, so each is free for any
+        /// address within a pass (about 17 minutes). Only ended slots are
+        /// cleared: nothing live ever leaves early.
         pub fn sweep(&mut self, now: Instant) {
             if self.used == 0 {
+                self.live = 0;
                 return;
             }
             let first = self.first_live(now);
             for _ in 0..SWEEP {
-                let slot = &mut self.slots[self.cursor];
-                if *slot != 0 && !Spill::live(*slot, first) {
-                    *slot = 0;
+                let slot = self.slots[self.cursor];
+                if slot != 0 && !Spill::live(slot, first) {
+                    self.slots[self.cursor] = 0;
+                    self.ends[(slot & MINUTE_MASK) as usize] -= 1;
                     self.used -= 1;
                 }
                 self.cursor = (self.cursor + 1) % SLOTS;
             }
+            self.live = self.count_live(first);
             // Drained: nothing placed with the old keys is left, so new
             // ones are drawn and keys carried across restarts don't live
             // forever.
@@ -1434,7 +1509,9 @@ pub(crate) mod spill {
                 keys,
                 base: now,
                 slots: Box::default(),
+                ends: Box::default(),
                 used: 0,
+                live: 0,
                 cursor: 0,
             };
             // Slots come block by block, and every block starts empty.
@@ -1451,9 +1528,7 @@ pub(crate) mod spill {
                 if end >= u64::from(HORIZON_MIN) || tag & MINUTE_MASK != 0 || tag == 0 {
                     return None;
                 }
-                if spill.slots.is_empty() {
-                    spill.slots = vec![0; SLOTS].into_boxed_slice();
-                }
+                spill.allocate();
                 if b != block {
                     block = b;
                     fill = 0;
@@ -1461,17 +1536,18 @@ pub(crate) mod spill {
                 if fill == BLOCK {
                     return None;
                 }
-                spill.slots[b * BLOCK + fill] = tag | end as u32;
+                spill.store(b * BLOCK + fill, tag | end as u32);
                 fill += 1;
-                spill.used += 1;
             }
             Some(spill)
         }
 
-        /// Whether there's likely room: below 15/16 of the slots used. An
-        /// insert can still refuse (both its blocks full).
+        /// Whether there's likely room: fewer than [`FALLBACK`] live
+        /// cooldowns. Ended ones don't count, swept or not: an insert takes
+        /// an ended slot as readily as a free one. An insert can still
+        /// refuse (both its blocks full of live cooldowns).
         pub fn has_room(&self) -> bool {
-            self.used < SLOTS / 16 * 15
+            self.live < FALLBACK
         }
 
         /// Slots in use, ended or not (until swept).
@@ -1479,16 +1555,35 @@ pub(crate) mod spill {
             self.used
         }
 
+        /// Live cooldowns, as of the last sweep and every insert since:
+        /// never fewer than truly live.
+        pub fn live_count(&self) -> usize {
+            self.live
+        }
+
         /// Slots in use, ended or not, and heap bytes held.
         #[cfg(test)]
         pub fn counts(&self) -> (usize, usize) {
-            (self.used, self.slots.len() * 4)
+            (self.used, (self.slots.len() + self.ends.len()) * 4)
+        }
+
+        /// Live slots counted one by one, for the tests that check
+        /// [`live_count`](Self::live_count).
+        #[cfg(test)]
+        pub fn scan_live(&self, now: Instant) -> usize {
+            let first = self.first_live(now);
+            self.slots
+                .iter()
+                .filter(|s| Spill::live(**s, first))
+                .count()
         }
     }
 }
 
 #[cfg(test)]
 mod escalate_tests;
+#[cfg(test)]
+mod horizon_tests;
 #[cfg(test)]
 mod split_tests;
 
