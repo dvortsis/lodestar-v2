@@ -32,3 +32,5 @@
 - IRC-1 · merged #1111 (7f079fe1), 2026-11-24 · slot 3 freed
 - X-cmp-egress-ui · slot 3 · slice/X-cmp-egress-ui · brief briefs/X-cmp-egress-ui.md · 2026-11-24 · starting
 - Landing lane: GS-5 #1108 entered 2026-11-24 12:31Z (catch-ups 2, ~1,950 lines, rust+web); #1112, X-flake-cap-index-move and X-cmp-egress-ui hold pushes until it merges
+- GS-5 · merged #1108 (4689737c), 2026-11-24 13:52Z · landing lane cleared · slot 4 freed
+- X-flake-search-keyboard-2 · slot 4 · slice/X-flake-search-keyboard-2 · brief briefs/X-flake-search-keyboard-2.md · 2026-11-24 · starting

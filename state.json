@@ -4507,52 +4507,14 @@
     }
   },
   "landing_lane": {
-    "pr": 1108,
-    "slice": "GS-5",
-    "entered": "2026-11-24T12:31Z",
-    "catch_ups": 2,
-    "lines": 1949,
-    "areas": [
-      "rust",
-      "web"
-    ],
-    "reason": "second catch-up and ~1,950 lines (README step 4)",
-    "head": "504987ecdf77f623c8d997483317311a4f14f0b8",
-    "holding": [
-      "X-escalate-full-table #1112 (rust)",
-      "X-flake-cap-index-move (rust)",
-      "X-cmp-egress-ui (web)"
-    ],
-    "review": "rv-1108 MERGE (no blocking); merge on green",
+    "pr": null,
     "last": {
-      "pr": 1110,
-      "slice": "ENR-11",
-      "areas": [
-        "Rust",
-        "web"
-      ],
-      "entered_at": "2026-11-24T09:58Z",
-      "catch_ups": 1,
-      "reason": "over ~1,500 changed lines (1,551) and not fresh after #1109",
-      "head_after_catch_up": "6aaf3a6b",
-      "holding": [
-        "IRC-1 (Rust)",
-        "X-escalate-full-table (Rust)",
-        "GS-5 (web)"
-      ],
-      "merge_needs": "ci-ok and web-ok green on 6aaf3a6b (CI running at 10:10Z); the runner holder merges",
-      "previous": null,
-      "review": {
-        "head": "6aaf3a6b",
-        "verdict": "MERGE",
-        "security": "PASS",
-        "file": "reviews/rv-1110.md",
-        "at": "2026-11-24T10:11Z"
-      },
-      "exited_at": "2026-11-24T11:15Z",
-      "exit": "merged as 4321071e"
-    },
-    "ci_note": "e2e-ok green on re-run (13:08Z, the known search-table flake did not repeat); CI (ci-ok) still running on 504987ec"
+      "pr": 1108,
+      "slice": "GS-5",
+      "entered": "2026-11-24T12:31Z",
+      "exited": "2026-11-24T13:52Z",
+      "merged_as": "4689737c3a2e6ce15f46da6517b464910bf02d01"
+    }
   },
   "landing_order_web": [
     "S-compare",
@@ -10618,6 +10580,12 @@
       "pr": 1111,
       "sha": "7f079fe1094180e1b8aa81c1d7393bc49fdbc464",
       "at": "2026-11-24T12:28Z"
+    },
+    {
+      "slice": "GS-5",
+      "pr": 1108,
+      "sha": "4689737c3a2e6ce15f46da6517b464910bf02d01",
+      "at": "2026-11-24T13:52Z"
     }
   ],
   "active_sessions": {
@@ -10735,8 +10703,7 @@
       "id": "bench-nrt-reuse",
       "what": "search-bench reusing --dir fails only NRT ('live indexer never indexed a new torrent'): likely bench reuse bug (from #341); give to bench owner after G-m5a",
       "at": "2026-11-01T15:16Z"
-    },
-    "X-flake-search-keyboard-2"
+    }
   ],
   "soak_r2": {
     "status": "stopped early 2026-11-01T11:00:57Z (operator_stop + already_exited_0; ~2.3 h into baseline); not gate evidence",
@@ -10889,7 +10856,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T13:30Z",
+    "updated": "2026-11-24T13:55Z",
     "items": [
       {
         "slot": 1,
@@ -10897,7 +10864,7 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "Starting: fix the store cap-index proptest flake (test code only; brief briefs/X-flake-cap-index-move.md).",
+        "doing": "lane cleared 13:52Z; open PR",
         "since": "2026-11-24T11:15Z"
       },
       {
@@ -10906,7 +10873,7 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "PR #1112 open (head c287570b, main merged in after ENR-11); CI running, then the runner holder's fresh review and merge.",
+        "doing": "PR #1112; lane cleared 13:52Z; bring main in, then fresh review",
         "since": "2026-11-24T09:19Z"
       },
       {
@@ -10914,17 +10881,17 @@
         "slice": "X-cmp-egress-ui",
         "role": "build",
         "model": "opus",
-        "doing": "committed locally 27866428; holding for #1108 lane",
+        "doing": "lane cleared 13:52Z; bring main in, push, open PR",
         "since": "2026-11-24T12:30Z",
         "status": "active"
       },
       {
         "slot": 4,
-        "slice": "GS-5",
+        "slice": "X-flake-search-keyboard-2",
         "role": "build",
-        "agent": "claude",
-        "doing": "PR #1108 in landing lane since 12:31Z (head 504987ec); lane review + merge by bookkeeping",
-        "since": "2026-11-24T06:22:30Z"
+        "doing": "starting: brief briefs/X-flake-search-keyboard-2.md",
+        "since": "2026-11-24T13:55Z",
+        "status": "active"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
