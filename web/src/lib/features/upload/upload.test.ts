@@ -1,15 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '$lib/api/client';
-import {
-	CONTENT_TYPE,
-	MAX_BYTES,
-	accepted,
-	dataDirProblem,
-	precheck,
-	refused,
-	send,
-	tally
-} from './upload';
+import { CONTENT_TYPE, MAX_BYTES, accepted, precheck, refused, send, tally } from './upload';
+import { dataDirProblem } from './data-dir';
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
 	new Response(JSON.stringify(body), {

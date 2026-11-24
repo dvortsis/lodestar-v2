@@ -49,7 +49,7 @@ describe('UploadScreen', () => {
 		render(UploadScreen);
 		expect(screen.getByRole('heading', { level: 1, name: 'Add torrent files' })).toBeTruthy();
 		expect(screen.getByTestId('upload-limits').textContent).toContain(
-			`Up to ${MAX_FILES} files at a time, each at most 8.00 MiB`
+			`Up to ${MAX_FILES} files at a time, each at most 8.00\u00a0MiB`
 		);
 		const click = vi.spyOn(input(), 'click');
 		await fireEvent.click(screen.getByRole('button', { name: 'Choose files' }));

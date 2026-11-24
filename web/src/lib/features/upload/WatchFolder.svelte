@@ -12,7 +12,7 @@
 	import Lazy from '$lib/features/settings/screens2/Lazy.svelte';
 	import { loadSettingsIndex } from '$lib/features/settings/form/schema';
 	import type { FieldSpec } from '$lib/features/settings/form/types';
-	import { dataDirProblem } from './upload';
+	import { dataDirProblem } from './data-dir';
 
 	let fields = $state<FieldSpec[]>();
 	let failed = $state(false);
