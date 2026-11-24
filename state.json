@@ -4400,6 +4400,11 @@
       "at": "2026-11-24T13:02Z",
       "slice": "X-cmp-egress-ui",
       "what": "size (\u00a72.26): new entry \"Settings companions route editor (on demand)\" 6 kB; companions parts 29 -> 29.5 kB; parts entry stops at Security password dialog; Sources companion chip and setup 27 -> 27.5 kB; shared edit of web/.size-limit.mjs after #1108 merges"
+    },
+    {
+      "at": "2026-11-24T14:45Z",
+      "slice": "ENR-G",
+      "what": "Approved fix outside owns: crates/store/src/unverified.rs purge_source Stage::Claims marks the deleted claims torrents for the backfill (DELETE ... RETURNING torrent_id, then parser_ver = 0), plus a store unit test. Hole found by the gate: purge left torrent_parsed with the purged adult match. Content-safety tightening; no owner call."
     }
   ],
   "runner_notes": {
@@ -10882,7 +10887,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T14:30Z",
+    "updated": "2026-11-24T14:45Z",
     "items": [
       {
         "slot": 1,
@@ -10907,7 +10912,7 @@
         "slice": "ENR-G",
         "role": "build",
         "model": "opus",
-        "doing": "starting (brief briefs/ENR-G.md)",
+        "doing": "building; store purge fix approved 14:45Z",
         "since": "2026-11-24T14:30Z",
         "status": "active",
         "agent": "opus"
