@@ -11,6 +11,7 @@ import type {
 	Template,
 	TemplateRequest
 } from './logic';
+import type { EgressChanged, EgressSetting } from './egress';
 
 export class CompanionsStore {
 	items = $state<Companion[]>([]);
@@ -109,6 +110,25 @@ export class CompanionsStore {
 		await api.post('/companions/{id}/restart', { path: { id } });
 		await this.refresh(id);
 		this.watch(id);
+	}
+
+	/**
+	 * Changes a companion's route (`PUT …/egress`, with the admin password). Takes the route as
+	 * saved into its row; when its restart on it began, watches `health` as after Restart. Never
+	 * says "applied": the answer says only whether the restart began.
+	 */
+	async setEgress(id: string, egress: EgressSetting, password: string): Promise<EgressChanged> {
+		const r = await api.put('/companions/{id}/egress', {
+			path: { id },
+			body: { egress, password }
+		});
+		if (this.live)
+			this.items = this.items.map((x) => (x.id === id ? { ...x, egress: r.egress } : x));
+		if (r.restarting) {
+			await this.refresh(id);
+			this.watch(id);
+		}
+		return r;
 	}
 
 	async logs(id: string): Promise<string[]> {

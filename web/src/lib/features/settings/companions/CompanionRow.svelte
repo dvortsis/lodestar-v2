@@ -7,13 +7,15 @@
 	import Button from '$lib/ui/controls/Button.svelte';
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Badge from '$lib/ui/labels/Badge.svelte';
-	import { failureWords, hasRoute, isHealth, prowlarrFamily, wordsFor } from './logic';
+	import { failureWords, isHealth, prowlarrOnSocks, wordsFor } from './logic';
 	import type { Companion, InstallOffer, RemovalPlan } from './logic';
 	import type { CompanionsStore } from './store.svelte';
 
 	let { store, c }: { store: CompanionsStore; c: Companion } = $props();
 
-	let panel = $state<'logs' | 'credentials' | 'template' | null>(null);
+	let panel = $state<'logs' | 'credentials' | 'template' | 'route' | null>(null);
+	/** The route kind chosen in the editor and not saved yet (live SOCKS5 warnings). */
+	let draft = $state<'' | 'direct' | 'socks5'>('');
 	let offer = $state<InstallOffer | null>(null);
 	let plan = $state<RemovalPlan | null>(null);
 	let busy = $state<string | null>(null);
@@ -33,7 +35,28 @@
 		setTimeout(() => {
 			if (what === offer || what === plan) clear();
 		}, 400);
+	// `draft` warns only while the editor is open, so closing it needs no reset.
 	const toggle = (p: typeof panel) => (panel = panel === p ? null : p);
+	// The route editor shows only while the row has a route and it's installed: a refreshed row
+	// without one hides it, and its unsaved choice no longer warns.
+	const routeOffered = $derived(c.egress !== null && installed);
+	/** Prowlarr's saved route is SOCKS5, or SOCKS5 is chosen in its editor: warn, the server decides. */
+	const socks = $derived(
+		(c.id === 'prowlarr' || c.id === 'flaresolverr') && prowlarrOnSocks(store.items)
+			? 'saved'
+			: c.id === 'prowlarr' && routeOffered && panel === 'route' && draft === 'socks5'
+				? 'draft'
+				: null
+	);
+	// Route.svelte has already cleared the row's last refusal when this try began.
+	async function routeSaved(text: string) {
+		panel = null;
+		note = text;
+		// The Save button that opened the password dialog is gone: focus goes to the row's name.
+		await tick();
+		heading?.focus();
+	}
+	const routeRefused = (text: string) => (error = text);
 
 	async function openOffer() {
 		busy = 'offer';
@@ -139,15 +162,17 @@
 		<p class="text-small text-muted-text" data-refusal>{wordsFor(c.refusal)}</p>
 	{/if}
 
-	{#if hasRoute(c.id)}
-		<p class="text-small text-muted-text" data-route-note>{m.settings_companions_route_note()}</p>
-	{/if}
-	{#if prowlarrFamily(c.id)}
-		<Banner kind="warning" title={m.settings_companions_socks_title()}>
-			<ul class="list-disc ps-4" data-socks-warnings>
-				<li>{m.settings_companions_socks_email()}</li>
+	{#if socks}
+		<Banner
+			kind="warning"
+			title={socks === 'saved'
+				? m.settings_companions_socks_title()
+				: m.settings_companions_socks_title_draft()}
+		>
+			<ul class="list-disc ps-4" data-socks-warnings={socks}>
+				{#if c.id === 'prowlarr'}<li>{m.settings_companions_socks_email()}</li>{/if}
 				<li>{m.settings_companions_socks_flaresolverr()}</li>
-				<li>{m.settings_companions_socks_indexer_proxies()}</li>
+				{#if c.id === 'prowlarr'}<li>{m.settings_companions_socks_indexer_proxies()}</li>{/if}
 			</ul>
 		</Banner>
 	{/if}
@@ -169,6 +194,11 @@
 				>{m.settings_companions_remove()}</Button
 			>
 		{/if}
+		{#if routeOffered}
+			<Button dense aria-expanded={panel === 'route'} onclick={() => toggle('route')}>
+				{m.settings_companions_route_change()}
+			</Button>
+		{/if}
 		{#if hasCredentials}
 			<Button dense aria-expanded={panel === 'credentials'} onclick={() => toggle('credentials')}>
 				{m.settings_companions_credentials()}
@@ -187,6 +217,11 @@
 				{store}
 				id={c.id}
 			/>{/await}{/if}
+	{#if panel === 'route' && routeOffered}
+		{#await import('./Route.svelte') then { default: Route }}
+			<Route {store} {c} bind:draft ondone={routeSaved} onrefused={routeRefused} />
+		{/await}
+	{/if}
 	{#if panel === 'credentials'}
 		{#await import('./Credentials.svelte') then { default: Credentials }}
 			<Credentials {store} id={c.id} name={c.name} fields={c.credentials} {pasteOffered} />
@@ -206,6 +241,8 @@
 		{#await import('./InstallDialog.svelte') then { default: InstallDialog }}
 			<InstallDialog
 				{offer}
+				runs={c.runs}
+				refusal={c.refusal}
 				busy={busy === 'install'}
 				error={dialogError}
 				onconfirm={confirmInstall}

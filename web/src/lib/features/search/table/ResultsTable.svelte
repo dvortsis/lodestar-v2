@@ -4,7 +4,7 @@
 	// chooser. The scroll container is the table's own, so narrow widths scroll here, not the page.
 	// Rows are a roving tab stop like the list's; j/k and the arrows move, Enter opens. More pages
 	// arrive from the sentinel row (the panel's "Load more" is the fallback).
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import ArrowDown from '~icons/ph/arrow-down-bold';
 	import ArrowUp from '~icons/ph/arrow-up-bold';
 	import { FOCUS_RING } from '$lib/ui/classes';
@@ -90,10 +90,12 @@
 		);
 	}
 
-	// A new query starts at the first row again (the list does the same through its resetKey).
+	// A new query starts at the first row again, as the list does through its resetKey. Unlike the
+	// list (so far), a row that keeps focus through the change (a re-sort answered while a row has
+	// focus) stays the active one instead, so j/k carry on from the focused row, as the arrows do.
 	$effect(() => {
 		void results.shown;
-		active = 0;
+		active = untrack(focusedRow) ?? 0;
 	});
 
 	let scroller = $state<HTMLElement>();
@@ -119,6 +121,10 @@
 		if (r.top < s.bottom + 200) onLoadMore();
 	});
 
+	function focusedRow(): number | undefined {
+		const row = document.activeElement?.closest<HTMLElement>('tbody tr[data-index]');
+		return row && scroller?.contains(row) ? Number(row.dataset.index) : undefined;
+	}
 	function rowEl(i: number) {
 		return scroller?.querySelector<HTMLElement>(`tbody tr[data-index="${i}"]`) ?? null;
 	}
