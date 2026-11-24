@@ -2052,6 +2052,8 @@ fn load(store: &mut Store, id: i64) -> Result<Option<Loaded>> {
 fn torrent_doc(store: &mut Store, t: &Loaded, sources: &mut SourceNames) -> Result<TorrentDoc> {
     let mut doc = TorrentDoc::new(&t.row, &t.tree);
     doc.enriched = doc_enrichment(store, t.row.id)?;
+    doc.enriched
+        .identify(&store.served_identifications(t.row.id)?);
     doc.provenance.sources = sources.of(store, t.row.sources)?;
     Ok(doc)
 }

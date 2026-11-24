@@ -209,6 +209,18 @@ fn shape(kind: FieldKind) -> (ValueType, &'static [Op], Vec<&'static str>) {
             | TagKey::Audio
             | TagKey::Lang
             | TagKey::Group => (ValueType::Keyword, LIST, Vec::new()),
+            // External ids (ENR-11).
+            TagKey::Imdb
+            | TagKey::Tmdb
+            | TagKey::Tvdb
+            | TagKey::Anidb
+            | TagKey::Anilist
+            | TagKey::Mbid
+            | TagKey::Olid
+            | TagKey::Igdb
+            | TagKey::Discogs
+            | TagKey::Steam
+            | TagKey::Wikidata => (ValueType::Keyword, LIST, Vec::new()),
         },
         FieldKind::Share(_) => (
             ValueType::Share,
@@ -284,6 +296,19 @@ mod tests {
         }
     }
 
+    /// A well-formed ID for an ID field (ENR-11), which takes only its
+    /// catalogue's form.
+    fn id_sample(name: &str) -> Option<&'static str> {
+        Some(match query::TagKey::id(name)? {
+            query::TagKey::Imdb => "tt0111161",
+            query::TagKey::Mbid => "a74b1b7f-71a5-4011-9441-d0b5e4122711",
+            query::TagKey::Olid => "OL45W",
+            query::TagKey::Discogs => "r249504",
+            query::TagKey::Wikidata => "Q42",
+            _ => "278",
+        })
+    }
+
     fn op_prefix(op: Op) -> &'static str {
         match op {
             Op::Gt => ">",
@@ -299,7 +324,11 @@ mod tests {
         for f in catalogue(true) {
             for name in std::iter::once(f.name).chain(f.aliases.iter().copied()) {
                 for &op in f.ops {
-                    let q = format!("{name}:{}", sample(f.value, op, &f.values));
+                    let q = match id_sample(name) {
+                        Some(id) if op == Op::AnyOf => format!("{name}:{id},{id}"),
+                        Some(id) => format!("{name}:{id}"),
+                        None => format!("{name}:{}", sample(f.value, op, &f.values)),
+                    };
                     assert!(query::parse(&q).is_ok(), "{q}: {:?}", query::parse(&q));
                 }
                 for v in &f.values {
