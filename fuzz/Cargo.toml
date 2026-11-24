@@ -447,3 +447,10 @@ path = "fuzz_targets/irc_line.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "irc_announce"
+path = "fuzz_targets/irc_announce.rs"
+test = false
+doc = false
+bench = false
