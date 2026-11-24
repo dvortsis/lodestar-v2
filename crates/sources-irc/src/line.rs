@@ -294,31 +294,46 @@ fn valid_tag_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/'))
 }
 
-/// IRCv3 tag-value unescaping: `\:` `;`, `\s` space, `\\` `\`, `\r` CR,
-/// `\n` LF; any other escaped character stands for itself, and a lone
-/// final `\` is dropped.
+/// IRCv3 tag-value unescaping: `\:` `;`, `\s` space, `\\` `\`; any other
+/// escaped character stands for itself, and a lone final `\` is dropped.
+///
+/// **A value never holds `CR`, `LF` or `NUL`:** IRCv3's `\r` and `\n`
+/// escapes, and any of the three however it got there, become U+FFFD,
+/// so a tag value can't break a line or a log record wherever it ends
+/// up. (Like every parsed field, it can still hold other control and
+/// format characters.)
 pub fn unescape_tag(v: &str) -> String {
     let mut out = String::with_capacity(v.len());
     let mut chars = v.chars();
     while let Some(c) = chars.next() {
         if c != '\\' {
-            out.push(c);
+            out.push(no_break(c));
             continue;
         }
         match chars.next() {
             Some(':') => out.push(';'),
             Some('s') => out.push(' '),
             Some('\\') => out.push('\\'),
-            Some('r') => out.push('\r'),
-            Some('n') => out.push('\n'),
-            Some(other) => out.push(other),
+            Some('r' | 'n') => out.push(char::REPLACEMENT_CHARACTER),
+            Some(other) => out.push(no_break(other)),
             None => {}
         }
     }
     out
 }
 
-/// The inverse of [`unescape_tag`].
+/// `CR`, `LF` and `NUL` as U+FFFD, everything else as itself.
+fn no_break(c: char) -> char {
+    if matches!(c, '\r' | '\n' | '\0') {
+        char::REPLACEMENT_CHARACTER
+    } else {
+        c
+    }
+}
+
+/// The inverse of [`unescape_tag`] for a value without `CR`, `LF` or
+/// `NUL` (an outgoing value with them escapes them as IRCv3 says, and
+/// they come back as U+FFFD).
 pub fn escape_tag(v: &str) -> String {
     let mut out = String::with_capacity(v.len());
     for c in v.chars() {
@@ -591,6 +606,55 @@ fn take_hex(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> bool {
     }
 }
 
+/// Whether `c` is a Unicode format character (general category Cf):
+/// bidi controls, zero-width characters, the soft hyphen, tag characters
+/// and the rest. Unicode 16's full list, written out so no dependency is
+/// needed; they render invisibly or reorder the text around them.
+pub fn is_format_char(c: char) -> bool {
+    const CF: &[(u32, u32)] = &[
+        (0x00AD, 0x00AD),
+        (0x0600, 0x0605),
+        (0x061C, 0x061C),
+        (0x06DD, 0x06DD),
+        (0x070F, 0x070F),
+        (0x0890, 0x0891),
+        (0x08E2, 0x08E2),
+        (0x180E, 0x180E),
+        (0x200B, 0x200F),
+        (0x202A, 0x202E),
+        (0x2060, 0x2064),
+        (0x2066, 0x206F),
+        (0xFEFF, 0xFEFF),
+        (0xFFF9, 0xFFFB),
+        (0x110BD, 0x110BD),
+        (0x110CD, 0x110CD),
+        (0x13430, 0x1343F),
+        (0x1BCA0, 0x1BCA3),
+        (0x1D173, 0x1D17A),
+        (0xE0001, 0xE0001),
+        (0xE0020, 0xE007F),
+    ];
+    let c = u32::from(c);
+    CF.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
+}
+
+/// Server text made safe to store, log or show: mIRC formatting removed
+/// ([`strip_formatting`]), then every control character, Unicode format
+/// character ([`is_format_char`]) and line or paragraph separator
+/// (U+2028, U+2029) dropped, except that tabs and the separators become
+/// a space, so words either side stay apart. Runs of spaces are kept
+/// (a pattern may rely on them). Never longer than the input.
+pub fn clean_text(text: &str) -> String {
+    strip_formatting(text)
+        .chars()
+        .filter_map(|c| match c {
+            '\t' | '\u{2028}' | '\u{2029}' => Some(' '),
+            c if c.is_control() || is_format_char(c) => None,
+            c => Some(c),
+        })
+        .collect()
+}
+
 /// Whether two nicks or channel names are equal under RFC 1459 case
 /// mapping (`A-Z` and `[]\~` fold to `a-z` and `{}|^`), the default when a
 /// server doesn't say otherwise.
@@ -780,11 +844,30 @@ mod tests {
     }
 
     #[test]
+    fn clean_text_golden() {
+        assert_eq!(
+            clean_text("\u{2}New\u{f}: \u{3}04,01Foo\u{3}\tBar\u{200b}\u{202e}Baz\u{2028}x\u{7}"),
+            "New: Foo BarBaz x"
+        );
+        assert_eq!(clean_text("plain  text"), "plain  text");
+        assert_eq!(clean_text("\u{85}\u{feff}\u{ad}"), "");
+    }
+
+    #[test]
     fn tag_escapes() {
         assert_eq!(
             unescape_tag("a\\:b\\sc\\\\d\\re\\nf\\xg\\"),
-            "a;b c\\d\re\nfxg"
+            "a;b c\\d\u{fffd}e\u{fffd}fxg"
         );
+        // Golden: no unescaped value holds CR, LF or NUL, whether escaped
+        // or (as a fuzzer or a future parser path could hand it) raw.
+        assert_eq!(unescape_tag("x\\r\\ny"), "x\u{fffd}\u{fffd}y");
+        assert_eq!(unescape_tag("x\ry\nz\0w"), "x\u{fffd}y\u{fffd}z\u{fffd}w");
+        assert_eq!(unescape_tag("x\\\ry\\\0z"), "x\u{fffd}y\u{fffd}z");
+        // Through the parser: a tag value can't break a line downstream.
+        let m = p("@a=one\\rtwo\\nthree;b=\\r\\n PING");
+        assert_eq!(m.tag("a"), Some("one\u{fffd}two\u{fffd}three"));
+        assert_eq!(m.tag("b"), Some("\u{fffd}\u{fffd}"));
         assert_eq!(escape_tag("a;b c\\d\re\n"), "a\\:b\\sc\\\\d\\re\\n");
     }
 
@@ -967,8 +1050,28 @@ mod tests {
         }
 
         #[test]
-        fn tag_escape_roundtrip(v in "\\PC{0,40}|[;\\\\ \r\n a]{0,20}") {
-            prop_assert_eq!(unescape_tag(&escape_tag(&v)), v);
+        fn tag_escape_roundtrip(v in "\\PC{0,40}|[;\\\\ \r\n\0 a]{0,20}") {
+            let back = unescape_tag(&escape_tag(&v));
+            prop_assert!(!back.contains(['\r', '\n', '\0']));
+            let expect: String = v
+                .chars()
+                .map(|c| if matches!(c, '\r' | '\n' | '\0') { '\u{fffd}' } else { c })
+                .collect();
+            prop_assert_eq!(back, expect);
+        }
+
+        #[test]
+        fn unescaped_tags_never_break_lines(v in "[\\\\rn0\r\n\0a;s]{0,40}|\\PC{0,40}") {
+            prop_assert!(!unescape_tag(&v).contains(['\r', '\n', '\0']));
+        }
+
+        #[test]
+        fn clean_text_is_clean(s in "[\u{2}\u{3}\u{1}\u{7f}\u{85}\u{200b}\u{202e}\u{2028}\u{feff}\u{e0041}\t\r\n0-9a-z ]{0,60}|\\PC{0,40}|\\PC{0,20}") {
+            let out = clean_text(&s);
+            prop_assert!(out.len() <= s.len());
+            prop_assert!(!out.chars().any(|c| c.is_control() || is_format_char(c)));
+            let separators = ['\u{2028}', '\u{2029}'];
+            prop_assert!(!out.contains(separators));
         }
 
         #[test]

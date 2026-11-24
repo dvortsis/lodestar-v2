@@ -17,6 +17,9 @@ lodestar-integrations.workspace = true
 # are already in the lock file.
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = "=0.7.1"
+# Announce patterns (IRC-1), compiled with size, DFA and nesting limits;
+# the version the search crate pins, already in the lock file.
+regex = "=1.13.1"
 tokio = { version = "1.54.1", features = ["rt", "net", "sync", "time", "io-util", "macros"] }
 tokio-rustls = { version = "=0.26.6", default-features = false }
 zeroize = "=1.9.1"
