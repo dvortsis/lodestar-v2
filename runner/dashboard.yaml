@@ -379,6 +379,7 @@ placement:
   - X-narrow-states-2
   - X-skip-results-flake
   - X-retry-typed-flake
+  - X-live-banner-flake
   - X-size-own-modules
   - X-size-own-modules-2
   - X-help
@@ -584,6 +585,7 @@ placement:
   - X-fleet-sudo-narrow
   - X-fleet-baab
   - X-fleet-baab-tails
+  - X-collector-ntp
   - X-pia-bridge-manual
   - X-pia-bridge-docs
   - X-restart-banner-polish
@@ -636,11 +638,14 @@ placement:
   - CR-LOOKUP-END
   - CR-HINT-FIRST
   - X-sampler-cooldown-split
+  - X-split-spill-horizon
+  - X-split-resume-gate
   - X-crawler-sim-calibrate
   - CR-COL-5
   - CR-COL-6
   - X-sampler-frontier-starve
   - CR-SAMPLE-BACKOFF-ESCALATE
+  - X-escalate-full-table
   - X-sample-cooling-metric
   - CR-UTP-FIRST-WINDOW
   - X-pool-first-request-docs
@@ -648,6 +653,7 @@ placement:
   - CR-SOFT-TIMEOUT
   - X-soft-lane-free
   - X-soft-key
+  - X-soft-absent-void
   - X-sampler-streak-metrics
   - X-capacity-rejection-source
 - ws: ws-cr-live
@@ -737,6 +743,9 @@ placement:
   - RX-2
   - X-trigram-switch
   - X-regex-lazy-verify
+  - X-regex-permit
+  - X-lease-client-key
+  - X-ast-regex-roundtrip
   - GS-3
   - X-gs3-nits
   - X-search-param-errors
@@ -766,6 +775,7 @@ placement:
   - UN-3
   - UN-4
   - X-unverified-cap-index
+  - X-unverified-count-heal
   - OUT-1
   - OUT-3
   - D-outputs-guide
@@ -975,6 +985,7 @@ state_override:
   G-v051: done
   R-rc3-cut: done
   SRC-10b: closed
+  ENR-debrid: closed  # skipped, no provider qualifies (decisions/2026-11-23-ENR-debrid.md, #1103; runner records r17)
 conditions:
   owner-cr-spec:
     met: true
@@ -1959,6 +1970,11 @@ owner_queue:
   action: 'May the experiment-host operator move Unraid''s mover schedule for the length of a host A/B stage, then put it back? A mover run inside a block invalidates a segment (it counts as an array operation), §2.68 lets the operator pause parity checks and backups but not change the mover, and Unraid''s default mover runs daily while a block runs about 36 h, so every block would hit it. Today the run sheet stops before starting and asks you (docs/soak/runsheets/host-stage1-ab-runsheet.md step 4b). The runner recommends yes: move it outside the stage''s hours and restore it at the stage''s end, recorded in the stage''s records (runner records r16).'
   unblocks: Host A/B blocks that start on time instead of waiting on a daily mover run
   when: Before the experiment host's stage 1 starts; until then the run sheet asks you each time
+- n: 37
+  type: action
+  action: 'Optional: will you, or a person you choose, read TorBox''s current terms (and its abuse-system article) in a browser before v0.7 closes? Debrid cache status was skipped because no provider qualifies (docs/decisions/2026-11-23-ENR-debrid.md): TorBox appears to offer a cache check by hash (its changelog and third-party docs say so), but its docs and terms pages are script-rendered and couldn''t be read by a session. If the terms clearly allow a third-party app to check hashes with the user''s own key, the runner can relaunch ENR-debrid for TorBox within v0.7 under your Q4 answer. If they''re silent or ambiguous, that''s a grey case and comes back to you under §2.28'
+  unblocks: Debrid cache status (a Cached on TorBox badge) in v0.7
+  when: Optional, before v0.7 closes; nothing waits on it
 
 gates:
 - id: G-v05
@@ -2164,8 +2180,10 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-23'
+  updated: '2026-11-24'
   now:
+  - label: The sampler split pauses sampling after a restart
+    text: 'On the real network the sampler split (dht.sampler_cooldown_split) ends the full-table stall, but after a clean restart from a spilled state it held sampling for 5 h 25 min, as its decision allows (up to 6 h). So the cloud''s stage-3 split A/B runs between paired instances instead of switching one instance (runner, r17). Before the split ships on by default, X-split-resume-gate shortens or removes that hold, so a user with the split on doesn''t lose hours of sampling after every restart.'
   - label: The runner decides the owner queue, except the filters (§2.69)
     text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto. You chose FILTER-01 and FILTER-03 (§2.70). Crawler tests on the Unraid box need no booking now (§2.68). The API credit now funds the owner-run build lane, whose enrichment PRs are landing (seven combined in #971), and the operator is unfunded (§2.75).'
   - label: B1 and B2 first (§2.66)
