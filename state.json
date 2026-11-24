@@ -4344,6 +4344,19 @@
       "pr": 1111,
       "flag": "IRC-1 turns announce lines into an Announce (name, size, category, id) and leaves mapping them to claims to IRC-2; no tracker definitions ship (owner \u00a72.47 Q2). Recorded in its decisions file.",
       "send": "next owner digest (\u00a72.19)"
+    },
+    {
+      "slice": "GS-5",
+      "pr": 1108,
+      "items": [
+        "group_versions per-account preference (new field)",
+        "URL wins, then account; browser cache for first paint",
+        "switch moves into More below a 52 rem toolbar",
+        "size raises: search results lazy 40.86->43.51 KB, toolbar 4.6->5.02 KB, cards 8.01->8.15 KB, new collapse rows entry 3.02 KB (\u00a72.26)",
+        "in-place rows from /siblings (all versions), not only query matches",
+        "Show all opens the details until GS-4 builds Related"
+      ],
+      "added": "2026-11-24"
     }
   ],
   "decisions_log": [
@@ -4497,7 +4510,7 @@
       "X-flake-cap-index-move (rust)",
       "X-cmp-egress-ui (web)"
     ],
-    "review": "fresh Opus review by the bookkeeping thread; merge on green",
+    "review": "rv-1108 MERGE (no blocking); merge on green",
     "last": {
       "pr": 1110,
       "slice": "ENR-11",
@@ -9126,6 +9139,23 @@
       "id": "IRC-2-from-1111",
       "note": "From #1111's review (reviews/rv-1111.md), for IRC-2's brief: add a second secret placeholder ({authkey}) so Gazelle trackers (authkey + torrent_pass) can be defined; show torrent_url_host() when a definition is added and bind the stored passkey to that host, so an imported or changed definition can't redirect it; refuse loopback and private hosts unless the user confirms; consider the server's CASEMAPPING for nick matching; refuse overlapping definitions for one channel+nick.",
       "added": "2026-11-24T11:26Z"
+    },
+    {
+      "id": "GS-5-followups",
+      "from": "rv-1108",
+      "owns": [
+        "web/src/lib/features/search/collapse/**",
+        "web/src/lib/features/search/results/ResultsPanel.svelte",
+        "web/src/lib/features/search/results/ResultsPanel.group.test.ts"
+      ],
+      "items": [
+        "Show all N counts max(others, siblings)+1 or drops the number",
+        "re-announce same-text group loads (clear-then-set)",
+        "carry the active row across a view switch by hash, not index",
+        "nits: test fixture at group.test.ts:247, move() at list end, duplicate data-testid, GroupToggle one-way"
+      ],
+      "model": "sonnet",
+      "added": "2026-11-24"
     }
   ],
   "main_health": {
