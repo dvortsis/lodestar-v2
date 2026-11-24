@@ -24,7 +24,13 @@ pub use tokio::time::Instant;
 use lodestar_bencode::{self as bencode, DecodeOptions, Encoder, Value};
 use sha2::{Digest, Sha256};
 
+/// The container version of the marker, the witness and a snapshot with
+/// nothing spilled (byte for byte what CR-0d wrote).
 pub const VERSION: u32 = 1;
+/// A snapshot that also keeps the spill filter's cooldowns
+/// (X-split-resume-gate). Written only when the filter holds a live one,
+/// so a run with the split off, or nothing spilled, writes version 1.
+pub const SNAPSHOT_SPILL_VERSION: u32 = 2;
 pub const LOCK_FILE: &str = "dht-restart.lock";
 pub const MARKER_FILE: &str = "dht-restart.mark";
 pub const SNAPSHOT_FILE: &str = "dht-restart.bin";
@@ -44,10 +50,22 @@ const MAGIC_MARKER: &[u8; 8] = b"LDSRMARK";
 const MAGIC_WITNESS: &[u8; 8] = b"LDSRWITN";
 const HEADER: usize = 16;
 const TRAILER: usize = 32;
-const MAX_SNAPSHOT_BODY: usize = 8 << 20;
+/// The listed entries (at most 4.4 MB) with room to spare, and the
+/// largest spill section.
+const MAX_SNAPSHOT_BODY: usize = (8 << 20) + MAX_SPILL_RAW;
 const MAX_SMALL_BODY: usize = 4 << 10;
 const R4: usize = 4 + 2 + 4;
 const R6: usize = 16 + 2 + 4;
+
+/// The spill filter's shape (`node::sampler::spill`), which the snapshot's
+/// spill section follows: blocks of slots, each slot a 20-bit tag above a
+/// 12-bit minute.
+pub const SPILL_BLOCK: usize = 64;
+pub const SPILL_BLOCKS: usize = 1 << 17;
+pub const SPILL_MINUTE_BITS: u32 = 12;
+const SPILL_MINUTE_MASK: u32 = (1 << SPILL_MINUTE_BITS) - 1;
+/// A count byte per block and every slot's word.
+const MAX_SPILL_RAW: usize = SPILL_BLOCKS + 4 * SPILL_BLOCKS * SPILL_BLOCK;
 
 pub type Digest32 = [u8; 32];
 pub type Id16 = [u8; 16];
@@ -70,12 +88,17 @@ impl fmt::Display for Fault {
 
 // ---- Container (§1.2) -------------------------------------------------------
 
-/// magic ‖ version ‖ len ‖ body ‖ SHA-256 of everything before it.
+/// magic ‖ version ‖ len ‖ body ‖ SHA-256 of everything before it, at
+/// [`VERSION`].
 fn seal(magic: &[u8; 8], body: &[u8]) -> Vec<u8> {
+    seal_at(magic, VERSION, body)
+}
+
+fn seal_at(magic: &[u8; 8], version: u32, body: &[u8]) -> Vec<u8> {
     let len = u32::try_from(body.len()).expect("bodies are bounded far below 4 GiB");
     let mut out = Vec::with_capacity(HEADER + body.len() + TRAILER);
     out.extend_from_slice(magic);
-    out.extend_from_slice(&VERSION.to_le_bytes());
+    out.extend_from_slice(&version.to_le_bytes());
     out.extend_from_slice(&len.to_le_bytes());
     out.extend_from_slice(body);
     let sum = Sha256::digest(&out);
@@ -83,12 +106,23 @@ fn seal(magic: &[u8; 8], body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The body of a sealed file, and its checksum.
+/// The body of a sealed file at [`VERSION`], and its checksum.
 fn open<'a>(
     magic: &[u8; 8],
     max_body: usize,
     bytes: &'a [u8],
 ) -> Result<(&'a [u8], Digest32), Fault> {
+    open_any(magic, &[VERSION], max_body, bytes).map(|(body, sum, _)| (body, sum))
+}
+
+/// The body of a sealed file at any of `versions`, its checksum and its
+/// version.
+fn open_any<'a>(
+    magic: &[u8; 8],
+    versions: &[u32],
+    max_body: usize,
+    bytes: &'a [u8],
+) -> Result<(&'a [u8], Digest32, u32), Fault> {
     if bytes.len() < HEADER + TRAILER {
         return Err(Fault::Corrupt("short"));
     }
@@ -96,7 +130,7 @@ fn open<'a>(
         return Err(Fault::Corrupt("magic"));
     }
     let version = u32::from_le_bytes(bytes[8..12].try_into().expect("4 bytes"));
-    if version != VERSION {
+    if !versions.contains(&version) {
         return Err(Fault::Version(version));
     }
     let len = u32::from_le_bytes(bytes[12..16].try_into().expect("4 bytes")) as usize;
@@ -107,7 +141,11 @@ fn open<'a>(
     if Sha256::digest(sealed).as_slice() != sum {
         return Err(Fault::Corrupt("checksum"));
     }
-    Ok((&sealed[HEADER..], sum.try_into().expect("32 bytes")))
+    Ok((
+        &sealed[HEADER..],
+        sum.try_into().expect("32 bytes"),
+        version,
+    ))
 }
 
 /// A strictly decoded body: one flat dictionary with exactly `keys`.
@@ -284,11 +322,113 @@ pub struct Snapshot {
     pub gate_s: u32,
     /// Sorted by family, then address bytes; no duplicates.
     pub entries: Vec<Entry>,
+    /// The spill filter's live cooldowns (version 2), never empty: a
+    /// snapshot with none is version 1, as CR-0d wrote it.
+    pub spill: Option<Spilled>,
 }
 
 const SNAPSHOT_KEYS: &[&[u8]] = &[
     b"at", b"dir_id", b"gate", b"gen", b"horizon", b"ids", b"r4", b"r6", b"run_id",
 ];
+const SNAPSHOT_SPILL_KEYS: &[&[u8]] = &[
+    b"at",
+    b"dir_id",
+    b"gate",
+    b"gen",
+    b"horizon",
+    b"ids",
+    b"r4",
+    b"r6",
+    b"run_id",
+    b"spill",
+    b"spill_key",
+];
+
+/// The spill filter's cooldowns as the snapshot keeps them
+/// (X-split-resume-gate). The filter holds fingerprints, not addresses, so
+/// it can't be listed as entries; it's kept as it is, with the keys its
+/// fingerprints were made with, so the next run asks the same questions
+/// of it.
+///
+/// `raw` is, for each of [`SPILL_BLOCKS`] blocks in order, a count byte
+/// `n` (at most [`SPILL_BLOCK`]) and then `n` big-endian words: a slot's
+/// 20-bit tag above the whole minutes its cooldown has left after the
+/// snapshot's `at`, rounded up (1 to the horizon in minutes, rounded up).
+#[derive(Clone, PartialEq, Eq)]
+pub struct Spilled {
+    /// The filter's SipHash keys.
+    pub key: [u8; 16],
+    pub raw: Vec<u8>,
+}
+
+impl fmt::Debug for Spilled {
+    // Neither the keys nor 32 MiB of words belong in a log.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Spilled")
+            .field("bytes", &self.raw.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The most minutes a spilled cooldown may have left: the horizon, in
+/// whole minutes rounded up.
+pub fn spill_max_minutes(horizon_s: u32) -> u32 {
+    horizon_s.div_ceil(60)
+}
+
+impl Spilled {
+    /// Checks `raw`'s layout and every word, and counts the slots. A
+    /// section with no slot is refused: that snapshot is version 1.
+    fn check(&self, horizon_s: u32) -> Result<usize, Fault> {
+        let max = spill_max_minutes(horizon_s);
+        let mut at = 0;
+        let mut slots = 0;
+        for _ in 0..SPILL_BLOCKS {
+            let n = usize::from(*self.raw.get(at).ok_or(Fault::Corrupt("spill length"))?);
+            if n > SPILL_BLOCK {
+                return Err(Fault::Corrupt("spill block"));
+            }
+            let words = self
+                .raw
+                .get(at + 1..at + 1 + 4 * n)
+                .ok_or(Fault::Corrupt("spill length"))?;
+            for w in words.chunks_exact(4) {
+                let w = u32::from_be_bytes(w.try_into().expect("4 bytes"));
+                // A tag's top byte is never 0 (the filter's own rule).
+                if w >> 24 == 0 {
+                    return Err(Fault::Corrupt("spill tag"));
+                }
+                let minutes = w & SPILL_MINUTE_MASK;
+                if minutes == 0 || minutes > max {
+                    return Err(Fault::Corrupt("spill remaining"));
+                }
+            }
+            at += 1 + 4 * n;
+            slots += n;
+        }
+        if at != self.raw.len() {
+            return Err(Fault::Corrupt("spill length"));
+        }
+        if slots == 0 {
+            return Err(Fault::Corrupt("spill empty"));
+        }
+        Ok(slots)
+    }
+
+    /// Every slot, as (block, word). Call on a checked section, or one the
+    /// filter built, only.
+    pub(crate) fn words(raw: &[u8]) -> impl Iterator<Item = (usize, u32)> + '_ {
+        let mut at = 0;
+        (0..SPILL_BLOCKS).flat_map(move |b| {
+            let n = usize::from(raw[at]);
+            let words = &raw[at + 1..at + 1 + 4 * n];
+            at += 1 + 4 * n;
+            words
+                .chunks_exact(4)
+                .map(move |w| (b, u32::from_be_bytes(w.try_into().expect("4 bytes"))))
+        })
+    }
+}
 
 /// The sort key: the address bytes as written, so byte order is numeric.
 fn entry_key(addr: &SocketAddr) -> (bool, Vec<u8>) {
@@ -310,7 +450,8 @@ impl Snapshot {
             out.extend_from_slice(&key);
             out.extend_from_slice(&e.remaining_s.to_be_bytes());
         }
-        let mut body = Vec::with_capacity(r4.len() + r6.len() + 256);
+        let spill = self.spill.as_ref().map_or(0, |s| s.raw.len());
+        let mut body = Vec::with_capacity(r4.len() + r6.len() + spill + 256);
         Encoder::new(&mut body).dict(|d| {
             d.entry(b"at").int(int(self.at_ms));
             d.entry(b"dir_id").bytes(&self.run.dir_id);
@@ -321,15 +462,35 @@ impl Snapshot {
             d.entry(b"r4").bytes(&r4);
             d.entry(b"r6").bytes(&r6);
             d.entry(b"run_id").bytes(&self.run.run_id);
+            if let Some(s) = &self.spill {
+                d.entry(b"spill").bytes(&s.raw);
+                d.entry(b"spill_key").bytes(&s.key);
+            }
         });
-        seal(MAGIC_SNAPSHOT, &body)
+        match self.spill {
+            Some(_) => seal_at(MAGIC_SNAPSHOT, SNAPSHOT_SPILL_VERSION, &body),
+            None => seal(MAGIC_SNAPSHOT, &body),
+        }
     }
 
     /// The snapshot and its container checksum (what a clean marker's
     /// `snap` names).
     pub fn decode(bytes: &[u8]) -> Result<(Snapshot, Digest32), Fault> {
-        let (body, sum) = open(MAGIC_SNAPSHOT, MAX_SNAPSHOT_BODY, bytes)?;
-        let b = Body::parse(body, SNAPSHOT_KEYS)?;
+        let (body, sum, version) = open_any(
+            MAGIC_SNAPSHOT,
+            &[VERSION, SNAPSHOT_SPILL_VERSION],
+            MAX_SNAPSHOT_BODY,
+            bytes,
+        )?;
+        let spilled = version == SNAPSHOT_SPILL_VERSION;
+        let b = Body::parse(
+            body,
+            if spilled {
+                SNAPSHOT_SPILL_KEYS
+            } else {
+                SNAPSHOT_KEYS
+            },
+        )?;
         let horizon_s = b.int("horizon", u64::from(MAX_HORIZON_S))? as u32;
         if horizon_s == 0 {
             return Err(Fault::Corrupt("horizon"));
@@ -345,6 +506,16 @@ impl Snapshot {
         let mut entries = Vec::with_capacity(r4.len() / R4 + r6.len() / R6);
         decode_entries(r4, 4, horizon_s, &mut entries)?;
         decode_entries(r6, 16, horizon_s, &mut entries)?;
+        let spill = if spilled {
+            let s = Spilled {
+                key: b.fixed("spill_key")?,
+                raw: b.bytes("spill")?.to_vec(),
+            };
+            s.check(horizon_s)?;
+            Some(s)
+        } else {
+            None
+        };
         let snapshot = Snapshot {
             run: RunHeader {
                 generation: b.int("gen", MAX_GEN)?,
@@ -356,6 +527,7 @@ impl Snapshot {
             horizon_s,
             gate_s,
             entries,
+            spill,
         };
         Ok((snapshot, sum))
     }
@@ -521,6 +693,10 @@ pub enum CaptureError {
     /// decode.
     BadHorizon,
     PortZero,
+    /// The spill section breaks its own rules (a minute past the horizon,
+    /// a bad count or tag). The sampler never writes one; refusing the
+    /// commit is safe.
+    Spill,
     /// An IPv6 key with a scope id or flow label. The sampler keys on the
     /// whole `SocketAddr`, so writing it without them would restore the
     /// restriction under a different key (and lose it). Refusing the
@@ -530,16 +706,31 @@ pub enum CaptureError {
 }
 
 /// S10 with the clock reads in the required order: monotonic, then wall.
+/// `spill` lists the spill filter's cooldowns as minutes left after the
+/// monotonic reading it's given (X-split-resume-gate).
 pub fn capture_now(
     clock: &dyn Clock,
     run: RunHeader,
     table: impl IntoIterator<Item = (SocketAddr, Instant)>,
     gate_until: Option<Instant>,
+    spill: impl FnOnce(Instant) -> Option<Spilled>,
     horizon_s: u32,
 ) -> Result<Snapshot, CaptureError> {
     let mono = clock.mono();
     let wall = clock.wall();
-    capture(run, table, gate_until, mono, wall, horizon_s)
+    capture_with_spill(run, table, gate_until, spill(mono), mono, wall, horizon_s)
+}
+
+/// [`capture_with_spill`] with nothing spilled: a version 1 snapshot.
+pub fn capture(
+    run: RunHeader,
+    table: impl IntoIterator<Item = (SocketAddr, Instant)>,
+    gate_until: Option<Instant>,
+    mono: Instant,
+    wall: Duration,
+    horizon_s: u32,
+) -> Result<Snapshot, CaptureError> {
+    capture_with_spill(run, table, gate_until, None, mono, wall, horizon_s)
 }
 
 /// S11's marker time: a wall reading taken after S10's, rounded up (N4).
@@ -548,11 +739,14 @@ pub fn stamp_after_capture(clock: &dyn Clock) -> u64 {
 }
 
 /// Builds the snapshot from the live table. `mono` must be read before
-/// `wall` (I4), so every deadline written is at or after the true one.
-pub fn capture(
+/// `wall` (I4), so every deadline written is at or after the true one;
+/// `spill`'s minutes count from `mono` too. A spill section with no slot
+/// is left out (version 1).
+pub fn capture_with_spill(
     run: RunHeader,
     table: impl IntoIterator<Item = (SocketAddr, Instant)>,
     gate_until: Option<Instant>,
+    spill: Option<Spilled>,
     mono: Instant,
     wall: Duration,
     horizon_s: u32,
@@ -596,12 +790,21 @@ pub fn capture(
         Some(until) => left(until)?,
         None => 0,
     };
+    let spill = match spill {
+        Some(s) if s.raw.iter().all(|b| *b == 0) => None,
+        Some(s) => {
+            s.check(horizon_s).map_err(|_| CaptureError::Spill)?;
+            Some(s)
+        }
+        None => None,
+    };
     Ok(Snapshot {
         run,
         at_ms: ceil_ms(wall),
         horizon_s,
         gate_s,
         entries,
+        spill,
     })
 }
 
@@ -752,6 +955,59 @@ pub struct Seeded {
     /// No sample to anyone before this (N1).
     pub gate_until: Option<Instant>,
     pub dropped_expired: usize,
+    /// The spill filter's cooldowns, for the sampler to rebuild its filter
+    /// from (X-split-resume-gate).
+    pub spill: Option<SeededSpill>,
+}
+
+/// A snapshot's spill section, checked, with what it takes to put each
+/// slot's end on this run's clock exactly as [`seed`] does an entry's.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SeededSpill {
+    key: [u8; 16],
+    raw: Vec<u8>,
+    at_ms: u64,
+    now_ms: u64,
+    h_ms: u64,
+    mono0: Instant,
+}
+
+impl fmt::Debug for SeededSpill {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SeededSpill")
+            .field("bytes", &self.raw.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl SeededSpill {
+    /// The filter's SipHash keys.
+    pub fn key(&self) -> [u8; 16] {
+        self.key
+    }
+
+    /// Every slot still cooling at `wall0`, as (block, tag, end on this
+    /// run's clock). Each end is at or after the true one: the minutes were
+    /// rounded up at capture and count from `at`, which was read after the
+    /// capture's monotonic reading, and `mono0` was read after `wall0`.
+    pub fn slots(&self) -> impl Iterator<Item = (usize, u32, Instant)> + '_ {
+        Spilled::words(&self.raw).filter_map(|(block, word)| {
+            let minutes = u64::from(word & SPILL_MINUTE_MASK);
+            // No overflow: `seed` checked the largest deadline.
+            let deadline = self.at_ms + minutes * 60_000;
+            if deadline <= self.now_ms {
+                return None;
+            }
+            // `left ≤ minutes ≤ the horizon in minutes`; the clamp to the
+            // horizon only trims the rounding past it, never the true end.
+            let left = (deadline - self.now_ms).min(self.h_ms);
+            Some((
+                block,
+                word & !SPILL_MINUTE_MASK,
+                self.mono0 + Duration::from_millis(left),
+            ))
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -871,7 +1127,7 @@ fn validate(loaded: &Loaded, here: &Here) -> Result<Seeded, Reason> {
 /// The restored deadlines on this run's clock. `now` is `floor_ms(wall0)`
 /// and `mono0` was read after `wall0`, so every `until` is at or after
 /// the true deadline (I4). Overflow anywhere is `corrupt` (I3).
-fn seed(s: &Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason> {
+pub(crate) fn seed(s: &Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason> {
     let h_ms = u64::from(here.horizon_s) * 1000;
     let until = |remaining_s: u32| -> Result<Option<Instant>, Reason> {
         let deadline = s
@@ -902,10 +1158,34 @@ fn seed(s: &Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason> {
     } else {
         until(s.gate_s)?
     };
+    let spill = match &s.spill {
+        Some(sp) => {
+            // Checked again: a `Snapshot` built in code skips `decode`, and
+            // `SeededSpill::slots` reads the section without bounds checks.
+            sp.check(s.horizon_s).map_err(|_| Reason::Corrupt)?;
+            // The largest deadline and end the slots can have, so
+            // `SeededSpill::slots` can't overflow.
+            let max = u64::from(spill_max_minutes(s.horizon_s)) * 60_000;
+            s.at_ms.checked_add(max).ok_or(Reason::Corrupt)?;
+            here.mono0
+                .checked_add(Duration::from_millis(h_ms))
+                .ok_or(Reason::Corrupt)?;
+            Some(SeededSpill {
+                key: sp.key,
+                raw: sp.raw.clone(),
+                at_ms: s.at_ms,
+                now_ms: now,
+                h_ms,
+                mono0: here.mono0,
+            })
+        }
+        None => None,
+    };
     Ok(Seeded {
         entries,
         gate_until,
         dropped_expired,
+        spill,
     })
 }
 

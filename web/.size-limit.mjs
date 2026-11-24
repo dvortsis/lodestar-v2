@@ -188,7 +188,7 @@ const filtersDoor = [/features\/filters\/flows-(?:door|root)\.ts$/];
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
-	/features\/detail\/(Contents|ErrorState|TechnicalDetails|ActionsMenu|swarm\/Swarm|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment|identified\/Identified)\.svelte$/,
+	/features\/detail\/(Contents|ErrorState|TechnicalDetails|ActionsMenu|swarm\/Swarm|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment|identified\/Identified|related\/Related)\.svelte$/,
 	// Clipboard failure is an interaction, not part of opening the detail view.
 	// Its UI and mount runtime remain included in the on-demand budget below.
 	/features\/detail\/manual-mount\.ts$/,
@@ -1403,6 +1403,11 @@ const identifiedSection = ownChunk(
 	false,
 	[...drawerView, ...torrentView]
 );
+// GS-4: the Related section loads when it scrolls near (at once on /t); own entry, as above.
+const relatedSection = ownChunk('src/lib/features/detail/related/Related.svelte', [], false, [
+	...drawerView,
+	...torrentView
+]);
 const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-(?:root|adult)\.ts$)/;
 const flowsCarried = [
 	['Settings FiltersScreen (first view)', filtersFirst],
@@ -1864,7 +1869,9 @@ export default [
 	// X-auth-early-401 (runner §2.26): the same replay: 21,967 B measured locally, 21,971 B in CI
 	// (its build SHA moves the chunk names), rounded up to the next 0.01 KB.
 	// X-labels (runner §2.26): 21,979 → 22,129 B, as the drawer.
-	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15.48 KB'),
+	// GS-4 (runner §2.26): 15.48 → 15.69 KB, measured 15,682 B: the Related section's mount (its
+	// placeholder and the dynamic import); the section itself is on demand.
+	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15.69 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[
@@ -1873,10 +1880,14 @@ export default [
 			(f) =>
 				!adultSection.includes(f) &&
 				!identifiedSection.includes(f) &&
+				!relatedSection.includes(f) &&
 				!menuOnly.includes(f) &&
 				!actionsMenu.includes(f)
 		),
-		'47.49 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		// GS-4 (runner §2.26): 47.49 → 47.87 KB, measured 47,864 B: Related's on-demand import of
+		// the drawer's open.ts (and the magnet chunk it shares) counts in /t's on-demand graph, though
+		// /t never calls it (a row there is a plain link); the drawer already has them. Related itself has its own entry.
+		'47.87 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
@@ -1891,6 +1902,9 @@ export default [
 		'0.79 KB'
 	),
 	entry('Detail identified-as section (on demand)', identifiedSection, '2.84 KB'),
+	// GS-4: the Related section (its lists, Compare these and its CSS), on demand. Measured 5,370 B;
+	// limit = measured + at most 10%, rounded to 100 B.
+	entry('Detail Related section (on demand)', relatedSection, '5.4 KB'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	routeEntry(
