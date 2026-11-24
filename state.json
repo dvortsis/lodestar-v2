@@ -4424,6 +4424,11 @@
       "at": "2026-11-24T16:08Z",
       "slice": "GS-4",
       "what": "Size raises approved under \u00a72.26: Related 5.4 KB (new), /t 15.69 KB, Detail sections 47.87 KB"
+    },
+    {
+      "at": "2026-11-24T18:28Z",
+      "slice": "ENR-G",
+      "what": "Approved touching crates/store/src/rules.rs (bump_class_gen pub(crate)) and crates/store/src/sources.rs (consent_of/secret_names_of on a Connection) for rv-1117 fixes; PR 1,852 lines in lane. Owns line fixed in the PR if it pushes again, else in a runner PR after merge."
     }
   ],
   "runner_notes": {
@@ -4549,7 +4554,7 @@
         "GS-4 #1116 (web)"
       ],
       "pr": 1117,
-      "head": "0cb66dc5a0917f6f63f5b851fcf2adc3ebc1eaff"
+      "head": "d38127615d7f0b22a3e4108ea9b61d6e0b5ddb64"
     },
     "last": {
       "pr": 1112,
@@ -11034,7 +11039,7 @@
         "slice": "ENR-G",
         "role": "build",
         "model": "opus",
-        "doing": "PR #1117 rv-1117 FIX (purge mark vs in-flight backfill: bump class_gen) + 3 should-fix; one push, then delta review",
+        "doing": "PR #1117 fixes pushed d3812761 (1,852 lines); delta review running (rv-1117b); merges on green + MERGE",
         "since": "2026-11-24T14:30Z",
         "status": "active",
         "agent": "opus"
@@ -12038,5 +12043,8 @@
     "GS-5": 2,
     "X-escalate-full-table": 3
   },
-  "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge."
+  "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge.",
+  "runner_todo": [
+    "After #1117 merges: if its slices.yaml owns still lack crates/store/src/rules.rs and sources.rs (and the other fix files), add them in a runner records PR; wiring slice notes must carry the adult-enrichment kill-switch requirement."
+  ]
 }
