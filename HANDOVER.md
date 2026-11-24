@@ -31,3 +31,4 @@
 **Returning runner:** read this file first, adopt the claims above as registered slices, and delete this file only after the owner confirms (`docs/handoff.md` §5 step 5).
 - IRC-1 · merged #1111 (7f079fe1), 2026-11-24 · slot 3 freed
 - X-cmp-egress-ui · slot 3 · slice/X-cmp-egress-ui · brief briefs/X-cmp-egress-ui.md · 2026-11-24 · starting
+- Landing lane: GS-5 #1108 entered 2026-11-24 12:31Z (catch-ups 2, ~1,950 lines, rust+web); #1112, X-flake-cap-index-move and X-cmp-egress-ui hold pushes until it merges

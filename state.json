@@ -4481,7 +4481,23 @@
     }
   },
   "landing_lane": {
-    "pr": null,
+    "pr": 1108,
+    "slice": "GS-5",
+    "entered": "2026-11-24T12:31Z",
+    "catch_ups": 2,
+    "lines": 1949,
+    "areas": [
+      "rust",
+      "web"
+    ],
+    "reason": "second catch-up and ~1,950 lines (README step 4)",
+    "head": "504987ecdf77f623c8d997483317311a4f14f0b8",
+    "holding": [
+      "X-escalate-full-table #1112 (rust)",
+      "X-flake-cap-index-move (rust)",
+      "X-cmp-egress-ui (web)"
+    ],
+    "review": "fresh Opus review by the bookkeeping thread; merge on green",
     "last": {
       "pr": 1110,
       "slice": "ENR-11",
@@ -10822,7 +10838,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T12:30Z",
+    "updated": "2026-11-24T12:33Z",
     "items": [
       {
         "slot": 1,
@@ -10847,7 +10863,7 @@
         "slice": "X-cmp-egress-ui",
         "role": "build",
         "model": "opus",
-        "doing": "starting: brief briefs/X-cmp-egress-ui.md",
+        "doing": "starting (coordinator 12:30Z), brief briefs/X-cmp-egress-ui.md; /security-review before merge",
         "since": "2026-11-24T12:30Z",
         "status": "active"
       },
@@ -10856,7 +10872,7 @@
         "slice": "GS-5",
         "role": "build",
         "agent": "claude",
-        "doing": "Building the search Group versions toggle and the +N other versions rows",
+        "doing": "PR #1108 in landing lane since 12:31Z (head 504987ec); lane review + merge by bookkeeping",
         "since": "2026-11-24T06:22:30Z"
       }
     ],
@@ -11845,7 +11861,8 @@
     }
   ],
   "catch_ups": {
-    "ENR-11": 1
+    "ENR-11": 1,
+    "GS-5": 2
   },
   "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge."
 }
