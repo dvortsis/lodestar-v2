@@ -1,4 +1,4 @@
-# X-watch-env decisions (PR pending)
+# X-watch-env decisions (#1104)
 
 `LODESTAR_WATCH_DIR` and `[watch] folder` for the watch folder (UP-1, `docs/decisions/2026-11-12-UP-1.md`; the runner named this follow-up on 2026-11-12).
 
