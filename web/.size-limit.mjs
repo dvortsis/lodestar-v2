@@ -420,8 +420,11 @@ const settingsUpdatesModules = [/features\/settings\/updates\/(icon|about)\.ts$/
 const settingsCompanionsModules = [/features\/settings\/companions\/icon\.ts$/];
 // Companions' dialogs and panels load on the first press that needs them; gated on their own below.
 const settingsCompanionsParts = [
-	/features\/settings\/companions\/(InstallDialog|RemoveDialog|Credentials|Logs|Templates)\.svelte$/
+	/features\/settings\/companions\/(InstallDialog|RemoveDialog|Credentials|Logs|Templates|Route)\.svelte$/
 ];
+// The route editor (X-cmp-egress-ui) is one of those parts with its own entry (runner, §2.26): its
+// refusal and restart sentences would crowd the other parts' budget.
+const settingsCompanionsRoute = [/features\/settings\/companions\/Route\.svelte$/];
 // Outputs (OUT-2): the icon and purpose line load after the first view, like Companions'; its
 // 18+ dialog and Security's key flows (through `key-flows.ts`) load on the first press that needs them.
 const settingsOutputsModules = [/features\/settings\/outputs\/icon\.ts$/];
@@ -854,18 +857,31 @@ const settingsCompanionsModulesLazy = requireMeasuredJs(
 );
 const companionsFirstView =
 	settingsHandBuilt.find(({ name }) => name === 'CompanionsScreen')?.files ?? [];
-const settingsCompanionsPartsLazy = requireMeasuredJs('Settings companions parts (on demand)', [
+// Both stop at Security's password dialog (the route editor's save), measured in Security's parts.
+const companionsPartsOf = (keep) => [
 	...new Set(
 		Object.keys(manifest)
-			.filter((key) => settingsCompanionsParts.some((re) => re.test(key)))
+			.filter(keep)
 			.flatMap((key) =>
-				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...settingsSecurity], false, [
 					...settingsShellView,
 					...companionsFirstView
 				])
 			)
 	)
-]);
+];
+const settingsCompanionsPartsLazy = requireMeasuredJs(
+	'Settings companions parts (on demand)',
+	companionsPartsOf(
+		(key) =>
+			settingsCompanionsParts.some((re) => re.test(key)) &&
+			!settingsCompanionsRoute.some((re) => re.test(key))
+	)
+);
+const settingsCompanionsRouteLazy = requireMeasuredJs(
+	'Settings companions route editor (on demand)',
+	companionsPartsOf((key) => settingsCompanionsRoute.some((re) => re.test(key)))
+);
 const settingsOutputsModulesLazy = requireMeasuredJs(
 	'Settings outputs icon and purpose (on demand)',
 	[
@@ -1513,7 +1529,10 @@ export default [
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
 	entry('Settings updates advanced (on demand)', settingsUpdatesAdvancedLazy, '4.65 KB'),
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
-	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '29 KB'),
+	// X-cmp-egress-ui (runner, §2.26): the parts 29 → 29.5 KB (InstallDialog's "where it runs" from
+	// `runs`); the route editor on its own, measured 5.3 kB.
+	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '29.5 KB'),
+	entry('Settings companions route editor (on demand)', settingsCompanionsRouteLazy, '6 KB'),
 	entry('Settings companions icon and purpose (on demand)', settingsCompanionsModulesLazy, '1 KB'),
 	// OUT-2: Outputs' 18+ dialog and Security's key flows measured 26.32 kB, limit 27 KB (~2.6%
 	// headroom); its icon and purpose line 0.68 kB, limit 0.75 KB (measured + ~10%).
@@ -1630,7 +1649,8 @@ export default [
 	// first view above (the dialogs are unchanged). Limit = measured + ~1.2%.
 	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '41.8 KB'),
 	entry('Sources config dialog (on demand)', sourcesConfigLazy, '6 KB'),
-	entry('Sources companion chip and setup (on demand)', sourcesCompanionLazy, '27 KB'),
+	// X-cmp-egress-ui (runner, §2.26): 27 → 27.5 KB for the install dialog's "where it runs".
+	entry('Sources companion chip and setup (on demand)', sourcesCompanionLazy, '27.5 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.
