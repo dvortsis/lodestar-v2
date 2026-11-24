@@ -11006,7 +11006,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T22:00Z",
+    "updated": "2026-11-24T22:02Z",
     "items": [
       {
         "slot": 1,
@@ -11024,7 +11024,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "brief written (briefs/X-split-spill-horizon.md); coordinator starting it",
+        "doing": "started by coordinator ~21:52Z; building from main with #1118",
         "since": "2026-11-24T22:00Z",
         "status": "active"
       },
