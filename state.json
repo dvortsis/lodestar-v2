@@ -1,5 +1,5 @@
 {
-  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
+  "runner_session": "session_01MMjhnCpMMYF4uEW49L9SpF",
   "updated_at": "2026-11-24T11:26Z",
   "launches": {
     "date": "2026-10-22",
@@ -4382,6 +4382,11 @@
       "slice": "ENR-G",
       "pr": 1117,
       "flag": "\u00a72.19: content-safety tightenings in-PR: purge removes derived records and re-arms a running server; consent checked inside the write transaction; consent-refused hits not cached; narrower mark."
+    },
+    {
+      "slice": "X-split-resume-gate",
+      "pr": 1118,
+      "flag": "\u00a72.19: hash keys persisted in the data dir; restart memory up to ~130 MiB once; cap at H kept; fallback gate if the filter cannot be rebuilt; sim liveness check relaxed to 99% with the split on only."
     }
   ],
   "decisions_log": [
@@ -9210,6 +9215,15 @@
       "model": "opus",
       "added": "2026-11-24",
       "note": "after X-split-resume-gate merges; on-disk format parser, Opus only"
+    },
+    {
+      "id": "X-restart-fuzz-v2-seal",
+      "from": "X-split-resume-gate #1118",
+      "items": [
+        "fuzz/fuzz_targets/dht_restart.rs should also seal SNAPSHOT_SPILL_VERSION"
+      ],
+      "note": "fold into X-restart-fuzz-v2",
+      "added": "2026-11-24"
     }
   ],
   "main_health": {
@@ -10997,9 +11011,10 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "released to push 20:34Z (ENR-G merged); catch-up + Opus review next",
+        "doing": "#1118 ready at 2c988fb2 (all green); fresh Opus review incl. snapshot format running",
         "since": "2026-11-24T17:25Z",
-        "thread": "cmsg_01NSSK1erQ8P6b2pdCDdthC3DsUfzgoadHjfcTG4SEtHXw"
+        "thread": "cmsg_01NSSK1erQ8P6b2pdCDdthC3DsUfzgoadHjfcTG4SEtHXw",
+        "pr": 1118
       },
       {
         "slot": 3,
@@ -11128,7 +11143,7 @@
     }
   ],
   "heartbeat": "2026-11-24T03:39:06Z",
-  "updated": "2026-11-24T21:15Z",
+  "updated": "2026-11-24T21:40Z",
   "pause": {
     "build_slices": false,
     "since": "2026-11-23T06:09Z",
