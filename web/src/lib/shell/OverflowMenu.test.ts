@@ -37,6 +37,7 @@ describe('overflow menu', () => {
 		open();
 		await signOutItem();
 		expect(screen.getAllByRole('menuitem').map((i) => i.textContent?.trim())).toEqual([
+			'Add torrent files',
 			'Logs',
 			'About',
 			'Sign out'

@@ -22,6 +22,7 @@ describe('the screen registry', () => {
 			'sources',
 			'jobs',
 			'companions',
+			'import',
 			'storage',
 			'search',
 			'trackers',
