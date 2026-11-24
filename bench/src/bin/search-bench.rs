@@ -2180,7 +2180,9 @@ fn steady_rss(
         ("Steady-state RSS at 10M, default caches", RSS_MAX)
     };
     let mb = |b: u64| b as f64 / 1e6;
-    let without = |status| Row::without("rss.steady.max", row, "MB", Some(mb(max)), status);
+    // `< max` as a row's `<=`: one byte under, on every row's budget.
+    let budget = Some(mb(max - 1));
+    let without = |status| Row::without("rss.steady.max", row, "MB", budget, status);
     if ds.built_now {
         rows.push(without(Status::Unmeasured(
             "the dataset was built by this process: run again to measure".into(),
@@ -2274,14 +2276,7 @@ fn steady_rss(
         mb(max),
         if pass { "PASS" } else { "FAIL" }
     );
-    // `< max` as a row's `<=`: one byte under.
-    rows.push(Row::measured(
-        "rss.steady.max",
-        row,
-        mb(top),
-        "MB",
-        Some(mb(max - 1)),
-    ));
+    rows.push(Row::measured("rss.steady.max", row, mb(top), "MB", budget));
     rows.push(Row::measured(
         "rss.steady.median",
         row,
