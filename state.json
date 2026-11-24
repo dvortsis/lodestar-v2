@@ -4392,6 +4392,10 @@
       "slice": "X-split-spill-horizon",
       "pr": 1122,
       "flag": "\u00a72.19: spill filter 16 KiB larger; dht_sample_spill_slots keeps its name but counts live cooldowns; fallback engages on live cooldowns; at WK-10e scale >= 8 (~155 samples/s) the filter reaches its line and throttles sampling (safe); runner kept scaled cooldowns uncapped (capping would shorten cooldowns: owner call if ever wanted)."
+    },
+    {
+      "slice": "X-consent-gate-lift-account/-external",
+      "flag": "Not launched: both need SRC-02 settled first (build-plan \u00a70.3 veto list, roadmap n:23). Owner veto item: Ben decides whether the runner settles SRC-02 now."
     }
   ],
   "decisions_log": [
@@ -11045,7 +11049,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1120 open at 4f8bee4e (~630 lines), CI running; review on ready. Deviation to weigh: shaping purged claim still bumps class_gen (brief item 2)",
+        "doing": "#1120 ready at 4f8bee4e (all green); fresh Opus + security review running; needs catch-up (#1118 Rust since base) before merge",
         "since": "2026-11-24T20:40Z",
         "status": "active",
         "owns_extra": [
@@ -11167,7 +11171,7 @@
     }
   ],
   "heartbeat": "2026-11-24T03:39:06Z",
-  "updated": "2026-11-24T22:00Z",
+  "updated": "2026-11-24T23:10Z",
   "pause": {
     "build_slices": false,
     "since": "2026-11-23T06:09Z",
@@ -12068,5 +12072,11 @@
       ],
       "note": "assign no other control.rs slice until X-purge-rederive merges; X-tcache-recheck already merged (no slot needed)"
     }
-  ]
+  ],
+  "next_pick": {
+    "slot": 3,
+    "slice": "X-restart-fuzz-v2",
+    "brief": "briefs/X-restart-fuzz-v2.md",
+    "when": "after #1120 merges"
+  }
 }
