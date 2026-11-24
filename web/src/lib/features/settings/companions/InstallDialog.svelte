@@ -6,17 +6,43 @@
 	import Banner from '$lib/ui/feedback/Banner.svelte';
 	import Dialog from '$lib/ui/overlays/Dialog.svelte';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
-	import { bytesText, type InstallOffer } from './logic';
+	import { bytesText, wordsFor, type Companion, type InstallOffer } from './logic';
 
 	interface Props {
 		offer: InstallOffer;
+		/**
+		 * Where it runs, as the companion's row says (`runs`, X-cmp-egress-api). Left out (the
+		 * setup flow), it's what an install here does: Lodestar runs it.
+		 */
+		runs?: Companion['runs'];
+		/** Why it can't run here, for `not_here`. */
+		refusal?: string | null;
 		busy: boolean;
 		error: string;
 		onconfirm: () => void;
 		onclose: () => void;
 	}
-	let { offer, busy, error, onconfirm, onclose }: Props = $props();
+	let {
+		offer,
+		runs = 'lodestar',
+		refusal = null,
+		busy,
+		error,
+		onconfirm,
+		onclose
+	}: Props = $props();
 	let open = $state(true);
+	/**
+	 * "Where it runs" from `runs`, not a fixed sentence; `not_here` adds why. An install puts even
+	 * a companion you ran yourself (`yours`) under Lodestar, so that one reads as `lodestar`.
+	 */
+	const where = $derived(
+		runs === 'own_container'
+			? m.settings_companions_runs_own_container()
+			: runs === 'not_here'
+				? `${m.settings_companions_runs_not_here()} ${wordsFor(refusal)}`
+				: m.settings_companions_runs_lodestar()
+	);
 	const size = $derived(bytesText(offer.size_bytes, currentLocale()));
 	// The checksum's halves: the one break opportunity is between them, so it wraps 32+32.
 	const shaHead = $derived((offer.sha256 ?? '').slice(0, 32));
@@ -31,7 +57,7 @@
 		],
 		[m.settings_companions_offer_licence(), offer.licence],
 		[m.settings_companions_offer_size(), size],
-		[m.settings_companions_offer_runs(), m.settings_companions_offer_runs_value()]
+		[m.settings_companions_offer_runs(), where]
 	]);
 </script>
 

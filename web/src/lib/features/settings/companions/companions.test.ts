@@ -32,6 +32,8 @@ const row = (o: Record<string, unknown>) => ({
 	name: 'qBittorrent',
 	opt_in: false,
 	refusal: null,
+	runs: 'lodestar',
+	egress: null,
 	templates: [],
 	...o
 });
@@ -66,7 +68,8 @@ beforeEach(() => {
 			id: 'prowlarr',
 			name: 'Prowlarr',
 			licence: 'GPL-3.0-only',
-			refusal: 'native_in_container'
+			refusal: 'native_in_container',
+			runs: 'own_container'
 		})
 	];
 	vi.stubGlobal(
@@ -118,16 +121,29 @@ describe('the list', () => {
 		expect(document.body.textContent).not.toContain('native_in_container');
 		expect(screen.getByText(/can't install this program itself/)).toBeTruthy();
 	});
-	it('says the route is copied at first start and that a later change does not reach it', async () => {
+	it.each([
+		['own_container', null, 'runs as its own container'],
+		['lodestar', null, 'started and stopped by Lodestar'],
+		// An install puts a companion you ran yourself under Lodestar.
+		['yours', null, 'started and stopped by Lodestar'],
+		['not_here', 'unsupported_platform', "can't run it here. This program isn't available"]
+	])(
+		'says where it runs from runs (%s) in the install confirmation',
+		async (runs, refusal, words) => {
+			companions[0] = { ...companions[0]!, runs, refusal: refusal as null };
+			await open();
+			await fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+			const dialog = await screen.findByRole('dialog', {}, { timeout: 10_000 });
+			expect(dialog.textContent).toContain(words);
+			expect(dialog.textContent).not.toContain(runs);
+			if (refusal) expect(dialog.textContent).not.toContain(refusal);
+		}
+	);
+	it('shows no route and no SOCKS5 warnings while no companion has a route', async () => {
 		await open();
-		expect(screen.getAllByText(/copied from the source that needs it/).length).toBeGreaterThan(0);
-		expect(screen.getAllByText(/keeps the route it started with/).length).toBeGreaterThan(0);
-	});
-	it('warns about email, a FlareSolverr pairing and indexer proxies on SOCKS5', async () => {
-		await open();
-		expect(screen.getByText(/email notifications connect directly/)).toBeTruthy();
-		expect(screen.getByText(/a FlareSolverr pairing leaves directly/)).toBeTruthy();
-		expect(screen.getByText(/per-indexer proxies .* bypass the route/)).toBeTruthy();
+		expect(document.querySelector('[data-route]')).toBeNull();
+		expect(document.querySelector('[data-socks-warnings]')).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Change route' })).toBeNull();
 	});
 });
 
