@@ -11033,9 +11033,12 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "brief written (briefs/X-purge-rederive.md); coordinator starting it",
+        "doing": "started; owns store unverified.rs + tests, pipeline tests, plus pipeline control.rs purge_step",
         "since": "2026-11-24T20:40Z",
-        "status": "active"
+        "status": "active",
+        "owns_extra": [
+          "crates/pipeline/src/control.rs (purge_step only, ~6 lines: pass always-adult sources to the store before each step; coordinator relay 20:39Z)"
+        ]
       },
       {
         "slot": 4,
@@ -11151,7 +11154,7 @@
     }
   ],
   "heartbeat": "2026-11-24T03:39:06Z",
-  "updated": "2026-11-24T20:40Z",
+  "updated": "2026-11-24T20:45Z",
   "pause": {
     "build_slices": false,
     "since": "2026-11-23T06:09Z",
@@ -12040,5 +12043,17 @@
   "runner_todo": [
     "Runner docs PR for docs/metrics.md: (a) dht_sample_frontier can reach 40,000 with escalation (counts held), from rv-1112; (b) the 6 h restart-gate line is wrong after X-split-resume-gate merges. Land after X-split-resume-gate.",
     "After #1117 merges: put the kill-switch requirement in the ENR wiring slice's notes (runner PR)."
+  ],
+  "owns_locks": [
+    {
+      "path": "crates/pipeline/src/control.rs",
+      "held_by": "X-purge-rederive (slot 3)",
+      "since": "2026-11-24T20:39Z",
+      "blocks": [
+        "X-consent-gate-lift-account",
+        "X-consent-gate-lift-external"
+      ],
+      "note": "assign no other control.rs slice until X-purge-rederive merges"
+    }
   ]
 }
