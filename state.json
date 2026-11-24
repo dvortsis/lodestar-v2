@@ -10684,12 +10684,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T03:39:06Z",
+    "updated": "2026-11-24T06:22:10Z",
     "items": [
       {
         "slot": 1,
+        "slice": "ENR-11",
+        "role": "build",
         "model": "opus",
-        "status": "idle"
+        "agent": "ENR-11 thread session (standing in for the paused runner, owner 2026-11-24T06:19Z)",
+        "doing": "Building search enrichment: alternate titles and IMDb/TMDB-style IDs become searchable, plus Torznab ID searches.",
+        "since": "2026-11-24T06:22:10Z"
       },
       {
         "slot": 2,
