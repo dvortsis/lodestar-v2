@@ -4540,6 +4540,11 @@
       "entered": "2026-11-24T12:31Z",
       "exited": "2026-11-24T13:52Z",
       "merged_as": "4689737c3a2e6ce15f46da6517b464910bf02d01"
+    },
+    "next": {
+      "slice": "ENR-G",
+      "lines": 1567,
+      "note": "enters the lane when #1112 merges (over ~1,500); holding pushes until then"
     }
   },
   "landing_order_web": [
@@ -10972,7 +10977,7 @@
         "slice": "ENR-G",
         "role": "build",
         "model": "opus",
-        "doing": "building; 3 more fixes approved 15:32Z (control reenrich, narrow mark, ingest consent drop)",
+        "doing": "fixes in (1,567 lines); local checks + /security-review; holds push until #1112 merges, then enters lane",
         "since": "2026-11-24T14:30Z",
         "status": "active",
         "agent": "opus"
