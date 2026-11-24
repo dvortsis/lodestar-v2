@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T11:15Z",
+  "updated_at": "2026-11-24T11:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4329,6 +4329,13 @@
       "slice": "ENR-11",
       "pr": 1110,
       "flag": "Torznab caps advertise imdb/tmdb/tvdb ID search unconditionally. Harmless now; once identification is on, partial coverage could stop Sonarr/Radarr falling back to title search, so unidentified releases go missing. Runner's call: the host-wiring slice gates the caps on identification being on and its sweep done. Changes TZ-0's decision.",
+      "send": "next owner digest (\u00a72.19)"
+    },
+    {
+      "at": "2026-11-24T11:20Z",
+      "slice": "X-escalate-full-table",
+      "pr": 1112,
+      "flag": "Escalate-only refinements adopted by the runner holder: held (struck) nodes are sampled first even when the table has room, and a cooldown that has ended but isn't pruned yet is held too; with escalate on, dht_sample_frontier counts held candidates. All behind dht.sample_backoff_escalate, default off. Also: owns widened by crates/dht/src/node/testing.rs for a testing-only seam.",
       "send": "next owner digest (\u00a72.19)"
     }
   ],
@@ -9086,6 +9093,11 @@
       "id": "ENR-11-host-wiring",
       "note": "From #1110's review (reviews/rv-1110.md): the slice that wires identification into the host must (a) call identify_sweep_step until done and show the 'results may be incomplete' notice, (b) gate the Torznab caps' ID params (only when a redistributing identification source is on and the sweep is done) or decide it explicitly, (c) measure size-report with identified torrents (synth has no v3 claims; 10 B left under 560 B). Also place UI review 02 \u00a75.5 items (matched title in imdb:/tmdb: autocomplete; 'matched an alternate title' on rows) in ENR-12 or a new slice.",
       "added": "2026-11-24T10:11Z"
+    },
+    {
+      "id": "metrics-frontier-held",
+      "note": "docs/metrics.md: note that with dht.sample_backoff_escalate on, dht_sample_frontier includes held (struck) candidates (from X-escalate-full-table #1112). Runner-placed; put it in the next runner docs PR or the next slice that owns docs/metrics.md.",
+      "added": "2026-11-24T11:20Z"
     }
   ],
   "main_health": {
@@ -10792,7 +10804,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T11:15Z",
+    "updated": "2026-11-24T11:20Z",
     "items": [
       {
         "slot": 1,
@@ -10809,7 +10821,7 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "Building: escalation reaches a struck node on a full table with the split off. Sim test fails on old main and passes on the fix; workspace checks running.",
+        "doing": "PR #1112 open (head c287570b, main merged in after ENR-11); CI running, then the runner holder's fresh review and merge.",
         "since": "2026-11-24T09:19Z"
       },
       {
