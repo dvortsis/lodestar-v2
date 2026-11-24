@@ -1890,3 +1890,77 @@ impl Clock for FixedClock {
         Instant::now()
     }
 }
+
+/// Random spill sections: (block, tag, minutes), any order.
+fn any_spill() -> impl Strategy<Value = Spilled> {
+    proptest::collection::vec(
+        (
+            0..SPILL_BLOCKS,
+            0x1000u32..=0xF_FFFF,
+            1..=spill_max_minutes(H),
+        ),
+        1..48,
+    )
+    .prop_map(|mut w| {
+        w.sort_by_key(|x| x.0);
+        // A block holds at most 64; these are far fewer.
+        spilled(
+            &w.iter()
+                .map(|&(b, t, m)| (b, word(t, m)))
+                .collect::<Vec<_>>(),
+        )
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
+
+    /// The version 2 parser: every section the filter could write comes
+    /// back as it was, and any edit to the body, resealed so the checksum
+    /// holds, either decodes to a section `check` accepts, which seeds
+    /// without a panic, or is rejected.
+    #[test]
+    fn spill_sections_roundtrip_and_edits_are_checked(
+        sp in any_spill(),
+        edits in proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..6),
+        cut in any::<prop::sample::Index>(),
+        mode in 0u8..3,
+    ) {
+        let s = Snapshot { spill: Some(sp), ..snapshot() };
+        let bytes = s.encode();
+        prop_assert_eq!(&Snapshot::decode(&bytes).unwrap().0, &s);
+        let mut body = bytes[HEADER..bytes.len() - TRAILER].to_vec();
+        match mode {
+            0 => {
+                for (i, v) in &edits {
+                    let i = i.index(body.len());
+                    body[i] = *v;
+                }
+            }
+            1 => body.truncate(cut.index(body.len())),
+            _ => body.insert(cut.index(body.len() + 1), edits[0].1),
+        }
+        let (_, here) = resumable();
+        if let Ok((back, _)) = Snapshot::decode(&seal_at(MAGIC_SNAPSHOT, SNAPSHOT_SPILL_VERSION, &body)) {
+            let spill = back.spill.as_ref().expect("version 2 has a section");
+            prop_assert!(spill.check(back.horizon_s).is_ok());
+            if let Ok(seeded) = seed(&back, back.at_ms, &here) {
+                let _ = seeded.spill.map(|sp| sp.slots().count());
+            }
+        }
+    }
+}
+
+/// A section built in code skips `decode`; seeding checks it again, so a
+/// bad one is corrupt, never a panic.
+#[test]
+fn seeding_checks_a_section_built_in_code() {
+    let (_, here) = resumable();
+    for raw in [vec![], vec![1, 0, 0], vec![0; SPILL_BLOCKS]] {
+        let s = Snapshot {
+            spill: Some(Spilled { key: [7; 16], raw }),
+            ..snapshot()
+        };
+        assert_eq!(seed(&s, s.at_ms, &here).unwrap_err(), Reason::Corrupt);
+    }
+}

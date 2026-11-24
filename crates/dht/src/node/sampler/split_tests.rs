@@ -112,6 +112,27 @@ fn siphash_is_the_reference_function() {
     assert_eq!(spill::siphash(keys, &msg), 0xa129_ca61_49be_45e5);
 }
 
+/// Where an address's slot goes, pinned. A restored filter is looked up by
+/// the next binary, so a change to the hashed bytes, the shares
+/// (`limits::network`, the allocation) or the tag would free restored
+/// cooldowns early: it needs a new snapshot version, not a new golden.
+#[test]
+fn placement_is_pinned_for_a_restored_filter() {
+    let now = Instant::now();
+    let v4: SocketAddr = "198.51.100.7:6881".parse().unwrap();
+    let v6: SocketAddr = "[2001:db8:1234:5678::9]:51413".parse().unwrap();
+    let mut got = Vec::new();
+    for a in [v4, v6] {
+        let mut f = Spill::with_keys(now, [0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210]);
+        assert!(f.insert(&a, now + MINUTE * 10, now));
+        let w = exported(&f, now, MINUTE * 60);
+        got.push((w[0].0, w[0].1 >> 12));
+    }
+    assert_eq!(got, GOLDEN_PLACEMENT, "{got:x?}");
+}
+
+const GOLDEN_PLACEMENT: [(usize, u32); 2] = [(0xb673, 0x8_a7d5), (0x1_4397, 0xb_a95b)];
+
 /// A restart keeps every spilled cooldown to its end (capped at the
 /// horizon, as listed ones are) and every share it holds.
 #[test]
@@ -127,6 +148,13 @@ fn the_filter_survives_a_restart_whole() {
             assert!(f.insert(&a, until, now));
             ends.push((a, until));
         }
+    }
+    // IPv6: one /48 with several /64s, and its addresses.
+    for i in 0..12u16 {
+        let a = SocketAddr::from(([0x2001, 0xdb8, 7, i % 4, 0, 0, 0, i + 1], 7000 + i));
+        let until = now + Duration::from_secs(120 + 900 * u64::from(i));
+        assert!(f.insert(&a, until, now));
+        ends.push((a, until));
     }
     let far = (wide(1000), now + Duration::from_secs(10 * 3600));
     assert!(f.insert(&far.0, far.1, now));

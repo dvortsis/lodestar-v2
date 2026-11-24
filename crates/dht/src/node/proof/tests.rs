@@ -1218,3 +1218,51 @@ async fn a_spilled_cooldown_is_restored_and_the_next_run_samples_at_once() {
         assert!(r.sampler.reserve(addr(1), 13, Instant::now()), "ended");
     }
 }
+
+/// X-split-resume-gate's fallback: if the snapshot's filter can't be
+/// rebuilt (here the new sampler's filter is already in use), the start
+/// holds every sample until the last spilled end, and the next commit
+/// carries that gate, as before this slice. Never shorter.
+#[tokio::test(start_paused = true)]
+async fn a_filter_that_cant_be_rebuilt_gates_until_its_last_end() {
+    let d = Dirs::new("spill-fallback");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.sampler = Sampler::split_with_capacity(1);
+    let t0 = Instant::now();
+    r.sampled(addr(1), 1, Duration::from_secs(3600));
+    r.sampled(addr(2), 2, Duration::from_secs(600));
+    assert_eq!(r.sampler.spill_counts().0, 1);
+    r.commit(&d);
+
+    advance(Duration::from_secs(60)).await;
+    let now = Instant::now();
+    let mut busy = Sampler::split_with_capacity(1);
+    for (i, a) in [addr(5), addr(6)].into_iter().enumerate() {
+        assert!(busy.reserve(a, 20 + i as u64, now));
+        assert!(busy.complete(
+            a,
+            20 + i as u64,
+            Duration::from_secs(7200 - 600 * i as u64),
+            now
+        ));
+    }
+    assert_eq!(busy.spill_counts().0, 1, "in use before seeding");
+    let r = Run::boot_sampler(&d, &c, busy);
+    let now = Instant::now();
+    assert_eq!(r.proof.reason(), Reason::Resumed);
+    assert!(!r.proof.may_sample(now), "held for the spilled cooldown");
+    let end = t0 + Duration::from_secs(3600);
+    assert!(r.proof.may_sample(end + Duration::from_secs(120)));
+    assert!(!r.proof.may_sample(end - Duration::from_millis(1)));
+    r.commit(&d);
+    let bytes = std::fs::read(d.data.join(restart::SNAPSHOT_FILE)).unwrap();
+    let (s, _) = restart::Snapshot::decode(&bytes).unwrap();
+    assert!(
+        u64::from(s.gate_s) >= 3600 - 60 - 1,
+        "the next commit carries the gate: {}",
+        s.gate_s
+    );
+}

@@ -691,6 +691,11 @@ impl Sampler {
     pub fn prune(&mut self, now: Instant) {
         if let Some(spill) = &mut self.spill {
             spill.sweep(now);
+            // With the switch off, only restored cooldowns were ever in it
+            // (X-split-resume-gate); once they've ended it's freed.
+            if !self.split && spill.used() == 0 {
+                self.spill = None;
+            }
         }
         for _ in 0..RECLAIM_PER_TICK {
             let Some(&(until, token, addr)) = self.expiry.first() else {
@@ -866,13 +871,11 @@ impl Sampler {
         now: Instant,
     ) -> Option<Instant> {
         let empty = self.spill.as_ref().is_none_or(|s| s.used() == 0);
-        match (empty, spill::Spill::restore(seeded, now)) {
-            (true, Some(filter)) => {
-                self.spill = Some(filter);
-                None
-            }
-            _ => seeded.slots().map(|(_, _, until)| until).max(),
+        if let Some(filter) = empty.then(|| spill::Spill::restore(seeded, now)).flatten() {
+            self.spill = Some(filter);
+            return None;
         }
+        seeded.slots().map(|(_, _, until)| until).max()
     }
 
     /// Restored records still cooling, candidates they turned away, and
@@ -1199,6 +1202,15 @@ pub(crate) mod spill {
             }
         }
 
+        /// A filter with the given keys (tests pin placement with it).
+        #[cfg(test)]
+        pub fn with_keys(base: Instant, keys: [u64; 2]) -> Spill {
+            Spill {
+                keys,
+                ..Spill::new(base)
+            }
+        }
+
         fn hash(&self, bytes: &[u8]) -> u64 {
             siphash(self.keys, bytes)
         }
@@ -1356,6 +1368,12 @@ pub(crate) mod spill {
                 }
                 self.cursor = (self.cursor + 1) % SLOTS;
             }
+            // Drained: nothing placed with the old keys is left, so new
+            // ones are drawn and keys carried across restarts don't live
+            // forever.
+            if self.used == 0 {
+                self.keys = fresh_keys();
+            }
         }
 
         /// The filter for the restart snapshot (X-split-resume-gate): every
@@ -1419,6 +1437,9 @@ pub(crate) mod spill {
                 used: 0,
                 cursor: 0,
             };
+            // Slots come block by block, and every block starts empty.
+            let mut block = usize::MAX;
+            let mut fill = 0;
             for (b, tag, until) in seeded.slots() {
                 if until <= now {
                     continue;
@@ -1433,8 +1454,15 @@ pub(crate) mod spill {
                 if spill.slots.is_empty() {
                     spill.slots = vec![0; SLOTS].into_boxed_slice();
                 }
-                let i = (b * BLOCK..(b + 1) * BLOCK).find(|i| spill.slots[*i] == 0)?;
-                spill.slots[i] = tag | end as u32;
+                if b != block {
+                    block = b;
+                    fill = 0;
+                }
+                if fill == BLOCK {
+                    return None;
+                }
+                spill.slots[b * BLOCK + fill] = tag | end as u32;
+                fill += 1;
                 spill.used += 1;
             }
             Some(spill)

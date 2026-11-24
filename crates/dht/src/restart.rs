@@ -1160,6 +1160,9 @@ pub(crate) fn seed(s: &Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason
     };
     let spill = match &s.spill {
         Some(sp) => {
+            // Checked again: a `Snapshot` built in code skips `decode`, and
+            // `SeededSpill::slots` reads the section without bounds checks.
+            sp.check(s.horizon_s).map_err(|_| Reason::Corrupt)?;
             // The largest deadline and end the slots can have, so
             // `SeededSpill::slots` can't overflow.
             let max = u64::from(spill_max_minutes(s.horizon_s)) * 60_000;
