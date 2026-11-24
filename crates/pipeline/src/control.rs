@@ -1657,8 +1657,12 @@ impl Control {
         );
         let step = tokio::task::spawn_blocking(move || {
             let mut store = store.lock().expect("store lock");
+            // Set for this step only: the connection is shared, and its
+            // other writes keep the behaviour they had.
             store.set_adult_mark(adult.store_mark());
-            store.purge_source(id, from, lodestar_store::unverified::MAX_PURGE_STEP)
+            let step = store.purge_source(id, from, lodestar_store::unverified::MAX_PURGE_STEP);
+            store.set_adult_mark(lodestar_store::AdultMark::default());
+            step
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))?

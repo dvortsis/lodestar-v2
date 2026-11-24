@@ -1864,6 +1864,61 @@ fn a_purge_without_the_adult_mark_marks_nothing() {
     assert_eq!(parser_ver(&store, id), Some(7));
 }
 
+/// A kept torrent that loses its last always-adult finder moves the
+/// generation even when it has no record to mark: a backfill batch may
+/// already have read it with the purged source's bit.
+#[test]
+fn a_kept_unenriched_torrent_moves_the_generation_without_a_mark() {
+    let mut store = mem();
+    let (dht, adult, _) = sources(&mut store);
+    let p = prepared(&store, "unenriched");
+    let id = store_torrent(&mut store, &p, dht);
+    store
+        .put_unverified(&[item(&p.info_hash.0, adult, None)])
+        .unwrap();
+    assert_eq!(parser_ver(&store, id), None);
+    store.set_adult_mark(AdultMark {
+        sources: bit(adult),
+        content_type: ADULT,
+    });
+    store
+        .set_source_state(adult, SourceState::Disabled)
+        .unwrap();
+    let stale = lodestar_store::Enriched {
+        version: 7,
+        content_type: ADULT,
+        junk_score: 0,
+        comp: Vec::new(),
+        data: vec![0],
+    };
+    let mut cursor = PurgeCursor::START;
+    let mut kept_step = false;
+    loop {
+        let read_at = store.class_gen().unwrap();
+        let s = store.purge_source(adult, cursor, 1).unwrap();
+        if s.torrents_kept > 0 {
+            assert_eq!(s.torrents_kept, 1);
+            kept_step = true;
+            assert!(s.rederive);
+            assert_ne!(store.class_gen().unwrap(), read_at);
+            assert_eq!(parser_ver(&store, id), None, "nothing to mark");
+            assert_eq!(
+                store
+                    .set_enrichments_at(read_at, &[(id, stale.clone())], &[])
+                    .unwrap(),
+                None,
+                "a batch that read the purged bit is refused"
+            );
+        }
+        match s.next {
+            Some(c) => cursor = c,
+            None => break,
+        }
+    }
+    assert!(kept_step);
+    assert_eq!(parser_ver(&store, id), None);
+}
+
 /// Your own Is adult correction keeps a torrent Adult whatever is purged:
 /// it's marked to be derived again (the backfill applies the correction),
 /// never cleared by the purge itself.
