@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { hit } from '../results/fixtures';
 import type { SearchHit } from '../results/ResultRow.svelte';
+import type { ListRow } from './expand.svelte';
 
 vi.setConfig({ testTimeout: 20_000 });
 const WAIT = { timeout: 10_000 };
@@ -13,6 +14,9 @@ vi.mock('$lib/api/client', async (original) => ({
 }));
 
 const { SHOWN, createExpand, hitOf, isGroupRow, keyOf } = await import('./expand.svelte');
+/** Show all's count on a row, or undefined when the row isn't a group's line. */
+const totalOf = (r: ListRow | undefined) =>
+	r && isGroupRow(r) && r.row !== 'version' ? r.total : undefined;
 
 const group = (hits: SearchHit[], truncated = false) => ({
 	other_versions: { hits, reason: null, status: 'available', truncated }
@@ -58,6 +62,9 @@ describe('createExpand', () => {
 			'hit:2'
 		]);
 		expect(x.isOpen(best.hash)).toBe(true);
+		// Show all counts every version the server listed (7) and the best row.
+		const more = x.rows(hits)[SHOWN + 1]!;
+		expect(totalOf(more)).toBe(8);
 		// Keys carry the group, so a version's never meets another row's.
 		expect(keyOf(x.rows(hits)[1]!)).toBe(`group:${best.hash}:${hit(11).hash}`);
 	});
@@ -74,6 +81,19 @@ describe('createExpand', () => {
 		const other = hit(2, { others: 1 });
 		x.expand(other);
 		await vi.waitFor(() => expect(kinds(x.rows([other]))).toContain('more:2'), WAIT);
+		// A list cut short can't be counted: Show all names no number.
+		const more = x.rows([other]).at(-1)!;
+		expect(totalOf(more)).toBeNull();
+	});
+
+	it('counts Show all from the larger of the query matches and the versions listed', async () => {
+		get.mockResolvedValue(group([11, 12, 13, 14, 15, 16].map((n) => hit(n))));
+		const best = hit(1, { others: 2 }); // 2 match the query, 6 versions exist
+		const x = createExpand();
+		x.expand(best);
+		await vi.waitFor(() => expect(kinds(x.rows([best]))).toContain('more:1'), WAIT);
+		const more = x.rows([best]).at(-1)!;
+		expect(totalOf(more)).toBe(7);
 	});
 
 	it('says when nothing came back, and retries a failed load', async () => {

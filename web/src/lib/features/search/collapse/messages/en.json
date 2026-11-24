@@ -7,6 +7,7 @@
 	"search_collapse_others_one": "+1 other version",
 	"search_collapse_others_other": "+{count} other versions",
 	"search_collapse_show_all": "Show all {count}",
+	"search_collapse_show_all_versions": "Show all versions",
 	"search_collapse_loading": "Loading other versions…",
 	"search_collapse_failed": "Other versions couldn't load.",
 	"search_collapse_retry": "Retry",

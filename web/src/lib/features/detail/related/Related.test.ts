@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { ApiError } from '$lib/api/client';
+import { clearDetailCaches } from '../cache';
 import { HASH, searchHit, torrentDetail } from '../fixtures';
 import type { HitGroup, Siblings } from './lists';
 
@@ -12,8 +13,9 @@ vi.mock('$lib/api/client', async (original) => ({
 	...(await original<typeof import('$lib/api/client')>()),
 	api: { get }
 }));
-const openDetail = vi.hoisted(() => vi.fn());
-vi.mock('../open', () => ({ openDetail }));
+// The drawer's open function, as DetailHostBody hands it down (none outside the drawer).
+const openDetail = vi.fn();
+const provided = { open: true };
 
 const { default: Related } = await import('./Related.svelte');
 
@@ -63,9 +65,8 @@ const full = () =>
 
 const show = (mode: 'drawer' | 'page' = 'drawer') =>
 	render(Related, {
-		detail: torrentDetail(),
-		hit: searchHit({ resolution: '1080p' }),
-		mode
+		props: { detail: torrentDetail(), hit: searchHit({ resolution: '1080p' }), mode },
+		context: new Map(provided.open ? [['lodestar.detail.open', openDetail]] : [])
 	});
 const list = (key: string) =>
 	screen.getAllByTestId('detail-related-list').find((el) => el.dataset.list === key) as HTMLElement;
@@ -74,6 +75,8 @@ const text = (el: Element) => el.textContent!.replace(/[\s\u00a0]+/g, ' ').trim(
 beforeEach(() => {
 	get.mockReset();
 	openDetail.mockReset();
+	provided.open = true;
+	clearDetailCaches(false); // the siblings answer is kept: nothing carries into the next test
 });
 
 describe('Related', () => {
@@ -159,7 +162,7 @@ describe('Related', () => {
 			() =>
 				expect(openDetail).toHaveBeenCalledWith(
 					hex('a'),
-					expect.objectContaining({ hit: expect.objectContaining({ hash: hex('a') }) })
+					expect.objectContaining({ hash: hex('a') })
 				),
 			WAIT
 		);
@@ -171,6 +174,28 @@ describe('Related', () => {
 		// jsdom can't navigate: stop the link's default after the component has seen the click
 		link.addEventListener('click', (e) => e.preventDefault());
 		await fireEvent.click(link);
+		expect(openDetail).not.toHaveBeenCalled();
+	});
+
+	it('follows the link when nothing hands it an open function', async () => {
+		provided.open = false;
+		get.mockResolvedValue(full());
+		show('drawer');
+		await waitFor(() => expect(screen.getAllByTestId('detail-related-name')).toHaveLength(3), WAIT);
+		const link = screen.getAllByTestId('detail-related-name')[0]!;
+		// Read last, after the component's handler, then stopped there: jsdom can't navigate.
+		let prevented: boolean | undefined;
+		const last = (e: Event) => {
+			prevented = e.defaultPrevented;
+			e.preventDefault();
+		};
+		window.addEventListener('click', last);
+		try {
+			await fireEvent.click(link);
+		} finally {
+			window.removeEventListener('click', last);
+		}
+		expect(prevented).toBe(false);
 		expect(openDetail).not.toHaveBeenCalled();
 	});
 

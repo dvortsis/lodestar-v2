@@ -97,7 +97,7 @@
 		expanding ??= import('../collapse/rows').then(
 			(mod) => {
 				G = mod;
-				expand = mod.createExpand({ onsettled: (text) => (said = text) });
+				expand = mod.createExpand({ onsettled: say });
 				expand.follow(results.shown);
 				return expand;
 			},
@@ -268,6 +268,37 @@
 	});
 
 	let active = $state(0);
+	// The active row follows its torrent across a change of view: the List counts an open group's
+	// rows, the Table and Cards one row per group, so the same index would land on another torrent.
+	// A version (or a group's line) that the new view doesn't show hands over to its group's row.
+	const view = $derived(tableView ? 'table' : cards ? 'cards' : 'list');
+	let viewWas = untrack(() => view);
+	let rowsWas: typeof rows = [];
+	/** The row carried into the Table, set again once it mounts (it starts each mount at row 1). */
+	let carried: number | null = null;
+	$effect.pre(() => {
+		const now = view;
+		const next = rows;
+		untrack(() => {
+			const was = rowsWas[active];
+			if (now !== viewWas) carried = null;
+			if (now !== viewWas && was && G) {
+				const find = (hash: string) =>
+					next.findIndex((r) => !G!.isGroupRow(r) && (r as SearchHit).hash === hash);
+				let i = find(G.hitOf(was).hash);
+				if (i < 0 && G.isGroupRow(was)) i = find(was.parent.hash);
+				if (i >= 0) active = i;
+				if (i >= 0 && now === 'table') carried = i;
+			}
+			viewWas = now;
+			rowsWas = next;
+		});
+	});
+	$effect(() => {
+		if (!grid || carried === null) return;
+		active = carried;
+		carried = null;
+	});
 	let listEl = $state<HTMLElement>();
 	type Detail = typeof import('$lib/features/detail/open');
 	let detail: Detail | undefined;
@@ -312,6 +343,7 @@
 			clearTimeout(giveUp);
 			results.forget(); // answers from before this mount may be stale when it comes back
 			gone = true;
+			cancelAnimationFrame(saying);
 			detail?.cancelDetailPrefetch();
 			offKeys?.();
 			setCommandTarget(null);
@@ -347,8 +379,9 @@
 			// closes it and goes back to the row).
 			// A group's Show all, loading, failed or empty line has no torrent of its own: step over it.
 			let i = active + by;
-			while (i > 0 && i < n - 1 && isStateRow(rows[i]!)) i += by;
-			active = Math.min(n - 1, Math.max(0, i));
+			while (i >= 0 && i < n && isStateRow(rows[i]!)) i += by;
+			if (i < 0 || i >= n) return; // nothing past the line at either end: stay put
+			active = i;
 			const hit = hitAt(active);
 			if (hit) void open(hit);
 			return;
@@ -386,7 +419,7 @@
 		setCommandTarget(null);
 	}
 
-	async function open(hit: SearchHit) {
+	async function open(hit: SearchHit, section?: 'related') {
 		const mod = await detailMod();
 		if (gone) return;
 		detail = mod;
@@ -395,7 +428,8 @@
 		mod.openDetail(hit.hash, {
 			hit,
 			returnFocus: () => rowEl ?? null,
-			replace: 'detail' in page.state
+			replace: 'detail' in page.state,
+			section
 		});
 	}
 
@@ -415,7 +449,9 @@
 	function activate(r: (typeof rows)[number]) {
 		if (!G || !G.isGroupRow(r)) return void open(r as SearchHit);
 		if (r.row === 'failed') expand?.expand(r.parent);
-		else if (r.row === 'version' || r.row === 'more') void open(G.hitOf(r));
+		else if (r.row === 'version') void open(r.hit);
+		// Show all: the best version's details at Related, which lists every other version.
+		else if (r.row === 'more') void open(r.parent, 'related');
 	}
 	/** → opens a group, ← closes it; from a version row, focus goes back to the best row. */
 	function groupKey(event: KeyboardEvent, ctx: { item: (typeof rows)[number]; onRow: boolean }) {
@@ -466,6 +502,13 @@
 	// follows only the query the rows answer, not the rows (a new page isn't a new count). Cleared
 	// first so the same count is read again for a new query.
 	let said = $state('');
+	let saying = 0;
+	/** Says `text` politely, cleared first so the same words (a second group's load) are read again. */
+	function say(text: string) {
+		said = '';
+		cancelAnimationFrame(saying);
+		saying = requestAnimationFrame(() => (said = text));
+	}
 	$effect(() => {
 		const shown = results.shown;
 		if (shown === null) return;
@@ -495,6 +538,7 @@
 	$effect(() => {
 		const note = results.note;
 		if (!note) return;
+		cancelAnimationFrame(saying); // a group's load still waiting for its frame doesn't cover it
 		said = note;
 		results.note = '';
 	});
@@ -505,9 +549,10 @@
 		const n = selection.count;
 		if (n === announced) return;
 		announced = n;
-		void import('../bulk/ops').then(
-			(ops) => (said = ops.countText(n, (c) => formatCount(c, locale)))
-		);
+		void import('../bulk/ops').then((ops) => {
+			cancelAnimationFrame(saying);
+			said = ops.countText(n, (c) => formatCount(c, locale));
+		});
 	});
 
 	/** §10.1: details are fetched ahead on hover too (the 150 ms idle is `prefetchDetail`'s). */

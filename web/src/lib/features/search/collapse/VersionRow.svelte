@@ -1,8 +1,8 @@
 <script lang="ts">
 	// One row under an open group (UI review 02 §5.1), at the list's own height: another version as a
 	// compact line, or the group's state (loading, failed, none) or its "Show all". The list opens
-	// the row (Enter, a click): a version's drawer, the best version's for "Show all", a retry for a
-	// failed load.
+	// the row (Enter, a click): a version's drawer, the best version's at Related for "Show all", a
+	// retry for a failed load.
 	import ArrowUp from '~icons/ph/arrow-up-bold';
 	import Elbow from '~icons/ph/arrow-elbow-down-right-bold';
 	import { formatBytes, formatCount, showBidi } from '../results/ResultRow.svelte';
@@ -40,9 +40,9 @@
 		</span>
 	{:else if row.row === 'more'}
 		<span class="cl-more" data-testid="{testid}-more"
-			>{m.search_collapse_show_all({
-				count: formatCount((row.parent.others ?? 0) + 1, locale)
-			})}</span
+			>{row.total == null
+				? m.search_collapse_show_all_versions()
+				: m.search_collapse_show_all({ count: formatCount(row.total, locale) })}</span
 		>
 	{:else if row.row === 'loading'}
 		<span class="cl-note" role="status">{m.search_collapse_loading()}</span>

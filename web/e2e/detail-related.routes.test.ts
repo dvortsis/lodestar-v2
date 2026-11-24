@@ -1,10 +1,12 @@
 // GS-4: the detail's Related section on the OpenAPI mock. Four labelled lists with counts, each row
 // showing only what differs from the open torrent, "Compare these" pre-filling /compare (2 to 5), a
-// withheld torrent showing nothing, and a row opening in the drawer.
+// withheld torrent showing nothing, and a row opening in the drawer. X-gs-followups: a group's
+// Show all in the results opens the best version's drawer at Related.
 import type { Page, Request } from '@playwright/test';
 import { response } from '../src/lib/features/compare/testing';
 import { expectNoA11yViolations } from './a11y';
 import { HASH, detail, group, hit, mockTorrent, searchBody, siblings } from './detail.fixtures';
+import { body, hashOf as hitHash, hits, server } from './search-results.fixtures';
 import { expect, test } from './support/test';
 
 const A = 'a'.repeat(40);
@@ -147,4 +149,34 @@ test('in the drawer a row opens that torrent in the drawer', async ({ page, go, 
 	await expect(drawer.getByTestId('detail-raw-name')).toHaveText('Show.A');
 	// The row went with the old torrent; focus stays in the drawer, on its title.
 	await expect(drawer.locator('h2[tabindex]')).toBeFocused();
+});
+
+test('Show all on an open group opens the best version’s drawer at Related', async ({
+	page,
+	go,
+	mock
+}) => {
+	await page.setViewportSize({ width: 1440, height: 900 });
+	const [best, other] = hits(2);
+	server(mock, () =>
+		body([{ ...best!, others: 6 }, other!], { total: 8, collapsed: true, groups: 2 })
+	);
+	const versions = hits(6, 10);
+	mock.on('getTorrentSiblings', { ...siblings(hitHash(1)), other_versions: group(versions) });
+	await go('/search?q=lantern');
+	await page.getByTestId(`result-${hitHash(1)}-others`).click();
+	const more = page.getByTestId(`result-group:${hitHash(1)}:more-more`);
+	await expect(more).toHaveText('Show all 7');
+	await more.click();
+	const drawer = page.getByTestId('drawer');
+	await expect(page).toHaveURL(new RegExp(`/t/${hitHash(1)}`));
+	// Scrolled to Related, which loads there and lists the versions.
+	await expect(section(page)).toBeInViewport();
+	await expect(
+		drawer.locator('[data-list="other_versions"]').getByTestId('detail-related-row')
+	).toHaveCount(6);
+	// The group's own load, then one for the drawer: Parsed, scrolled to now, uses Related's answer.
+	await drawer.locator('[data-section="parsed"]').scrollIntoViewIfNeeded();
+	await expect(drawer.getByTestId('detail-parsed-years')).toHaveText('2019');
+	await expect.poll(() => mock.calls('getTorrentSiblings').length).toBe(2);
 });

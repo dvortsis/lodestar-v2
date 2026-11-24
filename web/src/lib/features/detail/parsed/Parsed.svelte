@@ -3,11 +3,11 @@
 	// its provenance, the type, and the title identity's spans (from siblings, fetched when this
 	// section is mounted, on first scroll near). Resolution, codecs, languages, group and edition are not
 	// served yet, so they have no rows rather than a "—" that would claim they were measured.
-	import { api, isAbort, latest } from '$lib/api/client';
 	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
 	import type { SearchHit } from '../cache';
+	import { loadSiblings } from '../siblings';
 	import { contentTypeLabel, resolvedVia } from './labels';
 	import { joinSpans, type Identity } from './spans';
 
@@ -19,27 +19,20 @@
 
 	let identity = $state<Identity | null>(null);
 	let status = $state<'loading' | 'ready' | 'error'>('loading');
-	const slot = latest();
+	let attempt = $state(0);
 
-	async function load() {
-		status = 'loading';
-		try {
-			const res = await slot.run((signal) =>
-				api.get('/torrents/{hash}/siblings', { path: { hash }, signal })
-			);
-			identity = res.identity;
-			status = 'ready';
-		} catch (e) {
-			if (!isAbort(e)) status = 'error';
-		}
-	}
-
-	// Mounted when the section first scrolls near; a new torrent in the same drawer starts over.
+	// Mounted when the section first scrolls near; a new torrent in the same drawer starts over. The
+	// request is Related's too (siblings.ts); a Retry asks again.
 	$effect(() => {
-		void hash;
 		identity = null;
-		void load();
-		return () => slot.cancel();
+		return loadSiblings(
+			hash,
+			(s) => {
+				if (s.status === 'ready') identity = s.siblings.identity;
+				status = s.status === 'ready' ? 'ready' : s.status === 'loading' ? 'loading' : 'error';
+			},
+			attempt > 0
+		);
 	});
 
 	const pick = (v: string[], one: () => string, many: () => string) =>
@@ -94,6 +87,6 @@
 	</dl>
 	{#if status === 'error'}
 		<p class="text-muted-text" role="status">{m.detail_parsed_error()}</p>
-		<div><Button dense onclick={load}>{m.detail_retry()}</Button></div>
+		<div><Button dense onclick={() => attempt++}>{m.detail_retry()}</Button></div>
 	{/if}
 </div>

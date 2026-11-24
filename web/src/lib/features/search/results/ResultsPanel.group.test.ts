@@ -193,15 +193,37 @@ describe('ResultsPanel, grouped', () => {
 		expect(rowOf(`result-${hit(2).hash}`).hasAttribute('aria-level')).toBe(false);
 	});
 
-	it('Show all opens the best version’s details', async () => {
+	it('Show all opens the best version’s details at Related', async () => {
 		mockSiblings(async () => siblings([11, 12, 13, 14, 15, 16].map((n) => hit(n))));
 		await openGroup();
 		const more = await screen.findByTestId(`${state('more')}-more`, {}, WAIT);
-		expect(more.textContent).toContain('Show all 3'); // others + 1, as the row counts
+		// Six versions listed though two match the query: never fewer than the rows it stands for.
+		expect(more.textContent).toContain('Show all 7');
 		expect(screen.queryByTestId(version(16))).toBeNull(); // five at most in place
 		await fireEvent.keyDown(rowOf(state('more')), { key: 'Enter' });
 		await waitFor(() => expect(openDetail).toHaveBeenCalled(), WAIT);
 		expect(openDetail.mock.calls[0]![0]).toBe(best.hash);
+		expect(openDetail.mock.calls[0]![1]).toMatchObject({ section: 'related' });
+	});
+
+	it('says a second group’s load again when it has the same words', async () => {
+		const two = hit(2, { others: 2 });
+		// Each group has two other versions (the best row isn't among them here).
+		mockSiblings(async () => ({
+			other_versions: { hits: versions, reason: null, status: 'available', truncated: false }
+		}));
+		api.post.mockResolvedValue(
+			page([], { hits: [best, two], total: 6, collapsed: true, groups: 2, groups_approx: false })
+		);
+		render(ResultsPanel, { focusBar: () => {} });
+		await screen.findByTestId(`result-${best.hash}-others`, {}, WAIT);
+		await waitFor(() => expect(announced()).toBe('2 groups · 6 torrents'), WAIT);
+		await fireEvent.click(screen.getByTestId(`result-${best.hash}-others`));
+		await waitFor(() => expect(announced()).toBe('2 other versions shown'), WAIT);
+		await fireEvent.click(screen.getByTestId(`result-${two.hash}-others`));
+		// Cleared first, then the same words: a screen reader hears the second load too.
+		await waitFor(() => expect(announced()).toBe(''), WAIT);
+		await waitFor(() => expect(announced()).toBe('2 other versions shown'), WAIT);
 	});
 
 	it('a version opens its own details', async () => {
@@ -245,8 +267,10 @@ describe('ResultsPanel, grouped', () => {
 	});
 
 	it('with the details open, j/k walk the versions and step over a group’s line', async () => {
+		mockSiblings(async () => siblings(versions, true)); // cut short: a Show all line follows v12
 		visit('/search?q=lantern', { detail: { hash: best.hash } });
 		await openGroup();
+		await screen.findByTestId(state('more'), {}, WAIT);
 		await screen.findByTestId(version(11), {}, WAIT);
 		await waitFor(() => expect(commands.get('results.next')).toBeDefined(), WAIT);
 		commands.get('results.next')!();
@@ -281,6 +305,48 @@ describe('ResultsPanel, grouped', () => {
 		commands.get('results.next')!();
 		await waitFor(() => expect(openDetail).toHaveBeenCalledOnce(), WAIT);
 		expect(openDetail.mock.calls[0]![0]).toBe(hit(2).hash);
+	});
+
+	it('stays on the last torrent at the end of the list rather than on a group’s line', async () => {
+		mockSiblings(async () => siblings(versions, true));
+		api.post.mockResolvedValue(
+			page([], { hits: [hit(2), best], total: 5, collapsed: true, groups: 2, groups_approx: false })
+		);
+		visit('/search?q=lantern', { detail: { hash: best.hash } });
+		await openGroup();
+		await screen.findByTestId(state('more'), {}, WAIT);
+		await waitFor(() => expect(commands.get('results.next')).toBeDefined(), WAIT);
+		for (let i = 0; i < 6; i++) commands.get('results.next')!();
+		await waitFor(
+			() => expect(openDetail).toHaveBeenLastCalledWith(hit(12).hash, expect.anything()),
+			WAIT
+		);
+		expect(openDetail).not.toHaveBeenCalledWith(
+			best.hash,
+			expect.objectContaining({ section: 'related' })
+		);
+	});
+
+	it('keeps the same torrent active across a change of view', async () => {
+		api.post.mockResolvedValue(
+			page([], { hits: [best, hit(2), hit(3)], total: 5, collapsed: true, groups: 2 })
+		);
+		await openGroup();
+		await screen.findByTestId(version(12), {}, WAIT);
+		// hit(2) is the List's fourth row (best, v11, v12, hit 2), the Table's second.
+		await fireEvent.keyDown(rowOf(`result-${hit(2).hash}`), { key: 'ArrowDown' });
+		await fireEvent.keyDown(rowOf(`result-${hit(3).hash}`), { key: 'ArrowUp' });
+		visit('/search?q=lantern&view=table');
+		const table = await screen.findByRole('table', {}, WAIT);
+		await waitFor(() => expect(table.querySelectorAll('tbody tr').length).toBe(3), WAIT);
+		await waitFor(() => expect(commands.get('results.select')).toBeDefined(), WAIT);
+		const { selection } = await import('../bulk/selection.svelte');
+		try {
+			commands.get('results.select')!();
+			expect(selection.has(hit(2).hash)).toBe(true);
+		} finally {
+			selection.toggle(hit(2).hash, false); // leave nothing selected for the next test
+		}
 	});
 
 	it('the Table shows one row per group, with an open group left to the List', async () => {

@@ -20,12 +20,20 @@ const { default: VersionRow } = await import('./VersionRow.svelte');
 describe('GroupToggle', () => {
 	it('is a labelled switch that says what on means, and reports a change', async () => {
 		const onchange = vi.fn();
-		render(GroupToggle, { on: true, onchange });
+		const { rerender } = render(GroupToggle, { on: true, onchange });
 		const sw = screen.getByRole('switch', { name: 'Group versions' });
 		expect((sw as HTMLInputElement).checked).toBe(true);
 		expect(sw.getAttribute('aria-describedby')).toBeNull();
 		await fireEvent.click(sw);
 		expect(onchange).toHaveBeenCalledWith(false);
+		// It shows `on` only: the press waits for the new value, and a change that never lands
+		// leaves it as it was.
+		expect((sw as HTMLInputElement).checked).toBe(true);
+		await rerender({ on: false });
+		expect((sw as HTMLInputElement).checked).toBe(false);
+		await fireEvent.click(sw);
+		expect(onchange).toHaveBeenLastCalledWith(true);
+		expect((sw as HTMLInputElement).checked).toBe(false);
 		// It reads the account's choice when it mounts.
 		expect(get).toHaveBeenCalledWith('/settings/{section}', {
 			path: { section: 'preferences' }
@@ -71,9 +79,12 @@ describe('VersionRow', () => {
 		expect(screen.getByTestId('v-seeders').textContent).toBe('1,200');
 	});
 
-	it('counts the whole group in Show all', () => {
-		render(VersionRow, { row: row({ row: 'more' }), testid: 'v' });
+	it('counts the whole group in Show all, or names no number it can’t be sure of', () => {
+		const a = render(VersionRow, { row: row({ row: 'more', total: 8 }), testid: 'v' });
 		expect(screen.getByTestId('v-more').textContent).toBe('Show all 8');
+		a.unmount();
+		render(VersionRow, { row: row({ row: 'more', total: null }), testid: 'v' });
+		expect(screen.getByTestId('v-more').textContent).toBe('Show all versions');
 	});
 
 	it('says when versions are loading, failed or missing', () => {
