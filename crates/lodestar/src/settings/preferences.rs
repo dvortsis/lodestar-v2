@@ -86,6 +86,10 @@ pub struct Preferences {
     pub time_zone: String,
     #[schema(inline)]
     pub first_day_of_week: FirstDay,
+    /// Search's "Group versions" (§10.4, owner §2.66): one row per group
+    /// of versions, the best first, when the URL doesn't say. On by
+    /// default; search answers ungrouped while group data isn't ready.
+    pub group_versions: bool,
 }
 
 impl Default for Preferences {
@@ -102,6 +106,7 @@ impl Default for Preferences {
             language: String::new(),
             time_zone: String::new(),
             first_day_of_week: FirstDay::Auto,
+            group_versions: true,
         }
     }
 }
@@ -232,6 +237,7 @@ impl Section for Preferences {
             .widget("time-zone")
             .auto(Auto::Str("")),
         Field::new("first_day_of_week").group("region"),
+        Field::new("group_versions").group("search"),
     ];
 
     /// Nothing in `config.toml` sets a preference.

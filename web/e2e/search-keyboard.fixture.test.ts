@@ -43,10 +43,15 @@ test('/ lantern, Enter; Skip to results, Enter opens the drawer, c copies its ma
 	await page.keyboard.press('Enter');
 	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('lantern');
 
-	const grid = page.getByRole('grid', { name: 'Matching torrents' });
+	// The fixture's lantern works have several versions, so the list is a tree grid of groups
+	// ("Group versions" is on by default, GS-5); ungrouped, it is a grid.
+	const name = 'Matching torrents';
+	const grid = page.getByRole('grid', { name }).or(page.getByRole('treegrid', { name }));
 	const first = grid.getByRole('row').first();
 	await expect(first).toBeVisible();
-	await expect(page.getByTestId('results-count')).toHaveText(/^\d[\d,]* results?$/);
+	await expect(page.getByTestId('results-count')).toHaveText(
+		/^(\d[\d,]* results?|\d[\d,]* groups? · \d[\d,]* torrents?)$/
+	);
 	// The facet rail comes before the results at this width: Skip to results, one Shift+Tab back
 	// from the bar, goes past it.
 	await page.keyboard.press('Shift+Tab');

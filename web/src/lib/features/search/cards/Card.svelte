@@ -9,6 +9,7 @@
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
 	import UnverifiedBadge from '../unverified/UnverifiedBadge.svelte';
+	import { othersText } from '../collapse/others';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
 	import {
 		ADULT_LABELS as ADULT,
@@ -85,6 +86,9 @@
 		</div>
 	{/if}
 	<div class="cd-facts">
+		{#if hit.others}<span class="cd-fact" data-testid="{id}-others"
+				>{othersText(hit.others, locale)}</span
+			>{/if}
 		<span class="cd-fact" data-testid="{id}-size">{formatBytes(hit.size, locale)}</span>
 		<span class="cd-fact" data-testid="{id}-files"
 			>{(hit.files === 1 ? m.search_results_files_one : m.search_results_files_other)({

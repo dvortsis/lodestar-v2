@@ -1076,6 +1076,8 @@ const recoverOnDemand = [/search\/results\/Recover\.svelte$/];
 const indexStateOnDemand = [/search\/results\/IndexState\.svelte$/];
 // After a Block applies, the list keeps its place (X-web-polish-1101d): loaded on that press only.
 const settleOnDemand = [/search\/results\/settle\.ts$/];
+// GS-5: a group's rows and their logic load when a group is first opened ("+N other versions").
+const collapseOnDemand = [/search\/collapse\/rows\.ts$/];
 const resultsOnDemand = [
 	/features\/detail\//,
 	/features\/search\/(live|cards)\//,
@@ -1086,7 +1088,8 @@ const resultsOnDemand = [
 	...bulkOnDemand,
 	...recoverOnDemand,
 	...indexStateOnDemand,
-	...settleOnDemand
+	...settleOnDemand,
+	...collapseOnDemand
 ];
 // What the view has loaded by the time the panel does (runner, 2026-10-24): the first load and the
 // bar's lazy part, which a URL with a query engages at once. Not the shell's Chrome: on a pasted
@@ -1186,6 +1189,15 @@ const toolbarLazy = [
 
 // Table mode (S-search-5): the table with its row and header code; the column chooser loads on its
 // first open. The bulk bar loads with the first selected row. Both beyond the results panel.
+// GS-5: the rows under an open group, beyond the results panel that opens them.
+const collapseLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/collapse/rows.ts', [], false, [
+			...engagedSearch,
+			...resultsLoaded
+		])
+	)
+];
 const tableLazy = [
 	...new Set(
 		ownChunk(
@@ -1755,7 +1767,11 @@ export default [
 	// X-pseudo-text-gaps (runner §2.26): 40.84 → 40.85 KB. 40,822 → 40,841 B: RelativeTime passes the
 	// catalogue's `common_just_now`, about 19 B in each chunk that uses it.
 	// +0.01 kB: hashed chunk-name compression noise (X-hit-resolution: a renamed table chunk costs Results 3 B; no code moved). Runner, r14.
-	entry('Search results (lazy)', resultsFirst, '40.86 KB'),
+	// GS-5 (runner §2.26): 40,832 B on main → 43.5 KB. Grouped results paint with "+N other versions"
+	// (Others and its styles), the account's Group versions choice the first request needs (grouping,
+	// the groups count and their messages), the tree grid's attributes and the live banner's match of
+	// a grouped answer; opening a group is its own on-demand entry below. Rounded up to 0.01 KB.
+	entry('Search results (lazy)', resultsFirst, '43.51 KB'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1781,10 +1797,14 @@ export default [
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
 	// X-alert-search-headroom: 4.65 → 4.6 KB. Save search's preload list moved to save-dialog.ts
 	// (−0.31 KB); measured 4.29 KB. Import the dialog only through save-dialog.ts.
-	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
+	// GS-5 (runner §2.26): 4.6 → 5.01 KB, the Group versions switch (twice: among the controls, and in
+	// More whenever the toolbar is too narrow for it, a container query), its note and the URL write
+	// with Back.
+	entry('Results toolbar (lazy)', toolbarLazy, '5.02 KB'),
 	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
 	// chunk); the limit falls to the measured size, rounded up at 0.01 kB, so the bytes aren't respent.
-	entry('Search live banner (lazy)', liveLazy, '2.58 KB'),
+	// GS-5 (runner §2.26): +1 B of shared-chunk noise (no live-banner code changed), rounded up to 0.01 KB.
+	entry('Search live banner (lazy)', liveLazy, '2.59 KB'),
 	// Raised by the runner (§2.26): +21 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, SRC-17: the Unverified badge on a card (8,300 B → 8,364 B; measured 5 B over).
 	// X-ui-guards (runner §2.26): 8,303 → 7,965 B with Bold icons, as the live banner; rounded up at 0.01 kB.
@@ -1792,8 +1812,11 @@ export default [
 	// X-facet-group-case (runner §2.18 port): main measures up to 8,012 B (build wobble;
 	// X-web-build-determinism).
 	// X-web-build-determinism (runner §2.26): 7,998 B with stable names (7,992 B with content hashes).
-	entry('Search cards (lazy)', cardsLazy, '8.01 KB'),
+	// GS-5 (runner §2.26): 8.01 → 8.15 KB, a grouped card's "+N other versions" fact.
+	entry('Search cards (lazy)', cardsLazy, '8.15 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
+	// GS-5: measured 3.01 KB (the rows, their logic, styles and messages), rounded up to 0.01 KB.
+	entry('Search collapse rows (on demand)', collapseLazy, '3.02 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
 	entry('Search row checkboxes (on demand)', pickLazy, '1.7 KB'),
