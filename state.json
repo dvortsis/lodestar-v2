@@ -9191,35 +9191,6 @@
       "added": "2026-11-24"
     },
     {
-      "id": "X-cmp-egress-ui-followups",
-      "from": "rv-1114",
-      "owns": [
-        "web/src/lib/features/settings/companions/**"
-      ],
-      "items": [
-        "Route.svelte re-fills from c.egress when the server value changes and the form is untouched (stale form can revert a newer route)",
-        "egress.ts routeText: explicit bind_address, neutral sentence for unknown kinds",
-        "comment the unmount-mid-PUT case in Route.svelte/confirm.ts",
-        "CompanionRow: routeRefused clears an older note; reset panel when routeOffered goes false"
-      ],
-      "model": "sonnet",
-      "added": "2026-11-24",
-      "note": "can fold into X-cmp-egress-follows (API follows list) as one slice"
-    },
-    {
-      "id": "X-list-active-reset",
-      "from": "X-flake-search-keyboard-2 #1115",
-      "owns": [
-        "web/src/lib/features/search/**/VirtualList.svelte"
-      ],
-      "items": [
-        "list view has the same active-row reset problem (VirtualList.svelte resetKey) that #1115 fixed in the table"
-      ],
-      "model": "sonnet",
-      "added": "2026-11-24",
-      "note": "also: one local unit-test failure after a package reinstall, not reproduced in 8 runs or CI; watch only"
-    },
-    {
       "id": "X-escalate-full-table-nits",
       "from": "rv-1112",
       "items": [
@@ -11042,7 +11013,7 @@
         "role": "build",
         "model": "sonnet",
         "agent": "sonnet",
-        "doing": "#1121 open at 302a1610 (branch claude/x-gs-followups-ox8wui), CI running; review on ready. Size: raises Related, Search results (lazy), collapse rows, /t; lowers Detail sections 47.87->47.44 KB (weigh under \u00a72.26)",
+        "doing": "#1121 ready at d77058cb (all green, fresh for web); fresh Opus review running",
         "since": "2026-11-24T21:15Z",
         "status": "active",
         "pr": 1121
@@ -12099,5 +12070,14 @@
   "merge_order": [
     "#1120 X-purge-rederive",
     "#1119 ENR-terms-api (catch-up after #1120)"
-  ]
+  ],
+  "next_pick_slot1": {
+    "slice": "X-web-followups-1124",
+    "brief": "briefs/X-web-followups-1124.md",
+    "when": "after #1121 merges",
+    "folds": [
+      "X-list-active-reset",
+      "X-cmp-egress-ui-followups"
+    ]
+  }
 }
