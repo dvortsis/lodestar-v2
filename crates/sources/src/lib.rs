@@ -19,6 +19,7 @@ pub mod pool;
 pub mod state;
 pub mod terms;
 pub mod testing;
+pub mod ws;
 
 pub use claims::{ClaimedFile, Claims, Confidence, ExternalId, Provenance};
 pub use egress::{
@@ -40,3 +41,4 @@ pub use pool::{
     PoolStats,
 };
 pub use state::{MemoryState, PluginState, StateError};
+pub use ws::{NoWs, Reconnect, Roots, WsConnect, WsError, WsLimits, WsMessage, WsStream};
