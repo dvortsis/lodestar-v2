@@ -153,6 +153,20 @@ pub enum TagKey {
     Resolved,
     /// What an adult torrent would otherwise be (§20.9).
     Adult,
+    /// External ids from identification answers (ENR-11), one per scheme
+    /// of `lodestar_store::claims::ENRICHMENT_SCHEMES`, values in
+    /// [`id_value`]'s form.
+    Imdb,
+    Tmdb,
+    Tvdb,
+    Anidb,
+    Anilist,
+    Mbid,
+    Olid,
+    Igdb,
+    Discogs,
+    Steam,
+    Wikidata,
 }
 
 impl TagKey {
@@ -168,7 +182,44 @@ impl TagKey {
             TagKey::Has => "has",
             TagKey::Resolved => "resolved",
             TagKey::Adult => "adult",
+            TagKey::Imdb => "imdb",
+            TagKey::Tmdb => "tmdb",
+            TagKey::Tvdb => "tvdb",
+            TagKey::Anidb => "anidb",
+            TagKey::Anilist => "anilist",
+            TagKey::Mbid => "mbid",
+            TagKey::Olid => "olid",
+            TagKey::Igdb => "igdb",
+            TagKey::Discogs => "discogs",
+            TagKey::Steam => "steam",
+            TagKey::Wikidata => "wikidata",
         }
+    }
+
+    /// The external-id keys (ENR-11), one per enrichment scheme; each
+    /// key's [`TagKey::as_str`] is its scheme.
+    pub const IDS: [TagKey; 11] = [
+        TagKey::Imdb,
+        TagKey::Tmdb,
+        TagKey::Tvdb,
+        TagKey::Anidb,
+        TagKey::Anilist,
+        TagKey::Mbid,
+        TagKey::Olid,
+        TagKey::Igdb,
+        TagKey::Discogs,
+        TagKey::Steam,
+        TagKey::Wikidata,
+    ];
+
+    /// Whether this is an external-id key ([`TagKey::IDS`]).
+    pub fn is_id(self) -> bool {
+        TagKey::IDS.contains(&self)
+    }
+
+    /// The external-id key for `scheme`, if it's an enrichment scheme.
+    pub fn id(scheme: &str) -> Option<TagKey> {
+        TagKey::IDS.into_iter().find(|k| k.as_str() == scheme)
     }
 }
 
@@ -500,6 +551,18 @@ pub(crate) const FIELDS: &[(&str, FieldKind)] = &[
     ("has", FieldKind::Tag(TagKey::Has)),
     ("resolved", FieldKind::Tag(TagKey::Resolved)),
     ("adult", FieldKind::Tag(TagKey::Adult)),
+    // External ids from identification answers (ENR-11).
+    ("imdb", FieldKind::Tag(TagKey::Imdb)),
+    ("tmdb", FieldKind::Tag(TagKey::Tmdb)),
+    ("tvdb", FieldKind::Tag(TagKey::Tvdb)),
+    ("anidb", FieldKind::Tag(TagKey::Anidb)),
+    ("anilist", FieldKind::Tag(TagKey::Anilist)),
+    ("mbid", FieldKind::Tag(TagKey::Mbid)),
+    ("olid", FieldKind::Tag(TagKey::Olid)),
+    ("igdb", FieldKind::Tag(TagKey::Igdb)),
+    ("discogs", FieldKind::Tag(TagKey::Discogs)),
+    ("steam", FieldKind::Tag(TagKey::Steam)),
+    ("wikidata", FieldKind::Tag(TagKey::Wikidata)),
     ("ambiguous", FieldKind::Flag("ambiguous")),
     // Content filtering (§20.3).
     ("hidden", FieldKind::Flag("hidden")),
@@ -1286,6 +1349,9 @@ const MAX_TAG_BYTES: usize = 64;
 /// A keyword value as the index holds it, or `None` if it can't be one.
 pub(crate) fn tag_value(key: TagKey, v: &str) -> Option<String> {
     use lodestar_classify::{AdultKind, ContentType, ResolvedVia, Structure};
+    if key.is_id() {
+        return id_value(key, v);
+    }
     let mut lower = v.to_lowercase();
     // `res:360` is read as `360p`, so both spellings land on the same
     // stored form (the parser files 360p under 480p), and the limit
@@ -1311,6 +1377,7 @@ pub(crate) fn tag_value(key: TagKey, v: &str) -> Option<String> {
         TagKey::Codec => "vcodec",
         TagKey::Audio => "acodec",
         TagKey::Lang => "lang",
+        _ => return None,
     };
     // Read the value the way the parser reads it in a name, so aliases
     // (`x265`, `4k`, `dovi`, `french`) land on the stored form.
@@ -1350,8 +1417,54 @@ fn tag_help(key: TagKey, name: &str, v: &str) -> String {
             "{name}: expects one of {}",
             list(AdultKind::ALL.iter().map(|k| k.as_str()).collect())
         ),
+        TagKey::Imdb => format!("{name}: expects an IMDb title id like tt0111161"),
+        TagKey::Mbid => format!("{name}: expects a MusicBrainz id (a UUID)"),
+        TagKey::Olid => format!("{name}: expects an Open Library id like OL123M or OL45W"),
+        TagKey::Discogs => format!("{name}: expects a Discogs id like r123 or m45"),
+        TagKey::Wikidata => format!("{name}: expects a Wikidata item like Q42"),
+        k if k.is_id() => format!("{name}: expects a number"),
         _ => format!("{name}: can't read {v:?}"),
     }
+}
+
+/// An external id as the index holds it (ENR-11), or `None` if it can't
+/// be one: the scheme's stored form ([`lodestar_store::claims::id_ok`]),
+/// lower-cased. Lenient where the spelling is unambiguous: an IMDb id
+/// may drop its `tt` or its zero padding (`111161` is `tt0111161`), a
+/// number may carry leading zeros, and case doesn't matter. Numbers stay
+/// strings: they may be past `u64` (ENR-9).
+pub fn id_value(key: TagKey, v: &str) -> Option<String> {
+    use lodestar_store::claims::id_ok;
+    if v.is_empty() || v.len() > MAX_TAG_BYTES || !v.is_ascii() {
+        return None;
+    }
+    let digits = |d: &str| -> Option<String> {
+        if d.is_empty() || !d.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let d = d.trim_start_matches('0');
+        (!d.is_empty()).then(|| d.to_owned())
+    };
+    let scheme = key.as_str();
+    let stored = match key {
+        TagKey::Imdb => {
+            let lower = v.to_ascii_lowercase();
+            let d = digits(lower.strip_prefix("tt").unwrap_or(&lower))?;
+            format!("tt{d:0>7}")
+        }
+        TagKey::Tmdb
+        | TagKey::Tvdb
+        | TagKey::Anidb
+        | TagKey::Anilist
+        | TagKey::Igdb
+        | TagKey::Steam => digits(v)?,
+        TagKey::Mbid => v.to_ascii_lowercase(),
+        TagKey::Olid => v.to_ascii_uppercase(),
+        TagKey::Discogs => v.to_ascii_lowercase(),
+        TagKey::Wikidata => v.to_ascii_uppercase(),
+        _ => return None,
+    };
+    id_ok(scheme, &stored).then(|| stored.to_ascii_lowercase())
 }
 
 /// `cat:video` (any), `cat:video>=80%`, `cat:software=0`,
@@ -1686,11 +1799,11 @@ impl Node {
         }
     }
 
-    /// Whether any clause tests `verified:`, `source:` or `network:`, or
-    /// `sig:`, or a `/…/` regex (RX-1): what only the search index knows
-    /// or runs, so a filter rule can't
-    /// test it (the judge would call it no match, and negated, a match
-    /// for everything).
+    /// Whether any clause tests `verified:`, `source:` or `network:`,
+    /// `sig:`, a `/…/` regex (RX-1) or an external id (`imdb:` and the
+    /// rest, ENR-11, read from claims at indexing): what only the search
+    /// index knows or runs, so a filter rule can't test it (the judge
+    /// would call it no match, and negated, a match for everything).
     pub fn mentions_provenance(&self) -> bool {
         match self {
             Node::Verified { .. }
@@ -1698,6 +1811,7 @@ impl Node {
             | Node::Network { .. }
             | Node::Sig { .. }
             | Node::Regex { .. } => true,
+            Node::Tag { key, .. } => key.is_id(),
             Node::And { of } | Node::Or { of } => of.iter().any(Node::mentions_provenance),
             Node::Not { of } | Node::File { of } => of.mentions_provenance(),
             _ => false,

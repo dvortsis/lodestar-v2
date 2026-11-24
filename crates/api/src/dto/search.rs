@@ -883,6 +883,18 @@ pub enum AstTagKey {
     Has,
     Resolved,
     Adult,
+    /// External ids from identification answers (ENR-11).
+    Imdb,
+    Tmdb,
+    Tvdb,
+    Anidb,
+    Anilist,
+    Mbid,
+    Olid,
+    Igdb,
+    Discogs,
+    Steam,
+    Wikidata,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

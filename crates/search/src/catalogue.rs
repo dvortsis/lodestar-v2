@@ -209,6 +209,18 @@ fn shape(kind: FieldKind) -> (ValueType, &'static [Op], Vec<&'static str>) {
             | TagKey::Audio
             | TagKey::Lang
             | TagKey::Group => (ValueType::Keyword, LIST, Vec::new()),
+            // External ids (ENR-11).
+            TagKey::Imdb
+            | TagKey::Tmdb
+            | TagKey::Tvdb
+            | TagKey::Anidb
+            | TagKey::Anilist
+            | TagKey::Mbid
+            | TagKey::Olid
+            | TagKey::Igdb
+            | TagKey::Discogs
+            | TagKey::Steam
+            | TagKey::Wikidata => (ValueType::Keyword, LIST, Vec::new()),
         },
         FieldKind::Share(_) => (
             ValueType::Share,

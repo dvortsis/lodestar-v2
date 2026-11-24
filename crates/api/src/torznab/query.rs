@@ -9,9 +9,11 @@
 //!   refused rather than one of them picked.
 //! - Parameters it doesn't read are ignored, as Newznab clients send many
 //!   (`extended`, `o`, `attrs`, `year`, …).
-//! - An ID parameter (`imdbid`, `tvdbid`, …) with a value is refused
-//!   (`203`). Ignoring it would answer an ID search with whatever else
-//!   matched. ENR-11 adds them.
+//! - `imdbid`, `tmdbid` and `tvdbid` search by external id (ENR-11): a
+//!   value must be one in the scheme's form (`tt0111161` or `0111161`,
+//!   digits for the others), or it's a `201`. Any other ID parameter
+//!   (`rid`, `tvmazeid`, …) with a value is refused (`203`): ignoring it
+//!   would answer an ID search with whatever else matched.
 //!
 //! **Bounds:**
 //! - `q`: at most [`MAX_Q_BYTES`] bytes and [`MAX_WORDS`] words, with
@@ -29,6 +31,9 @@
 //! a `q` such as `verified:no` or `-flag:hidden` is just words. The
 //! clauses:
 //! - each word of `q`, on name and paths;
+//! - each external id, as its `imdb:`, `tmdb:` or `tvdb:` clause, which
+//!   matches only torrents an identification answer that may be served
+//!   names (ENR-11);
 //! - `season` and `ep` as ranges (a daily `MM/DD` becomes the phrase
 //!   `YYYY MM DD`, the year from `season`);
 //! - the categories, or the mode's own when there's no `cat`;
@@ -38,7 +43,7 @@
 //! hidden, unverified and Adult defaults on top.
 
 use lodestar_search::Node;
-use lodestar_search::query::{NumField, TextField};
+use lodestar_search::query::{NumField, TagKey, TextField, id_value};
 
 use super::categories;
 
@@ -111,6 +116,9 @@ pub struct Request {
     pub cats: Option<Vec<u32>>,
     pub season: Option<u32>,
     pub ep: Option<Episode>,
+    /// `imdbid`, `tmdbid` and `tvdbid`, each in the index's form
+    /// ([`id_value`]), in that order.
+    pub ids: Vec<(TagKey, String)>,
     /// 1 to [`MAX_LIMIT`].
     pub limit: usize,
     pub offset: usize,
@@ -136,11 +144,16 @@ pub const NO_FUNCTION: u16 = 202;
 /// Newznab's "Function not available".
 pub const NOT_AVAILABLE: u16 = 203;
 
-/// The ID parameters Newznab clients may send, none of them supported
-/// until ENR-11.
-const ID_PARAMS: &[&str] = &[
-    "imdbid", "tmdbid", "tvdbid", "rid", "tvmazeid", "traktid", "doubanid", "tvrageid",
+/// The ID parameters this server searches by (ENR-11): the parameter,
+/// its key, and the description of a malformed value.
+const ID_SEARCH: [(&str, TagKey, &str); 3] = [
+    ("imdbid", TagKey::Imdb, "Incorrect parameter: imdbid"),
+    ("tmdbid", TagKey::Tmdb, "Incorrect parameter: tmdbid"),
+    ("tvdbid", TagKey::Tvdb, "Incorrect parameter: tvdbid"),
 ];
+
+/// The other ID parameters Newznab clients may send, none supported.
+const ID_PARAMS: &[&str] = &["rid", "tvmazeid", "traktid", "doubanid", "tvrageid"];
 
 /// Parses a raw query string (the part after `?`, or `None`).
 pub fn parse(query: Option<&str>) -> Result<Request, Refused> {
@@ -158,6 +171,7 @@ pub fn parse(query: Option<&str>) -> Result<Request, Refused> {
     let mut ep = None;
     let mut limit = None;
     let mut offset = None;
+    let mut ids: [Option<String>; 3] = [None, None, None];
     let mut n = 0usize;
     for (k, v) in form_urlencoded::parse(query.as_bytes()) {
         n += 1;
@@ -175,6 +189,10 @@ pub fn parse(query: Option<&str>) -> Result<Request, Refused> {
             "ep" => &mut ep,
             "limit" => &mut limit,
             "offset" => &mut offset,
+            // In `ID_SEARCH`'s order.
+            "imdbid" => &mut ids[0],
+            "tmdbid" => &mut ids[1],
+            "tvdbid" => &mut ids[2],
             id if ID_PARAMS.contains(&id) => {
                 if v.trim().is_empty() {
                     continue;
@@ -232,12 +250,22 @@ pub fn parse(query: Option<&str>) -> Result<Request, Refused> {
         None => 0,
         Some(o) => number(o, 9).ok_or(refused(INCORRECT, "Incorrect parameter: offset"))? as usize,
     };
+    let mut id_clauses = Vec::new();
+    for ((_, key, bad), v) in ID_SEARCH.iter().zip(ids) {
+        // An empty value counts as absent: some clients send `imdbid=`.
+        let Some(v) = v.filter(|v| !v.trim().is_empty()) else {
+            continue;
+        };
+        let v = id_value(*key, v.trim()).ok_or(refused(INCORRECT, bad))?;
+        id_clauses.push((*key, v));
+    }
     Ok(Request {
         function,
         words,
         cats,
         season,
         ep,
+        ids: id_clauses,
         limit,
         offset,
     })
@@ -327,6 +355,10 @@ impl Request {
                 word: w.clone(),
             })
             .collect();
+        of.extend(self.ids.iter().map(|(key, v)| Node::Tag {
+            key: *key,
+            any: vec![v.clone()],
+        }));
         match (self.season, self.ep) {
             (Some(year), Some(Episode::Daily { month, day })) => of.push(Node::Phrase {
                 field: TextField::Any,
@@ -487,10 +519,17 @@ mod tests {
     fn repeats_ids_and_size_limits() {
         assert_eq!(code("t=search&q=a&q=b"), INCORRECT);
         assert_eq!(code("t=search&t=caps"), INCORRECT);
-        assert_eq!(code("t=movie&imdbid=tt0111161"), NOT_AVAILABLE);
-        assert_eq!(code("t=tvsearch&tvdbid=1"), NOT_AVAILABLE);
+        for unsupported in ["rid", "tvmazeid", "traktid", "doubanid", "tvrageid"] {
+            assert_eq!(
+                code(&format!("t=tvsearch&{unsupported}=1")),
+                NOT_AVAILABLE,
+                "{unsupported}"
+            );
+        }
         // An empty ID, as some clients send, is no ID.
-        assert_eq!(ok("t=movie&imdbid=&q=x").words, ["x"]);
+        let r = ok("t=movie&imdbid=&tmdbid=%20&q=x");
+        assert_eq!((r.words, r.ids), (vec!["x".to_owned()], Vec::new()));
+        assert_eq!(code("t=movie&imdbid=tt1&imdbid=tt2"), INCORRECT);
         // Unknown parameters are ignored.
         assert_eq!(
             ok("t=search&extended=1&o=xml&attrs=a&year=2020&apikey=k").limit,
@@ -503,6 +542,78 @@ mod tests {
     }
 
     #[test]
+    fn id_params_take_the_scheme_forms() {
+        let ids = |q: &str| ok(q).ids;
+        // IMDb with or without `tt`, padded or not, in any case.
+        for v in ["tt0111161", "0111161", "111161", "TT0111161", "tt111161"] {
+            assert_eq!(
+                ids(&format!("t=movie&imdbid={v}")),
+                [(TagKey::Imdb, "tt0111161".to_owned())],
+                "{v}"
+            );
+        }
+        assert_eq!(
+            ids("t=movie&imdbid=tt12345678"),
+            [(TagKey::Imdb, "tt12345678".to_owned())]
+        );
+        assert_eq!(
+            ids("t=tvsearch&tvdbid=0081189&tmdbid=1396&imdbid=903747"),
+            [
+                (TagKey::Imdb, "tt0903747".to_owned()),
+                (TagKey::Tmdb, "1396".to_owned()),
+                (TagKey::Tvdb, "81189".to_owned()),
+            ]
+        );
+        // Past `u64`: kept as digits (ENR-9).
+        assert_eq!(
+            ids("t=movie&tmdbid=99999999999999999999"),
+            [(TagKey::Tmdb, "99999999999999999999".to_owned())]
+        );
+        for bad in [
+            "imdbid=nm0000151",
+            "imdbid=tt",
+            "imdbid=tt00000000",
+            "imdbid=tt12345678901",
+            "imdbid=0",
+            "tmdbid=abc",
+            "tmdbid=0",
+            "tmdbid=-1",
+            "tmdbid=1.5",
+            "tmdbid=123456789012345678901",
+            "tvdbid=1%2C2",
+            "tvdbid=%EF%BC%91",
+        ] {
+            assert_eq!(code(&format!("t=movie&{bad}")), INCORRECT, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_id_search_is_a_clause_beside_the_rest() {
+        let r = ok("t=tvsearch&tvdbid=81189&season=1&ep=2");
+        let Some(Node::And { of }) = r.ast(Mode::Tv) else {
+            panic!()
+        };
+        assert_eq!(
+            of[0],
+            Node::Tag {
+                key: TagKey::Tvdb,
+                any: vec!["81189".into()]
+            }
+        );
+        assert!(of.iter().any(|n| matches!(
+            n,
+            Node::Range {
+                field: NumField::Season,
+                ..
+            }
+        )));
+        assert!(of.contains(&Node::Flag {
+            name: "private_source".into(),
+            value: false
+        }));
+    }
+
+    #[test]
     fn descriptions_never_echo_values() {
         for q in [
             "t=<script>",
@@ -511,6 +622,8 @@ mod tests {
             "t=tvsearch&season=<b>",
             "t=tvsearch&season=1&ep=<b>",
             "t=movie&imdbid=<b>",
+            "t=movie&tmdbid=<b>",
+            "t=tvsearch&tvdbid=<b>",
         ] {
             let e = parse(Some(q)).unwrap_err();
             assert!(!e.description.contains('<'), "{q}: {}", e.description);
@@ -608,6 +721,27 @@ mod tests {
             let s = format!("t={t}&q={}&cat={cat}&season={season}&ep={}&limit={limit}", enc(&q), enc(&ep));
             if let Ok(r) = parse(Some(&s)) && let Function::Search(m) = r.function {
                 let _ = r.ast(m);
+            }
+        }
+
+        /// An ID parameter is a well-formed id of its scheme, or a `201`;
+        /// what it searches for is the scheme's stored form, lower-cased.
+        #[test]
+        fn id_params_are_stored_forms_or_refused(
+            p in prop::sample::select(vec!["imdbid", "tmdbid", "tvdbid"]),
+            v in "(tt|TT)?[0-9]{0,24}|.{0,30}",
+        ) {
+            let enc = form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>();
+            match parse(Some(&format!("t=movie&{p}={enc}"))) {
+                Ok(r) => {
+                    for (key, id) in &r.ids {
+                        prop_assert!(lodestar_store::claims::id_ok(key.as_str(), id), "{id}");
+                        prop_assert_eq!(id.to_ascii_lowercase(), id.clone());
+                    }
+                    prop_assert!(r.ids.len() <= 1);
+                    prop_assert!(r.ids.is_empty() == v.trim().is_empty());
+                }
+                Err(e) => prop_assert_eq!(e.code, INCORRECT),
             }
         }
     }

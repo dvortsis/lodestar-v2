@@ -3,6 +3,7 @@
 
 use lodestar_classify::{Category, Composition, Record};
 use lodestar_metainfo::{InfoHash, Text};
+use lodestar_store::identify_sweep::Identified;
 use lodestar_store::{FileTree, TorrentRow, flags};
 use tantivy::TantivyDocument;
 use tantivy::tokenizer::PreTokenizedString;
@@ -183,6 +184,98 @@ impl DocEnrichment {
         }
         e
     }
+}
+
+/// Alternative titles from identification answers indexed per torrent,
+/// at most (plan §4.3 ENR-11; a claim keeps up to 32). The record's own
+/// titles don't count toward it.
+pub const MAX_IDENTIFIED_TITLES: usize = 8;
+
+impl DocEnrichment {
+    /// Adds what the torrent's served identification answers say
+    /// (ENR-11; [`Store::served_identifications`] decides which may be
+    /// served): each answer's external ids as `scheme:value` tag terms
+    /// ([`TagKey::IDS`]), and up to [`MAX_IDENTIFIED_TITLES`] of their
+    /// canonical and alternative titles that the record doesn't already
+    /// have, ranked by [`title_rank`].
+    ///
+    /// Nothing is added to a torrent with no record yet, or one that's
+    /// Adult by its record: an identification is never looked up for an
+    /// Adult item (ENR-10), so one here is stale, and Adult items carry
+    /// no external ids.
+    ///
+    /// [`Store::served_identifications`]: lodestar_store::Store::served_identifications
+    pub fn identify(&mut self, answers: &[Identified]) {
+        let adult = self
+            .tags
+            .iter()
+            .any(|t| t == "type:adult" || t.starts_with("adult:"));
+        if answers.is_empty() || self.tags.is_empty() || adult {
+            return;
+        }
+        for a in answers {
+            for id in &a.ids {
+                let Some(key) = TagKey::id(&id.scheme) else {
+                    continue;
+                };
+                let t = format!("{}:{}", key.as_str(), id.value.to_ascii_lowercase());
+                if !self.tags.contains(&t) {
+                    self.tags.push(t);
+                }
+            }
+        }
+        let mut candidates: Vec<(TitleRank, &str)> = Vec::new();
+        for a in answers {
+            let canonical = a.canonical_title.iter().map(|t| (t.as_str(), None));
+            let alts = a
+                .alt_titles
+                .iter()
+                .map(|t| (t.title.as_str(), Some(t.language.as_str())));
+            for (order, (title, language)) in canonical.chain(alts).enumerate() {
+                candidates.push((title_rank(a, language, order), title));
+            }
+        }
+        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut seen: Vec<String> = self.titles.iter().map(|t| t.to_lowercase()).collect();
+        let mut added = 0;
+        for (_, title) in candidates {
+            if added == MAX_IDENTIFIED_TITLES {
+                break;
+            }
+            let folded = title.to_lowercase();
+            if title.trim().is_empty() || seen.contains(&folded) {
+                continue;
+            }
+            seen.push(folded);
+            self.titles.push(title.to_owned());
+            added += 1;
+        }
+    }
+}
+
+/// How [`DocEnrichment::identify`] orders candidate titles, first
+/// first: higher match confidence; the canonical title before the
+/// alternatives; then by language: English, then not known (`und`),
+/// then the rest by tag; then by source id and the answer's own order.
+pub(crate) type TitleRank = (std::cmp::Reverse<u8>, bool, u8, String, u8, usize);
+
+/// [`TitleRank`] of the `order`th title of answer `a` (its canonical
+/// title, with no language, first).
+pub(crate) fn title_rank(a: &Identified, language: Option<&str>, order: usize) -> TitleRank {
+    let (group, tag) = match language {
+        None => (0, String::new()),
+        Some(l) if l == "en" || l.starts_with("en-") => (0, l.to_owned()),
+        Some("und") => (1, String::new()),
+        Some(l) => (2, l.to_owned()),
+    };
+    (
+        std::cmp::Reverse(a.confidence),
+        language.is_some(),
+        group,
+        tag,
+        a.source.get(),
+        order,
+    )
 }
 
 /// The numbers in rendered spans (`2`, `1-10`), each span capped at
@@ -783,5 +876,40 @@ mod tests {
     fn flags_map_to_names() {
         let names: Vec<_> = flag_names(flags::PRIVATE | flags::BACKFILL).collect();
         assert_eq!(names, ["private", "backfill"]);
+    }
+
+    #[test]
+    fn titles_rank_by_confidence_then_canonical_then_language() {
+        let a = |confidence, source| Identified {
+            source: lodestar_store::SourceId::new(source).unwrap(),
+            confidence,
+            ids: Vec::new(),
+            canonical_title: None,
+            alt_titles: Vec::new(),
+        };
+        let (hi, lo) = (a(90, 5), a(80, 1));
+        let mut ranks = [
+            (title_rank(&lo, None, 0), "lo canonical"),
+            (title_rank(&hi, Some("fr"), 3), "hi fr"),
+            (title_rank(&hi, Some("und"), 2), "hi und"),
+            (title_rank(&hi, Some("en-gb"), 4), "hi en-gb"),
+            (title_rank(&hi, Some("en"), 1), "hi en"),
+            (title_rank(&hi, None, 0), "hi canonical"),
+            (title_rank(&hi, Some("de"), 5), "hi de"),
+        ];
+        ranks.sort();
+        let order: Vec<&str> = ranks.iter().map(|r| r.1).collect();
+        assert_eq!(
+            order,
+            [
+                "hi canonical",
+                "hi en",
+                "hi en-gb",
+                "hi und",
+                "hi de",
+                "hi fr",
+                "lo canonical"
+            ]
+        );
     }
 }

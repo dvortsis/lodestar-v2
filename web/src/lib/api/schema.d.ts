@@ -3363,7 +3363,7 @@ export interface components {
         /** @enum {string} */
         AstShareBy: "count" | "bytes";
         /** @enum {string} */
-        AstTagKey: "type" | "res" | "hdr" | "codec" | "audio" | "lang" | "group" | "has" | "resolved" | "adult";
+        AstTagKey: "type" | "res" | "hdr" | "codec" | "audio" | "lang" | "group" | "has" | "resolved" | "adult" | "imdb" | "tmdb" | "tvdb" | "anidb" | "anilist" | "mbid" | "olid" | "igdb" | "discogs" | "steam" | "wikidata";
         /** @enum {string} */
         AstTextField: "any" | "name" | "path" | "title";
         /**

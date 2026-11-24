@@ -9,6 +9,7 @@ import {
 	formatShare,
 	formatSpan
 } from '$lib/format';
+import { ID_LABELS } from '$lib/format/label-id';
 import { currentLocale } from '$lib/i18n/locale.svelte';
 import { m } from '$lib/paraglide/messages.js';
 import type { Ast } from '$lib/state/search.svelte';
@@ -306,7 +307,8 @@ const TAG_KEY: Record<Of<'tag'>['key'], () => string> = {
 	group: m.search_filters_group,
 	has: m.search_filters_has,
 	resolved: m.search_filters_resolved,
-	adult: m.adult_kind
+	adult: m.adult_kind,
+	...ID_LABELS
 };
 
 // The glossary's `content_type` and `adult_kind` lists: labelled values, not codes.

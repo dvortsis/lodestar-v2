@@ -76,6 +76,7 @@
 	"search_filters_group": "Release group",
 	"search_filters_has": "Contains",
 	"search_filters_resolved": "Title found via",
+	"search_filters_id": "{name} ID",
 	"search_filters_type_movie": "Movie",
 	"search_filters_type_tv": "TV",
 	"search_filters_type_music": "Music",
