@@ -4401,6 +4401,11 @@
       "slice": "ENR-terms-api",
       "pr": 1119,
       "flag": "\u00a72.19: terms reader is Store::redistributes (property-tested equal to identify::may_redistribute) so lodestar-api gains no pipeline dependency."
+    },
+    {
+      "slice": "X-purge-rederive",
+      "pr": 1120,
+      "flag": "\u00a72.19: purge bumps class_gen for any deleted shaping claim (deviation from brief, accepted); plain feed purges not re-derived (cost ~17,300 torrents/s plus reindex); torrents purged before this PR keep a stale Adult (no one-off re-derive); purge leaves the adult mark set on the Sources/Filters connection (stricter only)."
     }
   ],
   "decisions_log": [
@@ -4458,6 +4463,11 @@
       "at": "2026-11-24T23:00Z",
       "slice": "X-split-spill-horizon",
       "call": "scaled cooldowns stay as they are; the filter throttles at scale >= 8 rather than cap cooldowns (capping shortens them, against the split spec and WK-10e). Sizing the filter by scale is a later perf call if fleet runs show the throttle costs much."
+    },
+    {
+      "at": "2026-11-24T23:30Z",
+      "slice": "X-purge-rederive",
+      "call": "deviation accepted (rv-1120): Claims purge bumps class_gen whenever a shaping or undecodable claim is deleted, not only when an UPDATE matched; closes the backfill race for unenriched torrents."
     }
   ],
   "runner_notes": {
@@ -11054,7 +11064,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1120 ready at 4f8bee4e (all green); fresh Opus + security review running; needs catch-up (#1118 Rust since base) before merge",
+        "doing": "#1120 rv-1120 FIX / SECURITY PASS (1 blocking: test for gen bump on unmarked kept torrent losing last always-adult finder); fix + catch-up, then delta review",
         "since": "2026-11-24T20:40Z",
         "status": "active",
         "owns_extra": [
