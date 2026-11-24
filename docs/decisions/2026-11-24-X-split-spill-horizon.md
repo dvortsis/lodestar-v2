@@ -39,7 +39,7 @@ With `dht.sampler_cooldown_split` on, runner records r17 saw the spill filter gr
 | 100 a second | grows for 48 h, then holds at about 4,988,300 (at most 4,990,300, 63 % of the line) | 0 s | 21,600,000, the full rate |
 | 200 a second | reaches the line in its 32nd hour and holds there, never past it (at most 7,864,320 live, exactly the line, and 7,929,704 in use) | 32,399 s, all after the 31st hour | 36,581,043: about 135 a second once at the line, against 200 |
 
-- **There it throttles, safely,** as above. Shortening or evicting live cooldowns to stay under the line is the only way to avoid it, and the brief rules both out. The split and WK-10e's scale are both off by default, so no shipped default reaches it. Whether a fleet member's extra share of a scaled cooldown (the part past 6 h, which a restart already cuts under WK-10e) may be cut in the filter too is a question for the runner, below.
+- **There it throttles, safely,** as above. Shortening or evicting live cooldowns to stay under the line is the only way to avoid it, and the brief rules both out. The split and WK-10e's scale are both off by default, so no shipped default reaches it. The runner's call on this is below.
 
 ## Unchanged
 - **The split-off path:** no filter is made, and nothing in it changed. `the_split_off_day_is_unchanged` pins its day at r17's rate with a 2,000-place table: exactly 8,000 samples (one table a cooldown), full for all but about 80 s, nothing allocated. The existing split-off tests and the crawler-sim goldens pass unchanged.
@@ -60,5 +60,6 @@ With `dht.sampler_cooldown_split` on, runner records r17 saw the spill filter gr
 - **The gauge's meaning changes** from slots in use to live cooldowns; its name, `dht_sample_spill_slots`, stays. Near the line the two differ by at most a sweep pass of inflow (about 100,000 at r17's rate).
 - **The fallback engages on live cooldowns,** so it engages later than before by that same amount. No cooldown changes.
 
-## Questions for the runner (not decided here)
-- **Scaled cooldowns in the filter:** at scale 8 and above about 155 samples a second, the filter reaches its line in steady state. The restart already caps a scaled cooldown at 6 h from the commit (WK-10e), so a fleet member's extra share is not a lost-record obligation. Capping it at 6 h in the filter too would keep scale 8 under the line up to about 370 a second, but it shortens a cooldown within a run, which the brief rules out. Should it stay as it is (throttle at the line), or is that a decision for the owner?
+## Scaled cooldowns at the line (the runner, 2026-11-24)
+- **They stay as they are.** At WK-10e's scale 8 and above about 155 samples a second, the filter reaches its line and the sampler throttles there, safely: about 135 samples a second at 200 offered, as measured above. No cooldown is shortened. Capping a scaled cooldown in the filter would shorten it, which the split's spec and WK-10e rule out, and any loosening is the owner's call.
+- **Sizing the filter by scale** is a later performance call if fleet runs show the throttle costs much. Not in this slice.
