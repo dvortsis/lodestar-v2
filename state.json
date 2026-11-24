@@ -9181,6 +9181,19 @@
       "model": "opus",
       "added": "2026-11-24",
       "note": "after ENR-G merges; content-safety, /security-review"
+    },
+    {
+      "id": "X-list-active-reset",
+      "from": "X-flake-search-keyboard-2 #1115",
+      "owns": [
+        "web/src/lib/features/search/**/VirtualList.svelte"
+      ],
+      "items": [
+        "list view has the same active-row reset problem (VirtualList.svelte resetKey) that #1115 fixed in the table"
+      ],
+      "model": "sonnet",
+      "added": "2026-11-24",
+      "note": "also: one local unit-test failure after a package reinstall, not reproduced in 8 runs or CI; watch only"
     }
   ],
   "main_health": {
@@ -10643,6 +10656,14 @@
       "sha": "2262b3296373dc3e4954ce24e6d442079147b0fa",
       "head": "5442ba25ba637a3d5ea0a2c0dec76f99ee9e4391",
       "at": "2026-11-24T15:09Z"
+    },
+    {
+      "slice": "X-flake-search-keyboard-2",
+      "pr": 1115,
+      "sha": "25238cff8ec51778a48b5111a64ed4ffa50ecd1e",
+      "head": "0802cc8f9645282af2cbd59074896fe2e08fc2aa",
+      "at": "2026-11-24T15:3xZ",
+      "note": "merged by the coordinator side; fresh Opus review clean; 50x repeat x2 passed in CI"
     }
   ],
   "active_sessions": {
@@ -10913,7 +10934,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T15:32Z",
+    "updated": "2026-11-24T15:40Z",
     "items": [
       {
         "slot": 1,
@@ -10945,11 +10966,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-flake-search-keyboard-2",
+        "slice": "ENR-terms-api",
         "role": "build",
-        "doing": "starting: brief briefs/X-flake-search-keyboard-2.md",
-        "since": "2026-11-24T13:55Z",
-        "status": "active"
+        "doing": "starting (brief briefs/ENR-terms-api.md)",
+        "since": "2026-11-24T15:40Z",
+        "status": "active",
+        "agent": "opus"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
