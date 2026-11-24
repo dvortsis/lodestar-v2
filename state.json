@@ -4368,6 +4368,15 @@
         "Sources screen has no route editor; companion route editor offers direct and SOCKS5 only"
       ],
       "added": "2026-11-24"
+    },
+    {
+      "slice": "GS-4",
+      "pr": 1116,
+      "at": "2026-11-24T16:08Z",
+      "items": [
+        "Related always shows all four lists (other versions, identical clones, same file, similar payloads), even when empty (\u00a72.19 refinement)",
+        "size raises (runner \u00a72.26): Detail Related section 5.4 KB new entry; /t own view 15.48->15.69 KB; Detail sections 47.49->47.87 KB"
+      ]
     }
   ],
   "decisions_log": [
@@ -4410,6 +4419,11 @@
       "at": "2026-11-24T15:32Z",
       "slice": "ENR-G",
       "what": "Approved 3 more fixes outside owns (gate found): (1) pipeline control.rs purge_step sets reenrich when claims are deleted, so a running server re-derives; (2) purge marks only claims with an adult section or identification details (shared predicate with mark_matched); (3) pipeline ingest drops an adult-enrichment Discovery when its consent no longer holds (race: emitted before key removal, written after). All content-safety tightenings; no owner call. ENR-G fixes its own owns line (spec is web/e2e/adult-enrichment.routes.test.ts)."
+    },
+    {
+      "at": "2026-11-24T16:08Z",
+      "slice": "GS-4",
+      "what": "Size raises approved under \u00a72.26: Related 5.4 KB (new), /t 15.69 KB, Detail sections 47.87 KB"
     }
   ],
   "runner_notes": {
@@ -9224,6 +9238,21 @@
       "model": "opus",
       "added": "2026-11-24",
       "note": "fold into X-split-resume-gate or X-split-spill-horizon (same sampler.rs)"
+    },
+    {
+      "id": "GS-4-followups",
+      "from": "GS-4 #1116",
+      "owns": [
+        "web/src/lib/features/detail/**",
+        "web/src/lib/features/search/collapse/**"
+      ],
+      "items": [
+        "GS-5 Show all opens Related directly (open.ts/DetailHost + search/collapse)",
+        "Parsed and Related share one /siblings request per torrent"
+      ],
+      "model": "sonnet",
+      "added": "2026-11-24",
+      "note": "can fold with GS-5-followups"
     }
   ],
   "main_health": {
@@ -10964,7 +10993,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T15:45Z",
+    "updated": "2026-11-24T16:08Z",
     "items": [
       {
         "slot": 1,
@@ -10972,8 +11001,9 @@
         "role": "build",
         "model": "opus",
         "agent": "sonnet",
-        "doing": "starting (brief briefs/GS-4.md)",
-        "since": "2026-11-24T15:12Z"
+        "doing": "PR #1116 (198bfb4b, 1,139 lines) CI running; baselines commit to come; ready -> fresh review -> merge",
+        "since": "2026-11-24T15:12Z",
+        "session": "session_01MMjhnA8jZVGAa6zftpoAe9"
       },
       {
         "slot": 2,

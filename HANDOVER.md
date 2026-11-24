@@ -41,3 +41,4 @@
 - 2026-11-24T15:3xZ X-flake-search-keyboard-2 merged #1115 (25238cff); slot 4 freed.
 - 2026-11-24T15:40Z ENR-terms-api in slot 4, starting (briefs/ENR-terms-api.md).
 - 2026-11-24T15:45Z Landing lane: X-escalate-full-table #1112 entered (3rd catch-up). Rust pushes hold (ENR-G, ENR-terms-api). Fresh review rv-1112 running on b308aa62.
+- 2026-11-24T16:08Z GS-4 PR #1116 open (198bfb4b); size raises approved; owner flag + follow-ups recorded.
