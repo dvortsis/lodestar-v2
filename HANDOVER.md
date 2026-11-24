@@ -40,3 +40,4 @@
 - 2026-11-24T15:12Z GS-4 in slot 1, starting (briefs/GS-4.md).
 - 2026-11-24T15:3xZ X-flake-search-keyboard-2 merged #1115 (25238cff); slot 4 freed.
 - 2026-11-24T15:40Z ENR-terms-api in slot 4, starting (briefs/ENR-terms-api.md).
+- 2026-11-24T15:45Z Landing lane: X-escalate-full-table #1112 entered (3rd catch-up). Rust pushes hold (ENR-G, ENR-terms-api). Fresh review rv-1112 running on b308aa62.

@@ -4520,7 +4520,20 @@
     }
   },
   "landing_lane": {
-    "pr": null,
+    "pr": {
+      "pr": 1112,
+      "slice": "X-escalate-full-table",
+      "entered": "2026-11-24T15:45Z",
+      "areas": [
+        "rust"
+      ],
+      "reason": "3rd catch-up (#1113 Rust merged after base 4689737c)",
+      "reviewed_head": "b308aa622d9871fcde7a4a0f769c24eee73602f7",
+      "holds": [
+        "ENR-G",
+        "ENR-terms-api"
+      ]
+    },
     "last": {
       "pr": 1108,
       "slice": "GS-5",
@@ -10934,7 +10947,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T15:40Z",
+    "updated": "2026-11-24T15:45Z",
     "items": [
       {
         "slot": 1,
@@ -10951,7 +10964,7 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "PR #1112; lane cleared 13:52Z; bring main in, then fresh review",
+        "doing": "PR #1112 in landing lane 15:45Z; bringing main in; fresh Opus review running on b308aa62 (rv-1112)",
         "since": "2026-11-24T09:19Z"
       },
       {
@@ -11960,7 +11973,8 @@
   ],
   "catch_ups": {
     "ENR-11": 1,
-    "GS-5": 2
+    "GS-5": 2,
+    "X-escalate-full-table": 3
   },
   "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge."
 }
