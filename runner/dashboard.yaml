@@ -490,6 +490,7 @@ placement:
   - X-leaktest-vpn-held-down
   - X-flake-states-clock
   - X-flake-e2e-expect-timeout
+  - X-flake-search-keyboard-2
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
   - X-natural-wording
@@ -503,6 +504,7 @@ placement:
   - X-relevance-finish-flake
   - X-flake-utp-lossy
   - X-flake-utp-lossy-win
+  - X-flake-cap-index-move
   - X-snapshot-claims-nits
   - X-network-lost-msg
   - X-enr-lane-nits

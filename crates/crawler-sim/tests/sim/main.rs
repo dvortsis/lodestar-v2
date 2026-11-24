@@ -6,6 +6,7 @@
 //! report; the baselines' reports are checked in under `golden/`.
 //! See `README.md` for regenerating them and for A/B-ing a candidate.
 
+mod escalate;
 mod fetch;
 mod log;
 mod net;

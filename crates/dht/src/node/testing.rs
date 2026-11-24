@@ -17,6 +17,9 @@ use tokio::sync::{Mutex, mpsc};
 use super::transport::{RecvSocket, SendSocket};
 use super::{Config, Harvest, Node, NodeHandle, StatsSnapshot};
 
+/// While this guard lives, samplers made on this thread hold at most the
+/// given number of records (X-escalate-full-table's full-table screen).
+pub use super::sampler::TestCapacity as SamplerCapacity;
 /// The sampler's cooldown floor and ceiling, so the simulator's checks
 /// track the sampler's own rules.
 pub use super::sampler::{
