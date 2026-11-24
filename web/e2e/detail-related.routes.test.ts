@@ -55,7 +55,8 @@ test('/t lists the four groups with counts and only what differs', async ({ page
 	await expect(list(page, 'similar_payload')).toContainText('None found.');
 	await expect(list(page, 'similar_payload').getByTestId('detail-related-gap')).toBeVisible();
 	const rows = section(page).getByTestId('detail-related-differs');
-	await expect(rows).toHaveText([/^2160p\s·\s8\.38 GiB$/, /^720p$/, /^3 seeders$/]);
+	// Strings, not patterns: Playwright folds the no-break spaces around the dot only for strings.
+	await expect(rows).toHaveText(['2160p · 8.38 GiB', '720p', '3 seeders']);
 	await expectNoA11yViolations(page);
 });
 
