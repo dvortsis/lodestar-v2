@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ebcb9c4b8ee47c231db89cf27adac4d55704b08bdb90bf0f5de9bcb6f9f57461 # shrinks to ops = [FindBt(8, 0, true), Move(8), FindBt(8, 0, true), Move(8)]

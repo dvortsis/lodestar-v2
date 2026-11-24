@@ -503,6 +503,7 @@ placement:
   - X-relevance-finish-flake
   - X-flake-utp-lossy
   - X-flake-utp-lossy-win
+  - X-flake-cap-index-move
   - X-snapshot-claims-nits
   - X-network-lost-msg
   - X-enr-lane-nits
