@@ -275,8 +275,7 @@ fn query(text: &str) -> ApiResult<Node> {
     // The judge doesn't know an item's provenance: claims and fetched
     // metadata are judged alike, and its sources aren't known yet
     // (SRC-3), nor which sources identified it (ENR-11). A rule on them
-    // would silently never match, or with `-`,
-    // match everything.
+    // would silently never match, or with `-`, match everything.
     if node.mentions_provenance() {
         return Err(bad(
             "provenance_in_rule",

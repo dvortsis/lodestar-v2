@@ -1349,9 +1349,6 @@ const MAX_TAG_BYTES: usize = 64;
 /// A keyword value as the index holds it, or `None` if it can't be one.
 pub(crate) fn tag_value(key: TagKey, v: &str) -> Option<String> {
     use lodestar_classify::{AdultKind, ContentType, ResolvedVia, Structure};
-    if key.is_id() {
-        return id_value(key, v);
-    }
     let mut lower = v.to_lowercase();
     // `res:360` is read as `360p`, so both spellings land on the same
     // stored form (the parser files 360p under 480p), and the limit
