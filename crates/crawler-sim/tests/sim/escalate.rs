@@ -21,7 +21,7 @@ use crate::{scenario, simulate};
 const CAPACITY: usize = 200;
 /// How late a second sample may come after its first backoff ends: the
 /// node waits for the next maintenance prune and for a reply that offers
-/// it again.
+/// it again. The slowest in the screen took 104 s.
 const SLACK: Duration = Duration::from_secs(120);
 
 fn full_table(escalate: bool) -> crate::run::Report {
@@ -89,7 +89,10 @@ fn a_struck_node_gets_its_second_sample_on_a_full_table() {
     );
 
     let off = full_table(false);
-    // Before this slice, `main` gave exactly these.
+    // `main` gave exactly these before this slice (32396391). A later
+    // change to the base scenario, the network or the actor may move them:
+    // re-pin from a run with the escalation switch off, which takes none of
+    // this slice's paths.
     assert_eq!(
         (off.dht.samples_sent, off.dht.sample_full_seconds),
         (380, 1_045),

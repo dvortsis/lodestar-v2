@@ -369,8 +369,11 @@ impl Sampler {
     }
 
     /// Queues `node` on the frontier if it's eligible, not already queued,
-    /// and a new address fits its IP's and block's shares. True when it was
-    /// queued (CR-1b counts these as new).
+    /// and a new address fits its IP's and block's shares. With escalation
+    /// on, a node that holds a table record goes to the held queue instead,
+    /// under that queue's own bound (when it's full, the node is refused
+    /// even if the frontier has room). True when it was queued (CR-1b counts
+    /// these as new).
     pub fn offer(&mut self, mut node: NodeInfo, now: Instant) -> bool {
         node.addr = lodestar_network_policy::normalize(node.addr);
         if matches!(self.states.get(&node.addr), Some(State::Cooling { until, token, .. })
@@ -898,8 +901,9 @@ impl Sampler {
     /// [`SPILL_TRIES`] inserts are refused below that fill (very rare),
     /// `next` admits no one that tick without this saying so. A held
     /// candidate (escalation on) needs no free place, so while any waits
-    /// the sampler isn't saturated; one whose record left meanwhile makes
-    /// `next` admit no one once, and `next` drops it from the held queue.
+    /// the sampler isn't saturated. If every held one lost its record
+    /// meanwhile, `next` offers them again as newcomers, and on a full
+    /// table admits no one that call.
     pub fn saturated(&self) -> bool {
         self.held.is_empty()
             && self.known() >= self.capacity
