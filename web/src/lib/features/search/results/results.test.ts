@@ -319,3 +319,47 @@ describe('reload keeping the place', () => {
 		expect(post.mock.calls.map((c) => c[1].body.limit)).toEqual([200, 200, 200]);
 	});
 });
+
+describe('grouping versions (GS-5)', () => {
+	it('asks for groups only when grouping is on, as a query of its own', async () => {
+		const r = createResults();
+		post.mockResolvedValue(page([1]));
+		await r.load(query());
+		expect(sent(0)).not.toHaveProperty('collapse');
+		await r.load(query('lantern', { collapse: true }));
+		expect(sent(1).collapse).toBe('group');
+		// The same query grouped again is not a new request.
+		await r.load(query('lantern', { collapse: true }));
+		expect(post).toHaveBeenCalledTimes(2);
+	});
+
+	it('keeps the answer’s grouping, pages grouped, and forgets it with the rows', async () => {
+		const r = createResults();
+		post.mockResolvedValueOnce(
+			page([1, 2], { collapsed: true, groups: 2, groups_approx: false, next_cursor: 'c1' })
+		);
+		await r.load(query('lantern', { collapse: true }));
+		expect(r.grouped).toEqual({
+			collapsed: true,
+			groups: 2,
+			groups_approx: false,
+			collapse_unavailable: undefined
+		});
+		post.mockResolvedValueOnce(page([3]));
+		await r.loadMore();
+		expect(sent(1).collapse).toBe('group');
+		r.forget();
+		expect(r.grouped).toEqual({});
+	});
+
+	it('says when the server could not group', async () => {
+		const r = createResults();
+		post.mockResolvedValueOnce(
+			page([1], { collapsed: false, collapse_unavailable: 'group_key_not_ready' })
+		);
+		await r.load(query('lantern', { collapse: true }));
+		expect(r.grouped.collapse_unavailable).toBe('group_key_not_ready');
+		await r.load({ ...query(), ast: null });
+		expect(r.grouped).toEqual({});
+	});
+});

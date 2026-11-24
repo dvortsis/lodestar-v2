@@ -41,7 +41,7 @@ describe('column prefs', () => {
 		expect(p.order.slice(0, 2)).toEqual(['size', 'name']);
 		expect(new Set(p.order).size).toBe(p.order.length);
 		expect(p.order).toContain('discovered');
-		expect(p.hidden).toEqual(['files', 'raw', 'res']);
+		expect(p.hidden).toEqual(['files', 'raw', 'res', 'versions']);
 	});
 
 	it('show the raw name by default, and keep a saved choice that predates it', () => {
@@ -52,6 +52,14 @@ describe('column prefs', () => {
 		});
 		expect(visible(old)).not.toContain('raw');
 		expect(visible(normalize({ order: ['name', 'raw', 'size'], hidden: [] }))).toContain('raw');
+	});
+
+	it('show the versions by default (GS-5), and keep a saved choice that predates them', () => {
+		expect(visible(defaultPrefs())).toContain('versions');
+		const before = normalize({ order: ['name', 'raw', 'res', 'size'], hidden: [] });
+		expect(before.order.at(-1)).toBe('versions');
+		expect(visible(before)).not.toContain('versions');
+		expect(visible(normalize({ order: ['name', 'versions'], hidden: [] }))).toContain('versions');
 	});
 
 	it('show the resolution by default, and keep a saved choice that predates it', () => {
@@ -65,7 +73,8 @@ describe('column prefs', () => {
 			'seeders',
 			'leechers',
 			'trackers',
-			'discovered'
+			'discovered',
+			'versions'
 		]);
 		expect(visible(defaultPrefs())).toContain('res');
 		// Saved after Raw name, before Resolution: Raw name stays as chosen, Resolution arrives hidden.
@@ -75,12 +84,16 @@ describe('column prefs', () => {
 		});
 		expect(withRaw.order.slice(0, 5)).toEqual(['name', 'type', 'raw', 'size', 'files']);
 		expect(withRaw.order).toContain('res');
-		expect(withRaw.hidden).toEqual(['raw', 'res']);
+		expect(withRaw.hidden).toEqual(['raw', 'res', 'versions']);
 		const shownRaw = normalize({ order: ['name', 'raw', 'size'], hidden: [] });
 		expect(visible(shownRaw)).toContain('raw');
 		expect(visible(shownRaw)).not.toContain('res');
 		// Saved before both: both arrive hidden.
-		expect(normalize({ order: ['name', 'size'], hidden: [] }).hidden).toEqual(['raw', 'res']);
+		expect(normalize({ order: ['name', 'size'], hidden: [] }).hidden).toEqual([
+			'raw',
+			'res',
+			'versions'
+		]);
 		// A choice that knows the column keeps it, shown or hidden, and toggling it back works.
 		expect(visible(normalize({ order: ['name', 'res', 'raw'], hidden: [] }))).toContain('res');
 		const off = normalize({ order: ['name', 'res', 'raw'], hidden: ['res'] });

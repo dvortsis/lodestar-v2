@@ -50,7 +50,8 @@
 		seeders: m.seeders,
 		leechers: m.leechers,
 		trackers: m.trackers_reporting,
-		discovered: m.discovered
+		discovered: m.discovered,
+		versions: m.search_collapse_versions
 	};
 </script>
 

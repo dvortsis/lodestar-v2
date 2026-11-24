@@ -15,6 +15,9 @@
 	import { results } from '../results/results.svelte';
 	import { selection } from '../bulk/selection.svelte';
 	import { SORTS, VIEWS, sortValue, viewHref } from './toolbar';
+	import GroupToggle from '../collapse/GroupToggle.svelte';
+	import { groupsCount } from '../collapse/count';
+	import { PARAM, groupHref, groupedIn, grouping } from '../collapse/grouping.svelte';
 	import { viewOf, type View } from './view';
 
 	const id = $props.id();
@@ -62,6 +65,9 @@
 	const count = $derived.by(() => {
 		if (results.status !== 'ready') return '';
 		const n = results.hits.length === 0 ? 0 : results.total;
+		const g = results.grouped;
+		if (g.collapsed && g.groups !== undefined && n > 0)
+			return groupsCount(g.groups, !!g.groups_approx, n, results.totalApprox, locale);
 		if (results.totalApprox)
 			return m.search_toolbar_count_about({ count: formatCompact(n, locale) });
 		return n === 1
@@ -87,6 +93,24 @@
 		});
 	}
 
+	// "Group versions" (GS-5): pushed like a sort, so Back undoes it; remembered for the account.
+	// As the panel reads it: the URL, else the account's choice the rows were asked with.
+	const grouped = $derived(groupedIn(qs, grouping.applied));
+	const unavailable = $derived(grouped && !!results.grouped.collapse_unavailable);
+	async function setGrouped(on: boolean) {
+		ensureSearchPath();
+		const was = grouped;
+		void grouping.remember(on);
+		const opts = { keepFocus: true, noScroll: true };
+		// The entry being left writes its own value out first, so Back restores it whatever the
+		// account's choice is by then (the same rows: no new request).
+		if (!new URLSearchParams(page.url.search).has(PARAM))
+			// eslint-disable-next-line svelte/no-navigation-without-resolve -- groupHref() keeps this page's own path
+			await goto(groupHref(page.url, was), { ...opts, replaceState: true });
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- groupHref() keeps this page's own path
+		await goto(groupHref(page.url, on), opts);
+	}
+
 	let Dialog = $state<typeof import('$lib/features/alerts/SaveSearchDialog.svelte').default>();
 	let saving = $state(false);
 	let open = $state(false);
@@ -109,6 +133,12 @@
 	<div class="tb" data-testid="results-toolbar">
 		<p class="tb-count" data-testid="results-count">{count}</p>
 		<div class="tb-controls">
+			<GroupToggle
+				on={grouped}
+				describedby={unavailable ? `${id}-ungrouped` : undefined}
+				class="tb-wide"
+				onchange={(on) => void setGrouped(on)}
+			/>
 			<label class="tb-lbl" for="{id}-sort">
 				<span>{m.search_toolbar_sort()}</span>
 				<Select
@@ -145,6 +175,11 @@
 			<div class="tb-narrow">
 				<Button dense popovertarget="{id}-more" class="tb-more">{m.search_toolbar_more()}</Button>
 				<div popover="auto" id="{id}-more" class="tb-pop">
+					<GroupToggle
+						on={grouped}
+						describedby={unavailable ? `${id}-ungrouped` : undefined}
+						onchange={(on) => void setGrouped(on)}
+					/>
 					<Button dense aria-pressed={selection.mode} onclick={(e) => (toggle(), shut(e))}
 						>{m.search_bulk_mode()}</Button
 					>
@@ -152,6 +187,16 @@
 				</div>
 			</div>
 		</div>
+		{#if unavailable}
+			<!-- Owner §2.66: one line on why the rows came ungrouped, under the controls. -->
+			<p
+				id="{id}-ungrouped"
+				class="basis-full text-small text-muted-text"
+				data-testid="group-versions-unavailable"
+			>
+				{m.search_collapse_unavailable()}
+			</p>
+		{/if}
 	</div>
 {/if}
 {#if Dialog}
