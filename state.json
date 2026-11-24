@@ -9141,6 +9141,22 @@
       "from": "X-cmp-egress-ui self-review polish 9",
       "what": "Companion GET does not say which route kinds a companion can follow, so the editor offers qBittorrent SOCKS5 and the PUT refuses cant_follow_route. Add a follows list to Companion (API) and filter the editor by it.",
       "added": "2026-11-24"
+    },
+    {
+      "id": "X-cmp-egress-ui-followups",
+      "from": "rv-1114",
+      "owns": [
+        "web/src/lib/features/settings/companions/**"
+      ],
+      "items": [
+        "Route.svelte re-fills from c.egress when the server value changes and the form is untouched (stale form can revert a newer route)",
+        "egress.ts routeText: explicit bind_address, neutral sentence for unknown kinds",
+        "comment the unmount-mid-PUT case in Route.svelte/confirm.ts",
+        "CompanionRow: routeRefused clears an older note; reset panel when routeOffered goes false"
+      ],
+      "model": "sonnet",
+      "added": "2026-11-24",
+      "note": "can fold into X-cmp-egress-follows (API follows list) as one slice"
     }
   ],
   "main_health": {
@@ -10859,7 +10875,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T14:10Z",
+    "updated": "2026-11-24T14:20Z",
     "items": [
       {
         "slot": 1,
@@ -10884,7 +10900,7 @@
         "slice": "X-cmp-egress-ui",
         "role": "build",
         "model": "opus",
-        "doing": "lane cleared 13:52Z; bring main in, push, open PR",
+        "doing": "PR #1114 (14ef4bcb) reviewed MERGE, security PASS (rv-1114); merges on green",
         "since": "2026-11-24T12:30Z",
         "status": "active"
       },
