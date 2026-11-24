@@ -15,6 +15,7 @@ pub mod json;
 pub mod lemmy;
 pub mod musicbrainz;
 pub mod nostr;
+pub mod nostr_sig;
 pub mod openlibrary;
 pub mod predb;
 pub mod rss;

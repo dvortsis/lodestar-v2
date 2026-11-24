@@ -12,6 +12,10 @@ repository.workspace = true
 # AniDB's answers are gzip (ENR-anidb): the workspace's existing pin
 # (crates/filter, crates/lodestar), pure Rust, inflated within a cap.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+# BIP-340 Schnorr checks of Nostr event signatures (NOS-1, plan Q-r2):
+# RustCrypto's pure-Rust secp256k1, only its `schnorr` feature, pinned.
+# It shares the workspace's sha2 0.11.0 (docs/decisions/2026-11-23-NOS-1.md).
+k256 = { version = "=0.14.0", default-features = false, features = ["schnorr"] }
 lodestar-metainfo.workspace = true
 # For the Nostr event id (NOS-0); the workspace's one version, pinned.
 sha2 = "=0.11.0"
