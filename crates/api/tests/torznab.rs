@@ -644,8 +644,8 @@ const CAPS: &str = concat!(
     "<caps><server title=\"Lodestar\"/><limits default=\"100\" max=\"100\"/>",
     "<searching>",
     "<search available=\"yes\" supportedParams=\"q\"/>",
-    "<tv-search available=\"yes\" supportedParams=\"q,season,ep\"/>",
-    "<movie-search available=\"yes\" supportedParams=\"q\"/>",
+    "<tv-search available=\"yes\" supportedParams=\"q,season,ep,tvdbid,imdbid,tmdbid\"/>",
+    "<movie-search available=\"yes\" supportedParams=\"q,imdbid,tmdbid\"/>",
     "<music-search available=\"yes\" supportedParams=\"q\"/>",
     "<audio-search available=\"yes\" supportedParams=\"q\"/>",
     "<book-search available=\"yes\" supportedParams=\"q\"/>",
@@ -674,8 +674,15 @@ async fn caps_is_the_golden_document() {
     assert_eq!(r.cache_control.as_deref(), Some("no-store"));
     assert_eq!(r.body, CAPS);
     let caps = parse_xml(&r.body);
-    // ID search isn't advertised until ENR-11.
-    assert!(!r.body.contains("imdbid") && !r.body.contains("tvdbid"));
+    // ID search (ENR-11): TV and films only.
+    let searching = caps.child("searching").unwrap();
+    let params = |n: &str| searching.child(n).unwrap().attr("supportedParams");
+    assert_eq!(
+        params("tv-search"),
+        Some("q,season,ep,tvdbid,imdbid,tmdbid")
+    );
+    assert_eq!(params("movie-search"), Some("q,imdbid,tmdbid"));
+    assert_eq!(params("search"), Some("q"));
     assert_eq!(caps.child("limits").unwrap().attr("max"), Some("100"));
     // Caps doesn't need search.
     let off = fixture(
@@ -1031,7 +1038,9 @@ async fn bad_parameters_are_error_documents() {
         ("t=tvsearch&season=x", "201"),
         ("t=tvsearch&season=1&ep=1/2", "201"),
         ("t=search&q=a&q=b", "201"),
-        ("t=movie&imdbid=tt0111161", "203"),
+        ("t=movie&imdbid=nm0000151", "201"),
+        ("t=tvsearch&tvdbid=x", "201"),
+        ("t=tvsearch&rid=1", "203"),
     ] {
         let r = f.api(&key, q).await;
         assert_eq!(r.status, StatusCode::BAD_REQUEST, "{q}");

@@ -22,6 +22,7 @@ mod filter;
 mod floor;
 pub mod history;
 pub mod hot;
+pub mod identify_sweep;
 pub mod import;
 mod insights;
 mod insights_days;

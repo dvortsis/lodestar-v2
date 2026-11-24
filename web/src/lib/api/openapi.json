@@ -11392,7 +11392,18 @@
           "group",
           "has",
           "resolved",
-          "adult"
+          "adult",
+          "imdb",
+          "tmdb",
+          "tvdb",
+          "anidb",
+          "anilist",
+          "mbid",
+          "olid",
+          "igdb",
+          "discogs",
+          "steam",
+          "wikidata"
         ]
       },
       "AstTextField": {
