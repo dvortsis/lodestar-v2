@@ -112,7 +112,7 @@ test('the watch folder saves, and says when it is inside the data folder', async
 }) => {
 	const backend = new SettingsBackend(index, values()).attach(mock as unknown as MockLike);
 	await go('/settings/import');
-	const folder = page.getByLabel('Folder to watch');
+	const folder = page.getByRole('textbox', { name: 'Folder to watch' });
 	await expect(folder).toBeVisible();
 	await expect(page.getByTestId('watch-problem')).toHaveCount(0);
 	await folder.fill('/data/watch');

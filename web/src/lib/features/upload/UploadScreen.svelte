@@ -4,7 +4,7 @@
 	// result per file with Retry where the server or the connection failed, and the watch folder's
 	// settings below. Files go one at a time, in the order picked, so a pick never races itself
 	// past the server's rate limit; leaving the screen stops what hasn't been sent.
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount, type Component } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { formatBytes, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -13,7 +13,6 @@
 	import Badge, { type BadgeVariant } from '$lib/ui/labels/Badge.svelte';
 	import { PAGE_H1 } from '$lib/ui/layout/classes';
 	import { FOCUS_RING } from '$lib/ui/classes';
-	import Lazy from '$lib/features/settings/screens2/Lazy.svelte';
 	import {
 		MAX_BYTES,
 		MAX_FILES,
@@ -35,6 +34,16 @@
 	let dragging = $state(false);
 	let announcement = $state('');
 	let input = $state<HTMLInputElement>();
+	// The watch folder's part loads after the upload part paints. Not through Settings' Lazy: its
+	// failure line would put that message in a chunk of its own that every Settings page fetches.
+	let WatchFolder = $state<Component>();
+	let watchFailed = $state(false);
+	onMount(() => {
+		void import('./WatchFolder.svelte').then(
+			(mod) => (WatchFolder = mod.default),
+			() => (watchFailed = true)
+		);
+	});
 	let nextId = 0;
 	let running = false;
 	let ctl: AbortController | undefined = new AbortController();
@@ -211,7 +220,7 @@
 <section class="flex flex-col gap-4" aria-labelledby="upload-files">
 	<h2 id="upload-files" class="text-body-lg font-semibold">{m.upload_files_heading()}</h2>
 	<div
-		class="flex flex-col items-start gap-3 rounded-box border-2 border-dashed p-6 {dragging
+		class="flex flex-col items-start gap-3 rounded-box border p-6 {dragging
 			? 'border-primary bg-selected'
 			: 'border-field-border'}"
 		data-testid="upload-zone"
@@ -305,4 +314,10 @@
 	{/if}
 </section>
 
-<Lazy load={() => import('./WatchFolder.svelte')} />
+{#if WatchFolder}
+	<WatchFolder />
+{:else if watchFailed}
+	<p role="alert" class="text-small text-error" data-testid="watch-load-failed">
+		{m.upload_watch_load_failed()}
+	</p>
+{/if}

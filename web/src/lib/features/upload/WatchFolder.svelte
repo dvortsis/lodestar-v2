@@ -1,24 +1,24 @@
 <script lang="ts">
-	// The watch folder's settings (UP-1's `watch` section) on the form engine, with what the save
-	// can't say: the server takes a folder inside Lodestar's data folder, then never reads it
-	// (`Section::check` doesn't see the data folder), so the reason shows beside the field, read
-	// from General's data folder. Loaded after the upload part paints; a load failure says so here.
-	import { resolve } from '$app/paths';
+	// The watch folder's settings (UP-1's `watch` section), loaded after the upload part paints:
+	// the section's fields from the schema, General's data folder for the hint, and the form
+	// (`WatchForm`) once the fields are in.
+	// Nothing here imports GroupedForm, Lazy or the form's shared status lines: Rolldown groups
+	// modules by the entries that reach them, so reaching only a part of those chunks would split
+	// them and grow every Settings first view (form/embed.ts).
+	import type { Component } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
-	import IconWarning from '~icons/ph/warning-bold';
-	import { FOCUS_RING } from '$lib/ui/classes';
-	import GroupedForm from '$lib/features/settings/screens2/GroupedForm.svelte';
-	import Lazy from '$lib/features/settings/screens2/Lazy.svelte';
 	import { loadSettingsIndex } from '$lib/features/settings/form/schema';
-	import type { FieldSpec } from '$lib/features/settings/form/types';
-	import { dataDirProblem } from './data-dir';
+	import type { FieldSpec } from '$lib/features/settings/form/embed';
+	import WatchForm from './WatchForm.svelte';
 
 	let fields = $state<FieldSpec[]>();
 	let failed = $state(false);
 	let attempt = $state(0);
 	/** General's data folder, as the server shows it; empty until it's in (or if it can't be read). */
 	let dataDir = $state('');
+	// The shell's usual banner with Retry, loaded only when the fields can't be read.
+	let LoadFailed = $state<Component<{ onretry: () => void }>>();
 
 	$effect(() => {
 		void attempt;
@@ -44,44 +44,19 @@
 			live = false;
 		};
 	});
-
-	const problemText = (folder: unknown) => {
-		if (typeof folder !== 'string' || !dataDir) return '';
-		const p = dataDirProblem(folder, dataDir);
-		return p === 'inside' ? m.upload_watch_inside() : p === 'holds' ? m.upload_watch_holds() : '';
-	};
+	$effect(() => {
+		if (failed && !LoadFailed)
+			void import('$lib/features/settings/screens2/LoadFailed.svelte').then(
+				(mod) => (LoadFailed = mod.default),
+				() => {}
+			);
+	});
 </script>
 
 {#if failed}
-	<Lazy
-		load={() => import('$lib/features/settings/screens2/LoadFailed.svelte')}
-		props={{ onretry: () => attempt++ }}
-	/>
+	{#if LoadFailed}<LoadFailed onretry={() => attempt++} />{/if}
 {:else if !fields}
-	<p aria-busy="true" role="status">{m.settings_form_loading()}</p>
+	<p aria-busy="true" role="status">{m.upload_watch_loading()}</p>
 {:else if fields.length}
-	<GroupedForm id="import" {fields}>
-		{#snippet after(group, form)}
-			{#if group === 'watch'}
-				{@const problem = problemText(form.field('watch.folder').value)}
-				<div class="flex flex-col gap-2 text-small" data-testid="watch-notes">
-					{#if problem}
-						<p class="flex items-start gap-1" role="status" data-testid="watch-problem">
-							<IconWarning class="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-							<span>{problem}</span>
-						</p>
-					{/if}
-					<p>{m.upload_watch_how()}</p>
-					<p>{m.upload_watch_after()}</p>
-					<p>{m.upload_watch_rule()}</p>
-					<p>
-						{m.upload_watch_logs()}
-						<a class="link {FOCUS_RING}" href={resolve('/logs')} data-testid="watch-logs"
-							>{m.upload_watch_logs_link()}</a
-						>
-					</p>
-				</div>
-			{/if}
-		{/snippet}
-	</GroupedForm>
+	<WatchForm {fields} {dataDir} />
 {/if}

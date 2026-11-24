@@ -1,5 +1,6 @@
 {
 	"upload_title": "Add torrent files",
+	"upload_menu_item": "Add torrent files",
 	"upload_purpose": "Add .torrent files you already have, by hand or from a folder. Each one goes through your filters, like a torrent the crawler finds.",
 	"upload_files_heading": "Upload files",
 	"upload_drop_hint": "Drop .torrent files anywhere on this page.",
@@ -34,6 +35,8 @@
 	"upload_count_refused": "{n} refused by the safety floor",
 	"upload_count_too_large": "{n} too large",
 	"upload_count_retry": "{n} to retry",
+	"upload_watch_load_failed": "The watch folder's settings couldn't load. Check your connection, then reload the page.",
+	"upload_watch_loading": "Loading the watch folder's settings…",
 	"upload_watch_how": "Lodestar looks in this folder every 10 seconds and adds each .torrent file in it, with the same checks as an upload. A file that's still being copied is left until it stops changing.",
 	"upload_watch_after": "Added files move to added/ inside the folder. The rest move to failed/, with the reason in the name, such as name.held.torrent. To try a failed file again, move it back into the folder.",
 	"upload_watch_rule": "Don't use Lodestar's data folder, a folder inside it or a folder that holds it: Lodestar never reads one of those.",

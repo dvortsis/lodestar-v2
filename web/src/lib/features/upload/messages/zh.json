@@ -1,5 +1,6 @@
 {
 	"upload_title": "添加种子文件",
+	"upload_menu_item": "添加种子文件",
 	"upload_purpose": "添加你已有的 .torrent 文件，可手动添加，也可从文件夹添加。每个文件都会经过你的过滤器，与爬虫发现的种子相同。",
 	"upload_files_heading": "上传文件",
 	"upload_drop_hint": "将 .torrent 文件拖放到此页面任意位置。",
@@ -34,6 +35,8 @@
 	"upload_count_refused": "{n} 个被安全底线拒绝",
 	"upload_count_too_large": "{n} 个文件过大",
 	"upload_count_retry": "{n} 个待重试",
+	"upload_watch_load_failed": "监视文件夹的设置无法加载。请检查网络连接，然后重新加载页面。",
+	"upload_watch_loading": "正在加载监视文件夹的设置…",
 	"upload_watch_how": "Lodestar 每 10 秒查看一次此文件夹，并添加其中的每个 .torrent 文件，检查方式与上传相同。仍在复制中的文件会保留，直到它不再变化。",
 	"upload_watch_after": "已添加的文件会移到文件夹内的 added/。其余文件移到 failed/，文件名中带有原因，例如 name.held.torrent。要再次尝试失败的文件，请把它移回文件夹。",
 	"upload_watch_rule": "不要使用 Lodestar 的数据文件夹、其中的文件夹或包含它的文件夹：Lodestar 从不读取这些文件夹。",
