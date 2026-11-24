@@ -34,6 +34,7 @@
 		type ColumnId,
 		type ColumnPrefs
 	} from './columns';
+	import { versionsCell } from '../collapse/others';
 	import './table.css';
 
 	interface Props {
@@ -61,7 +62,8 @@
 		seeders: m.seeders,
 		leechers: m.leechers,
 		trackers: m.trackers_reporting,
-		discovered: m.discovered
+		discovered: m.discovered,
+		versions: m.search_collapse_versions
 	};
 
 	function sortBy(field: string) {
@@ -271,6 +273,8 @@
 											})}{/if}
 									{:else if id === 'discovered'}
 										<RelativeTime seconds={hit.discovered_at} />
+									{:else if id === 'versions'}
+										{versionsCell(hit.others, locale)}
 									{/if}
 								</td>
 							{/if}

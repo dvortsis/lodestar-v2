@@ -16,7 +16,7 @@ vi.mock('$lib/state/search.svelte', async (original) => ({
 	search: { q: 'lantern', sort: 'relevance', setSort: vi.fn() }
 }));
 vi.mock('../results/results.svelte', () => ({
-	results: { status: 'ready', hits: [hit(1)], total: 1, totalApprox: false }
+	results: { status: 'ready', hits: [hit(1)], total: 1, totalApprox: false, grouped: {} }
 }));
 const push = vi.hoisted(() => vi.fn());
 vi.mock('$lib/ui/feedback/toasts.svelte', () => ({ toast: { push } }));

@@ -26,8 +26,14 @@ const q = () => new URL(page.url()).searchParams.get('q');
 
 test('lantern lists rows; type:movie is checked in Type with the server’s count; unchecking drops it', async () => {
 	await page.goto('/search?q=lantern');
+	// A tree grid while the rows are groups ("Group versions" is on by default, GS-5).
+	const name = 'Matching torrents';
 	await expect(
-		page.getByRole('grid', { name: 'Matching torrents' }).getByRole('row').first()
+		page
+			.getByRole('grid', { name })
+			.or(page.getByRole('treegrid', { name }))
+			.getByRole('row')
+			.first()
 	).toBeVisible();
 	const movie = page.getByTestId('facet-type-movie');
 	await expect(movie).toBeVisible();

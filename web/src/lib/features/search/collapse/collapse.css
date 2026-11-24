@@ -1,0 +1,50 @@
+/* The rows under an open group (GS-5). A plain sheet loaded with rows.ts on a group's first
+   opening, never with /search's first load; token variables only (utility names would land in the
+   global sheet). */
+@reference "../../../../app.css";
+
+/* A row under its group: indented past the elbow, one line at the list's height. */
+.cl-row {
+	container-type: inline-size;
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 3);
+	box-sizing: border-box;
+	height: 100%;
+	min-width: 0;
+	padding-inline: calc(var(--spacing) * 6) calc(var(--spacing) * 3);
+	overflow: hidden;
+	white-space: nowrap;
+	color: var(--color-muted-text);
+	font-size: var(--text-small);
+	line-height: var(--text-small--line-height);
+	svg {
+		flex: none;
+		width: var(--icon-size-row);
+		height: var(--icon-size-row);
+	}
+}
+.cl-title {
+	flex: 1 1 0;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--color-base-content);
+}
+.cl-fact {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: var(--spacing);
+	font-variant-numeric: tabular-nums;
+}
+.cl-more {
+	color: var(--color-primary);
+	text-decoration: underline;
+	text-underline-offset: calc(var(--spacing) / 2);
+}
+.cl-note {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}

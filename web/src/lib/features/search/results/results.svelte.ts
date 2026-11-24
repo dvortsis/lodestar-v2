@@ -18,6 +18,10 @@ import type { SearchHit } from './ResultRow.svelte';
 
 type Notice = components['schemas']['SearchNotice'];
 type Recovery = components['schemas']['SearchRecovery'];
+type Grouped = Pick<
+	components['schemas']['SearchResponse'],
+	'collapsed' | 'groups' | 'groups_approx' | 'collapse_unavailable'
+>;
 
 export const PAGE = 50;
 /** The API's largest page (`MAX_LIMIT`, crates/api/src/search.rs). */
@@ -31,6 +35,8 @@ export interface ResultsQuery {
 	sort: string;
 	hidden: boolean;
 	exact: boolean;
+	/** "Group versions" (GS-5): one row per group of versions, `collapse=group`. */
+	collapse?: boolean;
 }
 
 export type Status =
@@ -43,7 +49,7 @@ export type Status =
 	| 'error';
 
 const keyOf = (q: ResultsQuery) =>
-	JSON.stringify([q.ast, q.sort, q.hidden, q.exact, q.browse ?? false]);
+	JSON.stringify([q.ast, q.sort, q.hidden, q.exact, q.browse ?? false, q.collapse ?? false]);
 const empty = (q: ResultsQuery) => q.ast === null || (q.ast.op === 'all' && !q.browse);
 
 export function createResults() {
@@ -53,6 +59,8 @@ export function createResults() {
 	let notices = $state.raw<Notice[]>([]);
 	/** Per-clause counts of an empty first page (zero-result recovery). */
 	let recovery = $state.raw<Recovery | null>(null);
+	/** The grouping of the rows shown (GS-5): `collapsed`, `groups`, or why it fell back. */
+	let grouped = $state.raw<Grouped>({});
 	let status = $state<Status>('empty');
 	/** A request for a new query is out while the previous rows stay (the hairline). */
 	let refining = $state(false);
@@ -85,7 +93,9 @@ export function createResults() {
 		cursor: after,
 		hidden: q.hidden,
 		exact: q.exact,
-		tz: null
+		tz: null,
+		// Not in the POST body's generated type (GS-3 left it out of the schema); the server reads it.
+		...((q.collapse ? { collapse: 'group' } : {}) as object)
 	});
 
 	// Untracked: the list calls `load` from an effect, and reading the rows here would make that
@@ -112,6 +122,7 @@ export function createResults() {
 			totalApprox = false;
 			notices = [];
 			recovery = null;
+			grouped = {};
 			error = null;
 			refining = false;
 			shownKey = null;
@@ -143,6 +154,12 @@ export function createResults() {
 			totalApprox = r.total_approx;
 			notices = r.notices;
 			recovery = r.recovery ?? null;
+			grouped = {
+				collapsed: r.collapsed,
+				groups: r.groups,
+				groups_approx: r.groups_approx,
+				collapse_unavailable: r.collapse_unavailable
+			};
 			cursor = r.next_cursor;
 			lease = r.next_cursor;
 			shownKey = key;
@@ -203,6 +220,10 @@ export function createResults() {
 		get recovery() {
 			return recovery;
 		},
+		/** The shown rows' grouping, as the server answered it (empty when not asked for). */
+		get grouped() {
+			return grouped;
+		},
 		get status() {
 			return status;
 		},
@@ -239,9 +260,15 @@ export function createResults() {
 		get expired() {
 			return expired;
 		},
-		/** The rows answer this query (false while a different query refines, or after an error). */
+		/**
+		 * The rows answer this query (false while a different query refines, or after an error). A
+		 * query that leaves `collapse` out (the live banner, which counts torrents either way) matches
+		 * the rows grouped or not.
+		 */
 		showing(q: ResultsQuery) {
-			return shownKey === keyOf(q);
+			return (
+				shownKey === keyOf(q.collapse === undefined ? { ...q, collapse: current?.collapse } : q)
+			);
 		},
 		load,
 		loadMore: () => untrack(loadMore),
@@ -259,6 +286,7 @@ export function createResults() {
 			totalApprox = false;
 			notices = [];
 			recovery = null;
+			grouped = {};
 			error = null;
 			cursor = null;
 			lease = null;
