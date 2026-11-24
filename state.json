@@ -10617,6 +10617,13 @@
       "sha": "69b90acd276c023c8e8556b6f59d1dd1d69476b3",
       "head": "14ef4bcbcf57efe6056005e7f8a60ad891486732",
       "at": "2026-11-24T14:28Z"
+    },
+    {
+      "slice": "X-flake-cap-index-move",
+      "pr": 1113,
+      "sha": "2262b3296373dc3e4954ce24e6d442079147b0fa",
+      "head": "5442ba25ba637a3d5ea0a2c0dec76f99ee9e4391",
+      "at": "2026-11-24T15:09Z"
     }
   ],
   "active_sessions": {
@@ -10701,7 +10708,7 @@
       "what": "Fix the random proptest failure in crates/store/tests/unverified_cap_index.rs the_kept_count_matches_the_rows (shrunk [FindBt(0,0,true),Move(0),FindBt(0,0,true),Move(0)]; second Move's UPDATE hits UNIQUE(network,key); test bug). Test code only, Opus. Brief: briefs/X-flake-cap-index-move.md. First in line for the next free build slot (slot 1, after ENR-11 #1110 merges).",
       "from": "ENR-11 #1110 via the coordinator",
       "at": "2026-11-24T08:50Z",
-      "status": "slot 1 at 2026-11-24T11:15Z"
+      "status": "merged #1113 2262b329 2026-11-24T15:09Z"
     },
     {
       "id": "F-suggest-adult-field",
@@ -10887,16 +10894,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T14:45Z",
+    "updated": "2026-11-24T15:12Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-flake-cap-index-move",
+        "slice": "GS-4",
         "role": "build",
         "model": "opus",
-        "agent": "claude",
-        "doing": "PR #1113 (5442ba25) reviewed MERGE (rv-1113); merges on green",
-        "since": "2026-11-24T11:15Z"
+        "agent": "sonnet",
+        "doing": "starting (brief briefs/GS-4.md)",
+        "since": "2026-11-24T15:12Z"
       },
       {
         "slot": 2,

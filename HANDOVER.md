@@ -36,3 +36,5 @@
 - X-flake-search-keyboard-2 · slot 4 · slice/X-flake-search-keyboard-2 · brief briefs/X-flake-search-keyboard-2.md · 2026-11-24 · starting
 - 2026-11-24T14:28Z X-cmp-egress-ui merged #1114 (69b90acd), pinned 14ef4bcb; slot 3 freed.
 - 2026-11-24T14:30Z ENR-G in slot 3, starting (briefs/ENR-G.md).
+- 2026-11-24T15:09Z X-flake-cap-index-move merged #1113 (2262b329), pinned 5442ba25; slot 1 freed.
+- 2026-11-24T15:12Z GS-4 in slot 1, starting (briefs/GS-4.md).
