@@ -11034,7 +11034,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1122 open at 570e8e9d, CI running; review on ready (format unchanged)",
+        "doing": "#1122 at 04abd899 (docs-only push: scaled-cooldown call recorded), CI running; review on ready",
         "since": "2026-11-24T22:00Z",
         "status": "active",
         "pr": 1122
