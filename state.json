@@ -9212,6 +9212,18 @@
       "model": "sonnet",
       "added": "2026-11-24",
       "note": "also: one local unit-test failure after a package reinstall, not reproduced in 8 runs or CI; watch only"
+    },
+    {
+      "id": "X-escalate-full-table-nits",
+      "from": "rv-1112",
+      "items": [
+        "frontier_len counts held: LOW_FRONTIER refill can lag ~1 tick",
+        "escalate.rs: set sampler_cooldown_split=false explicitly",
+        "re-pin (380,1045) when the base scenario changes"
+      ],
+      "model": "opus",
+      "added": "2026-11-24",
+      "note": "fold into X-split-resume-gate or X-split-spill-horizon (same sampler.rs)"
     }
   ],
   "main_health": {
@@ -10969,7 +10981,7 @@
         "role": "build",
         "model": "opus",
         "agent": "claude",
-        "doing": "PR #1112 in landing lane 15:45Z; bringing main in; fresh Opus review running on b308aa62 (rv-1112)",
+        "doing": "PR #1112 in lane; reviewed MERGE on b308aa62 (rv-1112); bringing main in; merges on green",
         "since": "2026-11-24T09:19Z"
       },
       {
