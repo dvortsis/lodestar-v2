@@ -11034,7 +11034,7 @@
         "slice": "ENR-G",
         "role": "build",
         "model": "opus",
-        "doing": "PR #1117 (0cb66dc5) in landing lane; fresh Opus + security review running (rv-1117); merges on green",
+        "doing": "PR #1117 rv-1117 FIX (purge mark vs in-flight backfill: bump class_gen) + 3 should-fix; one push, then delta review",
         "since": "2026-11-24T14:30Z",
         "status": "active",
         "agent": "opus"
