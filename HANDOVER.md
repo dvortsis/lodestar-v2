@@ -48,3 +48,4 @@
 - 2026-11-24T20:45Z: X-purge-rederive adds pipeline control.rs (purge_step, ~6 lines) to its owns; control.rs locked to it (X-consent-gate-lift-account/-external wait).
 - 2026-11-24T21:10Z: merged #1116 GS-4 at 901ce247 as 760dbc17 (rv-1116 MERGE; catch-up pure main + aria-live fix). Slot 1 -> X-gs-followups (GS-4 + GS-5 follow-ups, Sonnet), briefs/X-gs-followups.md.
 - 2026-11-24T21:58Z: merged #1118 X-split-resume-gate at 2c988fb2 as 16fa8c8c (rv-1118 MERGE, SECURITY PASS, v2 snapshot format covered; persisted SipHash keys judged acceptable). Slot 2 -> X-split-spill-horizon (briefs/X-split-spill-horizon.md). metrics.md runner docs PR unblocked. X-restart-fuzz-v2 ready.
+- 2026-11-24T23:58Z: merged #1121 X-gs-followups at d77058cb as 0c10e80f (rv-1121 MERGE; sizes accepted §2.26). Slot 1 -> X-web-followups-1124 (briefs/X-web-followups-1124.md). X-gs-followups-2 queued.

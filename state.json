@@ -4406,6 +4406,11 @@
       "slice": "X-purge-rederive",
       "pr": 1120,
       "flag": "\u00a72.19: purge bumps class_gen for any deleted shaping claim (deviation from brief, accepted); plain feed purges not re-derived (cost ~17,300 torrents/s plus reindex); torrents purged before this PR keep a stale Adult (no one-off re-derive); purge leaves the adult mark set on the Sources/Filters connection (stricter only)."
+    },
+    {
+      "slice": "X-gs-followups",
+      "pr": 1121,
+      "flag": "\u00a72.26: size limits changed: Detail sections down to 47.44 KB; Related 5.61, Search results (lazy) 43.70, collapse rows 3.05, /t 15.71 KB (small raises, net down across detail)."
     }
   ],
   "decisions_log": [
@@ -4468,6 +4473,11 @@
       "at": "2026-11-24T23:30Z",
       "slice": "X-purge-rederive",
       "call": "deviation accepted (rv-1120): Claims purge bumps class_gen whenever a shaping or undecodable claim is deleted, not only when an UPDATE matched; closes the backfill race for unenriched torrents."
+    },
+    {
+      "at": "2026-11-24T23:58Z",
+      "slice": "X-gs-followups",
+      "call": "\u00a72.26 size changes accepted (rv-1121): Detail sections 47.87->47.44 KB; Related 5.4->5.61 KB; Search results (lazy) 43.51->43.70 KB; collapse rows 3.02->3.05 KB; /t 15.69->15.71 KB."
     }
   ],
   "runner_notes": {
@@ -9229,6 +9239,21 @@
       "model": "opus",
       "added": "2026-11-24",
       "note": "small; pair with X-restart-fuzz-v2 (same restart area, Opus) after #1122 merges"
+    },
+    {
+      "id": "X-gs-followups-2",
+      "from": "rv-1121",
+      "owns": [
+        "web/src/lib/features/detail/**",
+        "web/src/lib/features/search/table/ResultsTable.svelte"
+      ],
+      "items": [
+        "unit tests: kept siblings answer expires after FRESH_MS (siblings.ts:81); markClosed drops the section wish (open.ts:58)",
+        "Show all: focus Related heading once mounted (DetailHostBody.svelte:176-186) or record that the title keeps focus",
+        "nits: siblings.ts listener isolation (try/catch each fn), LRU refresh on read; Parsed withheld -> hide quietly; expand.svelte.ts:84 check r.hash; ResultsTable stops resetting active on mount (drops ~30-40 B carried re-set); Table->List/Cards carry test"
+      ],
+      "model": "sonnet",
+      "added": "2026-11-24"
     }
   ],
   "main_health": {
@@ -10735,6 +10760,13 @@
       "merged_as": "16fa8c8c96220907c34fd15866f3383cdbbbb4d3",
       "head": "2c988fb250cf518f92e3b0f4ff927eb3e6e6d2b4",
       "at": "2026-11-24T21:58Z"
+    },
+    {
+      "pr": 1121,
+      "slice": "X-gs-followups",
+      "merged_as": "0c10e80fe1c6c7c84d73bf83ef5d13a1852edaa1",
+      "head": "d77058cb8a0c96bf3f7641b6bb843ff8f91e4f35",
+      "at": "2026-11-24T23:58Z"
     }
   ],
   "active_sessions": {
@@ -11005,18 +11037,17 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T23:25Z",
+    "updated": "2026-11-24T23:58Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-gs-followups",
+        "slice": "X-web-followups-1124",
         "role": "build",
         "model": "sonnet",
         "agent": "sonnet",
-        "doing": "#1121 ready at d77058cb (all green, fresh for web); fresh Opus review running",
-        "since": "2026-11-24T21:15Z",
-        "status": "active",
-        "pr": 1121
+        "doing": "brief written (briefs/X-web-followups-1124.md); coordinator starting it",
+        "since": "2026-11-24T23:58Z",
+        "status": "active"
       },
       {
         "slot": 2,
@@ -12047,7 +12078,8 @@
   "merge_order_note": "#1111 merged 12:28Z; #1112 must bring main in, then fresh review and merge.",
   "runner_todo": [
     "After #1117 merges: put the kill-switch requirement in the ENR wiring slice's notes (runner PR).",
-    "Runner docs PR for docs/metrics.md (now unblocked, #1118 merged): (a) dht_sample_frontier can reach 40,000 with escalation (rv-1112); (b) drop the ~6 h restart-gate sentence (:676); (c) dht_sample_spill_slots (:677): not 0 with the split off after restoring a v2 snapshot, and not only allocated at first fill (rv-1118). Use the wording for dht_sample_spill_slots and dht_restart_obligations_* in docs/decisions/2026-11-24-X-split-spill-horizon.md; land after #1122."
+    "Runner docs PR for docs/metrics.md (now unblocked, #1118 merged): (a) dht_sample_frontier can reach 40,000 with escalation (rv-1112); (b) drop the ~6 h restart-gate sentence (:676); (c) dht_sample_spill_slots (:677): not 0 with the split off after restoring a v2 snapshot, and not only allocated at first fill (rv-1118). Use the wording for dht_sample_spill_slots and dht_restart_obligations_* in docs/decisions/2026-11-24-X-split-spill-horizon.md; land after #1122.",
+    "Runner records PR: X-gs-followups slices.yaml owns gains web/e2e/search-results.fixtures.ts and web/e2e/search-results-adaptive.routes.test.ts-snapshots/search-drawer-1440-linux.png (rv-1121)."
   ],
   "owns_locks": [
     {
@@ -12070,14 +12102,5 @@
   "merge_order": [
     "#1120 X-purge-rederive",
     "#1119 ENR-terms-api (catch-up after #1120)"
-  ],
-  "next_pick_slot1": {
-    "slice": "X-web-followups-1124",
-    "brief": "briefs/X-web-followups-1124.md",
-    "when": "after #1121 merges",
-    "folds": [
-      "X-list-active-reset",
-      "X-cmp-egress-ui-followups"
-    ]
-  }
+  ]
 }
