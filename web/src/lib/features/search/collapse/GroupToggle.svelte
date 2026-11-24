@@ -21,7 +21,10 @@
 </script>
 
 <!-- The Toggle primitive's markup (ui/fields/Toggle.svelte), without its two-way binding: the URL
-     owns the value, and the binding would bring Svelte's bind runtime into the toolbar. -->
+     owns the value, and the binding would bring Svelte's bind runtime into the toolbar. So the
+     switch shows `on` and only `on`: a press asks for the change and takes back its own flip, and
+     the switch moves when the new `on` arrives (a change that never lands leaves it as it was). The
+     toolbar shows it twice (among its controls and in More), so it carries no test id. -->
 <label
 	class="inline-flex cursor-pointer items-center gap-2 text-body pointer-coarse:min-h-(--target-min) {className}"
 >
@@ -30,9 +33,11 @@
 		role="switch"
 		class="toggle border-field-border {FOCUS_RING}"
 		checked={on}
-		data-testid="group-versions"
 		aria-describedby={describedby}
-		onchange={(e) => onchange(e.currentTarget.checked)}
+		onclick={(e) => {
+			e.preventDefault();
+			onchange(!on);
+		}}
 	/>
 	<span>{m.search_collapse_toggle()}</span>
 </label>

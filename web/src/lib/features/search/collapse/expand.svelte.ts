@@ -6,7 +6,8 @@
 // The versions come from `GET /torrents/{hash}/siblings` (`other_versions`, best first): the same
 // title identity the server groups by (docs/decisions/2026-11-16-GS-3.md), confirmed and withheld
 // as the server does. The list is the work's versions, not only those matching the query, so the
-// in-place rows can differ from `others`; "Show all" counts the server's `others` and the row.
+// in-place rows can differ from `others`. "Show all" counts whichever is larger, plus the best row,
+// and drops the number when the server cut the list short (a count that could be wrong).
 import { api, isAbort } from '$lib/api/client';
 import { formatCount } from '$lib/format';
 import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -21,6 +22,8 @@ export type StateRow = {
 	row: 'more' | 'loading' | 'failed' | 'none';
 	parent: SearchHit;
 	key: string;
+	/** Show all's count: every version, the best included; null when the list was cut short. */
+	total?: number | null;
 };
 export type GroupRow = VersionRow | StateRow;
 export type ListRow = SearchHit | GroupRow;
@@ -142,7 +145,12 @@ export function createExpand(options: ExpandOptions = {}) {
 				for (const v of g.versions.slice(0, SHOWN))
 					out.push({ row: 'version', parent: hit, hit: v, key: `${k}:${v.hash}` });
 				if ((hit.others ?? 0) > SHOWN || g.versions.length > SHOWN || g.truncated)
-					out.push({ row: 'more', parent: hit, key: `${k}:more` });
+					out.push({
+						row: 'more',
+						parent: hit,
+						key: `${k}:more`,
+						total: g.truncated ? null : Math.max(hit.others ?? 0, g.versions.length) + 1
+					});
 			}
 			return out;
 		},

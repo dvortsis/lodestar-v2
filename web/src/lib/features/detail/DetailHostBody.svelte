@@ -6,7 +6,7 @@
 	// --results-min-width to a floor of --results-min-width-drawer (480 px), and the drawer narrows
 	// towards --drawer-min-width until the window fits the stored width. So it sits beside the
 	// results from 1366 px instead of covering them.
-	import { onMount, onDestroy, tick, untrack } from 'svelte';
+	import { onMount, onDestroy, setContext, tick, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -18,7 +18,9 @@
 	import { setDrawerTarget } from './target';
 	import { coverBackground } from './fullscreen';
 	import { DetailModel } from './model.svelte';
-	import { closeDetail, markClosed, returnFocusTarget } from './open';
+	import { closeDetail, markClosed, openDetail, returnFocusTarget } from './open';
+	import { want, wanted } from './section.svelte';
+	import type { SearchHit } from './cache';
 	import './detail.css';
 	import './host.css';
 
@@ -163,6 +165,24 @@
 				});
 			}
 		}
+	});
+
+	// Sections open another torrent in this drawer (Related's rows) through this context, so they
+	// never import `open.ts` themselves and /t, which has no drawer, never loads it. The key is a
+	// plain string, written out in Related too: a shared module would be one more chunk to load.
+	setContext('lodestar.detail.open', (next: string, hit: SearchHit) => openDetail(next, { hit }));
+
+	// Show all opens Related directly: once that torrent is on screen, its section scrolls into
+	// view (and, being near, loads). Asked once per open.
+	$effect(() => {
+		const asked = wanted();
+		if (!asked || asked.hash !== hash || model.detail?.hash !== hash) return;
+		want(asked.hash, null);
+		void tick().then(() =>
+			container
+				?.querySelector(`[data-section="${asked.section}"]`)
+				?.scrollIntoView?.({ block: 'start' })
+		);
 	});
 
 	// A different torrent in an open drawer (j/k) swaps in place; its title is announced once. The

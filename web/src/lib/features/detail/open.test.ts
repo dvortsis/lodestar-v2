@@ -25,6 +25,7 @@ const { openDetail, closeDetail, markClosed, prefetchDetail, returnFocusTarget }
 	await import('./open');
 const { clearDetailCaches, cachedDetail, cachedHit, cacheDetail, FRESH_MS } =
 	await import('./cache');
+const { wanted } = await import('./section.svelte');
 
 const H1 = 'a'.repeat(40);
 const H2 = 'b'.repeat(40);
@@ -50,6 +51,13 @@ describe('openDetail', () => {
 		expect(pushState).toHaveBeenCalledWith(`/t/${H1}?q=ubuntu`, { detail: { hash: H1 } });
 		expect(replaceState).not.toHaveBeenCalled();
 		expect(cachedHit(H1)).toBe(hit);
+	});
+
+	it('remembers the section an open asks for, and forgets it on the next plain open', () => {
+		openDetail(H1, { hit, section: 'related' });
+		expect(wanted()).toEqual({ hash: H1, section: 'related' });
+		openDetail(H2);
+		expect(wanted()).toBeNull();
 	});
 
 	it('replaces when asked and a drawer is already open (j/k)', () => {
