@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T11:21Z",
+  "updated_at": "2026-11-24T11:26Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4336,6 +4336,13 @@
       "slice": "X-escalate-full-table",
       "pr": 1112,
       "flag": "Escalate-only refinements adopted by the runner holder: held (struck) nodes are sampled first even when the table has room, and a cooldown that has ended but isn't pruned yet is held too; with escalate on, dht_sample_frontier counts held candidates. All behind dht.sample_backoff_escalate, default off. Also: owns widened by crates/dht/src/node/testing.rs for a testing-only seam.",
+      "send": "next owner digest (\u00a72.19)"
+    },
+    {
+      "at": "2026-11-24T11:26Z",
+      "slice": "IRC-1",
+      "pr": 1111,
+      "flag": "IRC-1 turns announce lines into an Announce (name, size, category, id) and leaves mapping them to claims to IRC-2; no tracker definitions ship (owner \u00a72.47 Q2). Recorded in its decisions file.",
       "send": "next owner digest (\u00a72.19)"
     }
   ],
@@ -9098,6 +9105,11 @@
       "id": "metrics-frontier-held",
       "note": "docs/metrics.md: note that with dht.sample_backoff_escalate on, dht_sample_frontier includes held (struck) candidates (from X-escalate-full-table #1112). Runner-placed; put it in the next runner docs PR or the next slice that owns docs/metrics.md.",
       "added": "2026-11-24T11:20Z"
+    },
+    {
+      "id": "IRC-2-from-1111",
+      "note": "From #1111's review (reviews/rv-1111.md), for IRC-2's brief: add a second secret placeholder ({authkey}) so Gazelle trackers (authkey + torrent_pass) can be defined; show torrent_url_host() when a definition is added and bind the stored passkey to that host, so an imported or changed definition can't redirect it; refuse loopback and private hosts unless the user confirms; consider the server's CASEMAPPING for nick matching; refuse overlapping definitions for one channel+nick.",
+      "added": "2026-11-24T11:26Z"
     }
   ],
   "main_health": {
