@@ -11,7 +11,8 @@ export const COLUMN_IDS = [
 	'seeders',
 	'leechers',
 	'trackers',
-	'discovered'
+	'discovered',
+	'versions'
 ] as const;
 export type ColumnId = (typeof COLUMN_IDS)[number];
 
@@ -33,13 +34,14 @@ export const NUMERIC: ReadonlySet<ColumnId> = new Set([
 	'files',
 	'seeders',
 	'leechers',
-	'trackers'
+	'trackers',
+	'versions'
 ]);
 /** The name is the row's header: it can't be hidden. */
 export const REQUIRED: ColumnId = 'name';
 
 /** Columns added after the first release of table mode: hidden for a choice saved before them. */
-const ADDED: readonly ColumnId[] = ['raw', 'res'];
+const ADDED: readonly ColumnId[] = ['raw', 'res', 'versions'];
 
 export const STORAGE_KEY = 'lodestar.search.columns';
 
