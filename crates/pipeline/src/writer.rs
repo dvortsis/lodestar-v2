@@ -119,6 +119,8 @@ pub(crate) struct Writer {
     /// The adult-enrichment sources: only they may attach an enrichment
     /// section (`unverified::Ctx::enrichers`, ENR-1b).
     pub enrichers: crate::adult_enrich::EnrichSources,
+    /// Their consent, judged again before an answer is stored (ENR-G).
+    pub enricher_consent: crate::adult_enrich::EnricherConsent,
     /// The background enrichment pass: the last id it reached, and whether
     /// it has found nothing left to do.
     pub backfill_after: i64,
@@ -1668,6 +1670,7 @@ impl Writer {
         let stats = self.stats.clone();
         let adult = self.adult;
         let (enrichers, reenrich) = (self.enrichers, self.reenrich.clone());
+        let consent = self.enricher_consent.clone();
         #[cfg(test)]
         let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
@@ -1688,6 +1691,7 @@ impl Writer {
                 enrichers,
                 filter: Some(&filter),
                 reenrich: Some(&reenrich),
+                consent: Some(&consent),
             };
             let result = unverified::ingest(
                 &mut store,
@@ -3176,6 +3180,7 @@ mod tests {
             adult: AdultSources::default(),
             flood: Default::default(),
             enrichers: Default::default(),
+            enricher_consent: Default::default(),
             backfill_after: 0,
             backfill_done: true,
             backfill_backoff: Default::default(),

@@ -1965,3 +1965,146 @@ async fn a_pinned_credential_saved_since_the_start_waits_for_a_restart() {
     assert!(!view.config_pending, "a purged source waits for nothing");
     pipeline.shutdown().await.unwrap();
 }
+
+/// A purge on a running server takes the purged source's match out of the
+/// record without a restart (ENR-G): the step that removed the claim marks
+/// its torrent, and re-arms the writer's backfill, whose one pass for the
+/// start has already gone past it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_purge_on_a_running_server_derives_the_record_again() {
+    use lodestar_classify::{AdultKind, ENRICHMENT_VERSION, Record};
+    use lodestar_pipeline::enrich::{enrich_with_rule, file_infos};
+    use lodestar_store::NewTorrent;
+    use lodestar_store::claims::{AdultEnrichment, AdultKind as Pinned, Claims};
+    use lodestar_store::unverified::{Network, NewUnverified, PurgeCursor};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let put = |s: &mut Store, name: &str, pin: bool| -> (i64, [u8; 20]) {
+        use lodestar_bencode::OwnedValue as V;
+        let d = [
+            ("length", V::Int(900 << 20)),
+            ("name", V::from(name)),
+            ("piece length", V::Int(1 << 18)),
+            ("pieces", V::Bytes(vec![0; 20 * 3600])),
+        ];
+        let d = d.into_iter().map(|(k, v)| (k.as_bytes().to_vec(), v));
+        let raw = lodestar_bencode::to_vec(&V::Dict(d.collect()));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let dht = s.register_source("dht", "1", 0).unwrap();
+        let id = s
+            .insert(&[NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 1_700_000_000,
+                metadata_at: 1_700_000_000,
+                extra_flags: 0,
+                source: dht,
+            }])
+            .unwrap()[0]
+            .id();
+        let mut e = enrich_with_rule(
+            name,
+            &file_infos(&info.files, info.path_encoding),
+            Some(true),
+        );
+        if pin {
+            // What the match pinned: a kind the name alone never derives.
+            let mut r = Record::decode(&e.data).unwrap();
+            assert_ne!(r.adult_kind, Some(AdultKind::Vr));
+            r.adult_kind = Some(AdultKind::Vr);
+            e.data = r.encode();
+        }
+        s.set_enrichments(&[(id, e)]).unwrap();
+        (id, info.swarm_hashes().next().unwrap().0)
+    };
+    let (target, enr) = {
+        let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+        let enr = s.register_source("tpdb", "1", 0).unwrap();
+        let (target, key) = put(&mut s, "Garden Party 2021", true);
+        let matched = Claims {
+            adult: Some(AdultEnrichment {
+                kind: Some(Pinned::Vr),
+                ..AdultEnrichment::new("3f2c9a1e-0001")
+            }),
+            ..Claims::default()
+        };
+        s.put_unverified(&[NewUnverified {
+            network: Network::Bt,
+            key: &key,
+            source: enr,
+            private_source: false,
+            claims: Some(&matched),
+            at: 1_700_000_000,
+        }])
+        .unwrap();
+        assert_eq!(s.torrent_claims(target).unwrap().len(), 1);
+        // A later torrent for the start's pass to derive: once it's done,
+        // that pass is past the target.
+        let (sentinel, _) = put(&mut s, "Harbour Walk 2022", false);
+        s.mark_unenriched(&[sentinel]).unwrap();
+        s.set_source_state(enr, SourceState::Disabled).unwrap();
+        (target, enr)
+    };
+    let config = PipelineConfig {
+        flush_every: std::time::Duration::from_millis(100),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline::start_with(
+        config,
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![],
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    let control = Control::start(
+        pipeline.monitor(),
+        None,
+        Arc::new(Mutex::new(
+            Store::open(&db, StoreConfig::default()).unwrap(),
+        )),
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+    let current = |id: i64| reader.enrichment(id).unwrap().unwrap().version == ENRICHMENT_VERSION;
+    // The start's pass has derived every marked torrent.
+    until("the start's backfill pass", || {
+        reader
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM torrent_parsed WHERE parser_ver != ?1",
+                [ENRICHMENT_VERSION],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 0
+    })
+    .await;
+    let pinned = |id: i64| {
+        let e = reader.enrichment(id).unwrap().unwrap();
+        Record::decode(&e.data).unwrap().adult_kind == Some(AdultKind::Vr)
+    };
+    assert!(
+        current(target) && pinned(target),
+        "untouched by the start's pass"
+    );
+
+    let mut cursor = Some(PurgeCursor::START);
+    let mut claims = 0;
+    while let Some(from) = cursor {
+        let step = control.purge_step(enr, from).await.unwrap();
+        claims += step.claims_deleted;
+        cursor = step.next;
+    }
+    assert_eq!(claims, 1);
+    until("the record derived again without the match", || {
+        current(target) && !pinned(target)
+    })
+    .await;
+    drop(control);
+    pipeline.shutdown().await.unwrap();
+}
