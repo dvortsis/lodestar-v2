@@ -2178,7 +2178,17 @@ async fn a_purge_of_an_always_adult_source_derives_its_torrents_again() {
                 [flagged, flags::FLAGGED],
             )
             .unwrap();
-        // A hold the Adult-only core gave an item read as adult.
+        // An item only the source found, held by the Adult-only core
+        // while the source made it adult.
+        s.put_unverified(&[NewUnverified {
+            network: Net::Bt,
+            key: &held_hash,
+            source: adult,
+            private_source: false,
+            claims: None,
+            at: 1_700_000_000,
+        }])
+        .unwrap();
         s.write(&WriteBatch {
             filtered: &[Filtered {
                 hashes: &[held_hash],
@@ -2189,7 +2199,7 @@ async fn a_purge_of_an_always_adult_source_derives_its_torrents_again() {
                 evidence: &[],
                 at: 1_700_000_000,
                 expires_at: i64::MAX,
-                adult_hold: false,
+                adult_hold: true,
             }],
             ..WriteBatch::default()
         })
@@ -2243,11 +2253,7 @@ async fn a_purge_of_an_always_adult_source_derives_its_torrents_again() {
     let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
     let is_adult = |id: i64| reader.content_type(id).unwrap() == Some(ContentType::Adult.code());
     let current = |id: i64| reader.enrichment(id).unwrap().unwrap().version == ENRICHMENT_VERSION;
-    // The start's pass keeps both Adult: the source is still a finder.
-    until("the start's backfill pass", || {
-        current(target) && current(flagged)
-    })
-    .await;
+    // Stored Adult while the source is still a finder.
     assert!(is_adult(target) && is_adult(flagged));
 
     let mut cursor = Some(PurgeCursor::START);
@@ -2275,11 +2281,14 @@ async fn a_purge_of_an_always_adult_source_derives_its_torrents_again() {
         0,
         "the core's mark stays"
     );
+    // The source's item is gone with it; its hold stays, as adult.
+    assert!(reader.unverified(Net::Bt, &held_hash).unwrap().is_none());
     assert_eq!(reader.held_among(&[held_hash]).unwrap(), [true]);
     assert_eq!(
         reader.quarantine_rule(&held_hash).unwrap().as_deref(),
-        Some("CS-5a")
+        Some("CS-5a+adult")
     );
+    assert!(reader.adult_hold(&held_hash).unwrap());
     assert!(!ran.load(Ordering::SeqCst), "disabled: never ran");
     drop(control);
     pipeline.shutdown().await.unwrap();

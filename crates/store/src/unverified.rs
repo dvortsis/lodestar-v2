@@ -1188,17 +1188,19 @@ impl Store {
                 let mut marked = false;
                 for (id, data) in &lost {
                     // One that doesn't decode is marked: deriving again is
-                    // the safe side. Only a row the UPDATE changed counts,
-                    // so a purge that marks nothing leaves the generation.
-                    if !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record())
-                        && mark.execute(params![id])? > 0
-                    {
+                    // the safe side. A torrent with no record yet has no
+                    // row to mark but still counts: the backfill picks it
+                    // up, and a batch may already have read the claim.
+                    if !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record()) {
+                        mark.execute(params![id])?;
                         marked = true;
                     }
                 }
                 // A backfill batch that read these claims before the purge
-                // would write the old match back over the mark: moving the
-                // generation makes it rejected and run again (§20.9).
+                // would write the old match back over the mark, or into a
+                // first record: moving the generation makes it rejected and
+                // run again (§20.9). A purge of claims that shape nothing
+                // leaves the generation.
                 if marked {
                     crate::rules::bump_class_gen(&tx)?;
                     step.rederive = true;

@@ -1865,8 +1865,8 @@ fn a_purge_without_the_adult_mark_marks_nothing() {
 }
 
 /// Your own Is adult correction keeps a torrent Adult whatever is purged:
-/// it's derived again (the backfill applies the correction), never
-/// cleared by the purge itself.
+/// it's marked to be derived again (the backfill applies the correction),
+/// never cleared by the purge itself.
 #[test]
 fn a_purge_never_changes_the_stored_type_itself() {
     let mut store = mem();
@@ -1891,14 +1891,17 @@ fn a_purge_never_changes_the_stored_type_itself() {
         .set_source_state(adult, SourceState::Disabled)
         .unwrap();
     purge_all(&mut store, adult, 100);
+    // Marked for the backfill, which applies the correction; the purge
+    // itself changes neither.
+    assert_eq!(parser_ver(&store, id), Some(0));
     assert_eq!(store.content_type(id).unwrap(), Some(ADULT));
     assert_eq!(store.correction(id).unwrap(), Some(is_adult));
 }
 
-/// A purge's Claims stage moves the generation only when it marked a
-/// torrent: plain feed claims, or a torrent already marked, leave it.
+/// A purge's Claims stage moves the generation for a claim that shaped a
+/// record, even when the torrent has no record yet; plain feed claims leave it.
 #[test]
-fn a_claims_purge_that_marks_nothing_keeps_the_generation() {
+fn a_claims_purge_moves_the_generation_only_for_claims_that_shape_the_record() {
     let matched = Claims {
         adult: Some(AdultEnrichment {
             scene_id: "1".into(),
@@ -1920,19 +1923,41 @@ fn a_claims_purge_that_marks_nothing_keeps_the_generation() {
         .put_unverified(&[item(&a.info_hash.0, feed, Some(&c))])
         .unwrap();
     derived(&store, a_id, 2);
-    // A match on a torrent with no record yet: nothing to mark.
+    // A plain feed's claims shape nothing: the generation stays.
+    store.set_source_state(feed, SourceState::Disabled).unwrap();
+    let gen_before = store.class_gen().unwrap();
+    let (total, _) = purge_all(&mut store, feed, 100);
+    assert_eq!(total.claims_deleted, 1);
+    assert!(!total.rederive);
+    assert_eq!(store.class_gen().unwrap(), gen_before);
+    // A match on a torrent with no record yet has no row to mark, but a
+    // backfill batch may already have read it: the generation moves, so
+    // that batch can't write the purged match into a first record.
     let b = prepared(&store, "unenriched");
     let b_id = store_torrent(&mut store, &b, dht);
     store
         .put_unverified(&[item(&b.info_hash.0, enr, Some(&matched))])
         .unwrap();
     assert_eq!(parser_ver(&store, b_id), None);
-    for s in [feed, enr] {
-        store.set_source_state(s, SourceState::Disabled).unwrap();
-        let gen_before = store.class_gen().unwrap();
-        let (total, _) = purge_all(&mut store, s, 100);
-        assert_eq!(total.claims_deleted, 1);
-        assert!(!total.rederive);
-        assert_eq!(store.class_gen().unwrap(), gen_before);
-    }
+    let read_at = store.class_gen().unwrap();
+    store.set_source_state(enr, SourceState::Disabled).unwrap();
+    let (total, _) = purge_all(&mut store, enr, 100);
+    assert_eq!(total.claims_deleted, 1);
+    assert!(total.rederive);
+    assert_ne!(store.class_gen().unwrap(), read_at);
+    let stale = lodestar_store::Enriched {
+        version: 7,
+        content_type: ADULT,
+        junk_score: 0,
+        comp: Vec::new(),
+        data: vec![0],
+    };
+    assert_eq!(
+        store
+            .set_enrichments_at(read_at, &[(b_id, stale)], &[])
+            .unwrap(),
+        None,
+        "a batch that read the purged match is refused"
+    );
+    assert_eq!(parser_ver(&store, b_id), None);
 }
