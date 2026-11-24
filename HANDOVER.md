@@ -46,3 +46,4 @@
 - 2026-11-24T17:25Z Landing lane: ENR-G entered (1,567 lines, Rust+web). X-split-resume-gate in slot 2, starting.
 - 2026-11-24T20:34Z: merged #1117 ENR-G at 3b632ad1 as 182d49fe (MERGE + security PASS; CRLF test delta accepted). Lane empty. Slot 3 -> X-purge-rederive (with ENR-G-followups), briefs/X-purge-rederive.md. ENR-terms-api and X-split-resume-gate released to push; GS-4 #1116 needs catch-up + aria-live fix.
 - 2026-11-24T20:45Z: X-purge-rederive adds pipeline control.rs (purge_step, ~6 lines) to its owns; control.rs locked to it (X-consent-gate-lift-account/-external wait).
+- 2026-11-24T21:10Z: merged #1116 GS-4 at 901ce247 as 760dbc17 (rv-1116 MERGE; catch-up pure main + aria-live fix). Slot 1 -> X-gs-followups (GS-4 + GS-5 follow-ups, Sonnet), briefs/X-gs-followups.md.

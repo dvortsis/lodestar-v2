@@ -9151,23 +9151,6 @@
       "added": "2026-11-24T11:26Z"
     },
     {
-      "id": "GS-5-followups",
-      "from": "rv-1108",
-      "owns": [
-        "web/src/lib/features/search/collapse/**",
-        "web/src/lib/features/search/results/ResultsPanel.svelte",
-        "web/src/lib/features/search/results/ResultsPanel.group.test.ts"
-      ],
-      "items": [
-        "Show all N counts max(others, siblings)+1 or drops the number",
-        "re-announce same-text group loads (clear-then-set)",
-        "carry the active row across a view switch by hash, not index",
-        "nits: test fixture at group.test.ts:247, move() at list end, duplicate data-testid, GroupToggle one-way"
-      ],
-      "model": "sonnet",
-      "added": "2026-11-24"
-    },
-    {
       "id": "X-cmp-egress-follows",
       "from": "X-cmp-egress-ui self-review polish 9",
       "what": "Companion GET does not say which route kinds a companion can follow, so the editor offers qBittorrent SOCKS5 and the PUT refuses cant_follow_route. Add a follows list to Companion (API) and filter the editor by it.",
@@ -9213,22 +9196,6 @@
       "model": "opus",
       "added": "2026-11-24",
       "note": "fold into X-split-resume-gate or X-split-spill-horizon (same sampler.rs)"
-    },
-    {
-      "id": "GS-4-followups",
-      "from": "GS-4 #1116",
-      "owns": [
-        "web/src/lib/features/detail/**",
-        "web/src/lib/features/search/collapse/**"
-      ],
-      "items": [
-        "GS-5 Show all opens Related directly (open.ts/DetailHost + search/collapse)",
-        "Parsed and Related share one /siblings request per torrent",
-        "drawer hands Related an openDetail (context or event in DetailHostBody/open.ts) so the on-demand open.ts import leaves /t and Detail sections (would undo the 0.2-0.4 KB raises)"
-      ],
-      "model": "sonnet",
-      "added": "2026-11-24",
-      "note": "can fold with GS-5-followups"
     },
     {
       "id": "X-restart-fuzz-v2",
@@ -10735,6 +10702,13 @@
       "merged_as": "182d49fe2b61784fb37c22a14eee5ba4f45090cf",
       "head": "3b632ad182a896becc7f2e58625d6cc7df09a20b",
       "at": "2026-11-24T20:34Z"
+    },
+    {
+      "pr": 1116,
+      "slice": "GS-4",
+      "merged_as": "760dbc17c1624e01d37539c22514ed06275cc03b",
+      "head": "901ce247594504fd23d3f934fd860e6a22d52708",
+      "at": "2026-11-24T21:10Z"
     }
   ],
   "active_sessions": {
@@ -11005,17 +10979,17 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T20:40Z",
+    "updated": "2026-11-24T21:15Z",
     "items": [
       {
         "slot": 1,
-        "slice": "GS-4",
+        "slice": "X-gs-followups",
         "role": "build",
-        "model": "opus",
+        "model": "sonnet",
         "agent": "sonnet",
-        "doing": "#1116 not fresh (#1115, #1117 touched web): catch-up + aria-live fix, then ready",
-        "since": "2026-11-24T15:12Z",
-        "session": "session_01MMjhnA8jZVGAa6zftpoAe9"
+        "doing": "brief written (briefs/X-gs-followups.md); coordinator starting it",
+        "since": "2026-11-24T21:15Z",
+        "status": "active"
       },
       {
         "slot": 2,
@@ -11154,7 +11128,7 @@
     }
   ],
   "heartbeat": "2026-11-24T03:39:06Z",
-  "updated": "2026-11-24T20:45Z",
+  "updated": "2026-11-24T21:15Z",
   "pause": {
     "build_slices": false,
     "since": "2026-11-23T06:09Z",
