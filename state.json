@@ -4547,7 +4547,9 @@
         "ENR-terms-api",
         "X-split-resume-gate",
         "GS-4 #1116 (web)"
-      ]
+      ],
+      "pr": 1117,
+      "head": "0cb66dc5a0917f6f63f5b851fcf2adc3ebc1eaff"
     },
     "last": {
       "pr": 1112,
@@ -11025,7 +11027,7 @@
         "slice": "ENR-G",
         "role": "build",
         "model": "opus",
-        "doing": "ready-local 308fb54a (1,567 lines; local checks + /security-review clean; e2e not run locally); holds push until #1112 merges, then enters lane",
+        "doing": "PR #1117 (0cb66dc5) in landing lane; fresh Opus + security review running (rv-1117); merges on green",
         "since": "2026-11-24T14:30Z",
         "status": "active",
         "agent": "opus"
