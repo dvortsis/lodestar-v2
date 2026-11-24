@@ -18,7 +18,7 @@
 
 **Claims** (`<slice> · <agent> · <branch> · <owned paths> · <date> · <state>`):
 - ENR-11 · Duet thread cse_01MMjhnBQhGk9LHSMPPEyyEr · slice/ENR-11 · slices.yaml owns · 2026-11-24 · building
-- NOS-2b · Duet thread cse_01MMjhnB3W4fAZ47FuT1Fkdj · slice/NOS-2b · slices.yaml owns · 2026-11-24 · building
+- NOS-2b (merged #1109; slot 2 now X-escalate-full-table, branch slice/X-escalate-full-table) · Duet thread cse_01MMjhnB3W4fAZ47FuT1Fkdj · slice/NOS-2b · slices.yaml owns · 2026-11-24 · building
 - IRC-1 · Duet thread cse_01MMjhnD539Mu5nKX1dp6JLD · slice/IRC-1 · slices.yaml owns · 2026-11-24 · building (PR after NOS-2b, shared lockfiles)
 - GS-5 · Duet thread cse_01MMjhnCYYLLydZtF2G8z2S2 · slice/GS-5 · slices.yaml owns · 2026-11-24 · building
 

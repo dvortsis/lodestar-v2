@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T08:50Z",
+  "updated_at": "2026-11-24T09:19Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4316,6 +4316,13 @@
       "flag": "collector reaches Docker only through a pinned HAProxy allow-list rendered per block with the exact lodestar container/image IDs (inspect, image inspect, HEAD archive, one-shot stats, stop); real socket mounted only into the proxy",
       "send": "on merge",
       "sent": "2026-11-11T06:43Z"
+    },
+    {
+      "at": "2026-11-24T09:19Z",
+      "slice": "NOS-2b",
+      "pr": 1109,
+      "flag": "Runner's calls in docs/decisions/2026-11-24-NOS-2b.md: WebSocket message/frame cap 128 KiB (131,072 B, plan's '128 KB' read in binary); ping 60 s default, plugin may go down to a 30 s minimum; idle timeout 150 s default (2x ping..600 s), connect timeout 15 s default (1-60 s); host list keys wss entries on their own (wss lets no HTTP through and https no WebSocket); lodestar-sources adds direct deps incl. futures-util =0.3.34 (no crate new to the lockfile; 'no new crate' read as none new to the tree)",
+      "send": "next owner digest (\u00a72.19)"
     }
   ],
   "decisions_log": [
@@ -9026,6 +9033,11 @@
       "id": "X-querybar-static-q",
       "note": "A pasted /search?q= link shows an empty bar until the lazy Live editor mounts (hundreds of ms under load); write q into QueryBar's static bar at mount (+16 B, Search route at its 45 kB budget, so it must pay with a saving; handle q with a newline). From X-retry-typed-flake step 0 option B.",
       "added": "2026-11-23T04:15Z"
+    },
+    {
+      "id": "NOS-3-notes",
+      "note": "From NOS-2b (#1109): NOS-3 adds the plugin's WsConnect to its Kit (crates/sources/src/plugin.rs, a shared one-line edit NOS-3 claims; PL-2 also owns plugin.rs, so not beside it); with several relays open, share one kill-switch route probe per plugin egress across relays instead of one per session; NOS-3's own caps (30 s to 1 h back-off, one connection per relay per 30 s, Q-r11) go on top of Reconnect. Put these in NOS-3's brief and its slices.yaml notes at launch.",
+      "added": "2026-11-24T09:19Z"
     }
   ],
   "main_health": {
@@ -10445,6 +10457,16 @@
       "sha": "8128060e",
       "at": "2026-11-20T21:50Z",
       "note": "review CHANGES (1 blocking, 2 important) then delta MERGE (11 of 12 mutations caught; 1 equivalent); merged-tree npm test OK"
+    },
+    {
+      "pr": 1109,
+      "slice": "NOS-2b",
+      "sha": "32396391",
+      "at": "2026-11-24T09:19Z",
+      "unlocks": [
+        "NOS-3 (still needs ext:owner-v08-q1, X-sources-restructure)",
+        "PL-2"
+      ]
     }
   ],
   "active_sessions": {
@@ -10590,7 +10612,7 @@
     "gluetun": "NOT approved; owner decides after baseline ends",
     "watch": "Antigravity task-668 3-hourly; confirms survival after 11-02 11:00Z"
   },
-  "queue_note": "2026-11-24T08:50Z: Next as build slots free: X-flake-cap-index-move (flake, first), then X-escalate-full-table, then X-cmp-egress-ui, ENR-G, GS-4, ENR-terms-api. X-split-resume-gate and X-split-spill-horizon share sampler.rs with X-escalate-full-table, so one at a time. Previous: Next as slots free: openapi-example-size (Sonnet, now unblocked), X-strip-format-chars (Opus, small), SRC-9 (IA JSON parser, Opus+SR), SRC-4 (consent framework, Opus), SRC-5 (egress/kill-switch, Opus+SR), i9-stage2 (one release later). Blocked on owner: SRC-7 (Q2,Q15), SRC-10e (Q7), SRC-13 (Q3), SRC",
+  "queue_note": "2026-11-24T09:19Z: slot 2 -> X-escalate-full-table. Slot 1 reserved for X-flake-cap-index-move after ENR-11 (#1110). Then: X-cmp-egress-ui, ENR-G, GS-4, ENR-terms-api; PL-2 newly ready (rung 7, owns crates/sources/src/plugin.rs, not beside NOS-3). X-split-resume-gate / X-split-spill-horizon wait for X-escalate-full-table (sampler.rs). ",
   "plan_ref": "build-plan \u00a70.5 Path to 100 (r5/r5.1, PR #970, owner 2026-11-20)",
   "v051_gate": {
     "upgrade_test": "SATISFIED per owner-decisions \u00a72.28 (#371): r1 upgraded the Oct 22 volume V3->V12 cleanly; crates/store is byte-identical between v0.5.1-rc.1 and v0.5.1-rc.2 (git diff --quiet v0.5.1-rc.1 v0.5.1-rc.2 -- crates/store/), so the migration code matches whichever rc r1 ran. Runner-verified 2026-11-02T03:20Z."
@@ -10715,7 +10737,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T09:18:00Z",
+    "updated": "2026-11-24T09:19Z",
     "items": [
       {
         "slot": 1,
@@ -10728,7 +10750,12 @@
       },
       {
         "slot": 2,
-        "status": "idle"
+        "slice": "X-escalate-full-table",
+        "role": "build",
+        "model": "opus",
+        "agent": "claude",
+        "doing": "Starting: sampler backoff escalation reaches a struck node on a full table with the split off (brief briefs/X-escalate-full-table.md).",
+        "since": "2026-11-24T09:19Z"
       },
       {
         "slot": 3,
