@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T06:30:19Z",
+  "updated_at": "2026-11-24T06:45:47Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -10696,7 +10696,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T06:30:19Z",
+    "updated": "2026-11-24T06:45:47Z",
     "items": [
       {
         "slot": 1,
@@ -11700,5 +11700,12 @@
     "holder": "X-detail-depth-compare (in-house, slot 2 after #1085)",
     "since": "2026-11-23T04:05:35Z",
     "next": "X-size-own-modules (API lane, front of order)"
+  },
+  "handover": {
+    "file": "HANDOVER.md",
+    "holder": "owner's Claude Duet chat (coordinator session_01MMjhn8V1uDvWKEpC8V3BHU; bookkeeping thread session_01MMjhnCpMMYF4uEW49L9SpF)",
+    "since": "2026-11-24T06:44Z",
+    "by": "owner, Duet chat 06:30Z 'Perfect. Thanks!' (approving pause + handover) and 06:44Z 'I paused it'",
+    "runner_session_kept": "runner_session still names the paused runner, so it reads HANDOVER.md on any return; the watchdog stands down while HANDOVER.md exists"
   }
 }
