@@ -1014,7 +1014,11 @@ fn the_binary_wires_no_adult_enrichment_yet() {
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with(own) {
                 files += 1;
-                let text = std::fs::read_to_string(&path).unwrap();
+                // Windows checkouts may carry CRLF endings, which would
+                // hide the `#[cfg(test)] mod` split below.
+                let text = std::fs::read_to_string(&path)
+                    .unwrap()
+                    .replace("\r\n", "\n");
                 // A crate's own unit tests (its `#[cfg(test)] mod`) may
                 // stand in for the host.
                 let text = text.split("\n#[cfg(test)]\nmod ").next().unwrap();
