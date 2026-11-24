@@ -11006,7 +11006,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T22:05Z",
+    "updated": "2026-11-24T22:22Z",
     "items": [
       {
         "slot": 1,
@@ -11014,9 +11014,10 @@
         "role": "build",
         "model": "sonnet",
         "agent": "sonnet",
-        "doing": "brief written (briefs/X-gs-followups.md); coordinator starting it",
+        "doing": "#1121 open at 302a1610 (branch claude/x-gs-followups-ox8wui), CI running; review on ready. Size: raises Related, Search results (lazy), collapse rows, /t; lowers Detail sections 47.87->47.44 KB (weigh under \u00a72.26)",
         "since": "2026-11-24T21:15Z",
-        "status": "active"
+        "status": "active",
+        "pr": 1121
       },
       {
         "slot": 2,
