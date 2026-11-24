@@ -64,6 +64,7 @@ class Base(col5.Base):
     pass
 
 
+
 class TreatmentTests(Base):
     def test_soft_is_a_stacked_treatment_with_its_own_switch(self):
         self.assertEqual(collect.TREATMENT_SWITCHES["soft"], ("soft_timeout",))
@@ -87,6 +88,32 @@ class TreatmentTests(Base):
         self.assertValid(report)
         self.assertIn("## Soft timeout", analyze_cr.markdown(report))
         self.assertNotIn("## Soft timeout", analyze_cr.markdown({**report, "treatment": "hint"}))
+
+
+def scrape(suppression=0, full=None):
+    """A parsed scrape holding the start suppression and, unless None, sampler-full time."""
+    text = f"lodestar_dht_sample_suppression_seconds {suppression}\n"
+    if full is not None:
+        text += f"lodestar_{SPLIT['full_seconds']} {full}\n"
+    return {"snap": analyze_cr.parse_snapshot(text)}
+
+
+class IntervalStallTests(unittest.TestCase):
+    """The runner's definition of a sampling minute (2026-11-24), one case per exclusion."""
+
+    def test_an_interval_with_no_suppression_and_flat_sampler_full_time_samples(self):
+        self.assertIsNone(analyze_cr.interval_stall(scrape(full=12.5), scrape(full=12.5)))
+
+    def test_suppression_at_either_end_stalls_it(self):
+        self.assertEqual(analyze_cr.interval_stall(scrape(30, 0), scrape(0, 0)), "suppressed")
+        self.assertEqual(analyze_cr.interval_stall(scrape(0, 0), scrape(30, 0)), "suppressed")
+
+    def test_sampler_full_time_growing_stalls_it(self):
+        self.assertEqual(analyze_cr.interval_stall(scrape(full=12.5), scrape(full=13.5)), "sampler_full")
+
+    def test_without_sampler_full_time_it_samples(self):
+        self.assertIsNone(analyze_cr.interval_stall(scrape(), scrape()))
+        self.assertIsNone(analyze_cr.interval_stall(scrape(full=3), scrape()))
 
 
 class SoftReportTests(Base):
@@ -115,15 +142,29 @@ class SoftReportTests(Base):
         self.assertLessEqual(soft["stalled_minutes"], 12.1)
         self.assertAlmostEqual(soft["sampling_minutes"] + soft["stalled_minutes"],
                                report["numerator"]["window"]["minutes"], places=2)
-        # The tenfold soft rate while stalled never reaches the report.
+        # The tenfold soft rate while stalled never reaches the headline figures...
         self.assertAlmostEqual(soft["soft_per_hour"], SOFT_RATE * 3600, delta=SOFT_RATE * 3600 * 0.02)
         self.assertAlmostEqual(soft["late_per_soft"], LATE_RATE / SOFT_RATE, delta=0.0005)
+        # ...but shows in the stalled ones, with the edge intervals' sampling share mixed in.
+        stalled = soft["stalled"]
+        self.assertGreater(stalled["soft_per_hour"], SOFT_RATE * 3600 * 8)
+        self.assertLess(stalled["late_per_soft"], soft["late_per_soft"])
+        # Together the two parts cover the whole window: 20 sampling minutes and 10 stalled ones.
+        window_soft = (20 * SOFT_RATE + 10 * SOFT_RATE * 10) * 60
+        self.assertAlmostEqual(stalled["soft"] + soft["soft"], window_soft, delta=5)
 
     def test_a_segment_stalled_throughout_has_no_counts(self):
         soft = self.run_sim(SoftSim(stall=(0, 10 ** 9)))["soft_timeout"]
         self.assertEqual(soft["sampling_minutes"], 0)
         self.assertEqual((soft["soft"], soft["late"], soft["peer_lookup_queries"]), (None, None, None))
         self.assertIsNone(soft["soft_per_hour"])
+        self.assertGreater(soft["stalled"]["soft"], 0)
+        self.assertIsNotNone(soft["stalled"]["soft_per_hour"])
+
+    def test_with_no_stall_the_stalled_figures_are_null(self):
+        soft = self.run_sim(SoftSim())["soft_timeout"]
+        self.assertEqual(soft["stalled"], {"soft": None, "late": None, "soft_per_hour": None,
+                                           "late_per_hour": None, "late_per_soft": None})
 
     def test_the_control_arm_reports_zeros_and_no_ratio(self):
         soft = self.run_sim(SoftSim(on=False))["soft_timeout"]
@@ -162,8 +203,11 @@ class SoftEffectTests(unittest.TestCase):
         return analyze_cr.analyze_effect(treatment, blocks, sorted(winners))
 
     def test_soft_reports_the_pair_per_arm_and_decides_on_the_numerator(self):
-        soft = {"sampling_minutes": 300.0, "stalled_minutes": 60.0, "soft_per_hour": 7200.0,
-                "late_per_hour": 30.0, "late_per_soft": 0.004, "soft_per_peer_query": 0.1, "absent": []}
+        stalled = {"soft": 72000, "late": 60, "soft_per_hour": 72000.0, "late_per_hour": 60.0,
+                   "late_per_soft": 0.0008}
+        soft = {"sampling_minutes": 300.0, "stalled_minutes": 60.0, "soft": 36000, "late": 150,
+                "soft_per_hour": 7200.0, "late_per_hour": 30.0, "late_per_soft": 0.004, "soft_per_peer_query": 0.1,
+                "stalled": stalled, "absent": []}
         out = self.effect("soft", soft_timeout=soft)
         self.assertEqual(out["switch"], "soft_timeout")
         self.assertEqual(out["outcome"], self.effect("soft")["outcome"])  # the report never moves the verdict
@@ -172,6 +216,8 @@ class SoftEffectTests(unittest.TestCase):
         self.assertEqual((len(by_arm["A"]), len(by_arm["B"])), (4, 4))
         self.assertEqual(by_arm["B"][0]["late_per_soft"], 0.004)
         self.assertEqual(by_arm["A"][0]["stalled_minutes"], 60.0)
+        self.assertEqual(by_arm["A"][0]["stalled"], stalled)  # unstalled and stalled, side by side
+        self.assertEqual(by_arm["B"][0]["soft"], 36000)
         self.assertNotIn("warnings", out)
 
     def test_other_treatments_have_no_soft_report(self):

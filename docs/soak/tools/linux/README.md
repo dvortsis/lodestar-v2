@@ -383,6 +383,14 @@ Both are stacked treatments, so they take `--winners` as stage 2 does.
 - **Rule 6.4, for split, in both arms:** each segment reports its sampler-full time,
   its three worst hours of stored per minute and any restart gate (`sampler_split`), and `effect`
   lists them per arm (`sampler_split_by_arm`). They're reported, never decided on.
+- **`--treatment soft`** (X-soft-key) turns on `soft_timeout` in B
+  (`LODESTAR_DHT_SOFT_TIMEOUT`, CR-SOFT-TIMEOUT). It takes `--winners` too, which may be
+  empty. Each soft segment reports `soft_timeout`, and `effect` lists it per arm
+  (`soft_timeout_by_arm`): soft queries and late replies per hour, late ÷ soft and
+  soft ÷ peer-lookup queries over sampling minutes, and soft and late over stalled
+  minutes (`stalled`). A scrape interval is stalled when the start suppression is
+  above 0 at either end or sampler-full time grew in it. It's reported, never decided
+  on, and other treatments carry no soft report. See `docs/decisions/2026-11-23-X-soft-key.md`.
 
 Each treatment's series are required in both arms of its own segments. Every other
 segment reports them under `hint_first` and `sampler_split` and lists the missing
