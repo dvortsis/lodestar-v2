@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-24T09:36Z",
+  "updated_at": "2026-11-24T10:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4459,7 +4459,25 @@
       "at": "2026-11-14T00:11Z"
     }
   },
-  "landing_lane": null,
+  "landing_lane": {
+    "pr": 1110,
+    "slice": "ENR-11",
+    "areas": [
+      "Rust",
+      "web"
+    ],
+    "entered_at": "2026-11-24T09:58Z",
+    "catch_ups": 1,
+    "reason": "over ~1,500 changed lines (1,551) and not fresh after #1109",
+    "head_after_catch_up": "6aaf3a6b",
+    "holding": [
+      "IRC-1 (Rust)",
+      "X-escalate-full-table (Rust)",
+      "GS-5 (web)"
+    ],
+    "merge_needs": "fresh Opus review + /security-review on the newest head (none recorded on the PR yet; runner holder running it), ci-ok green, freshness",
+    "previous": null
+  },
   "landing_order_web": [
     "S-compare",
     "S-alerts",
@@ -10743,7 +10761,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T09:36Z",
+    "updated": "2026-11-24T10:00Z",
     "items": [
       {
         "slot": 1,
@@ -11764,5 +11782,8 @@
       "q": "how to do the .size-limit.mjs lines",
       "a": "file handed to UP-2; securityLoader + WatchFolder on demand; remaining overs raised to measured under runner 2.26, recorded in its decisions file"
     }
-  ]
+  ],
+  "catch_ups": {
+    "ENR-11": 1
+  }
 }
