@@ -10605,6 +10605,13 @@
       "pr": 1108,
       "sha": "4689737c3a2e6ce15f46da6517b464910bf02d01",
       "at": "2026-11-24T13:52Z"
+    },
+    {
+      "slice": "X-cmp-egress-ui",
+      "pr": 1114,
+      "sha": "69b90acd276c023c8e8556b6f59d1dd1d69476b3",
+      "head": "14ef4bcbcf57efe6056005e7f8a60ad891486732",
+      "at": "2026-11-24T14:28Z"
     }
   ],
   "active_sessions": {
@@ -10875,7 +10882,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T14:20Z",
+    "updated": "2026-11-24T14:30Z",
     "items": [
       {
         "slot": 1,
@@ -10897,12 +10904,13 @@
       },
       {
         "slot": 3,
-        "slice": "X-cmp-egress-ui",
+        "slice": "ENR-G",
         "role": "build",
         "model": "opus",
-        "doing": "PR #1114 (14ef4bcb) reviewed MERGE, security PASS (rv-1114); merges on green",
-        "since": "2026-11-24T12:30Z",
-        "status": "active"
+        "doing": "starting (brief briefs/ENR-G.md)",
+        "since": "2026-11-24T14:30Z",
+        "status": "active",
+        "agent": "opus"
       },
       {
         "slot": 4,

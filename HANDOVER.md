@@ -34,3 +34,5 @@
 - Landing lane: GS-5 #1108 entered 2026-11-24 12:31Z (catch-ups 2, ~1,950 lines, rust+web); #1112, X-flake-cap-index-move and X-cmp-egress-ui hold pushes until it merges
 - GS-5 · merged #1108 (4689737c), 2026-11-24 13:52Z · landing lane cleared · slot 4 freed
 - X-flake-search-keyboard-2 · slot 4 · slice/X-flake-search-keyboard-2 · brief briefs/X-flake-search-keyboard-2.md · 2026-11-24 · starting
+- 2026-11-24T14:28Z X-cmp-egress-ui merged #1114 (69b90acd), pinned 14ef4bcb; slot 3 freed.
+- 2026-11-24T14:30Z ENR-G in slot 3, starting (briefs/ENR-G.md).
