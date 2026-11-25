@@ -11053,7 +11053,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-25T00:20Z",
+    "updated": "2026-11-25T00:25Z",
     "items": [
       {
         "slot": 1,
@@ -11061,7 +11061,7 @@
         "role": "build",
         "model": "sonnet",
         "agent": "sonnet",
-        "doing": "brief written (briefs/X-web-followups-1124.md); coordinator starting it",
+        "doing": "brief written (briefs/X-web-followups-1124.md); coordinator starting it | owner hold: slot stays empty when this merges",
         "since": "2026-11-24T23:58Z",
         "status": "active"
       },
@@ -11071,7 +11071,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1122 ready at 04abd899 (ci-ok/web-ok/e2e-ok green); fresh Opus review rv-1122 running 2026-11-25T00:14Z; merges after #1120 and #1119 (one catch-up each)",
+        "doing": "#1122 ready at 04abd899 (ci-ok/web-ok/e2e-ok green); fresh Opus review rv-1122 running 2026-11-25T00:14Z; merges after #1120 and #1119 (one catch-up each) | owner hold: slot stays empty when this merges",
         "since": "2026-11-24T22:00Z",
         "status": "active",
         "pr": 1122
@@ -11082,7 +11082,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1120 at cf7e908d: delta accepted; web-ok/e2e-ok green, ci-ok still running; merges first",
+        "doing": "#1120 at cf7e908d: delta accepted; web-ok/e2e-ok green, ci-ok still running; merges first | owner hold: slot stays empty when this merges",
         "since": "2026-11-24T20:40Z",
         "status": "active",
         "owns_extra": [
@@ -11094,7 +11094,7 @@
         "slot": 4,
         "slice": "ENR-terms-api",
         "role": "build",
-        "doing": "#1119 rv-1119 MERGE / SECURITY PASS on 5ffdaec2; catch-up after #1120 merges, then merge if pure main",
+        "doing": "#1119 rv-1119 MERGE / SECURITY PASS on 5ffdaec2; catch-up after #1120 merges, then merge if pure main | owner hold: slot stays empty when this merges",
         "since": "2026-11-24T15:40Z",
         "status": "active",
         "agent": "opus",
@@ -11208,17 +11208,19 @@
   "heartbeat": "2026-11-24T03:39:06Z",
   "updated": "2026-11-24T23:10Z",
   "pause": {
-    "build_slices": false,
-    "since": "2026-11-23T06:09Z",
-    "lifted": "2026-11-24T06:19Z",
-    "lifted_by": "owner, Claude Duet chat 2026-11-24T06:19Z: the 2026-11-23 no-new-builds hold was only to conserve credit; 'You can ignore those instructions.' Build slices resume in the 4 build slots (phase_total 4, unchanged).",
+    "build_slices": true,
+    "since": "2026-11-25T00:16Z",
     "runner": {
       "paused": true,
       "since": "2026-11-24T06:30:19Z",
       "by": "owner",
       "words": "pause the agent runner until further notice",
       "effect": "no merges, no reviews, no launches, heartbeat disabled; resumes only on the owner's word"
-    }
+    },
+    "by": "owner, Claude Duet chat 2026-11-25T00:16:17Z",
+    "words": "I'm out of usage. Please do not start new slices until I say otherwise.",
+    "scope": "no new slices start; in-flight reviews and merges finish (#1120, #1119, #1122, slot 1 X-web-followups-1124); each slot stays empty when it frees",
+    "resume": "only on the owner's word; then start X-restart-fuzz-v2 (briefs/X-restart-fuzz-v2.md) and X-gs-followups-2 (briefs/X-gs-followups-2.md)"
   },
   "owner_queue_pending": [
     {
@@ -12022,6 +12024,12 @@
   },
   "pause_history": [
     {
+      "since": "2026-11-25T00:16Z",
+      "by": "owner, Claude Duet chat",
+      "scope": "no new slices start; in-flight reviews and merges finish (#1120, #1119, #1122, slot 1 X-web-followups-1124); each slot stays empty when it frees",
+      "words": "I'm out of usage. Please do not start new slices until I say otherwise."
+    },
+    {
       "since": "2026-11-23T06:09Z",
       "by": "owner, runner chat",
       "scope": "no new build slices; support cloud testing and the API lane only",
@@ -12109,23 +12117,14 @@
       "note": "assign no other control.rs slice until X-purge-rederive merges; X-tcache-recheck already merged (no slot needed)"
     }
   ],
-  "next_pick": [
-    {
-      "slot": 3,
-      "slice": "X-restart-fuzz-v2",
-      "brief": "briefs/X-restart-fuzz-v2.md",
-      "when": "after #1120 merges"
-    },
-    {
-      "slot": 2,
-      "slice": "X-gs-followups-2",
-      "brief": "briefs/X-gs-followups-2.md",
-      "when": "after #1122 merges"
-    }
-  ],
+  "next_pick": {
+    "held": true,
+    "note": "owner hold 2026-11-25T00:16Z: no new slices. Queued for when it lifts: slot 3 X-restart-fuzz-v2, slot 2 X-gs-followups-2."
+  },
   "merge_order": [
     "#1120 X-purge-rederive",
     "#1119 ENR-terms-api (catch-up after #1120)",
-    "#1122 X-split-spill-horizon (review rv-1122; catch-up after #1119)"
+    "#1122 X-split-spill-horizon (review rv-1122; catch-up after #1119)",
+    "slot 1 X-web-followups-1124 when ready"
   ]
 }
