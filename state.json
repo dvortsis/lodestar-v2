@@ -10830,6 +10830,14 @@
       "reviewed_head": "5ffdaec2e01bc6170a313a29c89000ee8e563de6",
       "merged_head": "f48e1807d95fd18c68a30f7b1ca4d7b7c63bc856 (pure-main catch-up)",
       "at": "2026-11-25T02:29Z"
+    },
+    {
+      "pr": 1123,
+      "slice": "X-web-followups-1124",
+      "merge": "25d4dbec7f95797556362449ee39e7381f116051",
+      "reviewed_head": "e0b5b3ed5618311a9f2fbe4a0bfec41ef5e8b25b",
+      "merged_head": "ab8568a2f4673c05d43dbb84521a39ddfda31b0d (delta 3a03885d accepted + pure-main catch-up)",
+      "at": "2026-11-25T02:51Z"
     }
   ],
   "active_sessions": {
@@ -11100,18 +11108,13 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-25T02:30Z",
+    "updated": "2026-11-25T02:51Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-web-followups-1124",
-        "role": "build",
         "model": "sonnet",
-        "agent": "sonnet",
-        "doing": "#1123 delta accepted; asked to bring main in once (02:30Z); merge if pure main; last of the four | owner hold",
-        "since": "2026-11-24T23:58Z",
-        "status": "active",
-        "pr": 1123
+        "status": "idle",
+        "doing": "empty: owner hold; #1123 merged 2026-11-25T02:51Z"
       },
       {
         "slot": 2,
@@ -12163,6 +12166,6 @@
     "note": "owner hold 2026-11-25T00:16Z: no new slices. Queued for when it lifts: slot 3 X-restart-fuzz-v2, slot 2 X-gs-followups-2."
   },
   "merge_order": [
-    "#1122 and #1123: each brings main in once after #1119 (different areas)"
+    "#1122 X-split-spill-horizon: brings main in once after #1119; last of the four"
   ]
 }
