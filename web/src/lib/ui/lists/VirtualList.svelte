@@ -57,7 +57,12 @@
 		onLoadMore?: () => void;
 		/** Text of the sentinel row (e.g. "Loading more…"); announced politely. */
 		loadMoreLabel?: string;
-		/** When this changes (new query, new sort) the list starts over: first row active, scrolled to top. */
+		/**
+		 * When this changes (new query, new sort) the list starts over: first row active, scrolled to
+		 * top. A row that has focus through the change and is still in `items` stays the active one
+		 * instead (scrolled into view), so j/k carry on from the focused row, as the arrows do.
+		 * Only a row that has focus itself counts: a control inside a row (the cards' tiles) doesn't.
+		 */
 		resetKey?: unknown;
 		class?: string;
 	}
@@ -156,13 +161,23 @@
 			});
 			// Rows appeared above the viewport (live inserts): keep what the user is looking at in place.
 			const a = list !== lastItems ? anchor : null;
+			const before = lastItems;
 			lastItems = list;
 			if (resetKeyNow !== lastReset) {
 				lastReset = resetKeyNow;
 				requestedAt = -1;
-				activeKey = null;
-				activeIndex = 0;
-				$virt.scrollToOffset(0);
+				// The DOM still shows the rows from before, so the focused row is found in `before`.
+				const kept = focusedKey(before);
+				const at = kept === undefined ? undefined : findIndex(kept, 0);
+				if (kept !== undefined && at !== undefined) {
+					activeKey = kept;
+					activeIndex = at;
+					$virt.scrollToIndex(at, { align: 'auto' });
+				} else {
+					activeKey = null;
+					activeIndex = 0;
+					$virt.scrollToOffset(0);
+				}
 			} else if (a && scroller && scroller.scrollTop > 0) {
 				const at = findIndex(a.key, 0);
 				const target = at === undefined ? undefined : $virt.getOffsetForIndex(at, 'start')?.[0];
@@ -179,6 +194,15 @@
 			delta: scroller.scrollTop - (first.start - headerHeight)
 		};
 	});
+
+	/** Key of the row that has focus itself (not a control inside it), in the rows `shown`. */
+	function focusedKey(shown: T[] | undefined): string | undefined {
+		const el = document.activeElement as HTMLElement | null;
+		if (!shown || !el?.dataset.index || !scroller?.contains(el)) return undefined;
+		const i = Number(el.dataset.index);
+		const item = shown[i];
+		return item === undefined ? undefined : getKey(item, i);
+	}
 
 	let requestedAt = -1;
 	// --- load more ---------------------------------------------------------------------------

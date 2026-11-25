@@ -1506,7 +1506,9 @@ export default [
 	// Raised by the runner (§2.26): +86 B from the chunk re-split when /logs was added (S-logs-1).
 	// X-alert-search-headroom: 45.40 KB (−0.57 KB, links no longer load the nav table); the limit is
 	// kept so the cut is the headroom. Keep the rules by `alertOnDemand`.
-	routeEntry('Alert route (own JS + CSS)', alertView, '35.03 KB'),
+	// X-web-followups-1124 (a raise for the runner's §2.26 call): 35.03 → 35.10 KB, measured 35,099 B (+69 B): VirtualList
+	// keeps a focused row active through a new resetKey (the list's side of #1115's table fix).
+	routeEntry('Alert route (own JS + CSS)', alertView, '35.10 KB'),
 	routeEntry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
@@ -1778,7 +1780,9 @@ export default [
 	// a grouped answer; opening a group is its own on-demand entry below. Rounded up to 0.01 KB.
 	// X-gs-followups (runner §2.26): 43.51 → 43.70 KB, measured 43,696 B (+200 B): the active row
 	// carried across a view switch by hash and the clear-then-set re-announce of a group's load.
-	entry('Search results (lazy)', resultsFirst, '43.70 KB'),
+	// X-web-followups-1124 (a raise for the runner's §2.26 call): 43.70 → 43.78 KB, measured 43,777 B (+77 B): VirtualList
+	// keeps a focused row active through a new resetKey, so j/k carry on from it after a re-sort.
+	entry('Search results (lazy)', resultsFirst, '43.78 KB'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1890,10 +1894,12 @@ export default [
 				!menuOnly.includes(f) &&
 				!actionsMenu.includes(f)
 		),
+		// X-web-followups-1124 (a raise for the runner's §2.26 call): 47.44 → 47.52 KB, measured 47,514 B (+81 B): VirtualList
+		// keeps a focused row active through a new resetKey.
 		// X-gs-followups: 47.87 → 47.44 KB, measured 47,433 B. Related no longer imports open.ts (the
 		// drawer hands it the open function), and the siblings loader Parsed and Related now share
 		// counts in Related's entry. Earlier, GS-4 (runner §2.26): 47.49 → 47.87 KB for that import.
-		'47.44 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		'47.52 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.

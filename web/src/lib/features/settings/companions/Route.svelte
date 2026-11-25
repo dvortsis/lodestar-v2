@@ -4,7 +4,7 @@
 	// change uses it). Saving restarts the companion; the answer says only whether that restart began,
 	// so nothing here ever says "applied". A refusal is a sentence per code, naming the field, never
 	// the value. The password lives only in the dialog's field.
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { ApiError } from '$lib/api/client';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -42,16 +42,31 @@
 	onDestroy(() => flows?.dismissPasswordDialogs());
 
 	// Starts from the saved route when it's one offered here; `interface` and `bind_address` aren't.
-	// svelte-ignore state_referenced_locally
-	const saved = c.egress?.setting ?? null;
-	let route = $state<'' | 'direct' | 'socks5'>(
-		saved?.route === 'direct' || saved?.route === 'socks5' ? saved.route : ''
-	);
-	let proxy = $state(saved?.route === 'socks5' ? (saved.proxy ?? '') : '');
+	const fill = (s: EgressSetting | null) => ({
+		route: s?.route === 'direct' || s?.route === 'socks5' ? s.route : ('' as const),
+		proxy: s?.route === 'socks5' ? (s.proxy ?? '') : ''
+	});
+	/** What the form was last filled with: the form is untouched while it still shows this. */
+	let filled = fill(untrack(() => c.egress?.setting ?? null));
+	let route = $state<'' | 'direct' | 'socks5'>(filled.route);
+	let proxy = $state(filled.proxy);
 	let busy = $state(false);
 	let error = $state('');
 	$effect(() => {
 		draft = route;
+	});
+	// The server's route changed while this is open (another tab, a refresh after "busy"): an
+	// untouched form follows it, so a Save can't send the older route back over the newer one. A
+	// form the user has changed keeps their choice; it's measured against the newer route from then on.
+	$effect(() => {
+		const next = fill(c.egress?.setting ?? null);
+		untrack(() => {
+			if (route === filled.route && proxy === filled.proxy) {
+				route = next.route;
+				proxy = next.proxy;
+			}
+			filled = next;
+		});
 	});
 
 	// A companion's SOCKS5 launch always has the proxy resolve names (`socks5://`, manager.rs
@@ -88,6 +103,10 @@
 					}
 				}
 			});
+			// Null is Cancel, or this editor unmounting (the row lost its route, the screen closed):
+			// onDestroy dismisses the dialog, which resolves null even if the PUT had already gone
+			// out. That save may still apply; the store's refresh shows the row's route either way,
+			// so nothing here claims it was or wasn't saved.
 			if (r === null) return;
 			if ('refused' in r) {
 				onrefused(egressWords(r.refused));

@@ -144,6 +144,7 @@
 	"settings_companions_route_socks5": "through the SOCKS5 proxy {proxy}",
 	"settings_companions_route_interface": "bound to a network interface",
 	"settings_companions_route_bind_address": "bound to a local address",
+	"settings_companions_route_unknown": "a kind this version of Lodestar can't describe",
 	"settings_companions_route_unreadable": "Its saved route can't be read, so it stays stopped until you set a new one.",
 	"settings_companions_route_from_saved": "Set here for this companion.",
 	"settings_companions_route_from_source": "Copied from the source it serves. It becomes this companion's own at its next start, and a later change to that source's route doesn't reach it.",

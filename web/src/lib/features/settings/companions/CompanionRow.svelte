@@ -56,7 +56,16 @@
 		await tick();
 		heading?.focus();
 	}
-	const routeRefused = (text: string) => (error = text);
+	// A new try (empty text) or a refusal: an older note (a saved route, a restart) is out of date.
+	function routeRefused(text: string) {
+		error = text;
+		note = '';
+	}
+	// The row lost its route (a refresh without one, or uninstalled): the editor's panel closes, so
+	// it doesn't come back open when the route does.
+	$effect(() => {
+		if (!routeOffered && panel === 'route') panel = null;
+	});
 
 	async function openOffer() {
 		busy = 'offer';
