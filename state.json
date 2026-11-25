@@ -10838,6 +10838,14 @@
       "reviewed_head": "e0b5b3ed5618311a9f2fbe4a0bfec41ef5e8b25b",
       "merged_head": "ab8568a2f4673c05d43dbb84521a39ddfda31b0d (delta 3a03885d accepted + pure-main catch-up)",
       "at": "2026-11-25T02:51Z"
+    },
+    {
+      "pr": 1122,
+      "slice": "X-split-spill-horizon",
+      "merge": "f347618836f0c5afe3120d40aef8b7546baded12",
+      "reviewed_head": "04abd89984b4bc30529af52c6f99906912f0cb7d",
+      "merged_head": "2066310f4074f8b1cc6b93bc15636ed89a24a4d7 (pure-main catch-up)",
+      "at": "2026-11-25T03:17Z"
     }
   ],
   "active_sessions": {
@@ -11108,24 +11116,19 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-25T02:51Z",
+    "updated": "2026-11-25T03:17Z",
     "items": [
       {
         "slot": 1,
         "model": "sonnet",
         "status": "idle",
-        "doing": "empty: owner hold; #1123 merged 2026-11-25T02:51Z"
+        "doing": "empty: runner paused by the owner 2026-11-25T03:17Z"
       },
       {
         "slot": 2,
-        "slice": "X-split-spill-horizon",
-        "role": "build",
         "model": "opus",
-        "agent": "opus",
-        "doing": "#1122 rv-1122 MERGE / PASS; asked to bring main in once (02:30Z); merge if pure main | owner hold",
-        "since": "2026-11-24T22:00Z",
-        "status": "active",
-        "pr": 1122
+        "status": "idle",
+        "doing": "empty: runner paused by the owner 2026-11-25T03:17Z"
       },
       {
         "slot": 3,
@@ -11134,12 +11137,12 @@
         "owns_extra": [
           "crates/pipeline/src/control.rs (purge_step only, ~6 lines: pass always-adult sources to the store before each step; coordinator relay 20:39Z)"
         ],
-        "doing": "empty: owner hold (no new slices); #1120 merged 2026-11-25T00:47Z"
+        "doing": "empty: runner paused by the owner 2026-11-25T03:17Z"
       },
       {
         "slot": 4,
         "status": "idle",
-        "doing": "empty: owner hold; #1119 merged 2026-11-25T02:29Z"
+        "doing": "empty: runner paused by the owner 2026-11-25T03:17Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
@@ -11272,7 +11275,16 @@
         "slot 1 X-web-followups-1124"
       ],
       "effect": "after the last of the four merges: all runner work pauses (no slices, no queued starts, no runner docs PR, no other runner jobs) until the owner says otherwise",
-      "state": "draining"
+      "state": "paused",
+      "paused_at": "2026-11-25T03:17Z"
+    },
+    "all_runner_work": {
+      "paused": true,
+      "since": "2026-11-25T03:17Z",
+      "by": "owner",
+      "words": "pause once those four are done.",
+      "effect": "no slices, no queued starts, no reviews, no merges, no runner docs PR, no other runner jobs until the owner says otherwise",
+      "resume": "on the owner's word: start X-restart-fuzz-v2 and X-gs-followups-2 (briefs written); then the metrics.md runner docs PR (runner_todo)"
     }
   },
   "owner_queue_pending": [
@@ -12081,7 +12093,8 @@
       "by": "owner, Claude Duet chat",
       "scope": "no new slices start; in-flight reviews and merges finish (#1120, #1119, #1122, slot 1 X-web-followups-1124); each slot stays empty when it frees",
       "words": "I'm out of usage. Please do not start new slices until I say otherwise.",
-      "after_drain": "owner 00:17:47Z: pause once those four are done"
+      "after_drain": "owner 00:17:47Z: pause once those four are done",
+      "paused_at": "2026-11-25T03:17Z"
     },
     {
       "since": "2026-11-23T06:09Z",
@@ -12165,7 +12178,5 @@
     "held": true,
     "note": "owner hold 2026-11-25T00:16Z: no new slices. Queued for when it lifts: slot 3 X-restart-fuzz-v2, slot 2 X-gs-followups-2."
   },
-  "merge_order": [
-    "#1122 X-split-spill-horizon: brings main in once after #1119; last of the four"
-  ]
+  "merge_order": []
 }
