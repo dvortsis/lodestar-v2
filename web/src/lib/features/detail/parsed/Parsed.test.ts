@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { clearDetailCaches } from '../cache';
 import { HASH, searchHit } from '../fixtures';
 
 const get = vi.hoisted(() => vi.fn());
@@ -16,11 +17,14 @@ const identity = {
 	title_words: ['show'],
 	years: ['2019', '2020-2021']
 };
-beforeEach(() => get.mockReset());
+beforeEach(() => {
+	get.mockReset();
+	clearDetailCaches(false); // the siblings answer is kept: nothing carries into the next test
+});
 
 describe('Parsed', () => {
 	it('shows the title with its provenance and the type, then the spans from siblings', async () => {
-		get.mockResolvedValue({ identity });
+		get.mockResolvedValue({ hash: HASH, identity });
 		render(Parsed, { hash: HASH, hit: searchHit({ resolved_via: 'folder', adult_kind: null }) });
 		expect(screen.getByTestId('detail-parsed-title').textContent).toContain('Show');
 		expect(screen.getByTestId('detail-parsed-provenance').textContent).toBe('Resolved via folder');
@@ -37,13 +41,13 @@ describe('Parsed', () => {
 	});
 
 	it('says "From: name" when nothing was resolved', () => {
-		get.mockResolvedValue({ identity: null });
+		get.mockResolvedValue({ hash: HASH, identity: null });
 		render(Parsed, { hash: HASH, hit: searchHit({ resolved_via: null }) });
 		expect(screen.getByTestId('detail-parsed-provenance').textContent).toBe('From: name');
 	});
 
 	it('adds the adult type for an adult torrent, and shows an unknown type as sent', () => {
-		get.mockResolvedValue({ identity: null });
+		get.mockResolvedValue({ hash: HASH, identity: null });
 		const { unmount } = render(Parsed, {
 			hash: HASH,
 			hit: searchHit({ content_type: 'adult', adult_kind: 'vr' })
@@ -55,7 +59,7 @@ describe('Parsed', () => {
 	});
 
 	it('leaves out spans the server did not send, and shows "Not parsed" without a hit', async () => {
-		get.mockResolvedValue({ identity: { ...identity, absolute: [], years: [] } });
+		get.mockResolvedValue({ hash: HASH, identity: { ...identity, absolute: [], years: [] } });
 		render(Parsed, { hash: HASH, hit: null });
 		expect(screen.getByTestId('detail-parsed-title').textContent?.trim()).toBe('Not parsed');
 		await waitFor(() => expect(screen.getByTestId('detail-parsed-seasons')).toBeTruthy());
@@ -67,7 +71,7 @@ describe('Parsed', () => {
 		get.mockRejectedValueOnce(new Error('offline'));
 		render(Parsed, { hash: HASH, hit: searchHit() });
 		expect(await screen.findByText("Couldn't load the parsed details.")).toBeTruthy();
-		get.mockResolvedValueOnce({ identity });
+		get.mockResolvedValueOnce({ hash: HASH, identity });
 		await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 		await waitFor(() => expect(screen.getByTestId('detail-parsed-years')).toBeTruthy());
 		for (const word of ['Resolution', 'Codec', 'Language', 'Group', 'Edition']) {
@@ -77,6 +81,7 @@ describe('Parsed', () => {
 
 	it('uses singular labels for one plain value, plural for several or a range', async () => {
 		get.mockResolvedValue({
+			hash: HASH,
 			identity: { ...identity, years: ['2019'], seasons: ['1-2'] }
 		});
 		render(Parsed, { hash: HASH, hit: searchHit() });

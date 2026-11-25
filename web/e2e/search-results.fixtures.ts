@@ -185,7 +185,10 @@ export function server(mock: OpenApiMock, answer: (req: Sent) => Answer) {
 		const h = new URL(request.url()).pathname.split('/').pop()!;
 		return { status: 200, body: detail({ hash: h, magnet: `magnet:?xt=urn:btih:${h}` }) };
 	});
-	mock.on('getTorrentSiblings', siblings());
+	// About the torrent asked for: an answer for another hash is a failure in both Parsed and Related.
+	mock.on('getTorrentSiblings', (request: Request) =>
+		siblings(new URL(request.url()).pathname.split('/')[4] ?? '')
+	);
 	mock.on('listTorrentFiles', { files: [], offset: 3, total: 3 });
 }
 

@@ -432,6 +432,27 @@ pub struct SourceSchedule {
     pub windows: Vec<String>,
 }
 
+/// What a lookup service asks to be credited with (ENR-terms), in its own
+/// prescribed words: shown beside its answers in the detail drawer and in
+/// its Sources row. It comes from the plugin's own terms, compiled into
+/// this build, never from anything the service sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "link": "https://www.themoviedb.org",
+    "text": "Lodestar uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB."
+}))]
+pub struct SourceAttribution {
+    /// The `https` page the credit links to.
+    pub link: String,
+    /// The id of a bundled logo asset, when the service requires its
+    /// logo. **Absent**, never null, when it doesn't.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub logo: Option<String>,
+    /// The credit, word for word as the service prescribes it.
+    pub text: String,
+}
+
 /// One source plugin of this build.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Source {
@@ -449,6 +470,12 @@ pub struct Source {
     #[serde(default)]
     #[schema(required = true)]
     pub always_adult: bool,
+    /// What its service asks to be credited with, from its plugin's own
+    /// terms (ENR-terms): show it in the source's row. **Absent**, never
+    /// null, when its terms ask for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub attribution: Option<SourceAttribution>,
     /// The companion it waits for before it runs (§18.10); null when it
     /// needs none, or has it and it's healthy. Not the same as `needs`,
     /// which is what enabling it asks for.

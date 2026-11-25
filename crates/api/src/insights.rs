@@ -2841,6 +2841,7 @@ mod tests {
                         public: true,
                         endpoints: Vec::new(),
                         always_adult: false,
+                        attribution: None,
                     },
                 )
             })

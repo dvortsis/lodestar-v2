@@ -763,11 +763,13 @@ placement:
   - X-steam-followups
   - X-snapshot-claims-retention
   - X-snapshot-followups-2
+  - X-purge-rederive
 - ws: ws-m7-w5
   match:
   - ENR-11
   - GS-4
   - GS-5
+  - X-gs-followups
   - ENR-13
   - ENR-13b
   - X-always-adult-detail-mask
