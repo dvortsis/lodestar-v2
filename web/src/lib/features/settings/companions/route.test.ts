@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { initLocale } from '$lib/i18n/locale.svelte';
 import { dismissPasswordDialogs } from '../security/confirm';
+import CompanionRow from './CompanionRow.svelte';
 import CompanionsScreen from './CompanionsScreen.svelte';
+import { CompanionsStore } from './store.svelte';
 
 vi.setConfig({ testTimeout: 30_000 });
 const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
@@ -146,6 +148,22 @@ describe('the route on the row', () => {
 		expect(line.textContent).toContain('Copied from the source it serves');
 		expect(select.value).toBe('');
 		expect([...select.options].map((o) => o.value)).toEqual(['', 'direct', 'socks5']);
+	});
+	it('names a bind_address route as one, and an unknown kind in neutral words', async () => {
+		companions[0] = row({ egress: { from: 'saved', setting: { route: 'bind_address' } } });
+		await open();
+		await editor();
+		expect(prowlarr().querySelector('[data-route]')!.textContent).toContain(
+			'bound to a local address'
+		);
+		cleanup();
+		companions[0] = row({ egress: { from: 'saved', setting: { route: 'some_new_kind' } } });
+		await open();
+		await editor();
+		const line = prowlarr().querySelector('[data-route]')!.textContent ?? '';
+		expect(line).toContain("Route: a kind this version of Lodestar can't describe");
+		expect(line).not.toContain('local address');
+		expect(line).not.toContain('some_new_kind');
 	});
 	it("says an unreadable route keeps it stopped, never that it's direct", async () => {
 		companions[0] = row({ egress: { from: 'saved', setting: null } });
@@ -381,5 +399,81 @@ describe('the SOCKS5 warnings', () => {
 		await until(() => expect(prowlarr().querySelector('[data-socks-warnings]')).toBeTruthy());
 		await fireEvent.click(within(prowlarr()).getByRole('button', { name: 'Change route' }));
 		await until(() => expect(prowlarr().querySelector('[data-socks-warnings]')).toBeNull());
+	});
+});
+
+// rv-1114 follow-ups (X-web-followups-1124): the row is rendered on its own, so a test can hand it
+// the server's newer row the way a refresh does.
+describe('the editor follows the server (rv-1114)', () => {
+	const socksRow = () =>
+		row({ egress: { from: 'saved', setting: { route: 'socks5', proxy: PROXY, dns: 'proxy' } } });
+	const one = (c: ReturnType<typeof row>) => {
+		const store = new CompanionsStore();
+		store.items = [c] as never;
+		return { store, ...render(CompanionRow, { store, c: c as never }) };
+	};
+
+	it('an untouched form takes a newer route, so Save never sends the older one back', async () => {
+		const { store, rerender } = one(row({}));
+		const form = await editor();
+		expect(kind(form).value).toBe('direct');
+		await rerender({ store, c: socksRow() as never });
+		await until(() => expect(kind(form).value).toBe('socks5'));
+		expect((within(form).getByLabelText('Proxy address') as HTMLInputElement).value).toBe(PROXY);
+		await fireEvent.click(within(form).getByRole('button', { name: 'Save and restart' }));
+		await screen.findByRole('dialog', {}, { timeout: 10_000 });
+		await confirm();
+		await until(() => expect(puts).toHaveLength(1));
+		expect(puts[0]!.body).toMatchObject({ egress: { route: 'socks5', proxy: PROXY } });
+	});
+	it("a form the user changed keeps their choice when the server's route changes", async () => {
+		const { store, rerender } = one(row({}));
+		const form = await editor();
+		await fireEvent.change(kind(form), { target: { value: 'socks5' } });
+		await fireEvent.input(within(form).getByLabelText('Proxy address'), {
+			target: { value: '10.9.9.9:1080' }
+		});
+		await rerender({ store, c: socksRow() as never });
+		// The row took the newer route (the line above the form says so) and the form kept the edit.
+		await until(() =>
+			expect(prowlarr().querySelector('[data-route]')!.textContent).toContain('SOCKS5 proxy')
+		);
+		await rerender({ store, c: row({}) as never });
+		await until(() =>
+			expect(prowlarr().querySelector('[data-route]')!.textContent).toContain('directly')
+		);
+		expect(kind(form).value).toBe('socks5');
+		expect((within(form).getByLabelText('Proxy address') as HTMLInputElement).value).toBe(
+			'10.9.9.9:1080'
+		);
+	});
+	it('the route panel closes when the row loses its route, and stays closed when it returns', async () => {
+		const { store, rerender } = one(row({}));
+		await editor();
+		await rerender({ store, c: row({ egress: null }) as never });
+		await until(() => expect(prowlarr().querySelector('[data-route-editor]')).toBeNull());
+		await rerender({ store, c: row({}) as never });
+		await until(() =>
+			expect(within(prowlarr()).getByRole('button', { name: 'Change route' })).toBeTruthy()
+		);
+		expect(prowlarr().querySelector('[data-route-editor]')).toBeNull();
+		expect(
+			within(prowlarr()).getByRole('button', { name: 'Change route' }).getAttribute('aria-expanded')
+		).toBe('false');
+	});
+	it("a refusal replaces an older saved route's note instead of showing both", async () => {
+		await open();
+		await socksAndSave();
+		await confirm();
+		await until(() =>
+			expect(prowlarr().textContent).toContain('Restarting Prowlarr on the new route')
+		);
+		answer = () => fail(409, 'busy');
+		await socksAndSave();
+		await confirm();
+		await until(() =>
+			expect(prowlarr().textContent).toContain('Something else is changing this companion')
+		);
+		expect(prowlarr().textContent).not.toContain('Restarting Prowlarr on the new route');
 	});
 });

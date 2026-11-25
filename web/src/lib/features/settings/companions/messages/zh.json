@@ -144,6 +144,7 @@
 	"settings_companions_route_socks5": "通过 SOCKS5 代理 {proxy}",
 	"settings_companions_route_interface": "绑定到网络接口",
 	"settings_companions_route_bind_address": "绑定到本地地址",
+	"settings_companions_route_unknown": "此版本的 Lodestar 无法描述的类型",
 	"settings_companions_route_unreadable": "无法读取已保存的线路，因此在你设置新线路之前它会保持停止。",
 	"settings_companions_route_from_saved": "这是在此为该配套组件设置的线路。",
 	"settings_companions_route_from_source": "从它服务的来源复制而来。下次启动时会成为它自己的线路，之后对该来源线路的更改不会传到它这里。",

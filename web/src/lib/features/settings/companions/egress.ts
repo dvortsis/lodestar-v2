@@ -19,8 +19,11 @@ export function routeText(s: EgressSetting | null): string {
 			return r(m.settings_companions_route_socks5({ proxy: s.proxy ?? '' }).trimEnd());
 		case 'interface':
 			return r(m.settings_companions_route_interface());
-		default:
+		case 'bind_address':
 			return r(m.settings_companions_route_bind_address());
+		default:
+			// A kind newer than this UI: say so, never guess which one it is.
+			return r(m.settings_companions_route_unknown());
 	}
 }
 

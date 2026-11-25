@@ -835,6 +835,7 @@ placement:
   - X-ci-filter-docs-user
   - X-companions-mount-check
   - X-cmp-egress-ui
+  - X-web-followups-1124
   - D-companions-guide
   - X-cmp0-polish
   - X-cmp4b-mounts
