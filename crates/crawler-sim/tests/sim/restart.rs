@@ -350,7 +350,8 @@ pub async fn run(
         one.dht.sample_stale
     );
     // X-split-resume-gate: the cooldowns leg 1 moved out of a full table
-    // (a gauge: slots in use at the stop, ended ones not yet swept).
+    // (a gauge: live ones as of the stop's last tick; since
+    // X-split-spill-horizon, ended ones don't count, swept or not).
     let spilled1 = one.dht.sample_spill_slots;
     if split {
         let _ = writeln!(text, "spill_slots_at_stop={spilled1}");
@@ -482,7 +483,8 @@ pub async fn run(
             "restored = pending + honoured"
         );
         // With the split on, a node can be held by the spill filter
-        // instead (one slot each, short of a rare shared slot).
+        // instead (one live slot each; the gauge counts live slots only,
+        // so ended ones can't make up for a node the snapshot lost).
         let held = restored + if split { spilled1 } else { 0 };
         assert!(
             held as usize >= restricted,
