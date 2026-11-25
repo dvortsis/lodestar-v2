@@ -9233,11 +9233,15 @@
       "id": "X-split-restart-metrics",
       "from": "rv-1118",
       "owns": [
-        "crates/dht/src/restart.rs",
-        "crates/dht/src/node/proof.rs"
+        "crates/crawler-sim/tests/sim/**",
+        "crates/dht/src/node/proof.rs",
+        "crates/dht/src/node/sampler.rs",
+        "crates/dht/src/node/sampler/**",
+        "crates/dht/src/restart.rs"
       ],
       "items": [
-        "rv-1118 nits outside X-split-spill-horizon: restart.rs seed clones the spill section (move it); proof.rs apply_seed(sampler, Instant::now()) -> clock.mono()"
+        "rv-1118 nits outside X-split-spill-horizon: restart.rs seed clones the spill section (move it); proof.rs apply_seed(sampler, Instant::now()) -> clock.mono()",
+        "rv-1122 nits: wide() test helper overflows u32 past ~16M addresses (release-only measurement relies on wrapping); day test runs exactly 24 h (make it >24 h); test comments say \"owner's brief\"; spill_used doc says \"as of the last prune\" but counts inserts since; add the hard line to the sampler proptest"
       ],
       "model": "opus",
       "added": "2026-11-24",
@@ -9469,6 +9473,13 @@
     },
     "PR227": {
       "reviewer": "session_01MMjhnBqY1uGE5su7ioUMTQ"
+    },
+    "1122": {
+      "file": "reviews/rv-1122.md",
+      "head": "04abd89984b4bc30529af52c6f99906912f0cb7d",
+      "verdict": "MERGE",
+      "security": "PASS",
+      "at": "2026-11-25T00:40Z"
     }
   },
   "log": [
@@ -11074,7 +11085,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1122 ready at 04abd899 (ci-ok/web-ok/e2e-ok green); fresh Opus review rv-1122 running 2026-11-25T00:14Z; merges after #1120 and #1119 (one catch-up each) | owner hold: slot stays empty when this merges",
+        "doing": "#1122 rv-1122 MERGE / SECURITY PASS on 04abd899; merges after #1120 and #1119 (catch-up then, check pure main) | owner hold: slot stays empty when this merges",
         "since": "2026-11-24T22:00Z",
         "status": "active",
         "pr": 1122
@@ -12120,7 +12131,8 @@
   "runner_todo": [
     "After #1117 merges: put the kill-switch requirement in the ENR wiring slice's notes (runner PR).",
     "Runner docs PR for docs/metrics.md (now unblocked, #1118 merged): (a) dht_sample_frontier can reach 40,000 with escalation (rv-1112); (b) drop the ~6 h restart-gate sentence (:676); (c) dht_sample_spill_slots (:677): not 0 with the split off after restoring a v2 snapshot, and not only allocated at first fill (rv-1118). Use the wording for dht_sample_spill_slots and dht_restart_obligations_* in docs/decisions/2026-11-24-X-split-spill-horizon.md; land after #1122.",
-    "Runner records PR: X-gs-followups slices.yaml owns gains web/e2e/search-results.fixtures.ts and web/e2e/search-results-adaptive.routes.test.ts-snapshots/search-drawer-1440-linux.png (rv-1121)."
+    "Runner records PR: X-gs-followups slices.yaml owns gains web/e2e/search-results.fixtures.ts and web/e2e/search-results-adaptive.routes.test.ts-snapshots/search-drawer-1440-linux.png (rv-1121).",
+    "metrics docs PR (held by owner pause): also docs/metrics.md:677 and crates/lodestar/src/metrics.rs:1643 help text: dht_sample_spill_slots now counts live cooldowns only (rv-1122)"
   ],
   "owns_locks": [
     {
