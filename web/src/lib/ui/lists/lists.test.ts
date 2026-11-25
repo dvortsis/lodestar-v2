@@ -7,6 +7,8 @@ import TreeHarness from './testing/TreeHarness.svelte';
 import Tree from './Tree.svelte';
 import type { FlatNode } from './tree-model';
 
+// The waits below use a 10 s deadline (WAIT), so a test needs longer than vitest's 5 s default.
+vi.setConfig({ testTimeout: 30_000 });
 beforeAll(() => stubLayout());
 
 const rowBox = (n: number) =>
