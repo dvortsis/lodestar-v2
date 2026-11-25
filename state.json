@@ -11053,7 +11053,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-24T23:58Z",
+    "updated": "2026-11-25T00:20Z",
     "items": [
       {
         "slot": 1,
@@ -11071,7 +11071,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1122 at 04abd899 (docs-only push: scaled-cooldown call recorded), CI running; review on ready",
+        "doing": "#1122 ready at 04abd899 (ci-ok/web-ok/e2e-ok green); fresh Opus review rv-1122 running 2026-11-25T00:14Z; merges after #1120 and #1119 (one catch-up each)",
         "since": "2026-11-24T22:00Z",
         "status": "active",
         "pr": 1122
@@ -11082,7 +11082,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1120 at cf7e908d: delta accepted (catch-up pure main + fixes); merges when ci-ok green",
+        "doing": "#1120 at cf7e908d: delta accepted; web-ok/e2e-ok green, ci-ok still running; merges first",
         "since": "2026-11-24T20:40Z",
         "status": "active",
         "owns_extra": [
@@ -12109,14 +12109,23 @@
       "note": "assign no other control.rs slice until X-purge-rederive merges; X-tcache-recheck already merged (no slot needed)"
     }
   ],
-  "next_pick": {
-    "slot": 3,
-    "slice": "X-restart-fuzz-v2",
-    "brief": "briefs/X-restart-fuzz-v2.md",
-    "when": "after #1120 merges"
-  },
+  "next_pick": [
+    {
+      "slot": 3,
+      "slice": "X-restart-fuzz-v2",
+      "brief": "briefs/X-restart-fuzz-v2.md",
+      "when": "after #1120 merges"
+    },
+    {
+      "slot": 2,
+      "slice": "X-gs-followups-2",
+      "brief": "briefs/X-gs-followups-2.md",
+      "when": "after #1122 merges"
+    }
+  ],
   "merge_order": [
     "#1120 X-purge-rederive",
-    "#1119 ENR-terms-api (catch-up after #1120)"
+    "#1119 ENR-terms-api (catch-up after #1120)",
+    "#1122 X-split-spill-horizon (review rv-1122; catch-up after #1119)"
   ]
 }
