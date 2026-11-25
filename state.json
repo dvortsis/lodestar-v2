@@ -10797,6 +10797,13 @@
       "merged_as": "0c10e80fe1c6c7c84d73bf83ef5d13a1852edaa1",
       "head": "d77058cb8a0c96bf3f7641b6bb843ff8f91e4f35",
       "at": "2026-11-24T23:58Z"
+    },
+    {
+      "pr": 1120,
+      "slice": "X-purge-rederive",
+      "merge": "fcfb45f5c68e0d1ba37f4c8f0bf4ac8c8541645f",
+      "reviewed_head": "cf7e908d1efb5bea24ead8e80c7035da16c62591",
+      "at": "2026-11-25T00:47Z"
     }
   ],
   "active_sessions": {
@@ -11067,7 +11074,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-25T00:25Z",
+    "updated": "2026-11-25T00:48Z",
     "items": [
       {
         "slot": 1,
@@ -11092,23 +11099,18 @@
       },
       {
         "slot": 3,
-        "slice": "X-purge-rederive",
-        "role": "build",
         "model": "opus",
-        "agent": "opus",
-        "doing": "#1120 at cf7e908d: delta accepted; web-ok/e2e-ok green, ci-ok still running; merges first | owner hold: slot stays empty when this merges",
-        "since": "2026-11-24T20:40Z",
-        "status": "active",
+        "status": "idle",
         "owns_extra": [
           "crates/pipeline/src/control.rs (purge_step only, ~6 lines: pass always-adult sources to the store before each step; coordinator relay 20:39Z)"
         ],
-        "pr": 1120
+        "doing": "empty: owner hold (no new slices); #1120 merged 2026-11-25T00:47Z"
       },
       {
         "slot": 4,
         "slice": "ENR-terms-api",
         "role": "build",
-        "doing": "#1119 rv-1119 MERGE / SECURITY PASS on 5ffdaec2; catch-up after #1120 merges, then merge if pure main | owner hold: slot stays empty when this merges",
+        "doing": "#1119 rv-1119 MERGE / PASS on 5ffdaec2; asked to bring main in after #1120 merged (00:48Z); merge if pure main | owner hold: slot stays empty when this merges",
         "since": "2026-11-24T15:40Z",
         "status": "active",
         "agent": "opus",
@@ -12134,24 +12136,12 @@
     "Runner records PR: X-gs-followups slices.yaml owns gains web/e2e/search-results.fixtures.ts and web/e2e/search-results-adaptive.routes.test.ts-snapshots/search-drawer-1440-linux.png (rv-1121).",
     "metrics docs PR (held by owner pause): also docs/metrics.md:677 and crates/lodestar/src/metrics.rs:1643 help text: dht_sample_spill_slots now counts live cooldowns only (rv-1122)"
   ],
-  "owns_locks": [
-    {
-      "path": "crates/pipeline/src/control.rs",
-      "held_by": "X-purge-rederive (slot 3)",
-      "since": "2026-11-24T20:39Z",
-      "blocks": [
-        "X-consent-gate-lift-account",
-        "X-consent-gate-lift-external"
-      ],
-      "note": "assign no other control.rs slice until X-purge-rederive merges; X-tcache-recheck already merged (no slot needed)"
-    }
-  ],
+  "owns_locks": [],
   "next_pick": {
     "held": true,
     "note": "owner hold 2026-11-25T00:16Z: no new slices. Queued for when it lifts: slot 3 X-restart-fuzz-v2, slot 2 X-gs-followups-2."
   },
   "merge_order": [
-    "#1120 X-purge-rederive",
     "#1119 ENR-terms-api (catch-up after #1120)",
     "#1122 X-split-spill-horizon (review rv-1122; catch-up after #1119)",
     "slot 1 X-web-followups-1124 when ready"
