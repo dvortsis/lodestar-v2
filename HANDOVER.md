@@ -1,7 +1,7 @@
 # Handover: the build is held by the owner's Claude Duet chat
 
 
-**Owner hold, 2026-11-25T00:16Z:** "I'm out of usage. Please do not start new slices until I say otherwise." Finish in-flight reviews and merges (#1120, #1119, #1122, slot 1's PR), then leave each slot empty. On the owner's word, start X-restart-fuzz-v2 and X-gs-followups-2 (briefs written).
+**Owner hold, 2026-11-25T00:16Z:** "I'm out of usage. Please do not start new slices until I say otherwise." Finish in-flight reviews and merges (#1120, #1119, #1122, slot 1's PR), then leave each slot empty. Owner 00:17:47Z: "pause once those four are done." After the last of the four merges, all runner work pauses (no runner docs PR or other jobs either). On the owner's word, start X-restart-fuzz-v2 and X-gs-followups-2 (briefs written).
 **Send runner messages to: `session_01MMjhnCpMMYF4uEW49L9SpF`** (the same session as `cse_01MMjhnCpMMYF4uEW49L9SpF`). This is the holder's bookkeeping thread. It answers for the runner: slice and PR readiness, X-test-vm and API-lane questions. Don't message the paused runner session `session_01EYhgh4JX3AmHzKXPjYCoUg`.
 
 **Holder:** the owner's Claude Duet chat. Its coordinator session (`session_01MMjhn8V1uDvWKEpC8V3BHU`) starts one thread session per build slot; its bookkeeping thread (`session_01MMjhnCpMMYF4uEW49L9SpF`) keeps `state.json`, the dashboard, API-lane answers, X-test-vm support and the merge gate.

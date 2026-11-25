@@ -11223,7 +11223,20 @@
     "by": "owner, Claude Duet chat 2026-11-25T00:16:17Z",
     "words": "I'm out of usage. Please do not start new slices until I say otherwise.",
     "scope": "no new slices start; in-flight reviews and merges finish (#1120, #1119, #1122, slot 1 X-web-followups-1124); each slot stays empty when it frees",
-    "resume": "only on the owner's word; then start X-restart-fuzz-v2 (briefs/X-restart-fuzz-v2.md) and X-gs-followups-2 (briefs/X-gs-followups-2.md)"
+    "resume": "only on the owner's word; then start X-restart-fuzz-v2 (briefs/X-restart-fuzz-v2.md) and X-gs-followups-2 (briefs/X-gs-followups-2.md)",
+    "after_drain": {
+      "at": "2026-11-25T00:17:47Z",
+      "by": "owner, Claude Duet chat",
+      "words": "pause once those four are done.",
+      "four": [
+        "#1120 X-purge-rederive",
+        "#1119 ENR-terms-api",
+        "#1122 X-split-spill-horizon",
+        "slot 1 X-web-followups-1124"
+      ],
+      "effect": "after the last of the four merges: all runner work pauses (no slices, no queued starts, no runner docs PR, no other runner jobs) until the owner says otherwise",
+      "state": "draining"
+    }
   },
   "owner_queue_pending": [
     {
@@ -12030,7 +12043,8 @@
       "since": "2026-11-25T00:16Z",
       "by": "owner, Claude Duet chat",
       "scope": "no new slices start; in-flight reviews and merges finish (#1120, #1119, #1122, slot 1 X-web-followups-1124); each slot stays empty when it frees",
-      "words": "I'm out of usage. Please do not start new slices until I say otherwise."
+      "words": "I'm out of usage. Please do not start new slices until I say otherwise.",
+      "after_drain": "owner 00:17:47Z: pause once those four are done"
     },
     {
       "since": "2026-11-23T06:09Z",
