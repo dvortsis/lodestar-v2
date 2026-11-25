@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
+use super::ops::SourceAttribution;
+
 /// `GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),
 /// its swarm section (§7.2) and the first 500 files.
 ///
@@ -133,6 +135,7 @@ pub struct AdultEnrichment {
 #[schema(example = json!({
     "alternatives": [{
         "alt_titles": [{"language": "ja", "title": "ショーシャンクの空に"}],
+        "attribution": {"link": "https://www.wikidata.org", "text": "Wikidata (CC0)"},
         "canonical_title": "The Shawshank Redemption",
         "chosen": true,
         "confidence": 92,
@@ -161,6 +164,13 @@ pub struct IdentifiedAs {
 pub struct Identification {
     /// Other titles the work is known by, at most 32.
     pub alt_titles: Vec<IdentifiedTitle>,
+    /// What the answering service asks to be credited with, from its
+    /// plugin's own terms (ENR-terms): show it beside the answer.
+    /// **Absent**, never null, when its terms ask for none, or the host
+    /// doesn't run its plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub attribution: Option<SourceAttribution>,
     /// The work's own title in the plugin's database.
     #[schema(required = true)]
     pub canonical_title: Option<String>,
@@ -246,8 +256,9 @@ pub struct Provenance {
     /// It has verified metadata (§18.5). Always true here: a torrent's
     /// detail is its BEP 9 info dictionary.
     pub verified: bool,
-    /// Sources or claims were left out because they're private and this
-    /// caller isn't the admin session.
+    /// Sources or claims were left out because this caller isn't the
+    /// admin session: they're private, or a claim's source's terms keep
+    /// its data inside Lodestar (ENR-terms).
     pub withheld: bool,
 }
 

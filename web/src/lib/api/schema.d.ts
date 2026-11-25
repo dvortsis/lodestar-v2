@@ -5976,6 +5976,13 @@ export interface components {
         Identification: {
             /** @description Other titles the work is known by, at most 32. */
             alt_titles: components["schemas"]["IdentifiedTitle"][];
+            /**
+             * @description What the answering service asks to be credited with, from its
+             *     plugin's own terms (ENR-terms): show it beside the answer.
+             *     **Absent**, never null, when its terms ask for none, or the host
+             *     doesn't run its plugin.
+             */
+            attribution?: components["schemas"]["SourceAttribution"];
             /** @description The work's own title in the plugin's database. */
             canonical_title: string | null;
             /**
@@ -6021,6 +6028,10 @@ export interface components {
          *               "title": "ショーシャンクの空に"
          *             }
          *           ],
+         *           "attribution": {
+         *             "link": "https://www.wikidata.org",
+         *             "text": "Wikidata (CC0)"
+         *           },
          *           "canonical_title": "The Shawshank Redemption",
          *           "chosen": true,
          *           "confidence": 92,
@@ -7931,8 +7942,9 @@ export interface components {
              */
             verified: boolean;
             /**
-             * @description Sources or claims were left out because they're private and this
-             *     caller isn't the admin session.
+             * @description Sources or claims were left out because this caller isn't the
+             *     admin session: they're private, or a claim's source's terms keep
+             *     its data inside Lodestar (ENR-terms).
              */
             withheld: boolean;
         };
@@ -9649,6 +9661,12 @@ export interface components {
              */
             always_adult: boolean;
             /**
+             * @description What its service asks to be credited with, from its plugin's own
+             *     terms (ENR-terms): show it in the source's row. **Absent**, never
+             *     null, when its terms ask for none.
+             */
+            attribution?: components["schemas"]["SourceAttribution"];
+            /**
              * @description The companion it waits for before it runs (§18.10); null when it
              *     needs none, or has it and it's healthy. Not the same as `needs`,
              *     which is what enabling it asks for.
@@ -9889,6 +9907,27 @@ export interface components {
              */
             state: "enabled" | "paused" | "disabled" | "purged";
             version: string;
+        };
+        /**
+         * @description What a lookup service asks to be credited with (ENR-terms), in its own
+         *     prescribed words: shown beside its answers in the detail drawer and in
+         *     its Sources row. It comes from the plugin's own terms, compiled into
+         *     this build, never from anything the service sent.
+         * @example {
+         *       "link": "https://www.themoviedb.org",
+         *       "text": "Lodestar uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB."
+         *     }
+         */
+        SourceAttribution: {
+            /** @description The `https` page the credit links to. */
+            link: string;
+            /**
+             * @description The id of a bundled logo asset, when the service requires its
+             *     logo. **Absent**, never null, when it doesn't.
+             */
+            logo?: string;
+            /** @description The credit, word for word as the service prescribes it. */
+            text: string;
         };
         /** @description How a source is doing. */
         SourceHealth: {

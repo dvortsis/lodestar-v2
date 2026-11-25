@@ -15,9 +15,9 @@ use lodestar_api::ops::{
     BoxFuture, CompanionNeed, CompanionNeedState, ConsentClass, CrawlerRuntime, CredentialField,
     CredentialKind, DhtStatus, EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState,
     ExternalAddress, FetchStatus, NetworkCheck, OpsApi, OpsError, PortMapping, ReachReason,
-    RiskLevel, SamplingBlocked, Secret, SocksDns, Source, SourceAgents, SourceEgress, SourceHealth,
-    SourceKind, SourceNeed, SourcePatch, SourcePriority, SourceSchedule, SourceState,
-    StatsResponse, parse_proxy, parse_window, window_text,
+    RiskLevel, SamplingBlocked, Secret, SocksDns, Source, SourceAgents, SourceAttribution,
+    SourceEgress, SourceHealth, SourceKind, SourceNeed, SourcePatch, SourcePriority,
+    SourceSchedule, SourceState, StatsResponse, parse_proxy, parse_window, window_text,
 };
 use lodestar_dht::node::{NodeHandle, StatsSnapshot};
 use lodestar_pipeline::Monitor;
@@ -449,6 +449,18 @@ fn companion_need(state: CompanionState) -> Option<CompanionNeed> {
     })
 }
 
+/// What the plugin `id`'s service asks to be credited with: its own
+/// terms, compiled into this build (ENR-terms-api), never anything the
+/// service sent. `None` when its terms ask for none, or it declares none.
+fn attribution(id: &str) -> Option<SourceAttribution> {
+    let a = lodestar_sources_plugins::catalogue::terms(id)?.attribution?;
+    Some(SourceAttribution {
+        link: a.link.to_owned(),
+        logo: a.logo.map(str::to_owned),
+        text: a.text.to_owned(),
+    })
+}
+
 fn source(v: SourceView, companion: CompanionState) -> Source {
     let m = &v.status.manifest;
     let state = match v.state {
@@ -481,6 +493,7 @@ fn source(v: SourceView, companion: CompanionState) -> Source {
         // Exactly what an acknowledgement covers.
         endpoints: consent_rules::addresses(m),
         always_adult: m.always_adult,
+        attribution: attribution(m.id),
         finds_private: m.finds_private,
         health: SourceHealth {
             harvested_24h: v.harvested_24h,
@@ -890,6 +903,39 @@ mod companion_need_tests {
         let back: CompanionNeed =
             serde_json::from_str(r#"{"companion":"prowlarr","state":"unhealthy"}"#).unwrap();
         assert_eq!(back.state, CompanionNeedState::Unhealthy);
+    }
+}
+
+/// `Source.attribution` (ENR-terms-api): each lookup plugin's credit from
+/// its own compiled terms, word for word, and none for a plugin whose
+/// terms carry none or that declares no terms.
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+
+    #[test]
+    fn the_credit_is_the_plugins_own_terms() {
+        use lodestar_sources_plugins::{catalogue, tmdb, wikidata};
+        let a = attribution(wikidata::ID).unwrap();
+        let want = wikidata::TERMS.attribution.unwrap();
+        assert_eq!((a.text.as_str(), a.link.as_str()), (want.text, want.link));
+        assert_eq!(a.logo.as_deref(), want.logo);
+        let a = attribution(tmdb::ID).unwrap();
+        assert_eq!(a.text, tmdb::ATTRIBUTION);
+        assert_eq!(a.link, tmdb::ATTRIBUTION_URL);
+        for m in catalogue::manifests() {
+            let terms = catalogue::terms(m.id);
+            assert_eq!(
+                attribution(m.id).is_some(),
+                terms.is_some_and(|t| t.attribution.is_some()),
+                "{}",
+                m.id
+            );
+        }
+        assert_eq!(attribution("dht"), None);
+        assert_eq!(attribution("no-such-plugin"), None);
+        let json = serde_json::to_value(attribution(wikidata::ID)).unwrap();
+        assert!(json.as_object().unwrap().get("logo").is_none(), "{json}");
     }
 }
 
