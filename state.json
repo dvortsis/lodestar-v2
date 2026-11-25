@@ -9277,6 +9277,12 @@
       ],
       "model": "opus",
       "added": "2026-11-25"
+    },
+    {
+      "id": "X-results-table-comment",
+      "from": "X-web-followups-1124 (#1123)",
+      "note": "ResultsTable.svelte comment \"Unlike the list (so far)\" is stale now the list keeps its active row; fold into X-gs-followups-2 (owns ResultsTable.svelte).",
+      "added": "2026-11-25"
     }
   ],
   "main_health": {
@@ -11074,7 +11080,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-25T00:50Z",
+    "updated": "2026-11-25T01:05Z",
     "items": [
       {
         "slot": 1,
@@ -11082,7 +11088,7 @@
         "role": "build",
         "model": "sonnet",
         "agent": "sonnet",
-        "doing": "#1123 opened at e0b5b3ed, CI running; 3 size raises (+69/+77/+81 B, VirtualList) for the runner \u00a72.26 call at review | owner hold: slot stays empty when this merges",
+        "doing": "#1123 ready at e0b5b3ed (ci-ok/web-ok/e2e-ok green); fresh Opus review rv-1123 running 01:05Z; merges after #1119 and #1122; last of the four, full pause after | owner hold",
         "since": "2026-11-24T23:58Z",
         "status": "active",
         "pr": 1123
@@ -12145,6 +12151,6 @@
   "merge_order": [
     "#1119 ENR-terms-api (catch-up after #1120)",
     "#1122 X-split-spill-horizon (review rv-1122; catch-up after #1119)",
-    "slot 1 X-web-followups-1124 when ready"
+    "#1123 X-web-followups-1124 (review rv-1123; web area: catch-up only if a web merge lands first)"
   ]
 }
