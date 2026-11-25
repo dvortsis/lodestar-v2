@@ -2032,3 +2032,82 @@ async fn the_daily_cap_is_clamped() {
     let _ = r.stop.send(true);
     r.task.await.unwrap().unwrap();
 }
+
+/// What [`MANIFEST`] declares: a required `api_key`, its Account consent.
+static CREDENTIALS: [lodestar_sources::consent::CredentialSpec; 1] =
+    [lodestar_sources::consent::CredentialSpec {
+        name: "api_key",
+        label: "API key",
+        kind: lodestar_sources::consent::CredentialKind::Secret,
+        required: true,
+    }];
+
+/// ENR-G follow-up (rv-1117b): ingest stores an answer through the
+/// consented write, which judges consent again inside its own transaction.
+/// Here consent is withdrawn on another connection after ingest's early
+/// check and before the write (from `mark`, which runs between them when
+/// the same batch earns a hold): nothing of the answer is stored. Storing
+/// through the unchecked write would keep it, so this fails if ingest
+/// ever stops using the consented one.
+#[test]
+fn consent_withdrawn_between_the_check_and_the_write_stores_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let mut s = Store::open(&db, StoreConfig::default()).unwrap();
+    let dht = s.register_source("dht", "1", 0).unwrap();
+    let enr = s.register_source(MANIFEST.id, "1", 0).unwrap();
+    s.update_source_secrets(
+        enr,
+        &[("api_key", b"sealed")],
+        &[],
+        Some(SourceState::Enabled),
+    )
+    .unwrap();
+    let filter = stand_in();
+    let enrichers = EnrichSources::listed(1 << enr.get());
+    let consent =
+        adult_enrich::EnricherConsent::of([(enr, &MANIFEST, &CREDENTIALS[..])], enrichers);
+    let ctx = Ctx {
+        enrichers,
+        filter: Some(&filter),
+        consent: Some(&consent),
+        ..Ctx::default()
+    };
+    // Each run: an answer for a clean torrent, and one for a torrent the
+    // floor holds, so the batch writes a hold (calling `mark`) between the
+    // early consent check and the answer's write.
+    let run = |s: &mut Store, n: u8, withdraw: bool| {
+        let (id, key) = put(s, &format!("Garden Scene {n}"), dht, 0, true);
+        let (_, floor) = put(s, &format!("Harbour Scene {n}"), dht, 0, true);
+        filter.update(|core| core.cs.add_hash(floor.0, lodestar_filter::Origin::Imported));
+        let found = [
+            matched(enr, key, section(Some(Kind2::Scene), "Garden")),
+            matched(enr, floor, section(Some(Kind2::Scene), "Harbour")),
+        ];
+        let marked = AtomicBool::new(false);
+        let mark = |_: &Store, _: &[[u8; 20]]| {
+            if withdraw {
+                let mut other = Store::open(&db, StoreConfig::default()).unwrap();
+                other
+                    .update_source_secrets(enr, &[], &["api_key"], None)
+                    .unwrap();
+            }
+            marked.store(true, Ordering::SeqCst);
+        };
+        let stats = UnverifiedStats::default();
+        let engine = filter.current();
+        let done = unverified::ingest(s, &engine, ctx, &found, &stats, T, &mark).unwrap();
+        assert!(marked.load(Ordering::SeqCst), "the hold ran between them");
+        (id, done, stats)
+    };
+    // Consent kept: the answer is stored.
+    let (id, done, _) = run(&mut s, 1, false);
+    assert_eq!(done.matched, vec![id]);
+    assert_eq!(s.torrent_claims(id).unwrap().len(), 1);
+    // Withdrawn in between: refused, nothing stored, nothing pinned.
+    let (id, done, stats) = run(&mut s, 2, true);
+    assert!(done.matched.is_empty(), "{done:?}");
+    assert!(s.torrent_claims(id).unwrap().is_empty());
+    assert_eq!(stats.refused.load(Ordering::Relaxed), 1);
+    assert!(s.source_secret_names(MANIFEST.id).unwrap().is_empty());
+}
