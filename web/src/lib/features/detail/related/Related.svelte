@@ -15,8 +15,8 @@
 	import { TYPE_LABELS } from '$lib/util/content-labels';
 	import { compareHref, torrentHref } from '$lib/features/compare/href';
 	import type { SearchHit, TorrentDetail } from '../cache';
-	import { tick } from 'svelte';
-	import { loadSiblings, type Loaded } from './load';
+	import { getContext, tick } from 'svelte';
+	import { loadSiblings, type Loaded } from '../siblings';
 	import {
 		COMPARE_MAX,
 		base,
@@ -44,10 +44,8 @@
 	let loaded = $state.raw<Loaded>({ status: 'loading' });
 	let attempt = $state(0);
 	let heading = $state<HTMLElement>();
-	$effect(() => {
-		void attempt;
-		return loadSiblings(detail.hash, (s) => (loaded = s));
-	});
+	// One request with Parsed (siblings.ts); a Retry asks again.
+	$effect(() => loadSiblings(detail.hash, (s) => (loaded = s), attempt > 0));
 	// Retry replaces the failed block (and its button) with the loading one: keep focus in the section.
 	async function retry() {
 		attempt++;
@@ -126,15 +124,18 @@
 
 	// In the drawer a row opens in the drawer (one history entry, as j/k does); on /t it's a link.
 	// The new load unmounts this section, link and all, so focus moves to the drawer's title first
-	// (Esc and the keys keep working). `open.ts` is the drawer's own module, already loaded there;
-	// importing it here on demand keeps it out of /t, which never calls it.
+	// (Esc and the keys keep working). The drawer hands its open function down (the 'lodestar.detail.open' context, DetailHostBody), so
+	// this section never imports the drawer's `open.ts` and /t's chunks stay without it.
+	const openInDrawer = getContext<((hash: string, hit: SearchHit) => void) | undefined>(
+		'lodestar.detail.open'
+	);
 	function go(event: MouseEvent, h: SearchHit) {
-		if (mode !== 'drawer' || event.button !== 0) return;
+		if (mode !== 'drawer' || !openInDrawer || event.button !== 0) return;
 		if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
 		event.preventDefault();
 		const host = (event.currentTarget as HTMLElement).closest('[data-testid="drawer"]');
 		host?.querySelector<HTMLElement>('h2[tabindex]')?.focus();
-		void import('../open').then((o) => o.openDetail(h.hash, { hit: h }));
+		openInDrawer(h.hash, h);
 	}
 </script>
 

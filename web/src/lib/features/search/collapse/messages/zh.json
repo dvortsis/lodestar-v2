@@ -7,6 +7,7 @@
 	"search_collapse_others_one": "另有 1 个版本",
 	"search_collapse_others_other": "另有 {count} 个版本",
 	"search_collapse_show_all": "显示全部 {count} 个",
+	"search_collapse_show_all_versions": "显示全部版本",
 	"search_collapse_loading": "正在加载其他版本…",
 	"search_collapse_failed": "无法加载其他版本。",
 	"search_collapse_retry": "重试",

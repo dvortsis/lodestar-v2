@@ -1776,7 +1776,9 @@ export default [
 	// (Others and its styles), the account's Group versions choice the first request needs (grouping,
 	// the groups count and their messages), the tree grid's attributes and the live banner's match of
 	// a grouped answer; opening a group is its own on-demand entry below. Rounded up to 0.01 KB.
-	entry('Search results (lazy)', resultsFirst, '43.51 KB'),
+	// X-gs-followups (runner §2.26): 43.51 → 43.70 KB, measured 43,696 B (+200 B): the active row
+	// carried across a view switch by hash and the clear-then-set re-announce of a group's load.
+	entry('Search results (lazy)', resultsFirst, '43.70 KB'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1821,7 +1823,9 @@ export default [
 	entry('Search cards (lazy)', cardsLazy, '8.15 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	// GS-5: measured 3.01 KB (the rows, their logic, styles and messages), rounded up to 0.01 KB.
-	entry('Search collapse rows (on demand)', collapseLazy, '3.02 KB'),
+	// X-gs-followups (runner §2.26): 3.02 → 3.05 KB, measured 3,044 B (+37 B): Show all's group
+	// total and its no-number wording.
+	entry('Search collapse rows (on demand)', collapseLazy, '3.05 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
 	entry('Search row checkboxes (on demand)', pickLazy, '1.7 KB'),
@@ -1871,7 +1875,9 @@ export default [
 	// X-labels (runner §2.26): 21,979 → 22,129 B, as the drawer.
 	// GS-4 (runner §2.26): 15.48 → 15.69 KB, measured 15,682 B: the Related section's mount (its
 	// placeholder and the dynamic import); the section itself is on demand.
-	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15.69 KB'),
+	// X-gs-followups (runner §2.26): 15.69 → 15.71 KB, measured 15,705 B (+18 B, no /t code: the
+	// shared message barrel and chunk names moved; Settings and Welcome moved by +9 and −2 B too).
+	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15.71 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[
@@ -1884,10 +1890,10 @@ export default [
 				!menuOnly.includes(f) &&
 				!actionsMenu.includes(f)
 		),
-		// GS-4 (runner §2.26): 47.49 → 47.87 KB, measured 47,864 B: Related's on-demand import of
-		// the drawer's open.ts (and the magnet chunk it shares) counts in /t's on-demand graph, though
-		// /t never calls it (a row there is a plain link); the drawer already has them. Related itself has its own entry.
-		'47.87 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		// X-gs-followups: 47.87 → 47.44 KB, measured 47,433 B. Related no longer imports open.ts (the
+		// drawer hands it the open function), and the siblings loader Parsed and Related now share
+		// counts in Related's entry. Earlier, GS-4 (runner §2.26): 47.49 → 47.87 KB for that import.
+		'47.44 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
@@ -1904,7 +1910,10 @@ export default [
 	entry('Detail identified-as section (on demand)', identifiedSection, '2.84 KB'),
 	// GS-4: the Related section (its lists, Compare these and its CSS), on demand. Measured 5,370 B;
 	// limit = measured + at most 10%, rounded to 100 B.
-	entry('Detail Related section (on demand)', relatedSection, '5.4 KB'),
+	// X-gs-followups (runner §2.26): 5.4 → 5.61 KB, measured 5,604 B (+252 B): the siblings loader
+	// it now shares with Parsed (one request, the kept answer, the abort) moved here from Detail
+	// sections (−431 B there), so the two together are 179 B smaller.
+	entry('Detail Related section (on demand)', relatedSection, '5.61 KB'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	routeEntry(
