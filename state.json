@@ -11092,7 +11092,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-25T01:15Z",
+    "updated": "2026-11-25T01:23Z",
     "items": [
       {
         "slot": 1,
@@ -11100,7 +11100,7 @@
         "role": "build",
         "model": "sonnet",
         "agent": "sonnet",
-        "doing": "#1123 rv-1123 MERGE / PASS on e0b5b3ed; one fix asked (lists.test.ts test timeout 30 s, so the 10 s wait is real); delta check then merge after #1119 and #1122; last of the four | owner hold",
+        "doing": "#1123 fix pushed 3a03885d, delta accepted; waits on ci-ok/web-ok/e2e-ok; merges after #1119 and #1122; last of the four | owner hold",
         "since": "2026-11-24T23:58Z",
         "status": "active",
         "pr": 1123
