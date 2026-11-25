@@ -24,7 +24,7 @@ use utoipa::OpenApi;
 
 use crate::auth::Access;
 use crate::dto::error::ErrorEnvelope;
-use crate::dto::ops::ConsentClass;
+use crate::dto::ops::{ConsentClass, SourceAttribution};
 use crate::dto::search::{HitSource, SearchHit};
 use crate::dto::torrents::{
     AdultEnrichment, ClaimDifferences, ClaimedNumber, ClaimedText, EnrichmentSource, FileEntry,
@@ -110,6 +110,9 @@ pub(crate) struct PluginName {
     pub endpoints: Vec<String>,
     /// Everything it finds is Adult (its manifest's `always_adult`).
     pub always_adult: bool,
+    /// What its service asks to be credited with, from its plugin's own
+    /// terms as the host lists them (ENR-terms-api).
+    pub attribution: Option<SourceAttribution>,
 }
 
 /// Display names and privacy by manifest id.
@@ -255,6 +258,7 @@ fn plugin_name(src: crate::ops::Source) -> (String, PluginName) {
             public,
             endpoints: src.endpoints,
             always_adult: src.always_adult,
+            attribution: src.attribution,
         },
     )
 }
@@ -272,6 +276,9 @@ pub(crate) struct SourceEntry {
     /// Everything it finds is Adult; `None` when this build doesn't run
     /// its plugin (or no pipeline is served), whose manifest isn't known.
     pub always_adult: Option<bool>,
+    /// See [`PluginName::attribution`]; `None` for a plugin this build
+    /// doesn't run too.
+    pub attribution: Option<SourceAttribution>,
 }
 
 /// The store's sources by id, named from [`plugin_names`].
@@ -290,6 +297,7 @@ impl Catalogue {
                 name: known.map_or_else(|| row.plugin.clone(), |n| n.name.clone()),
                 public: known.map(|n| n.public),
                 always_adult: known.map(|n| n.always_adult),
+                attribution: known.and_then(|n| n.attribution.clone()),
                 plugin: row.plugin,
             });
         }
@@ -401,11 +409,15 @@ impl Catalogue {
     }
 
     /// The detail view's provenance of `row`, from its stored claims.
+    /// `closed` is what this caller may not be given under the sources'
+    /// terms ([`TermsClosed`]): a public caller gets those claims left
+    /// out, with `withheld` set, as for a private claim.
     pub(crate) fn provenance(
         &self,
         row: &TorrentRow,
         claims: &[StoredClaims],
         viewer: Viewer,
+        closed: TermsClosed,
     ) -> Provenance {
         let claim_of = |id: u8| claims.iter().find(|c| c.source.get() == id);
         let (shown, mut withheld) = self.visible(row, viewer);
@@ -414,8 +426,10 @@ impl Catalogue {
         for (e, private) in shown {
             let stored = claim_of(e.id);
             let private_claim = stored.is_some_and(|c| c.private_source);
-            // A public source's name stays; its private claim doesn't.
-            let claim = if private_claim && viewer == Viewer::Public {
+            let terms_closed = stored.is_some() && closed.keeps(viewer, e.id);
+            // A public source's name stays; its private claim doesn't, nor
+            // one its terms keep inside Lodestar (ENR-terms).
+            let claim = if (private_claim || terms_closed) && viewer == Viewer::Public {
                 withheld = true;
                 None
             } else {
@@ -446,6 +460,88 @@ impl Catalogue {
             withheld,
         }
     }
+}
+
+/// Source `id`'s bit in a source bitset; 0 for an id past the set.
+fn bit(id: u8) -> u64 {
+    1u64.checked_shl(u32::from(id)).unwrap_or(0)
+}
+
+/// The sources whose claims a caller may not be given under their terms
+/// (ENR-terms-api), read for one caller. Only [`TermsClosed::read`] makes
+/// one, so the detail view can't pass "nothing closed" by mistake: the
+/// admin is held to no terms and reads nothing; any other caller gets
+/// [`terms_closed`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TermsClosed {
+    /// The caller it was read for.
+    viewer: Viewer,
+    /// For a public caller, the closed sources' bits.
+    bits: u64,
+}
+
+impl TermsClosed {
+    /// What `viewer` may not be given of `claims`.
+    pub(crate) fn read(
+        viewer: Viewer,
+        store: &Store,
+        claims: &[StoredClaims],
+    ) -> lodestar_store::Result<TermsClosed> {
+        let bits = match viewer {
+            Viewer::Admin => 0,
+            Viewer::Public => terms_closed(store, claims)?,
+        };
+        Ok(TermsClosed { viewer, bits })
+    }
+
+    /// Whether source `id`'s claims are kept from `viewer`. The admin is
+    /// given everything. A public caller is kept from a closed source's,
+    /// and from every source's when this was read for the admin (nothing
+    /// was read for it): a mix-up fails closed.
+    pub(crate) fn keeps(&self, viewer: Viewer, id: u8) -> bool {
+        match viewer {
+            Viewer::Admin => false,
+            Viewer::Public => self.viewer != Viewer::Public || self.bits & bit(id) != 0,
+        }
+    }
+}
+
+/// Of the sources behind `claims`, those whose terms don't let their
+/// claims leave Lodestar's own UI (ENR-terms, ENR-terms-api), as a bitset
+/// over source ids: what a caller other than the admin is never given.
+///
+/// A claims row is governed by its source's terms when the source has a
+/// terms record (a lookup plugin: everything it says is its service's
+/// data), or when the row is an identification answer (a details section
+/// with a match confidence, ENR-10's rule) whatever its source, since an
+/// answer whose terms weren't recorded is under the strictest ones. A
+/// governed row passes only when its source's record allows
+/// redistribution: [`Store::redistributes`], the reader search, Torznab
+/// and export already go by (ENR-11), held to `identify::may_redistribute`
+/// by a property test. A missing or unreadable record doesn't.
+///
+/// Reads the store only for a source with a claims row, once per source.
+pub(crate) fn terms_closed(store: &Store, claims: &[StoredClaims]) -> lodestar_store::Result<u64> {
+    let mut closed = 0;
+    for c in claims {
+        let b = bit(c.source.get());
+        if closed & b != 0 {
+            continue;
+        }
+        let answer = c
+            .claims
+            .as_ref()
+            .and_then(|s| s.details.as_deref())
+            .is_some_and(|d| d.match_confidence.is_some());
+        let governed = answer
+            || store
+                .plugin_state(c.source, lodestar_store::identify_sweep::TERMS_KEY)?
+                .is_some();
+        if governed && !store.redistributes(c.source)? {
+            closed |= b;
+        }
+    }
+    Ok(closed)
 }
 
 /// `s` cut to [`MAX_NAME`] bytes on a character boundary.
@@ -691,7 +787,10 @@ pub(crate) async fn detail(
         let catalogue = Catalogue::read(&store, &names).map_err(internal)?;
         let always_adult = catalogue.always_adult_bits() | drawer_adult;
         let claims = store.torrent_claims(row.id).map_err(internal)?;
-        let provenance = catalogue.provenance(&row, &claims, viewer);
+        // Only a caller other than the admin is held to the terms: the
+        // admin's own UI may show every answer (ENR-terms).
+        let closed = TermsClosed::read(viewer, &store, &claims).map_err(internal)?;
+        let provenance = catalogue.provenance(&row, &claims, viewer, closed);
         // Only for the admin with "Show adult content" on (§20.9), only
         // for a torrent that could be adult, and never for one a filter or
         // the core holds back.
@@ -724,9 +823,16 @@ pub(crate) async fn detail(
         // at all: nothing is known, so no section shows.
         let finders_adult = (!names.is_empty())
             .then(|| catalogue.adult_or_unknown(row.sources) | (drawer_adult & row.sources));
-        let identified =
-            identified_section(&store, &row, &claims, &catalogue, viewer, finders_adult)
-                .map_err(internal)?;
+        let identified = identified_section(
+            &store,
+            &row,
+            &claims,
+            &catalogue,
+            viewer,
+            closed,
+            finders_adult,
+        )
+        .map_err(internal)?;
         drop(store);
         let id = row.id;
         let detail = detail_of(&row, &tree, summary, more, provenance, section, identified);
@@ -806,8 +912,13 @@ pub(crate) async fn files(
 ///   own rule (`identify::stored_title`), so a feed's claims never read as
 ///   one.
 /// - **Sources:** the admin sees every answer with its source. Any other
-///   caller sees only answers from a source known to be public; the rest
-///   are left out, unannounced, as provenance leaves out private sources.
+///   caller sees only answers from a source known to be public whose
+///   terms allow passing its answers on (`closed`, [`TermsClosed`]); the
+///   rest are left out, unannounced, as provenance leaves out private
+///   sources.
+/// - **Attribution:** each answer carries what its service asks to be
+///   credited with, from its plugin's own terms as the host lists them;
+///   none when they ask for none.
 /// - **Stored text only, bounded again:** each list cut to its stored cap,
 ///   ids kept only in the closed schemes, each text cut to its limit.
 fn identified_section(
@@ -816,6 +927,7 @@ fn identified_section(
     claims: &[StoredClaims],
     catalogue: &Catalogue,
     viewer: Viewer,
+    closed: TermsClosed,
     always_adult: Option<u64>,
 ) -> lodestar_store::Result<Option<IdentifiedAs>> {
     // Unknown always-adult sources: nothing can be confirmed, so nothing
@@ -835,8 +947,7 @@ fn identified_section(
     let mut answers: Vec<(u8, &Claims, &lodestar_store::claims::Details, u8)> = Vec::new();
     for c in claims {
         let id = c.source.get();
-        let bit = 1u64.checked_shl(u32::from(id)).unwrap_or(0);
-        if row.sources & bit != 0 || c.private_source {
+        if row.sources & bit(id) != 0 || c.private_source {
             continue;
         }
         let Some(stored) = c.claims.as_ref().filter(|s| s.adult.is_none()) else {
@@ -879,7 +990,8 @@ fn identified_section(
         .into_iter()
         .filter_map(|(id, stored, d, confidence)| {
             let source = catalogue.get(id)?;
-            if viewer == Viewer::Public && source.public != Some(true) {
+            if viewer == Viewer::Public && (source.public != Some(true) || closed.keeps(viewer, id))
+            {
                 return None;
             }
             let mut a = identification(stored, d, confidence, source);
@@ -912,6 +1024,7 @@ fn identification(
         MAX_MATCH_CONFIDENCE, id_ok, language_ok,
     };
     Identification {
+        attribution: source.attribution.clone(),
         alt_titles: d
             .alt_titles
             .iter()
@@ -1343,6 +1456,7 @@ pub(crate) mod tests {
                 name: name.into(),
                 public,
                 always_adult: Some(false),
+                attribution: None,
             })
             .collect(),
         )
@@ -1387,7 +1501,7 @@ pub(crate) mod tests {
         let c = catalogue();
         // dht, nyaa and an unregistered bit 9; nyaa found it first.
         let r = row(0b101 | 1 << 9, Some(2), 0);
-        let p = c.provenance(&r, &[], Viewer::Admin);
+        let p = c.provenance(&r, &[], Viewer::Admin, closing(Viewer::Admin, 0));
         assert_eq!(plugins(&p), ["nyaa", "dht"]);
         assert!(p.sources[0].first && !p.sources[1].first);
         assert_eq!(p.sources[0].first_seen_at, Some(r.discovered_at));
@@ -1396,9 +1510,14 @@ pub(crate) mod tests {
         assert!(p.verified && !p.withheld && p.network == "bt");
         // A torrent stored before provenance has none.
         assert!(
-            c.provenance(&row(0, None, 0), &[], Viewer::Admin)
-                .sources
-                .is_empty()
+            c.provenance(
+                &row(0, None, 0),
+                &[],
+                Viewer::Admin,
+                closing(Viewer::Admin, 0)
+            )
+            .sources
+            .is_empty()
         );
     }
 
@@ -1418,7 +1537,7 @@ pub(crate) mod tests {
                 },
             ),
         ];
-        let admin = c.provenance(&r, &stored, Viewer::Admin);
+        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, 0));
         assert_eq!(plugins(&admin), ["prowlarr", "dht", "nyaa", "gone"]);
         let private: Vec<bool> = admin.sources.iter().map(|s| s.private).collect();
         // Unknown isn't known to be private, but stays from the public.
@@ -1428,7 +1547,7 @@ pub(crate) mod tests {
 
         // Nyaa is a public source: its name stays, its private claim
         // doesn't.
-        let public = c.provenance(&r, &stored, Viewer::Public);
+        let public = c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, 0));
         assert_eq!(plugins(&public), ["dht", "nyaa"]);
         assert!(public.withheld);
         assert!(
@@ -1461,11 +1580,11 @@ pub(crate) mod tests {
             },
         )];
         let hit = c.hit_source(&r, Viewer::Public).unwrap();
-        let detail = c.provenance(&r, &stored, Viewer::Public);
+        let detail = c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, 0));
         assert_eq!(plugins(&detail), [hit.plugin.as_str()]);
         assert_eq!(hit.plugin, "nyaa");
         assert!(detail.withheld && detail.sources[0].claim.is_none());
-        let admin = c.provenance(&r, &stored, Viewer::Admin);
+        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, 0));
         assert!(admin.sources[1].private && admin.sources[1].claim.is_some());
     }
 
@@ -1475,10 +1594,10 @@ pub(crate) mod tests {
         // Even public sources' bits: the flag says it was found only
         // through private ones (§18.7).
         let r = row(0b101, Some(0), store_flags::PRIVATE_SOURCE);
-        let public = c.provenance(&r, &[], Viewer::Public);
+        let public = c.provenance(&r, &[], Viewer::Public, closing(Viewer::Public, 0));
         assert!(public.sources.is_empty() && public.withheld);
         assert_eq!(c.hit_source(&r, Viewer::Public), None);
-        let admin = c.provenance(&r, &[], Viewer::Admin);
+        let admin = c.provenance(&r, &[], Viewer::Admin, closing(Viewer::Admin, 0));
         assert!(admin.sources.iter().all(|s| s.private));
         assert_eq!(c.hit_source(&r, Viewer::Admin).unwrap().plugin, "dht");
     }
@@ -1504,8 +1623,11 @@ pub(crate) mod tests {
         let c = catalogue();
         let r = row(0b1, Some(0), 0);
         let stored = [claims(2, true, Claims::default())];
-        assert!(c.provenance(&r, &stored, Viewer::Public).withheld);
-        let admin = c.provenance(&r, &stored, Viewer::Admin);
+        assert!(
+            c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, 0))
+                .withheld
+        );
+        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, 0));
         assert_eq!(plugins(&admin), ["dht"]);
     }
 
@@ -1563,8 +1685,253 @@ pub(crate) mod tests {
                 .put_claims(id, acct, &answer("Account Answer", 95), false)
                 .unwrap()
         );
+        // Wikidata's terms let its answers be passed on (CC0), as its
+        // runtime records them; the account enricher has no record.
+        record(&mut store, wikidata, true);
         let row = store.torrent(id).unwrap().unwrap();
         (store, row)
+    }
+
+    /// Records terms for `source` that allow redistribution or not, as the
+    /// identify runtime does (`identify::record_terms`).
+    /// A [`TermsClosed`] read for `viewer` with `bits` closed, as
+    /// [`TermsClosed::read`] would give it.
+    fn closing(viewer: Viewer, bits: u64) -> TermsClosed {
+        TermsClosed { viewer, bits }
+    }
+
+    fn record(store: &mut Store, source: SourceId, redistribute: bool) {
+        let terms = lodestar_sources::terms::Terms {
+            redistribute,
+            ..lodestar_sources::terms::Terms::STRICT
+        };
+        lodestar_pipeline::identify::record_terms(store, source, &terms, 0).unwrap();
+        assert_eq!(
+            lodestar_pipeline::identify::may_redistribute(store, source).unwrap(),
+            redistribute
+        );
+    }
+
+    /// A caller other than the admin never gets an answer or a claim from a
+    /// source whose terms keep them inside Lodestar (ENR-terms-api): one
+    /// recorded `redistribute: false`, or an answer with no record at all.
+    /// The admin gets them all, and a redistributable answer reaches both.
+    #[test]
+    fn terms_keep_answers_and_claims_from_the_public() {
+        let (mut store, row) = identified_store();
+        let tmdb = store.register_source("tmdb", "1", 0).unwrap();
+        let norecord = store.register_source("norecord", "1", 0).unwrap();
+        let answer = |title: &str, conf: u8| Claims {
+            details: Some(Box::new(lodestar_store::claims::Details {
+                canonical_title: Some(title.into()),
+                match_confidence: Some(conf),
+                ..Default::default()
+            })),
+            ..Claims::default()
+        };
+        for (src, title) in [(tmdb, "Strict Answer"), (norecord, "Unrecorded Answer")] {
+            assert!(
+                store
+                    .put_claims(row.id, src, &answer(title, 80), false)
+                    .unwrap()
+            );
+        }
+        record(&mut store, tmdb, false);
+        let tmdb_credit = SourceAttribution {
+            link: "https://www.themoviedb.org".into(),
+            logo: Some("tmdb".into()),
+            text: "Uses TMDB".into(),
+        };
+        let wikidata_credit = SourceAttribution {
+            link: "https://www.wikidata.org".into(),
+            logo: None,
+            text: "Wikidata (CC0)".into(),
+        };
+        let entry =
+            |id: SourceId, plugin: &str, attribution: Option<SourceAttribution>| SourceEntry {
+                id: id.get(),
+                plugin: plugin.into(),
+                name: plugin.into(),
+                public: Some(true),
+                always_adult: Some(false),
+                attribution,
+            };
+        let ids: Vec<SourceId> = store.sources().unwrap().into_iter().map(|r| r.id).collect();
+        let [dht, wikidata, acct, ..] = ids[..] else {
+            panic!()
+        };
+        let c = Catalogue::of(vec![
+            entry(dht, "dht", None),
+            entry(wikidata, "wikidata", Some(wikidata_credit.clone())),
+            entry(acct, "acctenr", None),
+            entry(tmdb, "tmdb", Some(tmdb_credit.clone())),
+            entry(norecord, "norecord", None),
+        ]);
+        let claims = store.torrent_claims(row.id).unwrap();
+        let closed = terms_closed(&store, &claims).unwrap();
+        // The account enricher's answer has no record either: closed too.
+        assert_eq!(
+            closed,
+            bit(tmdb.get()) | bit(norecord.get()) | bit(acct.get())
+        );
+        let plugins = |s: &IdentifiedAs| -> Vec<String> {
+            s.alternatives
+                .iter()
+                .map(|a| a.source.plugin.clone())
+                .collect()
+        };
+        // The admin: every answer, each with its own credit or none.
+        let admin = identified_section(
+            &store,
+            &row,
+            &claims,
+            &c,
+            Viewer::Admin,
+            closing(Viewer::Admin, 0),
+            Some(0),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(plugins(&admin), ["acctenr", "tmdb", "norecord", "wikidata"]);
+        assert_eq!(admin.alternatives[1].attribution, Some(tmdb_credit));
+        assert_eq!(admin.alternatives[2].attribution, None);
+        assert_eq!(
+            admin.alternatives[3].attribution,
+            Some(wikidata_credit.clone())
+        );
+        // The public: the redistributable answer only, credited.
+        let public = identified_section(
+            &store,
+            &row,
+            &claims,
+            &c,
+            Viewer::Public,
+            closing(Viewer::Public, closed),
+            Some(0),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(plugins(&public), ["wikidata"]);
+        assert_eq!(public.alternatives[0].attribution, Some(wikidata_credit));
+        let text = format!("{public:?}");
+        for hidden in ["Strict Answer", "Unrecorded Answer", "themoviedb"] {
+            assert!(!text.contains(hidden), "{hidden}: {text}");
+        }
+        // Only closed sources left: nothing for the public.
+        let all = bit(wikidata.get()) | closed;
+        assert_eq!(
+            identified_section(
+                &store,
+                &row,
+                &claims,
+                &c,
+                Viewer::Public,
+                closing(Viewer::Public, all),
+                Some(0)
+            )
+            .unwrap(),
+            None
+        );
+        // Closing changes nothing for the admin.
+        assert_eq!(
+            identified_section(
+                &store,
+                &row,
+                &claims,
+                &c,
+                Viewer::Admin,
+                closing(Viewer::Admin, all),
+                Some(0)
+            )
+            .unwrap(),
+            Some(admin)
+        );
+    }
+
+    /// A finder's claim is held to its terms too when its source is a
+    /// lookup plugin (it has a terms record): the public gets its name but
+    /// not its claim, with `withheld` set; a finder with no record (a feed)
+    /// isn't governed by any lookup terms and keeps its claim.
+    #[test]
+    fn a_closed_finders_claim_is_withheld_from_the_public() {
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let ids: Vec<SourceId> = ["dht", "prowlarr", "nyaa"]
+            .iter()
+            .map(|p| store.register_source(p, "1", 0).unwrap())
+            .collect();
+        let named = |name: &str| Claims {
+            name: Some(name.into()),
+            ..Claims::default()
+        };
+        let stored = vec![
+            claims(0, false, named("Dht Name")),
+            claims(2, false, named("Nyaa Name")),
+        ];
+        let c = catalogue();
+        let r = row(0b101, Some(0), 0);
+        // No records: nothing closed, and the public sees both claims.
+        assert_eq!(terms_closed(&store, &stored).unwrap(), 0);
+        let public = c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, 0));
+        assert!(!public.withheld);
+        assert!(public.sources.iter().all(|s| s.claim.is_some()));
+        // Nyaa as a lookup plugin whose terms keep its data inside.
+        record(&mut store, ids[2], false);
+        let closed = terms_closed(&store, &stored).unwrap();
+        assert_eq!(closed, bit(2));
+        let public = c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, closed));
+        assert_eq!(plugins(&public), ["dht", "nyaa"]);
+        assert!(public.withheld);
+        assert!(public.sources[0].claim.is_some());
+        assert_eq!(public.sources[1].claim, None);
+        assert!(!format!("{public:?}").contains("Nyaa Name"));
+        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, closed));
+        assert!(!admin.withheld);
+        assert!(admin.sources[1].claim.is_some());
+        // Terms that allow it: shown again.
+        record(&mut store, ids[2], true);
+        assert_eq!(terms_closed(&store, &stored).unwrap(), 0);
+        // A source's closed bit with no claim of its withholds nothing.
+        let public = c.provenance(&r, &[], Viewer::Public, closing(Viewer::Public, bit(2)));
+        assert!(!public.withheld);
+    }
+
+    /// The detail view's wiring: the admin reads no terms and is kept from
+    /// nothing; a public caller gets exactly [`terms_closed`]; and a value
+    /// read for the admin, handed a public caller by mistake, keeps every
+    /// claim from it.
+    #[test]
+    fn terms_are_read_per_caller_and_fail_closed() {
+        let mut store = Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let ids: Vec<SourceId> = ["dht", "prowlarr", "nyaa"]
+            .iter()
+            .map(|p| store.register_source(p, "1", 0).unwrap())
+            .collect();
+        record(&mut store, ids[2], false);
+        let named = |name: &str| Claims {
+            name: Some(name.into()),
+            ..Claims::default()
+        };
+        let stored = vec![
+            claims(0, false, named("Dht Name")),
+            claims(2, false, named("Nyaa Name")),
+        ];
+        let admin = TermsClosed::read(Viewer::Admin, &store, &stored).unwrap();
+        assert_eq!((admin.viewer, admin.bits), (Viewer::Admin, 0));
+        assert!(!admin.keeps(Viewer::Admin, 2));
+        let public = TermsClosed::read(Viewer::Public, &store, &stored).unwrap();
+        assert_eq!(public.viewer, Viewer::Public);
+        assert_eq!(public.bits, terms_closed(&store, &stored).unwrap());
+        assert!(public.keeps(Viewer::Public, 2) && !public.keeps(Viewer::Public, 0));
+        assert!(!public.keeps(Viewer::Admin, 2));
+        // The admin's value for a public caller: everything kept.
+        assert!(admin.keeps(Viewer::Public, 0) && admin.keeps(Viewer::Public, 2));
+        let c = catalogue();
+        let r = row(0b101, Some(0), 0);
+        let mixed = c.provenance(&r, &stored, Viewer::Public, admin);
+        assert!(mixed.withheld);
+        assert!(mixed.sources.iter().all(|s| s.claim.is_none()));
+        let fine = c.provenance(&r, &stored, Viewer::Public, public);
+        assert!(fine.sources[0].claim.is_some() && fine.sources[1].claim.is_none());
     }
 
     /// A caller other than the admin sees only answers from a known public
@@ -1578,6 +1945,7 @@ pub(crate) mod tests {
             name: plugin.into(),
             public,
             always_adult: Some(false),
+            attribution: None,
         };
         let c = Catalogue::of(vec![
             entry(0, "dht", Some(true)),
@@ -1585,9 +1953,17 @@ pub(crate) mod tests {
             entry(2, "acctenr", Some(false)),
         ]);
         let claims = store.torrent_claims(row.id).unwrap();
-        let admin = identified_section(&store, &row, &claims, &c, Viewer::Admin, Some(0))
-            .unwrap()
-            .unwrap();
+        let admin = identified_section(
+            &store,
+            &row,
+            &claims,
+            &c,
+            Viewer::Admin,
+            closing(Viewer::Admin, 0),
+            Some(0),
+        )
+        .unwrap()
+        .unwrap();
         let plugins: Vec<&str> = admin
             .alternatives
             .iter()
@@ -1596,9 +1972,17 @@ pub(crate) mod tests {
         assert_eq!(plugins, ["acctenr", "wikidata"]);
         // The record isn't resolved via a plugin: nothing is chosen.
         assert!(admin.alternatives.iter().all(|a| !a.chosen));
-        let public = identified_section(&store, &row, &claims, &c, Viewer::Public, Some(0))
-            .unwrap()
-            .unwrap();
+        let public = identified_section(
+            &store,
+            &row,
+            &claims,
+            &c,
+            Viewer::Public,
+            closing(Viewer::Public, 0),
+            Some(0),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(public.alternatives.len(), 1);
         assert_eq!(public.alternatives[0].source.plugin, "wikidata");
         let text = format!("{public:?}");
@@ -1609,17 +1993,44 @@ pub(crate) mod tests {
         // An unknown class is private to the public: nothing left.
         let unknown = Catalogue::of(vec![entry(1, "wikidata", None), entry(2, "acctenr", None)]);
         assert_eq!(
-            identified_section(&store, &row, &claims, &unknown, Viewer::Public, Some(0)).unwrap(),
+            identified_section(
+                &store,
+                &row,
+                &claims,
+                &unknown,
+                Viewer::Public,
+                closing(Viewer::Public, 0),
+                Some(0)
+            )
+            .unwrap(),
             None
         );
         // The always-adult sources unknown: none, for anyone.
         assert_eq!(
-            identified_section(&store, &row, &claims, &c, Viewer::Admin, None).unwrap(),
+            identified_section(
+                &store,
+                &row,
+                &claims,
+                &c,
+                Viewer::Admin,
+                closing(Viewer::Admin, 0),
+                None
+            )
+            .unwrap(),
             None
         );
         // Found by an always-adult source: none, for anyone.
         assert_eq!(
-            identified_section(&store, &row, &claims, &c, Viewer::Admin, Some(1 << 0)).unwrap(),
+            identified_section(
+                &store,
+                &row,
+                &claims,
+                &c,
+                Viewer::Admin,
+                closing(Viewer::Admin, 0),
+                Some(1 << 0)
+            )
+            .unwrap(),
             None
         );
     }
@@ -1647,6 +2058,7 @@ pub(crate) mod tests {
             name: plugin.into(),
             public,
             always_adult: Some(false),
+            attribution: None,
         };
         let c = Catalogue::of(vec![
             entry(0, "dht", Some(true)),
@@ -1654,14 +2066,30 @@ pub(crate) mod tests {
             entry(2, "acctenr", Some(false)),
         ]);
         let claims = store.torrent_claims(row.id).unwrap();
-        let admin = identified_section(&store, &row, &claims, &c, Viewer::Admin, Some(0))
-            .unwrap()
-            .unwrap();
+        let admin = identified_section(
+            &store,
+            &row,
+            &claims,
+            &c,
+            Viewer::Admin,
+            closing(Viewer::Admin, 0),
+            Some(0),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(admin.alternatives[0].source.plugin, "acctenr");
         assert!(admin.alternatives[0].chosen && !admin.alternatives[1].chosen);
-        let public = identified_section(&store, &row, &claims, &c, Viewer::Public, Some(0))
-            .unwrap()
-            .unwrap();
+        let public = identified_section(
+            &store,
+            &row,
+            &claims,
+            &c,
+            Viewer::Public,
+            closing(Viewer::Public, 0),
+            Some(0),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(public.alternatives.len(), 1);
         assert_eq!(public.alternatives[0].source.plugin, "wikidata");
         assert!(
@@ -1687,6 +2115,7 @@ pub(crate) mod tests {
             name: plugin.into(),
             public: Some(true),
             always_adult,
+            attribution: None,
         };
         let c = Catalogue::of(
             manifests
@@ -1743,6 +2172,7 @@ pub(crate) mod tests {
                     name: m.name.into(),
                     public: Some(true),
                     always_adult: Some(m.always_adult),
+                    attribution: None,
                 })
                 .collect(),
         );
@@ -1776,6 +2206,7 @@ pub(crate) mod tests {
             name: "W".into(),
             public: Some(true),
             always_adult: Some(false),
+            attribution: None,
         };
         let a = identification(&Claims::default(), &d, 250, &src);
         let t = a.canonical_title.unwrap();
@@ -1912,6 +2343,7 @@ pub(crate) mod tests {
                         public: true,
                         endpoints: Vec::new(),
                         always_adult: false,
+                        attribution: None,
                     },
                 )
             })
@@ -2212,17 +2644,18 @@ pub(crate) mod tests {
                     name: names[plugin].name.clone(),
                     public: Some(names[plugin].public),
                     always_adult: Some(names[plugin].always_adult),
+                    attribution: None,
                 })
                 .collect(),
         );
         // Stored publicly: found by the DHT and by the webhook, no
         // private-source flag.
         let r = row(0b11, Some(0), 0);
-        let public = c.provenance(&r, &[], Viewer::Public);
+        let public = c.provenance(&r, &[], Viewer::Public, closing(Viewer::Public, 0));
         assert_eq!(plugins(&public), ["dht"]);
         assert_eq!(c.hit_source(&r, Viewer::Public).unwrap().plugin, "dht");
         assert!(!c.shows_plugin("arr_webhooks", Viewer::Public));
-        let admin = c.provenance(&r, &[], Viewer::Admin);
+        let admin = c.provenance(&r, &[], Viewer::Admin, closing(Viewer::Admin, 0));
         let mut seen = plugins(&admin);
         seen.sort_unstable();
         assert_eq!(seen, ["arr_webhooks", "dht"]);
