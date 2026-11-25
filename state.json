@@ -11092,7 +11092,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-25T01:23Z",
+    "updated": "2026-11-25T01:46Z",
     "items": [
       {
         "slot": 1,
@@ -11100,7 +11100,7 @@
         "role": "build",
         "model": "sonnet",
         "agent": "sonnet",
-        "doing": "#1123 fix pushed 3a03885d, delta accepted; waits on ci-ok/web-ok/e2e-ok; merges after #1119 and #1122; last of the four | owner hold",
+        "doing": "#1123 ready at 3a03885d (delta accepted, CI green); fresh now, but #1119 touches web/src/lib/api/schema.d.ts, so #1123 brings main in once after #1119 merges | owner hold",
         "since": "2026-11-24T23:58Z",
         "status": "active",
         "pr": 1123
@@ -11111,7 +11111,7 @@
         "role": "build",
         "model": "opus",
         "agent": "opus",
-        "doing": "#1122 rv-1122 MERGE / SECURITY PASS on 04abd899; merges after #1120 and #1119 (catch-up then, check pure main) | owner hold: slot stays empty when this merges",
+        "doing": "#1122 rv-1122 MERGE / PASS on 04abd899; brings main in once after #1119 merges (Rust), alongside #1123 (web) | owner hold",
         "since": "2026-11-24T22:00Z",
         "status": "active",
         "pr": 1122
@@ -11129,7 +11129,7 @@
         "slot": 4,
         "slice": "ENR-terms-api",
         "role": "build",
-        "doing": "#1119 rv-1119 MERGE / PASS on 5ffdaec2; asked to bring main in after #1120 merged (00:48Z); merge if pure main | owner hold: slot stays empty when this merges",
+        "doing": "#1119 caught up at f48e1807 (pure main, checked 01:45Z); CI running; merges when green | owner hold",
         "since": "2026-11-24T15:40Z",
         "status": "active",
         "agent": "opus",
@@ -12161,8 +12161,7 @@
     "note": "owner hold 2026-11-25T00:16Z: no new slices. Queued for when it lifts: slot 3 X-restart-fuzz-v2, slot 2 X-gs-followups-2."
   },
   "merge_order": [
-    "#1119 ENR-terms-api (catch-up after #1120)",
-    "#1122 X-split-spill-horizon (review rv-1122; catch-up after #1119)",
-    "#1123 X-web-followups-1124 (review rv-1123; web area: catch-up only if a web merge lands first)"
+    "#1119 ENR-terms-api (f48e1807, CI running)",
+    "#1122 X-split-spill-horizon and #1123 X-web-followups-1124: each brings main in once after #1119 (different areas, so either order after)"
   ]
 }
