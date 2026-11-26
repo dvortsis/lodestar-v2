@@ -79,14 +79,15 @@ fi
 
 # A region with WireGuard servers, in the US (PIA's US servers have no port
 # forwarding, as the test plan's ground rule 1 requires), whose first server's
-# name passes the step's own check (some PIA names don't, e.g. us-brooklyn's).
+# name passes the step's own check (pia-wireguard.sh accepts upper case and
+# lowercases it; PIA names servers like "Server-12284-4a", seen 2026-11-26).
 # Read the first line from a file: with pipefail, `curl | head -1` can fail
 # with curl's exit 23 when head closes the pipe early.
 list=$(mktemp)
 curl --fail --silent --show-error --max-time 30 --max-filesize 20000000 -o "$list" \
   https://serverlist.piaservers.net/vpninfo/servers/v6 || { rm -f -- "$list"; echo "can't fetch PIA's server list" >&2; exit 3; }
 servers=$(head -n 1 -- "$list"); rm -f -- "$list"
-mapfile -t regions < <(jq -r '.regions[] | select(.country == "US" and (.servers.wg | length) > 0 and (.offline | not) and (.port_forward | not)) | select(.servers.wg[0].cn | test("^[a-z0-9.-]{1,253}$")) | .id' <<<"$servers" | sort)
+mapfile -t regions < <(jq -r '.regions[] | select(.country == "US" and (.servers.wg | length) > 0 and (.offline | not) and (.port_forward | not)) | select(.servers.wg[0].cn | test("^[A-Za-z0-9.-]{1,253}$")) | .id' <<<"$servers" | sort)
 [[ ${#regions[@]} -gt 0 ]] || { echo "no US WireGuard region found" >&2; exit 3; }
 if [[ -z $region ]]; then
   for r in "${regions[@]}"; do [[ $r =~ new_?york|new_?jersey ]] && { region=$r; break; }; done
