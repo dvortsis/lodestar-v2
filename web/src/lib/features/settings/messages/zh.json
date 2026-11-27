@@ -374,5 +374,12 @@
 	"settings_logging_file_level_option_debug": "调试",
 	"settings_logging_file_level_option_trace": "跟踪",
 	"settings_watch_after_option_move": "移至 added/ 或 failed/",
-	"settings_watch_after_option_delete": "添加后删除"
+	"settings_watch_after_option_delete": "添加后删除",
+	"settings_watch_label": "监视文件夹",
+	"settings_watch_help": "Lodestar 会自动添加此文件夹中的 .torrent 文件。",
+	"settings_watch_folder_label": "要监视的文件夹",
+	"settings_watch_folder_help": "完整路径，例如 /watch 或 D:\\Torrents。在 Docker 中，请使用容器内的路径，并先把主机文件夹挂载到那里。留空则关闭监视。",
+	"settings_watch_after_label": "添加文件后",
+	"settings_watch_after_help": "删除只会移除已添加的文件。未添加的文件仍会移到 failed/，方便你查看原因。",
+	"settings_group_watch": "监视文件夹"
 }

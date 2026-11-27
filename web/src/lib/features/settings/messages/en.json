@@ -374,5 +374,12 @@
 	"settings_logging_file_level_option_debug": "Debug",
 	"settings_logging_file_level_option_trace": "Trace",
 	"settings_watch_after_option_move": "Move to added/ or failed/",
-	"settings_watch_after_option_delete": "Delete after adding"
+	"settings_watch_after_option_delete": "Delete after adding",
+	"settings_watch_label": "Watch folder",
+	"settings_watch_help": "A folder whose .torrent files Lodestar adds by itself.",
+	"settings_watch_folder_label": "Folder to watch",
+	"settings_watch_folder_help": "The full path, such as /watch or D:\\Torrents. In Docker, use the path inside the container and mount a host folder there first. Leave it empty to turn the watch off.",
+	"settings_watch_after_label": "After adding a file",
+	"settings_watch_after_help": "Delete removes only files that were added. Files that weren't added still go to failed/, so you can see why.",
+	"settings_group_watch": "Watch folder"
 }

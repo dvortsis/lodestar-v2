@@ -21,6 +21,7 @@ export const MESSAGES: Record<string, () => string> = {
 	settings_group_torznab: m.settings_group_torznab,
 	settings_group_transport: m.settings_group_transport,
 	settings_group_usage: m.settings_group_usage,
+	settings_group_watch: m.settings_group_watch,
 	settings_group_web_ui: m.settings_group_web_ui,
 	settings_group_webhook: m.settings_group_webhook
 };

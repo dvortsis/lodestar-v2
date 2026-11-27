@@ -2,6 +2,12 @@
 import { m } from '$lib/paraglide/messages.js';
 
 export const MESSAGES: Record<string, () => string> = {
+	settings_watch_after_help: m.settings_watch_after_help,
+	settings_watch_after_label: m.settings_watch_after_label,
 	settings_watch_after_option_delete: m.settings_watch_after_option_delete,
-	settings_watch_after_option_move: m.settings_watch_after_option_move
+	settings_watch_after_option_move: m.settings_watch_after_option_move,
+	settings_watch_folder_help: m.settings_watch_folder_help,
+	settings_watch_folder_label: m.settings_watch_folder_label,
+	settings_watch_help: m.settings_watch_help,
+	settings_watch_label: m.settings_watch_label
 };
