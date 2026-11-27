@@ -45,3 +45,9 @@
   - the gauge `dht_sample_cooling_reason{reason}` (sample_backoff_escalate);
   - `lodestar_dht_switch{switch}`.
 - **The hard-coded `outstanding > 1024` bad bound** near collect.py:2016 would trip on Aggressive (max 4,096). For round-1 runs, take the bound from the arm's declared preset (256 / 1,024 / 4,096). Old runs keep today's behaviour.
+- **The gate slice's draft schema is your starting point.** X-cr-round1-gate opened its PR early. Its decisions file, `docs/decisions/2026-11-27-X-cr-round1-gate.md` ("Draft collector schema"; fetch PR #1147's head), already names what `gate-round` reads:
+  - `run.json`: `run_id`, `round1 {round, attempt, day, arm, repeat}`, `host_identity`, `network_identity`, and `config.effective_switches` (from `lodestar_dht_switch`);
+  - the day archive: exits, and per-arm egress, activity and leak test;
+  - `events`, with `diagnosis` (pending | product | infrastructure);
+  - the 10 s host samples, with `backing_device`.
+  Write to that schema. Where it doesn't fit what you can collect, agree a change with that session directly; in your decisions file, record the final schema as the agreed interface.
