@@ -23,9 +23,10 @@ fn actor(soft_timeout: bool, lookup_end: bool) -> (Actor, Vec<SendSocket>) {
         bind: vec![addr],
         bootstrap: vec![],
         allow_private: true,
-        // Sampling suppressed, so `maintain` sends no samples to the
-        // scripted nodes.
-        sample_start_delay: None,
+        // Sampling held for a day (a fixture's delay; production no longer
+        // waits, CR-0w), so `maintain` sends no samples to the scripted
+        // nodes.
+        sample_start_delay: Some(Duration::from_secs(86_400)),
         soft_timeout,
         lookup_end,
         ..Default::default()
