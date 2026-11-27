@@ -81,7 +81,7 @@ fuzz_target!(|data: &[u8]| {
             promises(&c);
             assert_eq!(data[0], c.version(), "one version per value");
             let mut z = lodestar_store::claims_dict::compressor(DICT, 1).expect("compressor");
-            let blob = claims::encode_dict(&c, 1, &mut z).expect("decoded claims encode");
+            let blob = claims::encode_dict(&c, 1, &mut z, 1).expect("decoded claims encode");
             assert!(blob.len() <= claims::MAX_STORED);
             assert_eq!(claims::decode_with(&blob, &mut dict).expect("re-decodes"), c);
         }

@@ -985,34 +985,43 @@ impl std::error::Error for ClaimsError {}
 /// zstd `level` when that makes it smaller.
 pub fn encode(claims: &Claims, level: i32) -> Result<Vec<u8>, ClaimsError> {
     let plain = encode_plain(claims)?;
+    Ok(plain_blob(claims.version(), &plain, level))
+}
+
+/// Codec 1 when zstd at `level` shrinks `plain`, codec 0 otherwise.
+fn plain_blob(version: u8, plain: &[u8], level: i32) -> Vec<u8> {
     let mut out = Vec::with_capacity(plain.len() + 2);
-    out.push(claims.version());
-    match zstd::bulk::compress(&plain, level) {
+    out.push(version);
+    match zstd::bulk::compress(plain, level) {
         Ok(z) if z.len() < plain.len() => {
             out.push(ZSTD);
             out.extend_from_slice(&z);
         }
         _ => {
             out.push(RAW);
-            out.extend_from_slice(&plain);
+            out.extend_from_slice(plain);
         }
     }
-    Ok(out)
+    out
 }
 
-/// The stored blob for `claims` compressed with dictionary `id` (codec 2),
-/// or stored raw when that isn't smaller. `compressor` must hold that
-/// dictionary and leave the dictionary id and checksum out of its frames
-/// ([`crate::claims_dict`] builds it). The level is the compressor's.
+/// The stored blob for `claims` compressed with dictionary `id` (codec 2)
+/// when that's smaller than what [`encode`] writes at `level`, which is
+/// stored otherwise (a dictionary that suits the claims badly costs only
+/// the saving). `compressor` must hold that dictionary and leave the
+/// dictionary id and checksum out of its frames ([`crate::claims_dict`]
+/// builds it).
 pub fn encode_dict(
     claims: &Claims,
     id: i64,
     compressor: &mut zstd::bulk::Compressor<'_>,
+    level: i32,
 ) -> Result<Vec<u8>, ClaimsError> {
     if id < 1 {
         return Err(ClaimsError::Malformed("dictionary id"));
     }
     let plain = encode_plain(claims)?;
+    let fallback = plain_blob(claims.version(), &plain, level);
     let frame = compressor
         .compress(&plain)
         .map_err(|_| ClaimsError::Compression)?;
@@ -1024,12 +1033,11 @@ pub fn encode_dict(
     out.push(ZSTD_DICT);
     put_uvar(&mut out, id as u64);
     out.extend_from_slice(bare);
-    if out.len() >= plain.len() + 2 || out.len() < MIN_STORED {
-        out.truncate(1);
-        out.push(RAW);
-        out.extend_from_slice(&plain);
-    }
-    Ok(out)
+    Ok(if out.len() < fallback.len() && out.len() >= MIN_STORED {
+        out
+    } else {
+        fallback
+    })
 }
 
 /// What an [`Inflate`] made of a codec 2 frame.

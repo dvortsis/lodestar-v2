@@ -88,7 +88,7 @@ proptest! {
     /// to the same claims through it, and fails closed without it.
     #[test]
     fn dictionary_blobs_round_trip(c in claims()) {
-        let blob = claims::encode_dict(&c, 5, &mut dict_compressor()).unwrap();
+        let blob = claims::encode_dict(&c, 5, &mut dict_compressor(), 3).unwrap();
         prop_assert!(blob.len() <= claims::MAX_STORED);
         prop_assert!(blob.len() >= claims::MIN_STORED);
         prop_assert_eq!(&claims::decode_with(&blob, &mut fixed()).unwrap(), &c);
@@ -115,7 +115,7 @@ proptest! {
                 prop_assert!(d.check().is_ok());
             }
         }
-        let blob = claims::encode_dict(&c, 5, &mut dict_compressor()).unwrap();
+        let blob = claims::encode_dict(&c, 5, &mut dict_compressor(), 3).unwrap();
         let mut m = blob.clone();
         let i = at.index(m.len());
         m[i] = byte;

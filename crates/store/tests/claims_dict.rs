@@ -148,7 +148,7 @@ fn every_codec_round_trips() {
         let raw_or_zstd = claims::encode(&c, 3).unwrap();
         assert!(matches!(raw_or_zstd[1], 0 | 1));
         assert_eq!(claims::decode(&raw_or_zstd).unwrap(), c);
-        let blob = claims::encode_dict(&c, 7, &mut z).unwrap();
+        let blob = claims::encode_dict(&c, 7, &mut z, 19).unwrap();
         assert_eq!(blob[0], claims::VERSION_DETAILS, "the version stays first");
         assert_eq!(blob[1], ZSTD_DICT);
         assert_eq!(claims::dictionary_of(&blob), Some(7));
@@ -171,7 +171,7 @@ fn every_codec_round_trips() {
         })),
         ..Claims::default()
     };
-    let blob = claims::encode_dict(&tiny, 7, &mut z).unwrap();
+    let blob = claims::encode_dict(&tiny, 7, &mut z, 19).unwrap();
     assert_eq!(blob[1], 0);
     assert!(blob.len() >= claims::MIN_STORED);
     assert_eq!(claims::decode(&blob).unwrap(), tiny);
@@ -180,7 +180,7 @@ fn every_codec_round_trips() {
 #[test]
 fn an_unknown_dictionary_fails_closed() {
     let dict = sample_dict();
-    let blob = claims::encode_dict(&answer(3), 7, &mut fixed_compressor(&dict)).unwrap();
+    let blob = claims::encode_dict(&answer(3), 7, &mut fixed_compressor(&dict), 19).unwrap();
     // No dictionaries at all, or only another one: refused, never read.
     assert_eq!(claims::decode(&blob), Err(ClaimsError::Dictionary(7)));
     assert_eq!(
@@ -352,7 +352,7 @@ fn a_row_naming_an_unknown_dictionary_is_unreadable_and_passed_over() {
     let source = sources(&mut store);
     answers(&mut store, source, 1, 4);
     let dict = sample_dict();
-    let blob = claims::encode_dict(&answer(2), 99, &mut fixed_compressor(&dict)).unwrap();
+    let blob = claims::encode_dict(&answer(2), 99, &mut fixed_compressor(&dict), 19).unwrap();
     store
         .connection()
         .execute(

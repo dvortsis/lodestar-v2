@@ -61,6 +61,14 @@ const MIN_SAMPLES: usize = 256;
 /// trains from scratch, and the writer waits for it.
 pub const TRAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// What [`Store::sample_claims`] found.
+enum Sampled {
+    NotDue,
+    /// Due, but too few answers made usable samples.
+    Short,
+    Ready(Vec<Vec<u8>>),
+}
+
 /// What [`Store::train_claims_dict`] trained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Trained {
@@ -157,7 +165,7 @@ impl ClaimsDicts {
             self.compressor = Some((id, level, z));
         }
         let (_, _, z) = self.compressor.as_mut().expect("just set");
-        match claims::encode_dict(c, id, z) {
+        match claims::encode_dict(c, id, z, level) {
             // zstd failing costs the saving, not the answer.
             Err(ClaimsError::Compression) => claims::encode(c, level),
             r => r,
@@ -247,6 +255,101 @@ pub(crate) fn unavailable() -> Error {
     ))
 }
 
+/// `c`'s layout with nothing a source supplied: what the dictionary is
+/// trained on.
+///
+/// - **Kept, as the structure the encoding has anyway:** which fields and
+///   sections are present, how many entries each list has, every text's
+///   length in bytes and characters, the id schemes (the fixed list
+///   [`claims::ENRICHMENT_SCHEMES`]) and each id's fixed letters (`tt`,
+///   `Q`, `OL`…`M`, `r`/`m`, an MBID's dashes), and the primary language
+///   subtag of a language tag when it's a 2–3 letter code (ISO 639).
+/// - **Replaced:** every title, genre, category and newsgroup character by
+///   one fixed character of the same class (`a`, `A`, `0`, a space, `-`
+///   for other ASCII, and for any other character the first one of its
+///   64-character Unicode block plus 0x21, so only its script survives);
+///   every id digit and MBID hex digit by `1`; the year by 2000, the match
+///   confidence by 50, a posting time by 0; any other language tag (a
+///   region, a script, a private-use part) by its primary subtag or
+///   `und`. Entries that become equal are kept once.
+///
+/// A placeholder records shape, never content: no title, genre or id can
+/// be read back from it.
+pub fn template(c: &Claims) -> Claims {
+    fn text(s: &str, lower: bool) -> String {
+        s.chars()
+            .map(|ch| match ch {
+                'a'..='z' => 'a',
+                'A'..='Z' if lower => 'a',
+                'A'..='Z' => 'A',
+                '0'..='9' => '0',
+                ' ' => ' ',
+                _ if ch.is_ascii() => '-',
+                _ => char::from_u32((ch as u32 & !0x3F) | 0x21).unwrap_or('-'),
+            })
+            .collect()
+    }
+    fn id(scheme: &str, v: &str) -> String {
+        v.chars()
+            .map(|ch| match ch {
+                '0'..='9' => '1',
+                'a'..='f' if scheme == "mbid" => '1',
+                _ => ch,
+            })
+            .collect()
+    }
+    fn language(tag: &str) -> String {
+        match tag.split('-').next() {
+            Some(p) if (2..=3).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_lowercase()) => {
+                p.to_owned()
+            }
+            _ => "und".to_owned(),
+        }
+    }
+    fn dedup<T: PartialEq>(v: Vec<T>) -> Vec<T> {
+        let mut out: Vec<T> = Vec::with_capacity(v.len());
+        for x in v {
+            if !out.contains(&x) {
+                out.push(x);
+            }
+        }
+        out
+    }
+    let mut t = Claims {
+        ids: c
+            .ids
+            .iter()
+            .map(|i| claims::ExternalId {
+                scheme: i.scheme.clone(),
+                value: id(&i.scheme, &i.value),
+            })
+            .collect(),
+        ..Claims::default()
+    };
+    t.provenance.confidence = c.provenance.confidence;
+    t.details = c.details.as_ref().map(|d| {
+        Box::new(claims::Details {
+            source_category: d.source_category.as_deref().map(|s| text(s, false)),
+            posted_at: d.posted_at.map(|_| 0),
+            newsgroups: dedup(d.newsgroups.iter().map(|g| text(g, true)).collect()),
+            alt_titles: dedup(
+                d.alt_titles
+                    .iter()
+                    .map(|a| claims::AltTitle {
+                        language: language(&a.language),
+                        title: text(&a.title, false),
+                    })
+                    .collect(),
+            ),
+            canonical_title: d.canonical_title.as_deref().map(|s| text(s, false)),
+            genres: dedup(d.genres.iter().map(|g| text(g, true)).collect()),
+            year: d.year.map(|_| 2000),
+            match_confidence: d.match_confidence.map(|_| 50),
+        })
+    });
+    t
+}
+
 /// Trains a dictionary of at most `max_size` bytes from `samples` (plain
 /// bodies).
 pub fn train(samples: &[Vec<u8>], max_size: usize) -> std::io::Result<Vec<u8>> {
@@ -265,8 +368,18 @@ impl Store {
     /// sources (those with a terms record), and stops after
     /// [`MAX_SAMPLES`] rows or [`MAX_SAMPLE_BYTES`].
     pub fn claims_dict_samples(&self) -> Result<Option<Vec<Vec<u8>>>> {
+        Ok(match self.sample_claims()? {
+            Sampled::Ready(s) => Some(s),
+            Sampled::NotDue | Sampled::Short => None,
+        })
+    }
+
+    /// [`claims_dict_samples`](Store::claims_dict_samples), telling a
+    /// store that isn't due from one whose answers gave too few usable
+    /// samples.
+    fn sample_claims(&self) -> Result<Sampled> {
         if self.claims_dicts.active().is_some() || active_setting(&self.conn)?.is_some() {
-            return Ok(None);
+            return Ok(Sampled::NotDue);
         }
         let version = [VERSION_DETAILS];
         let stored: i64 = self
@@ -280,7 +393,7 @@ impl Store {
                 r.get(0)
             })?;
         if (stored as usize) < MIN_ROWS {
-            return Ok(None);
+            return Ok(Sampled::NotDue);
         }
         let mut stmt = self.conn.prepare_cached(
             "SELECT data FROM torrent_claims
@@ -295,7 +408,11 @@ impl Store {
             let Ok(c) = self.claims_dicts.decode(&self.conn, data) else {
                 continue;
             };
-            let Ok(plain) = claims::encode_plain(&c) else {
+            // Never the answer itself: its layout with every value the
+            // source supplied replaced (`template`), so the dictionary,
+            // kept for good, holds nothing a purge, a refile or a terms
+            // limit must remove.
+            let Ok(plain) = claims::encode_plain(&template(&c)) else {
                 continue;
             };
             if plain.len() > MAX_SAMPLE {
@@ -307,7 +424,11 @@ impl Store {
             bytes += plain.len();
             samples.push(plain);
         }
-        Ok((samples.len() >= MIN_SAMPLES).then_some(samples))
+        Ok(if samples.len() >= MIN_SAMPLES {
+            Sampled::Ready(samples)
+        } else {
+            Sampled::Short
+        })
     }
 
     /// Stores `dict`, trained from `samples` answers, and makes it the
@@ -365,8 +486,16 @@ impl Store {
                 {
                     return Ok(None);
                 }
-                let Some(samples) = self.claims_dict_samples()? else {
-                    return Ok(None);
+                let samples = match self.sample_claims()? {
+                    Sampled::Ready(s) => s,
+                    Sampled::NotDue => return Ok(None),
+                    // Due, but the answers gave too few usable samples:
+                    // sampling again at every flush would read them all
+                    // again for nothing.
+                    Sampled::Short => {
+                        self.claims_dicts.retry_at = Some(std::time::Instant::now() + TRAIN_RETRY);
+                        return Ok(None);
+                    }
                 };
                 match trainer(&samples) {
                     Ok(dict) => (samples.len(), dict),
