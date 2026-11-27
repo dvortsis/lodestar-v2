@@ -201,7 +201,17 @@ mod tests {
         };
         let direct = build(&Route::Direct).unwrap();
         assert_eq!(direct.verification(), Verification::Platform);
+        assert!(crate::net::routed_roots(&Route::Direct).unwrap().is_none());
         for r in routed() {
+            // The roots handed to reqwest's `tls_certs_only`: the client's
+            // only trust on every route but the direct one.
+            let roots = crate::net::routed_roots(&r).unwrap();
+            assert_eq!(wanted(&r), Verification::SelfContained, "{r:?}");
+            assert_eq!(
+                roots.map(|v| v.len()),
+                Some(self_contained_roots().len()),
+                "{r:?}"
+            );
             match build(&r) {
                 Ok(c) => assert_eq!(c.verification(), Verification::SelfContained, "{r:?}"),
                 // A bound interface is Linux only.

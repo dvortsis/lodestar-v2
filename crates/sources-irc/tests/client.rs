@@ -352,9 +352,9 @@ async fn a_certificate_for_another_name_stops_the_client() {
 
 #[tokio::test]
 async fn a_routed_client_verifies_with_its_own_roots() {
-    // Over a bound address the default roots are the self-contained set
-    // (`lodestar_integrations::tls`), which doesn't hold the test CA: the
-    // handshake reaches the server and the certificate is refused.
+    // Over a bound address the default roots (`lodestar_integrations::
+    // tls`, self-contained there) don't hold the test CA: the handshake
+    // reaches the server over the route and the certificate is refused.
     let mut srv = Server::start(true).await;
     let mut c = config(srv.port, true);
     c.roots = Roots::Platform;

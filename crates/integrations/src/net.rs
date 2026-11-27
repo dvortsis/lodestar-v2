@@ -628,6 +628,22 @@ fn local_name_class(host: &str) -> Option<AddrClass> {
     local.then_some(AddrClass::Private)
 }
 
+/// The only roots a client over `route` trusts, or `None` for the OS
+/// verifier ([`crate::tls::verification_for`]). Given to reqwest's
+/// `tls_certs_only`, which is webpki over these roots alone, with no
+/// revocation lists.
+pub(crate) fn routed_roots(route: &Route) -> Result<Option<Vec<reqwest::Certificate>>, RouteError> {
+    match crate::tls::verification_for(route) {
+        crate::tls::Verification::Platform => Ok(None),
+        crate::tls::Verification::SelfContained => crate::tls::self_contained_roots()
+            .iter()
+            .map(|c| reqwest::Certificate::from_der(c.as_ref()))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
+            .map_err(|_| RouteError::Build),
+    }
+}
+
 /// One HTTP answer, read whole within a size limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exchange {
@@ -748,18 +764,13 @@ impl GuardedClient {
                 builder = builder.proxy(proxy);
             }
         }
-        // Off the direct route, certificates are verified in-process
-        // (`crate::tls`): reqwest's `tls_certs_only` is webpki over these
-        // roots alone, with no revocation lists.
-        let verification = crate::tls::verification_for(route);
-        if verification == crate::tls::Verification::SelfContained {
-            let roots = crate::tls::self_contained_roots()
-                .iter()
-                .map(|c| reqwest::Certificate::from_der(c.as_ref()))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| RouteError::Build)?;
-            builder = builder.tls_certs_only(roots);
-        }
+        let verification = match routed_roots(route)? {
+            Some(roots) => {
+                builder = builder.tls_certs_only(roots);
+                crate::tls::Verification::SelfContained
+            }
+            None => crate::tls::Verification::Platform,
+        };
         let http = builder.build().map_err(|_| RouteError::Build)?;
         Ok(GuardedClient {
             http,

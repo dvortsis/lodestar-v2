@@ -1198,9 +1198,12 @@ mod tests {
         for r in &routed {
             assert!(tls_connector(&Roots::Platform, r).is_ok(), "{r:?}");
         }
-        assert_eq!(
-            tls::verification_for(&routed[3]),
-            tls::Verification::SelfContained
-        );
+        for r in &routed[1..] {
+            assert_eq!(
+                tls::verification_for(r),
+                tls::Verification::SelfContained,
+                "{r:?}"
+            );
+        }
     }
 }
