@@ -56,7 +56,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lodestar_bench::dataset::{self, Row, Status, rss, slug};
+use lodestar_bench::dataset::{self, Row, Status, rss, rss_anon, slug};
 use lodestar_bench::synth::{self, Generator};
 use lodestar_metainfo::Info;
 use lodestar_search::query::TagKey;
@@ -823,6 +823,20 @@ fn run(
                 "ms",
                 Some(ms_f(budget)),
                 Status::Off(why.into()),
+            ));
+        }
+        // Every other class `offered()` drops, so an off row is never
+        // mistaken for one that went missing.
+        for class in classes(a.seed, 1, a.hot)
+            .into_iter()
+            .filter(|c| !offered(a, c) && c.name != "regex")
+        {
+            rows.push(Row::without(
+                format!("search.{}.p95", slug(class.name)),
+                budget_row(class.target),
+                "ms",
+                class.target.map(ms_f),
+                Status::Off("low-resource mode has no file index".into()),
             ));
         }
     } else {
@@ -1780,9 +1794,12 @@ fn suggest_path(
 /// Drops the OS page cache (root only): whether it was dropped.
 fn drop_page_cache() -> bool {
     // `sync` first, so dirty pages are written and can be dropped.
-    let synced = std::process::Command::new("sync")
-        .status()
-        .is_ok_and(|s| s.success());
+    // By absolute path: this runs as root, so never through `PATH`.
+    let synced = ["/bin/sync", "/usr/bin/sync"].iter().any(|p| {
+        std::process::Command::new(p)
+            .status()
+            .is_ok_and(|s| s.success())
+    });
     synced && std::fs::write("/proc/sys/vm/drop_caches", "3\n").is_ok()
 }
 
@@ -1827,8 +1844,15 @@ fn cold_start(
     hot.epoch();
     let index = index.with_hot(Arc::new(hot));
     let opened = started.elapsed();
+    // `/search`'s base query: hidden and Adult torrents left out.
+    let no_adult = [Node::Not {
+        of: Box::new(Node::Tag {
+            key: TagKey::Type,
+            any: vec!["adult".into()],
+        }),
+    }];
     let (results, _) = index.search_with_fallback(
-        &parse("")?,
+        &with_filters(parse("")?.without_hidden(), &no_adult),
         2_000_000_000,
         Sort::Discovered { desc: true },
         50,
@@ -2189,7 +2213,7 @@ fn steady_rss(
         )));
         return Ok(true);
     }
-    if rss().is_none() {
+    if rss_anon().is_none() || rss().is_none() {
         rows.push(without(Status::Unavailable(
             "no /proc/self/status on this platform".into(),
         )));
@@ -2239,8 +2263,10 @@ fn steady_rss(
             std::thread::scope(|s| {
                 s.spawn(|| {
                     while !done.load(std::sync::atomic::Ordering::Relaxed) {
-                        if let Some(r) = rss() {
-                            samples.lock().expect("samples").push(r);
+                        if let (Some(anon), Some(resident)) = (rss_anon(), rss())
+                            && let Ok(mut s) = samples.lock()
+                        {
+                            s.push((anon, resident));
                         }
                         std::thread::sleep(Duration::from_millis(250));
                     }
@@ -2258,19 +2284,21 @@ fn steady_rss(
             })
         },
     )?;
-    let mut samples = samples.into_inner().expect("samples");
-    samples.sort();
-    let Some(&top) = samples.last() else {
+    let samples = samples.into_inner().map_err(|e| e.to_string())?;
+    let (mut anon, mut resident): (Vec<u64>, Vec<u64>) = samples.into_iter().unzip();
+    anon.sort();
+    resident.sort();
+    let (Some(&top), Some(&top_resident)) = (anon.last(), resident.last()) else {
         rows.push(without(Status::Unmeasured("no sample was taken".into())));
         return Ok(true);
     };
-    let median = samples[samples.len() / 2];
+    let median = anon[anon.len() / 2];
     let pass = top < max;
     println!(
         "\n  steady-state RSS over {} s ({queries} queries, live indexer and {:.1} torrents/s ingest, {} samples): median {:.0} MB, max {:.0} MB  max < {:.0} MB {}",
         a.steady_secs,
         ingest.rate,
-        samples.len(),
+        anon.len(),
         mb(median),
         mb(top),
         mb(max),
@@ -2281,6 +2309,14 @@ fn steady_rss(
         "rss.steady.median",
         row,
         mb(median),
+        "MB",
+        None,
+    ));
+    // The index's memory-mapped pages count here, not against the budget.
+    rows.push(Row::measured(
+        "rss.steady.resident",
+        row,
+        mb(top_resident),
         "MB",
         None,
     ));
@@ -2300,7 +2336,6 @@ fn nrt_under_ingest(
     db: &Path,
     rows: &mut Vec<Row>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    const ROW: &str = "New torrent → searchable";
     let store = std::sync::Mutex::new(Store::open(db, StoreConfig::default())?);
     let (mut times, ingest) = under_ingest(
         a,
@@ -2351,28 +2386,28 @@ fn nrt_under_ingest(
             (None, false) => "FAIL",
         }
     );
-    let mut push = |id: &str, value: f64, unit, budget| {
-        rows.push(match &starved {
-            Some(why) => Row::without(id, ROW, unit, budget, Status::Unmeasured(why.clone())),
-            None => Row::measured(id, ROW, value, unit, budget),
-        });
-    };
-    push(
-        "nrt.ingest.max",
-        worst.as_secs_f64(),
-        "s",
-        Some(NRT_MAX.as_secs_f64()),
-    );
-    push("nrt.ingest.p95", p95.as_secs_f64(), "s", None);
-    // What the ingest reached is a measurement either way.
-    rows.push(Row::measured(
-        "nrt.ingest.rate",
-        ROW,
-        ingest.rate,
-        "torrents/s",
-        None,
-    ));
+    rows.extend(ingest_rows(worst, p95, &ingest));
     Ok(pass || starved.is_some())
+}
+
+/// The rows of `nrt_under_ingest`: both latency rows are unmeasured when
+/// the ingest was starved; the rate reached is measured either way.
+fn ingest_rows(worst: Duration, p95: Duration, ingest: &Ingested) -> Vec<Row> {
+    const ROW: &str = "New torrent → searchable";
+    let starved = ingest.starved();
+    let row = |id: &str, value: f64, budget| match &starved {
+        Some(why) => Row::without(id, ROW, "s", budget, Status::Unmeasured(why.clone())),
+        None => Row::measured(id, ROW, value, "s", budget),
+    };
+    vec![
+        row(
+            "nrt.ingest.max",
+            worst.as_secs_f64(),
+            Some(NRT_MAX.as_secs_f64()),
+        ),
+        row("nrt.ingest.p95", p95.as_secs_f64(), None),
+        Row::measured("nrt.ingest.rate", ROW, ingest.rate, "torrents/s", None),
+    ]
 }
 
 fn main() -> ExitCode {
@@ -2391,6 +2426,30 @@ fn main() -> ExitCode {
                 Ok(ds) => Some(ds),
                 Err(e) => {
                     eprintln!("error: {e}");
+                    // The report is written even so, naming the error.
+                    if let Some(path) = &a.json {
+                        let rows = [Row::without(
+                            "run",
+                            "The whole run",
+                            "",
+                            None,
+                            Status::Unmeasured(format!("the dataset couldn't be opened: {e}")),
+                        )];
+                        let report = dataset::report(
+                            "search-bench",
+                            if a.low_resource {
+                                "low-resource"
+                            } else {
+                                "default"
+                            },
+                            Some(key),
+                            Some(dir.as_path()),
+                            &rows,
+                        );
+                        if let Err(e) = dataset::write_report(path, &report) {
+                            eprintln!("error: writing {}: {e}", path.display());
+                        }
+                    }
                     return ExitCode::FAILURE;
                 }
             }
@@ -2444,5 +2503,75 @@ fn main() -> ExitCode {
         Ok(false) if a.gate => ExitCode::FAILURE,
         Ok(false) => ExitCode::SUCCESS,
         Err(_) => ExitCode::FAILURE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn by_id<'a>(rows: &'a [Row], id: &str) -> &'a Row {
+        rows.iter().find(|r| r.id == id).expect(id)
+    }
+
+    #[test]
+    fn an_ingest_below_90_percent_of_the_rate_asked_is_starved() {
+        assert!(
+            Ingested {
+                rate: 89.0,
+                asked: 100
+            }
+            .starved()
+            .is_some()
+        );
+        assert!(
+            Ingested {
+                rate: 90.0,
+                asked: 100
+            }
+            .starved()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_starved_ingest_leaves_both_latencies_unmeasured_and_the_rate_measured() {
+        let fast = Duration::from_millis(100);
+        let rows = ingest_rows(
+            fast,
+            fast,
+            &Ingested {
+                rate: 50.0,
+                asked: 100,
+            },
+        );
+        for id in ["nrt.ingest.max", "nrt.ingest.p95"] {
+            let r = by_id(&rows, id);
+            assert!(matches!(r.status, Status::Unmeasured(_)), "{id}");
+            assert_eq!(r.value, None, "{id}");
+        }
+        assert_eq!(by_id(&rows, "nrt.ingest.rate").value, Some(50.0));
+
+        // Fed at the rate asked, the same latencies are a pass.
+        let rows = ingest_rows(
+            fast,
+            fast,
+            &Ingested {
+                rate: 100.0,
+                asked: 100,
+            },
+        );
+        assert_eq!(by_id(&rows, "nrt.ingest.max").status, Status::Pass);
+        assert_eq!(by_id(&rows, "nrt.ingest.max").value, Some(0.1));
+        // And over the 5 s budget, a fail.
+        let rows = ingest_rows(
+            Duration::from_secs(6),
+            fast,
+            &Ingested {
+                rate: 100.0,
+                asked: 100,
+            },
+        );
+        assert_eq!(by_id(&rows, "nrt.ingest.max").status, Status::Fail);
     }
 }

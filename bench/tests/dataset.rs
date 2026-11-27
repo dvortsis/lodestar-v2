@@ -645,6 +645,10 @@ fn search_bench_reports_every_row_and_leaves_the_dataset_as_built() {
     // Not built by the bench's process, so measured (pass or fail).
     let rss = row(&r, "rss.steady.max")["status"].as_str().unwrap();
     assert!(["pass", "fail", "unavailable"].contains(&rss), "{rss}");
+    if rss != "unavailable" {
+        // Mapped index pages are reported beside the gated figure.
+        assert_eq!(row(&r, "rss.steady.resident")["status"], "reported");
+    }
     // The trickle is measured, or named as starved; never a silent pass.
     let ingest = row(&r, "nrt.ingest.max")["status"].as_str().unwrap();
     assert!(["pass", "fail", "unmeasured"].contains(&ingest), "{ingest}");
@@ -673,6 +677,7 @@ fn search_bench_reports_every_row_and_leaves_the_dataset_as_built() {
     assert_eq!(r["mode"], "low-resource");
     assert_eq!(row(&r, "search.broad-file-cold.p95")["status"], "off");
     assert_eq!(row(&r, "search.regex.p95")["status"], "off");
+    assert_eq!(row(&r, "search.word-file-clause.p95")["status"], "off");
     assert_eq!(ids_starting(&r, "search.api.regex"), 0);
     assert_eq!(
         row(&r, "low_resource.switch.file_index_off")["status"],
@@ -829,4 +834,18 @@ fn a_file_tree_that_wont_decode_fails_the_digest() {
     let e = dataset::digest(&broken).unwrap_err().to_string();
     assert!(e.contains("torrent 5's file tree won't decode"), "{e}");
     assert!(dataset::digest(&ds.db()).is_ok());
+}
+
+/// A dataset that can't be opened still gets its report, naming why.
+#[test]
+fn a_dataset_that_cannot_be_opened_still_writes_the_report() {
+    let out = tempfile::tempdir().unwrap();
+    let not_a_dir = out.path().join("not-a-dir");
+    std::fs::write(&not_a_dir, b"x").unwrap();
+    let json = out.path().join("err.json");
+    let run = search_bench(&not_a_dir, &json, &[]);
+    assert_eq!(run.status.code(), Some(1));
+    let r = report(&json);
+    assert_eq!(row(&r, "run")["status"], "unmeasured");
+    assert_ne!(r["verdict"], "pass");
 }

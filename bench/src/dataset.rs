@@ -1303,12 +1303,24 @@ pub fn git() -> Value {
     json!({ "rev": rev, "dirty": dirty })
 }
 
-/// The process's resident set (Linux; `None` elsewhere).
+/// The process's resident set (Linux; `None` elsewhere), including
+/// memory-mapped file pages such as the index's.
 pub fn rss() -> Option<u64> {
+    status_bytes("VmRSS:")
+}
+
+/// The process's resident anonymous memory (Linux; `None` elsewhere):
+/// the heap and stacks without file-backed pages. What steady-state RSS
+/// gates, as CR-0's acceptance does.
+pub fn rss_anon() -> Option<u64> {
+    status_bytes("RssAnon:")
+}
+
+fn status_bytes(field: &str) -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     let kb: u64 = status
         .lines()
-        .find_map(|l| l.strip_prefix("VmRSS:"))?
+        .find_map(|l| l.strip_prefix(field))?
         .trim()
         .trim_end_matches("kB")
         .trim()
