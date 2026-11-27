@@ -126,5 +126,9 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 	'search.enrichment_unreadable': [
 		m.settings_logging_ev_search_enrichment_unreadable_n,
 		m.settings_logging_ev_search_enrichment_unreadable_h
+	],
+	'search.saved_verified_rewritten': [
+		m.settings_logging_ev_search_saved_verified_rewritten_n,
+		m.settings_logging_ev_search_saved_verified_rewritten_h
 	]
 };

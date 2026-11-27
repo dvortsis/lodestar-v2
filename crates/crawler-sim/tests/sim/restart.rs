@@ -1,11 +1,12 @@
 //! CR-SIM-restart: two legs of one scenario with a clean restart between
 //! them, and what leg 2's samples show against the restrictions leg 1 left.
 //!
-//! Leg 1 starts fresh with `dht.safe_restart` on, so it suppresses samples
-//! for the first-start window, then samples and shuts down cleanly (which
-//! commits the restart proof). Leg 2 starts from the same data and witness
-//! dirs after a gap, against the same network, which kept its state
-//! (sample windows, intervals) and its record of every sample asked.
+//! Leg 1 starts fresh with `dht.safe_restart` on: an unproven start
+//! (`first_start`), so it restores nothing and samples at once (owner
+//! §2.77, CR-0w), then shuts down cleanly (which commits the restart
+//! proof). Leg 2 starts from the same data and witness dirs after a gap,
+//! against the same network, which kept its state (sample windows,
+//! intervals) and its record of every sample asked.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -247,12 +248,10 @@ pub async fn run(
         clock: Arc::new(SimClock { start }),
         inline_io: true,
     });
-    let suppression = COOLDOWN_CEILING + dht.query_timeout;
     let escalate = dht.sample_backoff_escalate.then_some(dht.query_timeout);
     let split = dht.sampler_cooldown_split;
-    let hour = Duration::from_secs(3600);
 
-    // Leg 1: a first start (full suppression), then sampling.
+    // Leg 1: a first start, sampling at once.
     let leg = Leg::start(
         dht.clone(),
         pool_cfg.clone(),
@@ -263,9 +262,8 @@ pub async fn run(
         start,
         Vec::new(),
     );
-    sleep_until(start + hour).await;
-    let leg1_first_hour = leg.stored.load(Ordering::Relaxed);
-    sleep_until(start + suppression + Duration::from_secs(u64::from(r.leg1_minutes) * 60)).await;
+    let leg1_len = Duration::from_secs(u64::from(r.leg1_minutes) * 60);
+    sleep_until(start + leg1_len).await;
     let stop = Instant::now();
     let one = leg.stop().await;
     // Load-bearing: `Net::drain` stamps the samples sent while stopping
@@ -289,17 +287,14 @@ pub async fn run(
         c1.sent, one.dht.samples_sent,
         "leg 1: network saw every sample"
     );
-    let in_suppression = net
-        .asks
-        .iter()
-        .filter(|a| a.sent < start + suppression)
-        .count();
-    assert_eq!(
-        in_suppression, 0,
-        "leg 1 sampled inside its first-start suppression"
-    );
-    assert!(c1.answered > 0, "leg 1 never sampled after its suppression");
+    assert!(c1.answered > 0, "leg 1 never sampled");
     let first1 = net.asks.first().map(|a| a.sent.duration_since(start));
+    // CR-0w: an unproven start waits for nothing but the bootstrap.
+    assert!(
+        first1.is_some_and(|d| d <= Duration::from_secs(60)),
+        "a first start didn't sample at once: {first1:?}"
+    );
+    assert_eq!(one.dht.sample_suppression_seconds, 0);
 
     // Leg 2: the same dirs and network after the gap.
     sleep(Duration::from_secs(r.gap_s)).await;
@@ -328,13 +323,12 @@ pub async fn run(
     let pool_end = leg.pool_end();
     let _ = writeln!(
         text,
-        "\n# leg 1: a first start with dht.safe_restart on, sampling {} min after its suppression",
+        "\n# leg 1: a first start with dht.safe_restart on, sampling at once for {} min",
         r.leg1_minutes
     );
     let _ = writeln!(
         text,
-        "suppression={}s samples_in_suppression={in_suppression} first_sample_at={}s reason_at_stop={} stored={} stored_first_hour={leg1_first_hour}",
-        secs(suppression),
+        "first_sample_at={}s reason_at_stop={} stored={}",
         first1.map_or(0, secs),
         one.dht.sample_suppression_reason.as_str(),
         one.stored
@@ -394,7 +388,9 @@ pub async fn run(
     for a in asks2 {
         first2.entry(a.to).or_insert(a.sent);
     }
-    let early: Vec<String> = sampled_early(&earliest, asks2)
+    let early_all = sampled_early(&earliest, asks2);
+    let early_n = early_all.len();
+    let early: Vec<String> = early_all
         .into_iter()
         .take(5)
         .map(|a| {
@@ -406,8 +402,10 @@ pub async fn run(
             )
         })
         .collect();
+    // Only a resumed leg holds restrictions; an unproven one may ask a
+    // node early (CR-0w: re-asks, never a wait).
     assert!(
-        early.is_empty(),
+        !r.safe_restart || early.is_empty(),
         "leg 2 sampled nodes before their restored obligation expired: {early:?}"
     );
     let restricted = earliest.values().filter(|due| **due > start2).count();
@@ -455,7 +453,7 @@ pub async fn run(
     );
     let _ = writeln!(
         text,
-        "sampled_before_expiry=0 fresh_nodes_sampled={fresh} first_sample_after_start={}",
+        "sampled_before_expiry={early_n} fresh_nodes_sampled={fresh} first_sample_after_start={}",
         first_sample.map_or_else(|| "none".to_string(), |d| format!("{}s", secs(d)))
     );
     let _ = writeln!(
@@ -468,12 +466,33 @@ pub async fn run(
         two.dht.sample_failures,
         two.dht.sample_stale
     );
-    let first_hour: u64 = minutes.iter().take(60).map(|m| m.stored).sum();
+    // Leg 1's whole run against leg 2's first minutes of the same length.
+    let span = (r.leg1_minutes as usize).min(minutes.len());
+    let leg2_span: u64 = minutes.iter().take(span).map(|m| m.stored).sum();
     let _ = writeln!(
         text,
-        "restart_cost: stored in the first {} min, fresh start={leg1_first_hour} leg 2={first_hour}",
-        minutes.len().min(60)
+        "restart_cost: stored in the first {span} min, fresh start={} leg 2={leg2_span}",
+        one.stored
     );
+    // Every leg-2 start samples at once, resumed or not (CR-0w): within a
+    // minute of the first node it may ask. That's the start for an
+    // unproven leg; a resumed one may find every node restored, and then
+    // it's the first restored end.
+    let free_from = if !r.safe_restart || earliest.len() < s.net.nodes {
+        start2
+    } else {
+        earliest
+            .values()
+            .map(|d| (*d).max(start2))
+            .min()
+            .unwrap_or(start2)
+    };
+    let bound = free_from.duration_since(start2) + Duration::from_secs(60);
+    assert!(
+        first_sample.is_some_and(|d| d <= bound),
+        "sampling didn't start at once: {first_sample:?}, bound {bound:?}"
+    );
+    assert_eq!(d2.sample_suppression_seconds, 0, "{text}");
 
     if r.safe_restart {
         assert_eq!(d2.sample_suppression_reason, Reason::Resumed, "{text}");
@@ -490,10 +509,6 @@ pub async fn run(
             held as usize >= restricted,
             "restored {restored} (+{} spilled) < {restricted} known restricted at the restart",
             held - restored
-        );
-        assert!(
-            first_sample.is_some_and(|d| d <= Duration::from_secs(60)),
-            "sampling didn't resume at once: {first_sample:?}"
         );
         assert_eq!(
             expired_resampled, expired_at_restart,
@@ -521,9 +536,7 @@ pub async fn run(
         }
     } else {
         assert_eq!(d2.sample_suppression_reason, Reason::Off, "{text}");
-        if end2 < start2 + suppression {
-            assert!(asks2.is_empty(), "sampled inside the full suppression");
-        }
+        assert_eq!(restored, 0, "an off-run restores nothing");
     }
     drop(dirs);
     Report {

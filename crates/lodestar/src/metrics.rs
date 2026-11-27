@@ -627,7 +627,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         o.one(
             "dht_sample_suppression_seconds",
             "gauge",
-            "Seconds of startup sampling suppression remaining.",
+            "Seconds until sampling may start; at most 10 s after a start, 60 s in a crash loop.",
             d.sample_suppression_seconds,
         );
         render_restart(&mut o, d);
@@ -1651,7 +1651,7 @@ fn render_restart(o: &mut Out, d: &StatsSnapshot) {
     o.family(
         "dht_sample_suppression_reason",
         "gauge",
-        "Why this run is or isn't sampling yet (1 for the current reason).",
+        "The restart proof's outcome (1 for the current reason).",
     );
     for r in lodestar_dht::restart::Reason::ALL {
         o.value(

@@ -653,6 +653,8 @@
 	"settings_logging_ev_search_file_search_failed_h": "Searching file names failed.",
 	"settings_logging_ev_search_enrichment_unreadable_n": "Enrichment unreadable",
 	"settings_logging_ev_search_enrichment_unreadable_h": "Extra details for search couldn't be read.",
+	"settings_logging_ev_search_saved_verified_rewritten_n": "Saved searches updated for imports",
+	"settings_logging_ev_search_saved_verified_rewritten_h": "Saved searches made with Show unverified now include imported torrents.",
 	"settings_logging_ev_dht_socket_buffers_n": "DHT network buffers",
 	"settings_logging_ev_dht_socket_buffers_h": "The size of the DHT network buffers was set or limited.",
 	"settings_logging_ev_dht_bootstrap_unreachable_n": "DHT bootstrap unreachable",

@@ -86,6 +86,9 @@ impl Server {
             .env("LODESTAR_DATA_DIR", dir)
             .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
             .env("LODESTAR_DHT_ENABLED", dht.to_string())
+            // Safe restart is on by default since CR-0w; off here, as the
+            // test was written, so no witness lands in the runner's home.
+            .env("LODESTAR_DHT_SAFE_RESTART", "false")
             .env("LODESTAR_DHT_PORT", "0")
             .env("LODESTAR_SCRAPE_ENABLED", "false")
             .env("LODESTAR_LOG", "info")

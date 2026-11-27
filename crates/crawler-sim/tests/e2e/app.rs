@@ -53,8 +53,8 @@ impl Drop for DataDir {
 
 /// The crawler's DHT node: production settings, except that it binds
 /// loopback, bootstraps from the test network, may talk to private
-/// addresses, and samples at once (production suppresses sampling for
-/// 6 h after a start without a restart proof, CR-0d).
+/// addresses, and has no restart proof (production samples at once too,
+/// since CR-0w).
 pub fn crawler_config(bootstrap: String) -> Config {
     Config {
         bind: vec![SocketAddr::from(([127, 0, 0, 1], 0))],

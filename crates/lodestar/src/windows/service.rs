@@ -3054,7 +3054,11 @@ mod tests {
 
     #[test]
     fn the_service_witness_dir_is_a_sibling_only_when_the_switch_is_on() {
-        let off = |k: &str| (k == "ProgramData").then(|| r"D:\PD".to_string());
+        let off = |k: &str| match k {
+            "ProgramData" => Some(r"D:\PD".to_string()),
+            "LODESTAR_DHT_SAFE_RESTART" => Some("false".to_string()),
+            _ => None,
+        };
         let c = Config::load(None, off).unwrap();
         assert_eq!(default_witness_dir(&c, &off), None, "nothing while off");
         // `None` leaves the variable unset; `Some("")` sets it empty.
@@ -3199,7 +3203,11 @@ mod tests {
         }
 
         // Off, or a dir chosen: nothing changes.
-        let off = |k: &str| (k == "ProgramData").then(|| pd.clone());
+        let off = |k: &str| match k {
+            "ProgramData" => Some(pd.clone()),
+            "LODESTAR_DHT_SAFE_RESTART" => Some("false".to_string()),
+            _ => None,
+        };
         let mut c = Config::load(None, off).unwrap();
         let before = c.dht.restart_witness_dir.clone();
         assert_eq!(
