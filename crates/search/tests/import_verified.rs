@@ -157,12 +157,18 @@ fn library(root: &Path) -> (Store, SearchIndex) {
     // The legacy bitmagnet importer: no info dict, no import record.
     let p = from_database(&store, "bitmagnet-legacy");
     write(&mut store, &p, flags::IMPORTED | flags::FILES_PARTIAL);
-    // IMP-2 and IMP-3 jobs: unverified import records.
+    // IMP-2 and IMP-3 jobs: unverified import records. `archived-dict`
+    // carries an info dict's size but its record says unverified, so only
+    // the record (read by the loader) keeps it from reading as verified.
     let m = from_database(&store, "magnetico");
+    let a = prepared(&store, "archived-dict");
     import(
         &mut store,
         "magnetico",
-        &[(m, Completeness::ReportedComplete)],
+        &[
+            (m, Completeness::ReportedComplete),
+            (a, Completeness::ReportedComplete),
+        ],
     );
     let b = from_database(&store, "bitmagnet");
     import(&mut store, "bitmagnet", &[(b, Completeness::Partial)]);
@@ -170,17 +176,17 @@ fn library(root: &Path) -> (Store, SearchIndex) {
     catch_up(&index, &mut store);
     drop(index);
     // No producer indexes unverified items yet (SRC-3's decisions), so
-    // play one beside the torrents.
+    // play one beside the torrents, leaving the loader's documents as
+    // `catch_up` wrote them.
     rewrite(&index_dir(root), &mut store, None);
     (store, SearchIndex::open(&index_dir(root)).unwrap())
 }
 
-/// Rewrites the torrent index under `dir` from `store`, plus one
-/// unverified item named `unverified`. With `old_verified`, every
-/// torrent's `verified` is that value and the payload records the field
-/// at generation 1, as the build before this slice left an index;
-/// otherwise each document is what `TorrentDoc::new` gives (its row's
-/// read rule) and the payload is kept.
+/// Adds one unverified item named `unverified` to the torrent index
+/// under `dir`. With `old_verified`, it first rewrites every torrent
+/// from `store` with that `verified` value and records the field at
+/// generation 1, as the build before this slice left an index; without,
+/// the indexer's own documents and the payload are kept.
 fn rewrite(dir: &Path, store: &mut Store, old_verified: Option<Verified>) {
     let index = tantivy::Index::open_in_dir(dir).unwrap();
     index
@@ -197,16 +203,16 @@ fn rewrite(dir: &Path, store: &mut Store, old_verified: Option<Verified>) {
     };
     let (_, f) = lodestar_search::schema::build();
     let mut w = index.writer::<TantivyDocument>(HEAP).unwrap();
-    w.delete_all_documents().unwrap();
     let ids = store.ids_after(0, 1000).unwrap();
-    for id in &ids {
-        let row = store.torrent(*id).unwrap().unwrap();
-        let tree = store.files(*id).unwrap().unwrap();
-        let mut doc = TorrentDoc::new(&row, &tree);
-        if let Some(v) = old_verified {
+    if let Some(v) = old_verified {
+        w.delete_all_documents().unwrap();
+        for id in &ids {
+            let row = store.torrent(*id).unwrap().unwrap();
+            let tree = store.files(*id).unwrap().unwrap();
+            let mut doc = TorrentDoc::new(&row, &tree);
             doc.provenance.verified = v;
+            w.add_document(doc.to_document(&f)).unwrap();
         }
-        w.add_document(doc.to_document(&f)).unwrap();
     }
     let row = store.torrent(ids[0]).unwrap().unwrap();
     let tree = store.files(ids[0]).unwrap().unwrap();
@@ -220,9 +226,15 @@ fn rewrite(dir: &Path, store: &mut Store, old_verified: Option<Verified>) {
     prepared.commit().unwrap();
 }
 
-const IMPORTS: [&str; 3] = ["bitmagnet", "bitmagnet-legacy", "magnetico"];
+const IMPORTS: [&str; 4] = [
+    "archived-dict",
+    "bitmagnet",
+    "bitmagnet-legacy",
+    "magnetico",
+];
 const VERIFIED: [&str; 2] = ["network", "torrent-file"];
-const ALL: [&str; 5] = [
+const ALL: [&str; 6] = [
+    "archived-dict",
     "bitmagnet",
     "bitmagnet-legacy",
     "magnetico",
@@ -231,7 +243,8 @@ const ALL: [&str; 5] = [
 ];
 
 /// Every kind, the unverified item too.
-const EVERYTHING: [&str; 6] = [
+const EVERYTHING: [&str; 7] = [
+    "archived-dict",
     "bitmagnet",
     "bitmagnet-legacy",
     "magnetico",
@@ -243,10 +256,8 @@ const EVERYTHING: [&str; 6] = [
 #[test]
 fn each_kind_of_stored_torrent_indexes_its_own_value() {
     let tmp = tempfile::tempdir().unwrap();
-    let (mut store, index) = library(tmp.path());
-    // The loader reads the same as the row's read rule here: a fresh
-    // catch-up over the store changes nothing.
-    catch_up(&index, &mut store);
+    let (_store, index) = library(tmp.path());
+    // As the live loader (`torrent_doc`) wrote them.
     assert_eq!(names(&index, "verified:yes"), VERIFIED);
     assert_eq!(names(&index, "verified:imported"), IMPORTS);
     assert_eq!(names(&index, "verified:no"), ["unverified"]);
@@ -330,7 +341,7 @@ fn a_network_fetch_verifies_a_partial_import_at_its_next_index_write() {
     );
     assert_eq!(
         names(&index, "verified:imported"),
-        ["bitmagnet-legacy", "magnetico"]
+        ["archived-dict", "bitmagnet-legacy", "magnetico"]
     );
 }
 

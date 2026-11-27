@@ -710,7 +710,10 @@ pub struct CompositionShare {
     pub pct_files: u8,
 }
 
-/// Whether an item has verified metadata.
+/// A `verified:` value (§18.6): `yes`, the info dict was fetched and
+/// hashed to the key; `no`, an unverified item known only from claims;
+/// `imported`, a stored torrent from another indexer's database, not
+/// checked against the hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AstVerified {

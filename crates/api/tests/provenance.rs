@@ -208,6 +208,8 @@ struct Fixture {
     /// claims), then the private-source one (Prowlarr only).
     hashes: [String; 2],
     saved_search: i64,
+    /// [`fixture_with`]'s imported torrent's hash.
+    imported: Option<String>,
     _dir: tempfile::TempDir,
 }
 
@@ -216,6 +218,12 @@ fn hex(b: &[u8]) -> String {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(false)
+}
+
+/// The fixture, plus (with `import`) a torrent from a Magnetico import
+/// job: no info dict and an unverified import record (IMP-1, IMP-2).
+fn fixture_with(import: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -307,6 +315,7 @@ fn fixture() -> Fixture {
             1_700_000_200,
         )
         .unwrap();
+    let imported = import.then(|| import_magnetico(&mut store, "Imported.Library.Item"));
     let index = SearchIndex::in_memory().unwrap();
     let mut w = index.writer(15 << 20).unwrap();
     w.catch_up(&mut store, 10).unwrap();
@@ -342,8 +351,68 @@ fn fixture() -> Fixture {
             hex(&infos[1].primary_hash().0),
         ],
         saved_search,
+        imported,
         _dir: dir,
     }
+}
+
+/// Commits one torrent named `name` through an IMP-1 Magnetico job, as
+/// the adapter would: no info dict, an unverified record. Its hash.
+fn import_magnetico(store: &mut Store, name: &str) -> String {
+    use lodestar_store::import::{
+        BatchCommitted, Completeness, Decision, ImportBatch, ImportRecord, ImportTorrent,
+        NewImportJob, Phase, Privacy, Verification,
+    };
+    const T: i64 = 1_700_000_000;
+    let raw = metainfo(name, &[("item.mkv", 1 << 20)]);
+    let info = Info::parse(&raw).unwrap();
+    let mut torrent = store.preparer().prepare(&info, None).unwrap();
+    torrent.info_size = 0;
+    let src = store.register_source("magnetico", "1", T).unwrap();
+    let job = store
+        .create_import_job(&NewImportJob {
+            adapter: "magnetico",
+            adapter_ver: 1,
+            dataset: b"dataset",
+            schema_sig: b"sig",
+            options: b"{}",
+            credential: None,
+            at: T,
+        })
+        .unwrap();
+    let job = store
+        .set_import_phase(job.id, job.revision, Phase::Ready, T)
+        .unwrap();
+    let job = store
+        .set_import_phase(job.id, job.revision, Phase::Reading, T + 10)
+        .unwrap();
+    let records = [ImportRecord::Torrent(ImportTorrent {
+        torrent: &torrent,
+        completeness: Completeness::ReportedComplete,
+        verification: Verification::Unverified,
+        privacy: Privacy::Unknown,
+        repair: 0,
+        source_at: Some(T - 100),
+        files_dropped: 0,
+        decision: Decision {
+            hits: &[],
+            marks: 0,
+        },
+    })];
+    let r = store
+        .commit_import_batch(&ImportBatch {
+            job: job.id,
+            seq: 1,
+            position: b"pos",
+            source: src,
+            source_bytes: 1,
+            at: T + 20,
+            class_gen: None,
+            records: &records,
+        })
+        .unwrap();
+    assert!(matches!(r, BatchCommitted::Committed { .. }), "{r:?}");
+    hex(&info.primary_hash().0)
 }
 
 struct Reply {
@@ -633,4 +702,47 @@ async fn an_export_carries_no_provenance() {
     )
     .await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+}
+
+/// X-import-verified-no: an import from another indexer's database is
+/// shown by default, but neither a search hit nor the detail says it's
+/// verified; a crawled torrent still is.
+#[tokio::test]
+async fn an_import_is_shown_but_never_called_verified() {
+    let f = fixture_with(true);
+    let c = signed_in(&f).await;
+    let imported = f.imported.clone().unwrap();
+    let s = get_as(&f, "/api/v1/search?sort=%2Bdiscovered", &c).await;
+    let hits = s["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 3, "shown by default: {hits:?}");
+    let hit = |hash: &str| {
+        hits.iter()
+            .find(|h| h["hash"] == hash)
+            .unwrap_or_else(|| panic!("{hash} in {hits:?}"))
+            .clone()
+    };
+    let i = hit(&imported);
+    assert_eq!(
+        (&i["verified"], &i["imported"]),
+        (&json!(false), &json!(true))
+    );
+    let v = hit(&f.hashes[0]);
+    assert_eq!(v["verified"], true);
+    assert!(v.get("imported").is_none(), "{v}");
+    // `verified:yes` leaves it out; `verified:imported` finds it alone.
+    let yes = get_as(&f, "/api/v1/search?q=verified%3Ayes", &c).await;
+    assert_eq!(yes["hits"].as_array().unwrap().len(), 2);
+    let only = get_as(&f, "/api/v1/search?q=verified%3Aimported", &c).await;
+    let only = only["hits"].as_array().unwrap();
+    assert_eq!(only.len(), 1);
+    assert_eq!(only[0]["hash"], imported.as_str());
+
+    let d = get_as(&f, &format!("/api/v1/torrents/{imported}"), &c).await;
+    assert_eq!(
+        (&d["provenance"]["verified"], &d["provenance"]["imported"]),
+        (&json!(false), &json!(true))
+    );
+    let d = get_as(&f, &format!("/api/v1/torrents/{}", f.hashes[0]), &c).await;
+    assert_eq!(d["provenance"]["verified"], true);
+    assert!(d["provenance"].get("imported").is_none());
 }
