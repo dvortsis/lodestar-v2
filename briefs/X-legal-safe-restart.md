@@ -21,3 +21,5 @@
 **Checks before `ready`:** cargo fmt, clippy with -D warnings, `cargo test -p api -p lodestar` (legal_facts and auth at least), plus the workspace tests CI runs. If web e2e fixtures pin the notice version, they're in CI's playwright job: tell the runner rather than editing them without a grant.
 
 **Size:** small, about 100–200 lines. Target: ready within a few hours.
+
+**Also granted (runner):** `crates/api/src/dto/auth.rs` keeps the `LegalNotice` example equal to `NOTICE_VERSION`, and the web e2e specs read the version from `web/src/lib/api/openapi.json` (`web/e2e/support/notice.ts`). So update the example in dto/auth.rs. Regenerate `web/src/lib/api/openapi.json`, and `web/src/lib/api/schema.d.ts` if it changes, with the repo's own generator (see how earlier notice bumps did it). Never hand-edit or hand-merge them. Run `npx playwright test e2e/auth*` in web/ with `PW_CHROMIUM_PATH=/opt/pw-browsers/chromium`.
