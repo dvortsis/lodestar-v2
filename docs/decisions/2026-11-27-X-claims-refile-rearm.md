@@ -1,4 +1,4 @@
-# X-claims-refile-rearm decisions
+# X-claims-refile-rearm decisions (#1138)
 
 Slice session, 2026-11-27. Spec: architecture §20.5 and §20.9; `docs/decisions/2026-11-27-X-purge-index-shapes.md` (#1135) and its review; the runner's brief `briefs/X-claims-refile-rearm.md` (2026-11-27T10:52Z). Baseline: `main` at 3bfe7246.
 
