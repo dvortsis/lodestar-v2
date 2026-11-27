@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T07:31Z",
+    "updated": "2026-11-27T08:31Z",
     "items": [
       {
         "slot": 1,
@@ -11148,12 +11148,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-irc-fuzz-seeds",
+        "slice": "X-purge-index-shapes",
         "role": "build",
         "agent": "claude",
-        "session": "session_01MMjhn9rtKAcengeBXAT5JJ",
-        "doing": "building: irc_announce seed corpus and coverage",
-        "since": "2026-11-27T05:28Z"
+        "session": "session_01MMjhnBm7cVQaDymwdGpp26",
+        "doing": "building: a purge takes served identification data out of the index",
+        "since": "2026-11-27T08:31Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
