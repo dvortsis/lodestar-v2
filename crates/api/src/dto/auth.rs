@@ -60,8 +60,8 @@ pub struct SetupTokenRequest {
 /// `GET /legal/notice`: the Legal Notice this build shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
-    "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 5 · 2026-11-11**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
-    "version": 5
+    "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 6 · 2026-11-27**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+    "version": 6
 }))]
 pub struct LegalNotice {
     /// Raised only when the notice changes in substance; send it back to
@@ -209,6 +209,24 @@ impl fmt::Debug for PasswordRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `LegalNotice` example (and so `openapi.json` and the e2e mock,
+    /// `web/e2e/support/notice.ts`) shows this build's notice version, in
+    /// the field and in the text's version line, so a raise can't leave the
+    /// web specs behind.
+    #[test]
+    fn the_notice_example_is_this_version() {
+        let schema = serde_json::to_value(<LegalNotice as utoipa::PartialSchema>::schema())
+            .expect("the schema serialises");
+        let example = &schema["example"];
+        let v = crate::legal::NOTICE_VERSION;
+        assert_eq!(example["version"], v, "dto/auth.rs LegalNotice example");
+        let text = example["text"].as_str().expect("an example text");
+        assert!(
+            text.contains(&format!("**Version {v} ·")),
+            "the example's version line: {text}"
+        );
+    }
 
     #[test]
     fn debug_never_shows_the_secrets() {
