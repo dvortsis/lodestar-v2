@@ -1782,7 +1782,9 @@ export default [
 	// carried across a view switch by hash and the clear-then-set re-announce of a group's load.
 	// X-web-followups-1124 (a raise for the runner's §2.26 call): 43.70 → 43.78 KB, measured 43,777 B (+77 B): VirtualList
 	// keeps a focused row active through a new resetKey, so j/k carry on from it after a re-sort.
-	entry('Search results (lazy)', resultsFirst, '43.78 KB'),
+	// X-gs-followups-2 (runner §2.26): 43.78 → 43.76 KB, measured 43,752 B (−25 B): the Table keeps
+	// the row carried into it (no re-set on mount), less the reset to row 1 for a new query's rows.
+	entry('Search results (lazy)', resultsFirst, '43.76 KB'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1829,7 +1831,9 @@ export default [
 	// GS-5: measured 3.01 KB (the rows, their logic, styles and messages), rounded up to 0.01 KB.
 	// X-gs-followups (runner §2.26): 3.02 → 3.05 KB, measured 3,044 B (+37 B): Show all's group
 	// total and its no-number wording.
-	entry('Search collapse rows (on demand)', collapseLazy, '3.05 KB'),
+	// X-gs-followups-2 (runner §2.26): 3.05 → 3.08 KB, measured 3,078 B: the check that a siblings
+	// answer is about the torrent asked for.
+	entry('Search collapse rows (on demand)', collapseLazy, '3.08 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
 	entry('Search row checkboxes (on demand)', pickLazy, '1.7 KB'),
@@ -1861,7 +1865,10 @@ export default [
 	// X-safety-toggles (runner §2.26): 28.14 → 28.15 KB, measured 28,141 B: chunk-hash and gzip
 	// drift, with no change to the drawer's code.
 	// X-labels (runner §2.26): 28,141 → 28,304 B, "DHT" and the importers' names for Found by.
-	entry('Detail drawer (own JS + CSS)', drawerView, '28.31 KB'),
+	// X-gs-followups-2 (runner §2.26): 28.31 → 28.27 KB, measured 28,269 B (−35 B): Parsed hides
+	// quietly on a withheld answer, and Show all leaves a one-line ask on the drawer's host; the
+	// focus step itself is in Related, which loads on demand.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28.27 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1919,7 +1926,10 @@ export default [
 	// X-gs-followups (runner §2.26): 5.4 → 5.61 KB, measured 5,604 B (+252 B): the siblings loader
 	// it now shares with Parsed (one request, the kept answer, the abort) moved here from Detail
 	// sections (−431 B there), so the two together are 179 B smaller.
-	entry('Detail Related section (on demand)', relatedSection, '5.61 KB'),
+	// X-gs-followups-2 (runner §2.26): 5.61 → 5.74 KB, measured 5,734 B (+130 B): Related takes
+	// focus on mount when Show all asked for it, hands it to the drawer's title when the answer is
+	// withheld, and the siblings loader's per-listener guard and read refresh of a kept answer.
+	entry('Detail Related section (on demand)', relatedSection, '5.74 KB'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	routeEntry(

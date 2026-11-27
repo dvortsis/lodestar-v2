@@ -18,7 +18,7 @@
 	let { hash, hit }: Props = $props();
 
 	let identity = $state<Identity | null>(null);
-	let status = $state<'loading' | 'ready' | 'error'>('loading');
+	let status = $state<'loading' | 'ready' | 'error' | 'withheld'>('loading');
 	let attempt = $state(0);
 
 	// Mounted when the section first scrolls near; a new torrent in the same drawer starts over. The
@@ -29,7 +29,7 @@
 			hash,
 			(s) => {
 				if (s.status === 'ready') identity = s.siblings.identity;
-				status = s.status === 'ready' ? 'ready' : s.status === 'loading' ? 'loading' : 'error';
+				status = s.status === 'failed' ? 'error' : s.status;
 			},
 			attempt > 0
 		);

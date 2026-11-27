@@ -235,6 +235,60 @@ describe('Related', () => {
 		expect(screen.queryByTestId('detail-related-compare')).toBeNull();
 	});
 
+	// The drawer's host, with the title Show all's open leaves focus on, and the ask it records.
+	function host(ask: string | null) {
+		const el = document.body.appendChild(document.createElement('div'));
+		el.className = 'ls-detail-host';
+		el.dataset.testid = 'drawer';
+		if (ask) el.dataset.ask = ask;
+		const title = el.appendChild(document.createElement('h2'));
+		title.tabIndex = -1;
+		title.focus();
+		const mount = el.appendChild(document.createElement('div'));
+		return { el, title, mount };
+	}
+	const showIn = (target: HTMLElement) =>
+		render(Related, {
+			target,
+			props: { detail: torrentDetail(), hit: searchHit(), mode: 'drawer' },
+			context: new Map([['lodestar.detail.open', openDetail]])
+		});
+
+	it('takes focus on mount when Show all asked for it, and asks once', async () => {
+		get.mockResolvedValue(full());
+		const h = host(HASH);
+		showIn(h.mount);
+		await waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Related'), WAIT);
+		expect(h.el.dataset.ask).toBeUndefined();
+	});
+
+	it('leaves focus alone when the reader moved on, or the ask was for another torrent', async () => {
+		get.mockResolvedValue(full());
+		const moved = host(HASH);
+		const elsewhere = document.body.appendChild(document.createElement('button'));
+		elsewhere.focus();
+		showIn(moved.mount);
+		await screen.findAllByTestId('detail-related-row', {}, WAIT);
+		expect(document.activeElement).toBe(elsewhere);
+		const other = host(hex('e'));
+		showIn(other.mount);
+		await waitFor(
+			() => expect(screen.getAllByTestId('detail-related-row').length).toBeGreaterThan(0),
+			WAIT
+		);
+		expect(document.activeElement).toBe(other.title);
+	});
+
+	it('moves the focus it holds to the drawer title when the answer is withheld', async () => {
+		let reject!: (e: unknown) => void;
+		get.mockReturnValue(new Promise((_, r) => (reject = r)));
+		const h = host(HASH);
+		showIn(h.mount);
+		await waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Related'), WAIT);
+		reject(new ApiError(404, 'torrent_not_found', ''));
+		await waitFor(() => expect(document.activeElement).toBe(h.title), WAIT);
+	});
+
 	it('shows nothing at all when the API withholds the torrent', async () => {
 		get.mockRejectedValue(new ApiError(404, 'torrent_not_found', ''));
 		show();
