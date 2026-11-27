@@ -1397,7 +1397,7 @@ def analyze_effect(treatment, block_reports, winners=None, designs=None, aa=Fals
         out["split_not_exercised_b_segments"] = len(idle)
         if out["sampler_split_by_arm"]["B"] and len(idle) == len(out["sampler_split_by_arm"]["B"]):
             out["warnings"] = [SPLIT_NOT_EXERCISED]
-    if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair per arm, over sampling minutes; never decided on
+    if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair per arm, over sampling minutes; the figures never decide
         out["soft_timeout_by_arm"] = stage3_by_arm(valid, "soft_timeout",
                                                    ("sampling_minutes", "stalled_minutes", "soft", "late",
                                                     "soft_per_hour",

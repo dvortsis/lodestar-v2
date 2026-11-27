@@ -5,6 +5,7 @@ The runner launched this slice on 2026-11-27 (runner records r17, `docs/decision
 ## A soft treatment arm with no soft counter is void (§2.19 refinement)
 - **This reverses X-soft-key's recorded "no check, no warning" call** (`docs/decisions/2026-11-23-X-soft-key.md`, "Reported, never decided on") for one case. It's a refinement of a runner decision, not of an owner decision: no owner-set number moves and nothing is loosened. The runner flags it to the owner (`docs/owner-decisions.md` §2.19).
 - **The rule.** In a segment whose treatment is `soft` and whose `soft_timeout` switch is on, `dht_soft_timeouts_total` absent at any scrape of the window fails rule 5's check `soft_timeout_counter_rendered`, and the segment is void with that reason.
+  - In practice that's absence throughout the window: a counter that drops out at one scrape of a #1091 binary reads as a counter reset (rule 6.5), so the segment is invalid first.
   - A binary with #1091 renders the counter at every scrape, 0 included (`render_soft_timeout` in `crates/lodestar/src/metrics.rs`). So absence means the binary predates the switch, and the arm ran as the control.
   - **A count of 0 over the window is a result, never a void.** The switch was set; it found nothing to act on, or it acted and the count says so.
   - The control arm (switch off) is never checked: a binary from before #1091 renders nothing there, and that's what the control is.
