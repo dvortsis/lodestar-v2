@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T03:10Z",
+    "updated": "2026-11-27T03:45Z",
     "items": [
       {
         "slot": 1,
@@ -11124,7 +11124,7 @@
         "role": "build",
         "model": "sonnet",
         "agent": "session_01MMjhnBzN5tameBegsXYN5E",
-        "doing": "PR #1126 open; trim then \u00a72.26 raise of three size entries",
+        "doing": "#1126 rv MERGE+2 important; fix round (row reset, focus off drawer)",
         "since": "2026-11-27T02:00Z"
       },
       {
@@ -11133,7 +11133,7 @@
         "role": "build",
         "model": "opus",
         "agent": "session_01MMjhn9DwpYm2CJ3wEEyQEH",
-        "doing": "PR #1127 open; runner review running",
+        "doing": "#1127 fixes pushed 6dfa0473, delta checked; waiting CI",
         "since": "2026-11-27T01:35Z"
       },
       {
@@ -11151,7 +11151,7 @@
         "role": "build",
         "model": "opus",
         "agent": "session_01MMjhnCvVhSrDB5e8MDoECq",
-        "doing": "PR #1128 open; runner review + security review running",
+        "doing": "#1128 rv+sec MERGE; re-landing as one neutral commit on slice/X-sec-S8-26-b",
         "since": "2026-11-27T01:35Z"
       }
     ],
@@ -12246,7 +12246,9 @@
       "web/src/lib/features/detail/**",
       "web/src/lib/features/search/table/ResultsTable.svelte",
       "web/src/lib/features/search/results/ResultsPanel.svelte (carried re-set)",
-      "web/.size-limit.mjs (three entry lines: collapse rows, drawer, Related; shared with UP-2, disjoint hunks)"
+      "web/.size-limit.mjs (three entry lines: collapse rows, drawer, Related; shared with UP-2, disjoint hunks)",
+      "web/src/lib/features/search/results/ResultsPanel.svelte ($effect.pre empty\u2192rows reset)",
+      "web/.size-limit.mjs (Search results lazy line)"
     ]
   },
   "next_pick": {
