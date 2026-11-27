@@ -225,17 +225,12 @@ fn addr(i: u8) -> SocketAddr {
 }
 
 #[tokio::test(start_paused = true)]
-async fn first_start_suppresses_for_the_horizon() {
+async fn a_first_start_samples_at_once() {
+    // Owner §2.77: no start waits. The reason stays as a diagnostic.
     let d = Dirs::new("first");
     let c = clock();
-    let mut r = Run::boot(&d, &c, true);
+    let r = Run::boot(&d, &c, true);
     assert_eq!(r.proof.reason(), Reason::FirstStart);
-    assert!(!r.proof.may_sample(Instant::now()));
-    advance(horizon() - Duration::from_millis(1)).await;
-    r.tick();
-    assert!(!r.proof.may_sample(Instant::now()));
-    assert!(r.proof.suppression_seconds(Instant::now()) >= 1);
-    advance(Duration::from_millis(1)).await;
     assert!(r.proof.may_sample(Instant::now()));
     assert_eq!(r.proof.suppression_seconds(Instant::now()), 0);
 }
@@ -282,15 +277,14 @@ async fn a_clean_restart_resumes_and_honours_each_restored_restriction() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_short_suppressed_run_passes_its_window_on_through_the_gate() {
-    // N1: A resumes and samples E, then is killed. B suppresses (`dirty`)
-    // and stops cleanly 5 minutes later. C, starting 1 minute after that,
-    // resumes but sends nothing to anyone before B's start + H.
+async fn no_gate_carries_over_an_unproven_run() {
+    // CR-0w (it was N1's gate): A resumes and samples E, then is killed.
+    // B can't resume (`dirty`): it restores nothing, samples at once and
+    // stops cleanly 5 minutes later. C resumes B's commit and samples at
+    // once too: no gate is written or restored, only B's own restrictions.
     let d = Dirs::new("gate");
     let c = clock();
-    let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
+    let r = Run::boot(&d, &c, true);
     r.commit(&d);
     let mut a = Run::boot(&d, &c, true);
     assert_eq!(a.proof.reason(), Reason::Resumed);
@@ -298,38 +292,44 @@ async fn a_short_suppressed_run_passes_its_window_on_through_the_gate() {
     drop(a); // kill -9: no commit
 
     advance(Duration::from_secs(60)).await;
-    let b = Run::boot(&d, &c, true);
+    let mut b = Run::boot(&d, &c, true);
     assert_eq!(b.proof.reason(), Reason::Dirty);
-    let b_start = Instant::now();
+    assert!(b.proof.may_sample(Instant::now()), "samples at once");
+    assert_eq!(
+        b.stats.restart_obligations_restored.load(Ordering::Relaxed),
+        0,
+        "restores nothing"
+    );
+    b.sampled(addr(9), 2, Duration::from_secs(600));
     advance(Duration::from_secs(300)).await;
     b.commit(&d);
+    let (s, _) =
+        restart::Snapshot::decode(&std::fs::read(d.data.join(restart::SNAPSHOT_FILE)).unwrap())
+            .unwrap();
+    assert_eq!(s.gate_s, 0, "no gate is written");
 
     advance(Duration::from_secs(60)).await;
-    let mut c_run = Run::boot(&d, &c, true);
+    let c_run = Run::boot(&d, &c, true);
     assert_eq!(c_run.proof.reason(), Reason::Resumed);
-    assert!(!c_run.proof.may_sample(Instant::now()), "the gate holds");
-    let until = b_start + horizon();
-    advance(until - Instant::now() - Duration::from_millis(1)).await;
-    c_run.tick();
-    assert!(!c_run.proof.may_sample(Instant::now()));
-    advance(Duration::from_secs(1)).await;
-    assert!(c_run.proof.may_sample(Instant::now()));
+    assert!(c_run.proof.may_sample(Instant::now()), "no gate");
+    assert_eq!(c_run.proof.suppression_seconds(Instant::now()), 0);
+    let mut c_run = c_run;
+    assert!(
+        !c_run.sampler.reserve(addr(9), 3, Instant::now()),
+        "B's own restriction holds"
+    );
+    assert!(c_run.sampler.reserve(addr(1), 4, Instant::now()));
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_gate_carries_through_first_start_off_run_generation_and_torn_witness() {
+async fn no_gate_after_a_first_start_off_run_generation_or_torn_witness() {
     for case in ["first_start", "off_run", "generation", "torn_witness"] {
         let d = Dirs::new("gatecases");
         let c = clock();
         // Get to the state each case starts from.
         match case {
             "first_start" => {}
-            _ => {
-                let mut r = Run::boot(&d, &c, true);
-                advance(horizon()).await;
-                r.tick();
-                r.commit(&d);
-            }
+            _ => Run::boot(&d, &c, true).commit(&d),
         }
         match case {
             "off_run" => drop(Run::boot(&d, &c, false)),
@@ -354,8 +354,8 @@ async fn the_gate_carries_through_first_start_off_run_generation_and_torn_witnes
             }
             _ => {}
         }
-        // A short suppressed run that stops cleanly.
-        let b = Run::boot(&d, &c, true);
+        // A short unproven run that samples at once and stops cleanly.
+        let mut b = Run::boot(&d, &c, true);
         let expect = match case {
             "torn_witness" => Reason::NoWitness,
             "first_start" => Reason::FirstStart,
@@ -363,37 +363,47 @@ async fn the_gate_carries_through_first_start_off_run_generation_and_torn_witnes
             _ => Reason::Generation,
         };
         assert_eq!(b.proof.reason(), expect, "{case}");
-        let b_start = Instant::now();
+        assert!(b.proof.may_sample(Instant::now()), "{case}: at once");
+        b.sampled(addr(3), 1, Duration::from_secs(1800));
         advance(Duration::from_secs(120)).await;
         b.commit(&d);
         advance(Duration::from_secs(30)).await;
         let mut next = Run::boot(&d, &c, true);
         assert_eq!(next.proof.reason(), Reason::Resumed, "{case}");
-        let until = b_start + horizon();
-        advance(until - Instant::now() - Duration::from_millis(1)).await;
-        next.tick();
-        assert!(!next.proof.may_sample(Instant::now()), "{case}: early");
-        advance(Duration::from_millis(1)).await;
-        assert!(next.proof.may_sample(Instant::now()), "{case}");
+        assert!(next.proof.may_sample(Instant::now()), "{case}: no gate");
+        assert!(
+            !next.sampler.reserve(addr(3), 2, Instant::now()),
+            "{case}: the unproven run's own restriction carries over"
+        );
     }
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_busy_lock_is_retried_and_nothing_is_touched_meanwhile() {
+    // CR-0w: a locked-out on-run holds samples for at most START_HOLD,
+    // then samples, still locked out and still writing nothing.
     let d = Dirs::new("busy");
     let c = clock();
-    let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
-    r.commit(&d);
+    Run::boot(&d, &c, true).commit(&d);
     let before = std::fs::read(d.data.join(restart::MARKER_FILE)).unwrap();
     let LockAttempt::Held(other) = restart::try_lock(&d.data).unwrap() else {
         panic!("this test needs file locks in the temp dir");
     };
+    let start = Instant::now();
     let mut r = Run::boot_locked(&d, &c, true);
     assert_eq!(r.proof.reason(), Reason::Locked);
     assert!(!r.proof.may_sample(Instant::now()));
-    assert!(r.proof.suppression_seconds(Instant::now()) >= 1);
+    let left = r.proof.suppression_seconds(Instant::now());
+    assert!((1..=START_HOLD.as_secs()).contains(&left), "{left}");
+    advance(START_HOLD - Duration::from_millis(1)).await;
+    r.tick();
+    assert!(!r.proof.may_sample(Instant::now()));
+    advance(Duration::from_millis(1)).await;
+    r.tick();
+    assert_eq!(Instant::now(), start + START_HOLD);
+    assert!(r.proof.may_sample(Instant::now()), "the hold is bounded");
+    assert_eq!(r.proof.suppression_seconds(Instant::now()), 0);
+    assert_eq!(r.proof.reason(), Reason::Locked);
     for _ in 0..10 {
         advance(TICK).await;
         r.tick();
@@ -408,66 +418,53 @@ async fn a_busy_lock_is_retried_and_nothing_is_touched_meanwhile() {
     advance(MAX_RETRY).await;
     r.tick();
     r.take_lock();
-    assert_eq!(
-        r.proof.reason(),
-        Reason::Resumed,
-        "nothing was sent: it may resume"
-    );
+    assert_eq!(r.proof.reason(), Reason::Resumed, "it may still resume");
+    assert!(r.proof.may_sample(Instant::now()));
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_off_run_holds_the_lock_and_its_window_starts_when_it_gets_it() {
-    // C1: an off-run locked out for longer than H sends nothing until H
-    // after it takes the lock. N2: an on-run beside it is locked out.
+async fn an_off_run_samples_at_once_and_holds_the_lock_once_it_gets_it() {
+    // CR-0w (it was C1's window): an off-run samples at once, locked out
+    // or not. N2: an on-run beside it is locked out.
     let d = Dirs::new("c1");
     let c = clock();
     let LockAttempt::Held(holder) = restart::try_lock(&d.data).unwrap() else {
         panic!("this test needs file locks in the temp dir");
     };
     let mut off = Run::boot_locked(&d, &c, false);
-    advance(horizon() + Duration::from_secs(3600)).await;
-    off.tick();
-    assert!(!off.proof.may_sample(Instant::now()), "locked out: nothing");
+    assert!(off.proof.may_sample(Instant::now()), "locked out, at once");
     drop(holder);
     advance(MAX_RETRY).await;
     off.tick();
     off.take_lock();
-    let took = Instant::now();
-    assert!(
-        !off.proof.may_sample(took),
-        "the window starts now, not at the epoch"
-    );
+    assert!(off.proof.may_sample(Instant::now()));
     let on = Run::boot_locked(&d, &c, true);
     assert_eq!(
         on.proof.reason(),
         Reason::Locked,
-        "an on-run beside it waits"
+        "an on-run beside it is locked out"
     );
-    assert!(!on.proof.may_sample(Instant::now()));
-    advance(horizon()).await;
-    assert!(off.proof.may_sample(Instant::now()));
 }
 
 #[tokio::test(start_paused = true)]
-async fn failed_invalidation_blocks_sampling_until_a_retry_lands() {
-    // I1: a clean marker exists and neither the marker nor the witness can
-    // be written. Nothing is sampled. A retry that lands two minutes in
-    // turns the would-be resume into suppress mode: still nothing until
-    // this run's start + H, and the commit passes that window on.
+async fn a_failed_invalidation_samples_at_once_and_commits_once_a_retry_lands() {
+    // CR-0w (it was I1's wait): a clean marker exists and neither the
+    // marker nor the witness can be written. The run samples at once with
+    // what it restored; it can't commit until a retry lands. A late
+    // landing adds no wait, and the next start resumes with no gate.
     let d = Dirs::new("i1");
     let c = clock();
     let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
+    r.sampled(addr(1), 1, Duration::from_secs(3600));
     r.commit(&d);
     fail::arm_sticky(Some(restart::Point::AfterWrite));
-    let start = Instant::now();
     let mut r = Run::boot(&d, &c, true);
     assert_eq!(r.proof.reason(), Reason::InvalidateFailed);
-    assert!(!r.proof.may_sample(Instant::now()));
+    assert!(r.proof.may_sample(Instant::now()), "at once");
+    assert_eq!(r.proof.suppression_seconds(Instant::now()), 0);
     assert!(
-        r.proof.suppression_seconds(Instant::now()) >= 1,
-        "never reads 0 while blocked"
+        !r.sampler.reserve(addr(1), 2, Instant::now()),
+        "what it restored holds"
     );
     for _ in 0..4 {
         advance(Duration::from_secs(30)).await;
@@ -476,50 +473,38 @@ async fn failed_invalidation_blocks_sampling_until_a_retry_lands() {
     assert!(
         r.stats.restart_persist_errors[step(PersistStep::Invalidate)].load(Ordering::Relaxed) >= 2
     );
-    assert!(!r.proof.may_sample(Instant::now()));
+    r.sampled(addr(2), 3, Duration::from_secs(1800));
     fail::arm_sticky(None);
     settle(&mut r).await;
-    assert!(
-        Instant::now() < start + horizon(),
-        "the retry must land before the window ends for this test to mean anything"
-    );
-    assert_eq!(
-        r.proof.reason(),
-        Reason::InvalidateFailed,
-        "landed late: suppress mode"
-    );
-    assert!(!r.proof.may_sample(Instant::now()), "not before start + H");
-    advance(start + horizon() - Instant::now() - Duration::from_millis(1)).await;
-    r.tick();
-    assert!(!r.proof.may_sample(Instant::now()));
-    advance(Duration::from_millis(1)).await;
+    assert_eq!(r.proof.reason(), Reason::Resumed, "landed late: no wait");
     assert!(r.proof.may_sample(Instant::now()));
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_late_landing_passes_its_window_on() {
-    // The same, but the run stops before start + H: the next start
-    // resumes behind a gate at this run's start + H.
-    let d = Dirs::new("i1gate");
-    let c = clock();
-    let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
-    r.commit(&d);
-    fail::arm_sticky(Some(restart::Point::AfterWrite));
-    let start = Instant::now();
-    let mut r = Run::boot(&d, &c, true);
-    fail::arm_sticky(None);
-    settle(&mut r).await;
     advance(Duration::from_secs(60)).await;
     r.commit(&d);
     let mut next = Run::boot(&d, &c, true);
     assert_eq!(next.proof.reason(), Reason::Resumed);
-    advance(start + horizon() - Instant::now() - Duration::from_millis(1)).await;
-    next.tick();
-    assert!(!next.proof.may_sample(Instant::now()), "the gate holds");
-    advance(Duration::from_millis(1)).await;
-    assert!(next.proof.may_sample(Instant::now()));
+    assert!(next.proof.may_sample(Instant::now()), "no gate");
+    assert!(!next.sampler.reserve(addr(2), 4, Instant::now()), "carried");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_that_never_invalidates_samples_but_never_commits() {
+    // The marker can't be written all run: the run samples, and at
+    // shutdown it doesn't commit. A later start may then resume from the
+    // older snapshot without this run's restrictions: re-asks, never a
+    // wait (`docs/decisions/2026-11-27-CR-0w.md`).
+    let d = Dirs::new("i1never");
+    let c = clock();
+    Run::boot(&d, &c, true).commit(&d);
+    fail::arm_sticky(Some(restart::Point::AfterWrite));
+    let mut r = Run::boot(&d, &c, true);
+    assert_eq!(r.proof.reason(), Reason::InvalidateFailed);
+    assert!(r.proof.may_sample(Instant::now()));
+    r.sampled(addr(4), 1, Duration::from_secs(1800));
+    let got = r
+        .proof
+        .commit(&mut r.sampler, &state(), &d.state_path(), &r.stats);
+    fail::arm_sticky(None);
+    assert_eq!(got, None, "never invalidated: no commit");
 }
 
 #[tokio::test(start_paused = true)]
@@ -583,25 +568,19 @@ async fn a_failed_witness_with_a_landed_marker_resumes_and_is_retried_at_commit(
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_off_run_that_cant_overwrite_the_marker_waits_for_a_retry() {
-    // §6.13: an off-run with a clean marker it can't overwrite sends no
-    // samples, even after its window, until a retry lands.
+async fn an_off_run_that_cant_overwrite_the_marker_samples_and_retries() {
+    // §6.13, CR-0w: an off-run with a clean marker it can't overwrite
+    // samples at once and retries the overwrite until it lands.
     let d = Dirs::new("offfail");
     let c = clock();
-    let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
-    r.commit(&d);
+    Run::boot(&d, &c, true).commit(&d);
     fail::arm_sticky(Some(restart::Point::AfterWrite));
     let mut off = Run::boot(&d, &c, false);
     assert_eq!(off.proof.reason(), Reason::InvalidateFailed);
-    advance(horizon() + Duration::from_secs(60)).await;
-    off.tick();
-    assert!(!off.proof.may_sample(Instant::now()));
+    assert!(off.proof.may_sample(Instant::now()));
     fail::arm_sticky(None);
     settle(&mut off).await;
     assert_eq!(off.proof.reason(), Reason::Off);
-    assert!(off.proof.may_sample(Instant::now()));
     let Found::Ok(m) = restart::read_marker(&d.data) else {
         panic!()
     };
@@ -611,21 +590,18 @@ async fn an_off_run_that_cant_overwrite_the_marker_waits_for_a_retry() {
 #[tokio::test(start_paused = true)]
 async fn an_on_run_holding_the_lock_keeps_an_off_run_out() {
     // §6.7 / N2 with a marker present: the off-run beside a live on-run
-    // reports `locked`, samples nothing and writes nothing.
+    // reports `locked` and writes nothing. It samples (CR-0w).
     let d = Dirs::new("onoff");
     let c = clock();
-    let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
-    r.commit(&d);
+    Run::boot(&d, &c, true).commit(&d);
     let on = Run::boot(&d, &c, true);
     assert_eq!(on.proof.reason(), Reason::Resumed);
     let marker = std::fs::read(d.data.join(restart::MARKER_FILE)).unwrap();
     let mut off = Run::boot_locked(&d, &c, false);
     assert_eq!(off.proof.reason(), Reason::Locked);
+    assert!(off.proof.may_sample(Instant::now()));
     advance(horizon() * 2).await;
     off.tick();
-    assert!(!off.proof.may_sample(Instant::now()));
     assert_eq!(
         std::fs::read(d.data.join(restart::MARKER_FILE)).unwrap(),
         marker
@@ -637,7 +613,8 @@ async fn an_on_run_holding_the_lock_keeps_an_off_run_out() {
 async fn overlapping_runs_never_both_resume() {
     // §6.7: a new run starting while the old one is still up (an
     // in-process restart whose old actor hasn't finished) waits for the
-    // lock, then resumes from the old run's commit.
+    // lock, holding samples for at most START_HOLD, then resumes from the
+    // old run's commit.
     let d = Dirs::new("overlap");
     let c = clock();
     let mut r = Run::boot(&d, &c, true);
@@ -669,8 +646,9 @@ async fn overlapping_runs_never_both_resume() {
 #[tokio::test(start_paused = true)]
 async fn reload_send_crash_reload_never_resumes_past_a_crash() {
     // §6.2: 100 restarts, each stopping cleanly or crashing at a random
-    // point. A crash is always followed by a suppressed start; a clean
-    // stop by a resume that still holds the last run's restrictions.
+    // point. A crash is always followed by a start that restores nothing;
+    // a clean stop by a resume that still holds the last run's
+    // restrictions. Every start samples at once (CR-0w).
     use rand::{RngExt, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(0xC0DE);
     let d = Dirs::new("loop");
@@ -697,10 +675,8 @@ async fn reload_send_crash_reload_never_resumes_past_a_crash() {
         } else {
             assert_eq!(r.proof.reason(), Reason::Dirty, "iteration {i}");
         }
-        // Let any window or gate pass, then sample a couple of peers.
-        let wait = r.proof.suppression_seconds(Instant::now());
-        advance(Duration::from_secs(wait)).await;
-        r.tick();
+        // No window or gate: sample a couple of peers at once.
+        assert_eq!(r.proof.suppression_seconds(Instant::now()), 0);
         assert!(r.proof.may_sample(Instant::now()));
         let mut sampled = Vec::new();
         for k in 0..2u32 {
@@ -733,14 +709,18 @@ async fn an_off_run_between_two_on_runs_reads_off_run() {
     let r = Run::boot(&d, &c, true);
     assert_eq!(r.proof.reason(), Reason::OffRun);
     drop(r); // releases the lock
-    // A fixture that overrides the delay is an off-run too (I5).
-    let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
-    r.commit(&d);
-    drop(Run::boot_with(&d, &c, true, Some(Duration::ZERO)));
+    // A fixture's start delay no longer makes an off-run (CR-0w drops
+    // I5's coupling): the run is on, resumes, and holds for its delay.
+    Run::boot(&d, &c, true).commit(&d);
+    let mut delayed = Run::boot_with(&d, &c, true, Some(Duration::from_secs(30)));
+    delayed.take_lock();
+    assert_eq!(delayed.proof.reason(), Reason::Resumed);
+    assert!(!delayed.proof.may_sample(Instant::now()), "its own delay");
+    advance(Duration::from_secs(30)).await;
+    assert!(delayed.proof.may_sample(Instant::now()));
+    delayed.commit(&d);
     let r = Run::boot(&d, &c, true);
-    assert_eq!(r.proof.reason(), Reason::OffRun);
+    assert_eq!(r.proof.reason(), Reason::Resumed);
 }
 
 #[tokio::test(start_paused = true)]
@@ -872,19 +852,15 @@ async fn the_marker_carries_the_ids_saved_at_shutdown() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn legacy_runs_without_a_data_dir_keep_todays_suppression() {
+async fn legacy_runs_sample_at_once_unless_a_fixture_delays_them() {
     let p = Proof::new(None, None, None, horizon(), TICK, Instant::now());
-    assert!(!p.may_sample(Instant::now()));
-    advance(horizon()).await;
     assert!(p.may_sample(Instant::now()));
-    let p = Proof::new(
-        None,
-        None,
-        Some(Duration::ZERO),
-        horizon(),
-        TICK,
-        Instant::now(),
-    );
+    assert_eq!(p.suppression_seconds(Instant::now()), 0);
+    let delay = Duration::from_secs(90);
+    let p = Proof::new(None, None, Some(delay), horizon(), TICK, Instant::now());
+    assert!(!p.may_sample(Instant::now()));
+    assert_eq!(p.suppression_seconds(Instant::now()), 90);
+    advance(delay).await;
     assert!(p.may_sample(Instant::now()));
 }
 
@@ -953,26 +929,26 @@ fn make_marker_readable(d: &Dirs) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_unreadable_marker_must_be_overwritten_before_any_sample() {
+async fn an_unreadable_marker_must_be_overwritten_before_a_commit() {
     // Runner review B1: an unreadable marker may be a clean one, so an
-    // on-run samples nothing, even past its window and with its own (new
-    // id's) witness written, until the marker itself is overwritten.
+    // on-run doesn't count as invalidated, even with its own (new id's)
+    // witness written, until the marker itself is overwritten. It samples
+    // meanwhile (CR-0w), restoring nothing.
     let d = Dirs::new("unreadable");
     let c = clock();
-    let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
-    r.commit(&d);
+    Run::boot(&d, &c, true).commit(&d);
     make_marker_unreadable(&d);
-    let start = Instant::now();
     let mut r = Run::boot(&d, &c, true);
     assert_eq!(r.proof.reason(), Reason::InvalidateFailed);
-    advance(horizon() + Duration::from_secs(60)).await;
+    assert!(r.proof.may_sample(Instant::now()));
+    advance(Duration::from_secs(60)).await;
     r.tick();
-    assert!(
-        !r.proof.may_sample(Instant::now()),
+    assert_eq!(
+        r.proof.reason(),
+        Reason::InvalidateFailed,
         "the witness bump doesn't count"
     );
+    assert!(!r.proof.started.as_ref().unwrap().invalidated);
     make_marker_readable(&d);
     settle(&mut r).await;
     assert_eq!(
@@ -980,32 +956,25 @@ async fn an_unreadable_marker_must_be_overwritten_before_any_sample() {
         Reason::Corrupt,
         "landed: the start's own reason"
     );
-    assert!(r.proof.may_sample(Instant::now()));
-    assert!(Instant::now() >= start + horizon());
     let Found::Ok(m) = restart::read_marker(&d.data) else {
         panic!()
     };
     assert_eq!(m.state, MarkerState::Dirty);
+    r.commit(&d);
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_off_run_waits_for_an_unreadable_marker_too() {
+async fn an_off_run_overwrites_an_unreadable_marker_too() {
     let d = Dirs::new("unreadableoff");
     let c = clock();
-    let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
-    r.commit(&d);
+    Run::boot(&d, &c, true).commit(&d);
     make_marker_unreadable(&d);
     let mut off = Run::boot(&d, &c, false);
     assert_eq!(off.proof.reason(), Reason::InvalidateFailed);
-    advance(horizon() + Duration::from_secs(60)).await;
-    off.tick();
-    assert!(!off.proof.may_sample(Instant::now()));
+    assert!(off.proof.may_sample(Instant::now()));
     make_marker_readable(&d);
     settle(&mut off).await;
     assert_eq!(off.proof.reason(), Reason::Off);
-    assert!(off.proof.may_sample(Instant::now()));
     let Found::Ok(m) = restart::read_marker(&d.data) else {
         panic!()
     };
@@ -1035,7 +1004,8 @@ async fn a_copied_directory_needs_its_marker_overwritten() {
     let r = Run::boot(&d, &c, true);
     fail::arm(None);
     assert_eq!(r.proof.reason(), Reason::InvalidateFailed);
-    assert!(!r.proof.may_sample(Instant::now()));
+    assert!(!r.proof.started.as_ref().unwrap().invalidated);
+    assert!(r.proof.may_sample(Instant::now()), "it samples meanwhile");
 }
 
 /// On a real clock, waits (deadline 10 s) until the wall clock is past the
@@ -1219,19 +1189,16 @@ async fn a_spilled_cooldown_is_restored_and_the_next_run_samples_at_once() {
     }
 }
 
-/// X-split-resume-gate's fallback: if the snapshot's filter can't be
-/// rebuilt (here the new sampler's filter is already in use), the start
-/// holds every sample until the last spilled end, and the next commit
-/// carries that gate, as before this slice. Never shorter.
+/// X-split-resume-gate's fallback, under CR-0w: if the snapshot's filter
+/// can't be rebuilt (here the new sampler's filter is already in use), its
+/// cooldowns are dropped and nothing waits for them: the run samples at
+/// once, and the next commit writes no gate.
 #[tokio::test(start_paused = true)]
-async fn a_filter_that_cant_be_rebuilt_gates_until_its_last_end() {
+async fn a_filter_that_cant_be_rebuilt_is_dropped_without_a_gate() {
     let d = Dirs::new("spill-fallback");
     let c = clock();
     let mut r = Run::boot(&d, &c, true);
-    advance(horizon()).await;
-    r.tick();
     r.sampler = Sampler::split_with_capacity(1);
-    let t0 = Instant::now();
     r.sampled(addr(1), 1, Duration::from_secs(3600));
     r.sampled(addr(2), 2, Duration::from_secs(600));
     assert_eq!(r.sampler.spill_counts().0, 1);
@@ -1250,19 +1217,63 @@ async fn a_filter_that_cant_be_rebuilt_gates_until_its_last_end() {
         ));
     }
     assert_eq!(busy.spill_counts().0, 1, "in use before seeding");
-    let r = Run::boot_sampler(&d, &c, busy);
-    let now = Instant::now();
+    let mut r = Run::boot_sampler(&d, &c, busy);
     assert_eq!(r.proof.reason(), Reason::Resumed);
-    assert!(!r.proof.may_sample(now), "held for the spilled cooldown");
-    let end = t0 + Duration::from_secs(3600);
-    assert!(r.proof.may_sample(end + Duration::from_secs(120)));
-    assert!(!r.proof.may_sample(end - Duration::from_millis(1)));
+    assert!(r.proof.may_sample(Instant::now()), "no gate");
+    assert!(
+        !r.sampler.reserve(addr(2), 30, Instant::now()),
+        "the listed restriction still holds"
+    );
     r.commit(&d);
     let bytes = std::fs::read(d.data.join(restart::SNAPSHOT_FILE)).unwrap();
     let (s, _) = restart::Snapshot::decode(&bytes).unwrap();
-    assert!(
-        u64::from(s.gate_s) >= 3600 - 60 - 1,
-        "the next commit carries the gate: {}",
-        s.gate_s
+    assert_eq!(s.gate_s, 0, "the next commit writes no gate");
+}
+
+/// CR-0w: a version-1 snapshot an older binary wrote with a gate (#1118's
+/// upgrade path) resumes its per-node restrictions and drops the gate:
+/// the first run on this binary samples at once and commits none.
+#[tokio::test(start_paused = true)]
+async fn an_old_snapshots_gate_is_dropped() {
+    let d = Dirs::new("v1gate");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    r.sampled(addr(1), 1, Duration::from_secs(3600));
+    r.commit(&d);
+    // Rewrite the snapshot as an older run would have: the same entries
+    // behind a 5 h gate, and the clean marker naming it.
+    let path = d.data.join(restart::SNAPSHOT_FILE);
+    let (mut snap, _) = restart::Snapshot::decode(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(snap.gate_s, 0);
+    snap.gate_s = 5 * 3600;
+    let bytes = snap.encode();
+    assert_eq!(
+        u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
+        restart::VERSION
     );
+    std::fs::write(&path, &bytes).unwrap();
+    let Found::Ok(mut m) = restart::read_marker(&d.data) else {
+        panic!()
+    };
+    let MarkerState::Clean { state_bin, .. } = m.state else {
+        panic!("clean")
+    };
+    m.state = MarkerState::Clean {
+        snap: bytes[bytes.len() - 32..].try_into().unwrap(),
+        state_bin,
+    };
+    std::fs::write(d.data.join(restart::MARKER_FILE), m.encode()).unwrap();
+
+    advance(Duration::from_secs(60)).await;
+    let mut r = Run::boot(&d, &c, true);
+    assert_eq!(r.proof.reason(), Reason::Resumed);
+    assert!(r.proof.may_sample(Instant::now()), "the gate is dropped");
+    assert_eq!(r.proof.suppression_seconds(Instant::now()), 0);
+    assert!(
+        !r.sampler.reserve(addr(1), 2, Instant::now()),
+        "its restriction holds"
+    );
+    r.commit(&d);
+    let (s, _) = restart::Snapshot::decode(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(s.gate_s, 0, "and none is passed on");
 }

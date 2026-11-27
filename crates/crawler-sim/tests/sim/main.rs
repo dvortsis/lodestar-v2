@@ -287,10 +287,12 @@ fn restart_from_a_spilled_state_samples_at_once() {
     );
 }
 
-/// The negative control: the same restart with `dht.safe_restart` off in
-/// leg 2 suppresses in full, and no node is sampled in leg 2.
+/// The unproven restart (CR-0w, owner §2.77): the same restart with
+/// `dht.safe_restart` off in leg 2. It restores nothing and samples at
+/// once, so some nodes leg 1 left cooling are asked again early: the cost
+/// the owner accepted, re-asks instead of a six-hour wait.
 #[test]
-fn restart_without_safe_restart_suppresses_in_full() {
+fn restart_without_safe_restart_samples_at_once() {
     let mut s = scenario::restart_honoured();
     s.minutes = 10;
     if let Some(r) = &mut s.restart {
@@ -303,15 +305,17 @@ fn restart_without_safe_restart_suppresses_in_full() {
         "{}",
         r.text
     );
-    assert_eq!(r.dht.samples_sent, 0, "{}", r.text);
-    // The full window: 6 h plus the query timeout from leg 2's start, less
-    // the leg's 10 min.
-    assert!(
-        r.dht.sample_suppression_seconds >= 6 * 3600 + 4 - 600,
-        "{}",
-        r.text
-    );
+    assert!(r.dht.samples_sent > 0, "{}", r.text);
+    assert_eq!(r.dht.sample_suppression_seconds, 0, "{}", r.text);
     assert_eq!(r.dht.restart_obligations_restored, 0, "{}", r.text);
+    let early: u64 = r
+        .text
+        .split("sampled_before_expiry=")
+        .nth(1)
+        .and_then(|t| t.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .expect("the restart line");
+    assert!(early > 0, "nothing was re-asked early:\n{}", r.text);
 }
 
 /// CR-SAMPLE-BACKOFF-ESCALATE: the same restart with

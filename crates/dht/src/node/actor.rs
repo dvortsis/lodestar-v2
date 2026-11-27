@@ -3237,7 +3237,7 @@ impl Actor {
     /// frontier from the routing tables and exploring a random region of
     /// the keyspace when it runs low.
     fn sample_tick(&mut self, sockets: &[SendSocket], now_i: Instant) {
-        // The suppression, or the restart proof's gate (CR-0d).
+        // A fixture's delay, or an on-run's short start hold (CR-0w).
         if !self.proof.may_sample(now_i) {
             return;
         }
@@ -3358,7 +3358,7 @@ impl Actor {
                 .commit(&mut self.sampler, &state, &path, &self.stats)
             {
                 // A failure is counted and logged, and leaves the marker
-                // dirty: the next start suppresses. It isn't a node error.
+                // dirty: the next start restores nothing. It isn't a node error.
                 let _ = result;
                 return Ok(());
             }
@@ -4645,12 +4645,12 @@ mod tests {
         let peer = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let to = peer.local_addr().unwrap();
         a.sampler.offer(candidate(to), Instant::now());
-        // A production start: the full suppression, no restart proof.
-        a.cfg.sample_start_delay = None;
+        // A start held from sampling (a fixture's delay; production no
+        // longer waits, CR-0w), with no restart proof.
         a.proof = Proof::new(
             None,
             None,
-            None,
+            Some(sampler::MAX_INTERVAL),
             sampler::MAX_INTERVAL + a.cfg.query_timeout,
             a.cfg.tick,
             Instant::now(),
@@ -5290,17 +5290,10 @@ mod restart_wire {
             .map(|s| s.local_addr().unwrap())
             .collect();
 
-        // Run 1: first start suppresses; after the window, sample every
-        // peer once and give each a different interval, 1 min to 6 h.
+        // Run 1: a first start samples at once (CR-0w): sample every peer
+        // once and give each a different interval, 1 min to 6 h.
         let (mut a, sockets) = node(&root, &clock);
-        turn(&mut a, &sockets, &peers);
         let from = a.cfg.bind[0];
-        assert!(
-            samples_received(&peer_sockets, from)
-                .iter()
-                .all(|&n| n == 0)
-        );
-        advance(sampler::MAX_INTERVAL + a.cfg.query_timeout).await;
         for _ in 0..20 {
             turn(&mut a, &sockets, &peers);
             advance(a.cfg.tick).await;

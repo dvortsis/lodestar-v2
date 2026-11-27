@@ -627,7 +627,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         o.one(
             "dht_sample_suppression_seconds",
             "gauge",
-            "Seconds of startup sampling suppression remaining.",
+            "Seconds until sampling may start; at most 10 s after a start.",
             d.sample_suppression_seconds,
         );
         render_restart(&mut o, d);

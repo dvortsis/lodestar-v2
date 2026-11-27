@@ -2,19 +2,29 @@
 //! actor (`docs/decisions/2026-10-30-CR-0d.md` §2; the on-disk half is
 //! [`crate::restart`]).
 //!
-//! The actor owns one [`Proof`]. It decides when sampling may start
-//! ([`Proof::may_sample`]), seeds restored restrictions into the sampler
-//! once the start work lands, and commits the snapshot at shutdown. Nothing
-//! here sends a packet: routing, passive service and lookups never wait.
+//! The actor owns one [`Proof`]. It seeds restored restrictions into the
+//! sampler once the start work lands, and commits the snapshot at
+//! shutdown. Nothing here sends a packet: routing, passive service and
+//! lookups never wait.
+//!
+//! No start waits (owner §2.77, CR-0w): a first start, a failed or missing
+//! proof, a corrupt or old snapshot, a busy lock and a failed invalidation
+//! all sample as soon as the DHT has bootstrapped. Only per-node
+//! restrictions carry over a restart; no blanket gate does
+//! (`docs/decisions/2026-11-27-CR-0w.md`). The one hold left is
+//! [`START_HOLD`]: an on-run holds samples for at most that long after its
+//! epoch while its start work is landing, so a resume's restrictions are in
+//! the table before its first sample.
 //!
 //! Modes:
-//! - **Legacy:** no data directory (`state_path: None`). Today's full
-//!   suppression from the actor's epoch; no lock and no files.
-//! - **Off:** the switch is off, or a fixture overrides the start delay
-//!   (I5). The lock is held for the run's whole life (N2); a leftover
-//!   marker is overwritten as `off` before the first sample, and the
-//!   window counts from when the lock was taken (C1).
+//! - **Legacy:** no data directory (`state_path: None`). No lock and no
+//!   files.
+//! - **Off:** the switch is off. The lock is held for the run's whole life
+//!   (N2), and a leftover marker is overwritten as `off`.
 //! - **On:** S0–S4 at start, seeding on resume, S8–S11 at shutdown.
+//!
+//! A fixture's `sample_start_delay` holds samples for that long after the
+//! epoch in every mode, and no longer turns the proof off.
 //!
 //! The lock is retried every maintenance tick with backoff (N3). The file
 //! work runs on tokio's blocking pool, so a slow disk can't stall routing,
@@ -39,6 +49,10 @@ use crate::restart::{
 
 /// The longest wait between lock or invalidation retries (I1, N3).
 const MAX_RETRY: Duration = Duration::from_secs(60);
+/// How long after its epoch an on-run holds samples while its lock and
+/// start work land (CR-0w). Past it the run samples whatever the proof
+/// says: restrictions a late resume restores are seeded when it lands.
+pub(crate) const START_HOLD: Duration = Duration::from_secs(10);
 /// At shutdown, how long to wait for a start or retry job still running
 /// on the blocking pool, so a resume it earned isn't lost.
 const DRAIN: Duration = Duration::from_secs(5);
@@ -59,20 +73,19 @@ enum Phase {
     Starting,
     /// The start work landed (or there's nothing to do).
     Ready,
-    /// The filesystem has no locks: this run never resumes, and samples
-    /// as today, from the actor's epoch.
+    /// The filesystem has no locks: this run never resumes.
     Lockless,
 }
 
 /// What the start work reports.
 #[derive(Debug)]
 struct Started {
-    /// This run's S0 instant: the suppression and the gate count from it.
-    start: Instant,
     decision: Decision,
     reason: Reason,
     /// The marker (dirty or off) or, when on, the witness, made durable.
     /// False until one lands; a run that had no clean marker needs none.
+    /// Sampling no longer waits for it (CR-0w); a run commits only once
+    /// it's true.
     invalidated: bool,
     /// Whether the witness bump landed (retried once more before S11).
     witness_ok: bool,
@@ -103,10 +116,11 @@ pub(crate) struct Proof {
     data_dir: PathBuf,
     state_path: PathBuf,
     cfg: Option<RestartConfig>,
-    /// `H`: `MAX_INTERVAL + query_timeout`, and `H_s`.
+    /// `H`: `MAX_INTERVAL + query_timeout`, and `H_s`: the cooling horizon
+    /// for in-flight samples at shutdown, and the snapshot's bound.
     horizon: Duration,
     horizon_s: u32,
-    /// The suppression for off and legacy runs: `H` unless a fixture set it.
+    /// A fixture's start delay from the epoch; zero in production.
     delay: Duration,
     epoch: Instant,
     phase: Phase,
@@ -123,8 +137,6 @@ pub(crate) struct Proof {
     /// An invalidation retry in progress: (marker landed, witness landed).
     retrying: Option<mpsc::Receiver<Retried>>,
     reason: Reason,
-    /// No sample to anyone before this (N1, and the suppression).
-    gate_until: Option<Instant>,
     /// Seeded restrictions waiting for the actor to apply them.
     seed: Option<Vec<(std::net::SocketAddr, Instant)>>,
     /// The seeded spill filter, likewise (X-split-resume-gate).
@@ -152,10 +164,10 @@ impl Proof {
                 }
             })
             .unwrap_or_default();
-        let mode = match (state_path, restart, start_delay) {
-            (None, _, _) => Mode::Legacy,
-            (Some(_), Some(_), None) => Mode::On,
-            _ => Mode::Off,
+        let mode = match (state_path, restart) {
+            (None, _) => Mode::Legacy,
+            (Some(_), Some(_)) => Mode::On,
+            (Some(_), None) => Mode::Off,
         };
         let phase = match mode {
             Mode::Legacy => Phase::Ready,
@@ -175,7 +187,7 @@ impl Proof {
             cfg: restart.cloned(),
             horizon,
             horizon_s: restart::horizon_s(horizon),
-            delay: start_delay.unwrap_or(horizon),
+            delay: start_delay.unwrap_or(Duration::ZERO),
             epoch,
             phase,
             lock: None,
@@ -184,7 +196,6 @@ impl Proof {
             started: None,
             retry: (epoch, tick),
             retrying: None,
-            gate_until: None,
             seed: None,
             seed_spill: None,
             restored: 0,
@@ -202,29 +213,30 @@ impl Proof {
         self.cfg.as_ref().is_some_and(|c| c.inline_io)
     }
 
-    /// Whether the run may send a sample now.
+    /// Whether the run may send a sample now: past a fixture's delay, and
+    /// not inside an on-run's [`START_HOLD`] while its start work lands.
     pub(crate) fn may_sample(&self, now: Instant) -> bool {
-        match (&self.mode, &self.phase) {
-            (Mode::Legacy, _) | (_, Phase::Lockless) => now >= self.epoch + self.delay,
-            (_, Phase::Ready) => {
-                self.started.as_ref().is_some_and(|s| s.invalidated)
-                    && self.gate_until.is_none_or(|g| now >= g)
-            }
-            _ => false,
-        }
+        self.sample_from().is_some_and(|t| now >= t)
     }
 
-    /// Seconds until sampling may start, never 0 while it can't (I1).
+    /// When sampling may start: never later than the epoch plus the
+    /// fixture's delay or [`START_HOLD`], whatever the proof finds. `None`
+    /// is a fixture's delay too long for the clock: never.
+    fn sample_from(&self) -> Option<Instant> {
+        let held =
+            matches!(self.mode, Mode::On) && !matches!(self.phase, Phase::Ready | Phase::Lockless);
+        let hold = if held { START_HOLD } else { Duration::ZERO };
+        self.epoch.checked_add(self.delay.max(hold))
+    }
+
+    /// Seconds until sampling may start, never 0 while it can't. At most
+    /// [`START_HOLD`] in production, and 0 once the start work lands.
     pub(crate) fn suppression_seconds(&self, now: Instant) -> u64 {
         if self.may_sample(now) {
             return 0;
         }
-        let end = match (&self.mode, &self.phase) {
-            (Mode::Legacy, _) | (_, Phase::Lockless) => Some(self.epoch + self.delay),
-            (_, Phase::Ready) => self.gate_until,
-            _ => None,
-        };
-        end.map_or(0, |e| e.saturating_duration_since(now).as_secs())
+        self.sample_from()
+            .map_or(u64::MAX, |t| t.saturating_duration_since(now).as_secs())
             .max(1)
     }
 
@@ -302,18 +314,18 @@ impl Proof {
 
     /// Seeds what a resume restored into the sampler, once: the listed
     /// restrictions, then the spill filter. A filter that can't be rebuilt
-    /// holds sampling until the last of its cooldowns ends, so none is
-    /// shortened.
+    /// (the sampler's is already in use, which a fresh run's never is) is
+    /// dropped: its nodes may be asked again early, and nothing else waits
+    /// for it (CR-0w: only per-node restrictions carry over).
     fn apply_seed(&mut self, sampler: &mut Sampler, now: Instant) {
         if let Some(seed) = self.seed.take() {
             for (addr, until) in seed {
                 sampler.restore(addr, until);
             }
         }
-        if let Some(spill) = self.seed_spill.take()
-            && let Some(end) = sampler.restore_spill(&spill, now)
-        {
-            self.gate_until = Some(self.gate_until.map_or(end, |g| g.max(end)));
+        if let Some(spill) = self.seed_spill.take() {
+            // `Some(end)` is the last cooldown lost; no gate is kept for it.
+            let _lost_until = sampler.restore_spill(&spill, now);
         }
     }
 
@@ -420,17 +432,15 @@ impl Proof {
         } else {
             Reason::InvalidateFailed
         };
-        self.gate_until = match (&self.mode, &mut started.decision) {
-            (Mode::On, Decision::Resume(seeded)) => {
-                self.restored = seeded.entries.len() as u64;
-                self.seed = Some(seeded.entries.clone());
-                // Moved, not copied: it can be tens of MB.
-                self.seed_spill = seeded.spill.take();
-                seeded.gate_until
-            }
-            (Mode::On, Decision::Suppress(_)) => Some(started.start + self.horizon),
-            _ => Some(started.start + self.delay),
-        };
+        // Only per-node restrictions carry over (CR-0w): a gate an older
+        // snapshot restored (`seeded.gate_until`, version 1's upgrade path)
+        // is dropped, and a run that can't resume restores nothing.
+        if let (Mode::On, Decision::Resume(seeded)) = (&self.mode, &mut started.decision) {
+            self.restored = seeded.entries.len() as u64;
+            self.seed = Some(seeded.entries.clone());
+            // Moved, not copied: it can be tens of MB.
+            self.seed_spill = seeded.spill.take();
+        }
         if let (Some(cfg), Some(run)) = (&self.cfg, &started.run)
             && matches!(self.mode, Mode::On)
         {
@@ -518,16 +528,9 @@ impl Proof {
         }
         started.invalidated = true;
         started.witness_ok |= witness_ok;
-        // A late landing is suppress mode (§2 I1): sampling waits for this
-        // run's start + H, even on a resume, and the commit passes that on.
-        let own_end = started.start + self.horizon;
-        match &started.decision {
-            Decision::Resume(_) if matches!(self.mode, Mode::On) => {
-                self.gate_until = Some(self.gate_until.map_or(own_end, |g| g.max(own_end)));
-                self.reason = Reason::InvalidateFailed;
-            }
-            _ => self.reason = started.reason,
-        }
+        // A late landing adds no wait (CR-0w): the run has been sampling
+        // all along, and from now on it may commit.
+        self.reason = started.reason;
     }
 
     /// At shutdown, waits a bounded time for a job still on the blocking
@@ -552,7 +555,7 @@ impl Proof {
     /// then the clean marker. Returns `None` when this run doesn't commit
     /// (off, legacy, never invalidated): the caller saves `dht-state.bin`
     /// as before. Any failure leaves the marker dirty: the next start
-    /// suppresses.
+    /// restores nothing.
     pub(crate) fn commit(
         &mut self,
         sampler: &mut Sampler,
@@ -590,8 +593,7 @@ impl Proof {
                 ids: restart::ids_digest(&state.ids),
                 ..run
             };
-            // The gate: a suppressed run passes on its own window; a
-            // resumed one carries forward what it inherited (N1).
+            // No gate is written (CR-0w): `gate` stays in the format, as 0.
             let now = clock.mono();
             // X-split-resume-gate: the spill filter's cooldowns go in the
             // snapshot as they are, bounded like the listed ones (WK-10e):
@@ -602,7 +604,7 @@ impl Proof {
                 clock.as_ref(),
                 run,
                 sampler.restrictions(now).collect::<Vec<_>>(),
-                self.gate_until,
+                None,
                 |mono| sampler.spill_export(mono, horizon),
                 self.horizon_s,
             )
@@ -737,9 +739,8 @@ impl StartJob {
     }
 
     /// The off-run's invalidation (§5.2): a leftover marker becomes `off`,
-    /// keeping its generation and `dir_id`. The window counts from now (C1).
+    /// keeping its generation and `dir_id`.
     fn run_off(self) -> Started {
-        let start = self.clock.mono();
         let marker = restart::read_marker(&self.data_dir);
         let previous = previous(&marker);
         let mut errors = Vec::new();
@@ -761,9 +762,8 @@ impl StartJob {
                 )
             }
             // An unreadable marker may be a clean one we can't read yet (an
-            // I/O error, a permission change), so it must be overwritten
-            // before any sample, and retried until it is (§0.1(4)). Its
-            // real `dir_id` and path are unknown: a fresh id and a zero
+            // I/O error, a permission change), so it's overwritten, and
+            // retried until it is (§0.1(4)). Its real `dir_id` and path are unknown: a fresh id and a zero
             // path digest make the next on-run read `off_run`, then start
             // a new chain (§1.4).
             Found::Bad(_) => {
@@ -789,7 +789,6 @@ impl StartJob {
             }
         };
         Started {
-            start,
             decision: Decision::Suppress(Reason::Off),
             reason: Reason::Off,
             invalidated,
@@ -829,7 +828,7 @@ impl StartJob {
         let state_bin = std::fs::read(&self.state_path)
             .ok()
             .map(|b| restart::digest(&b));
-        // What must land before the first sample (§0.1(4)): nothing if
+        // What must land before the run may commit (§0.1(4)): nothing if
         // there's no marker, or one that can't resume; the marker or the
         // witness for a readable clean one; only the marker for one we
         // can't read, which may be clean.
@@ -908,7 +907,6 @@ impl StartJob {
             !had_clean || witness_ok || marker_ok
         };
         Started {
-            start: here.mono0,
             decision,
             reason,
             invalidated,
