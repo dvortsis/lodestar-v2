@@ -152,12 +152,17 @@ fn alert_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Alert> {
     })
 }
 
+/// A saved search's query text limit in bytes (the parser's) and its AST
+/// JSON's, as the table checks them.
+const MAX_QUERY: usize = 2048;
+const MAX_AST: usize = 65_536;
+
 fn check(s: &SavedSearchInput<'_>) -> Result<()> {
     check_name(s.name)?;
-    if s.query.len() > 2048 {
+    if s.query.len() > MAX_QUERY {
         return Err(Error::Invalid("query is over 2,048 bytes"));
     }
-    if s.ast.len() > 65_536 {
+    if s.ast.len() > MAX_AST {
         return Err(Error::Invalid("ast is over 64 KiB"));
     }
     if let Some(sort) = s.sort {
@@ -550,7 +555,7 @@ impl Store {
                 match rewrite(&ast) {
                     Ok(None) => {}
                     Err(()) => counts.unparseable += 1,
-                    Ok(Some((query, ast))) if query.len() > 2048 || ast.len() > 65_536 => {
+                    Ok(Some((query, ast))) if query.len() > MAX_QUERY || ast.len() > MAX_AST => {
                         counts.too_long += 1;
                     }
                     Ok(Some((query, ast))) => {

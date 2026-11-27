@@ -215,17 +215,9 @@ impl Services {
                     from = if from_snapshot { "snapshot" } else { "store" }
                 );
                 let hot = Arc::new(hot);
-                let mut user_data = Store::open(&db, store_config.clone())?;
-                // Before the percolator compiles any saved search, once per
-                // database (X-saved-verified-rewrite).
-                if let Some(n) = user_data.rewrite_saved_verified(rewrite_saved_ast)? {
-                    lodestar_log::log_event!(
-                        lodestar_search::log_events::SAVED_VERIFIED_REWRITTEN,
-                        rewritten = n.rewritten,
-                        unparseable = n.unparseable,
-                        too_long = n.too_long
-                    );
-                }
+                // Before the percolator compiles any saved search
+                // (X-saved-verified-rewrite).
+                let (user_data, _) = open_user_data(&db, store_config.clone())?;
                 let reader = Store::open_reader(&db, store_config.clone())?;
                 // The percolator records alerts through its own connection.
                 let percolation = search
@@ -909,6 +901,31 @@ impl Services {
     }
 }
 
+/// The API's user-data connection, opened after stored saved searches
+/// with `verified:yes,no` take `verified:yes,imported,no`, once per
+/// database (X-saved-verified-rewrite). At start, before the percolator's
+/// connection opens and the API serves. Logs the counts when there were
+/// any, and says whether it did.
+fn open_user_data(
+    db: &Path,
+    config: lodestar_store::StoreConfig,
+) -> Result<(Store, bool), BoxError> {
+    let mut store = Store::open(db, config)?;
+    let logged = match store.rewrite_saved_verified(rewrite_saved_ast)? {
+        Some(n) if n.rewritten + n.unparseable + n.too_long > 0 => {
+            lodestar_log::log_event!(
+                lodestar_search::log_events::SAVED_VERIFIED_REWRITTEN,
+                rewritten = n.rewritten,
+                unparseable = n.unparseable,
+                too_long = n.too_long
+            );
+            true
+        }
+        _ => false,
+    };
+    Ok((store, logged))
+}
+
 /// A stored saved search's AST with `verified:yes,no` rewritten, as the
 /// new canonical query text and AST JSON (X-saved-verified-rewrite).
 /// `Ok(None)` keeps it; `Err` is an AST this build can't read.
@@ -1422,6 +1439,50 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Start opens the user-data connection through `open_user_data`, so
+    /// a stored `verified:yes,no` reads `yes,imported,no` before the
+    /// percolator compiles it; the event is logged only when something was
+    /// counted, and a second start does nothing (X-saved-verified-rewrite).
+    #[test]
+    fn opening_user_data_rewrites_show_unverified_searches_once() {
+        use lodestar_store::{SavedSearchInput, StoreConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.db");
+        let (_, logged) = open_user_data(&fresh, StoreConfig::default()).unwrap();
+        assert!(!logged, "a fresh install has nothing to report");
+
+        let db = dir.path().join("t.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let q = "movie verified:yes,no";
+        let ast = serde_json::to_string(&lodestar_search::parse(q).unwrap()).unwrap();
+        let input = SavedSearchInput {
+            name: "old",
+            query: q,
+            ast: &ast,
+            sort: None,
+            alert: true,
+            rss: false,
+            channels: 0,
+            paused: false,
+        };
+        let id = store.create_saved_search(&input, 5, 0).unwrap();
+        drop(store);
+
+        let (store, logged) = open_user_data(&db, StoreConfig::default()).unwrap();
+        assert!(logged);
+        let s = store.saved_search(id).unwrap().unwrap();
+        let expected = lodestar_search::parse("movie verified:yes,imported,no").unwrap();
+        assert_eq!(s.query, expected.to_query());
+        assert_eq!(
+            serde_json::from_str::<lodestar_search::Node>(&s.ast).unwrap(),
+            expected
+        );
+        assert_eq!(s.watermark, 5);
+        drop(store);
+        let (_, logged) = open_user_data(&db, StoreConfig::default()).unwrap();
+        assert!(!logged, "the second start does nothing");
+    }
 
     /// The early stop is Unix only: on Windows the Notifier's last look at
     /// the settings stays after the drain (X-win-upd-stop-wait, owner

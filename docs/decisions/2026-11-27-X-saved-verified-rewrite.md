@@ -1,4 +1,4 @@
-# X-saved-verified-rewrite decisions
+# X-saved-verified-rewrite decisions (#1142)
 
 Saved searches and alerts made with Show unverified keep finding imports. Before X-import-verified-no (#1139), "Show unverified" sent `verified:yes,no`, and imports matched it only because they were indexed `yes`. Now they're `imported`, so a stored `verified:yes,no` would leave them out without notice (`2026-11-27-X-import-verified-no.md`, "Follow-up, a release blocker"). This slice rewrites those once, at start. Nothing released was affected. The runner decides it as a release blocker.
 
@@ -20,8 +20,9 @@ Saved searches and alerts made with Show unverified keep finding imports. Before
 - **Parsing stays out of the store.** The store takes a function from a stored AST to the new text and AST. `lodestar_search::saved_rewrite::rewrite_verified_yes_no` rewrites the `Node`, and the app (`services.rs`, `rewrite_saved_ast`) reads and writes the JSON, because `serde_json` is only a dev-dependency of the search crate.
 - **The text is the AST's canonical `Node::to_query`.** A saved search made before typed units (X-units-typed) that holds its text as typed now holds the canonical text. That text reads back as the same AST.
 - **Only `query` and `ast` change.** The watermark, `paused`, the channels, `updated_at` and the alerts stay as they were. So a rewritten search alerts only on torrents above its watermark and never re-fires old hits.
-- **When it runs:** at start, where the API's user-data connection is opened. That's before the percolator's connection is opened or `percolator::spawn` runs, and before the API serves. It runs whether search is on or not.
+- **When it runs:** at start, in `open_user_data`, which opens the API's user-data connection. That's before the percolator's connection is opened or `percolator::spawn` runs, and before the API serves. It runs whether search is on or not.
 - **Kept as they are, and counted:**
   - a row whose AST this build can't read (never dropped);
   - a row whose rewritten text would pass 2,048 bytes or whose AST would pass 64 KiB, the limits `create_saved_search` checks. Writing it would fail the table's check and stop every start.
-- **One Info event, `search.saved_verified_rewritten`,** with the counts `rewritten`, `unparseable` and `too_long`, on the run that writes the marker. It has an en and zh name and help in the Logging settings. The search event-names chunk grows from 2.07 KB to 2.21 KB gzipped, under its 2.25 KB limit. No limit was raised.
+  - Neither is retried: the marker is written with the run that counted them. Such a search keeps leaving imports out until it's edited. A too-long row is practically unreachable, since a rewrite adds 9 bytes per clause to a query the parser already took (runner, 2026-11-27).
+- **One Info event, `search.saved_verified_rewritten`,** with the counts `rewritten`, `unparseable` and `too_long`, on the run that writes the marker, and only when one of them is above 0. A fresh install logs nothing. It has an en and zh name and help in the Logging settings. The search event-names chunk grows from 2.07 KB to 2.21 KB gzipped, under its 2.25 KB limit. No limit was raised.
