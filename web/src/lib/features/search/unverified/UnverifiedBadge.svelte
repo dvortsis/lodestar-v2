@@ -2,7 +2,8 @@
 
 <script lang="ts">
 	// Marks a result whose metadata Lodestar hasn't confirmed: icon + text, never colour alone.
-	// `imported` (X-import-verified-no): from another indexer's database and shown by default, so
+	// `imported` (X-import-verified-no, X-remote-verified): not checked against the hash here (from
+	// another indexer's database, or a remote worker's find not yet re-verified) and shown by default, so
 	// it reads "Imported" in place of "Unverified", never both, in the neutral colour. Drawn by hand
 	// rather than with ui/Badge, which imports every status icon, and in runes mode so the legacy
 	// runtime isn't pulled into the size-limited drawer and results chunks.

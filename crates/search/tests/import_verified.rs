@@ -2,6 +2,10 @@
 //! when its info dict was hashed to its key here. One whose metadata came
 //! from another indexer's database (Magnetico, bitmagnet) is
 //! `verified:imported`: shown by default, left out of `verified:yes`.
+//!
+//! X-remote-verified: so is one a remote worker brought in
+//! (`REMOTE_UNVERIFIED`, WK-9), until WK-13 re-verifies it: the
+//! coordinator never hashes a remote record's info dict to its key.
 
 use std::path::Path;
 
@@ -172,6 +176,14 @@ fn library(root: &Path) -> (Store, SearchIndex) {
     );
     let b = from_database(&store, "bitmagnet");
     import(&mut store, "bitmagnet", &[(b, Completeness::Partial)]);
+    // A remote worker's find (WK-9): an info dict's size, but the dict was
+    // parsed by the worker and never hashed here.
+    let p = prepared(&store, "remote");
+    write(&mut store, &p, flags::REMOTE_UNVERIFIED);
+    // The same, flagged imported with an info dict: without the remote
+    // flag, IMP-1's read rule would call it hashed.
+    let p = prepared(&store, "remote-dict");
+    write(&mut store, &p, flags::REMOTE_UNVERIFIED | flags::IMPORTED);
     let index = SearchIndex::open(&index_dir(root)).unwrap();
     catch_up(&index, &mut store);
     drop(index);
@@ -184,10 +196,10 @@ fn library(root: &Path) -> (Store, SearchIndex) {
 
 /// Adds one unverified item named `unverified` to the torrent index
 /// under `dir`. With `old_verified`, it first rewrites every torrent
-/// from `store` with that `verified` value and records the field at
-/// generation 1, as the build before this slice left an index; without,
-/// the indexer's own documents and the payload are kept.
-fn rewrite(dir: &Path, store: &mut Store, old_verified: Option<Verified>) {
+/// from `store` with that `verified` value and records the field at that
+/// generation, as an earlier build left an index; without, the indexer's
+/// own documents and the payload are kept.
+fn rewrite(dir: &Path, store: &mut Store, old_verified: Option<(Verified, u32)>) {
     let index = tantivy::Index::open_in_dir(dir).unwrap();
     index
         .tokenizers()
@@ -198,13 +210,20 @@ fn rewrite(dir: &Path, store: &mut Store, old_verified: Option<Verified>) {
     );
     let payload = index.load_metas().unwrap().payload.unwrap();
     let payload = match old_verified {
-        Some(_) => payload.replace("verified=2", "verified=1"),
+        Some((_, old)) => {
+            let now = lodestar_search::Generations::current()
+                .get("verified")
+                .unwrap();
+            let (from, to) = (format!("verified={now}"), format!("verified={old}"));
+            assert!(payload.contains(&from), "{payload}");
+            payload.replace(&from, &to)
+        }
         None => payload,
     };
     let (_, f) = lodestar_search::schema::build();
     let mut w = index.writer::<TantivyDocument>(HEAP).unwrap();
     let ids = store.ids_after(0, 1000).unwrap();
-    if let Some(v) = old_verified {
+    if let Some((v, _)) = old_verified {
         w.delete_all_documents().unwrap();
         for id in &ids {
             let row = store.torrent(*id).unwrap().unwrap();
@@ -226,29 +245,35 @@ fn rewrite(dir: &Path, store: &mut Store, old_verified: Option<Verified>) {
     prepared.commit().unwrap();
 }
 
-const IMPORTS: [&str; 4] = [
+const IMPORTS: [&str; 6] = [
     "archived-dict",
     "bitmagnet",
     "bitmagnet-legacy",
     "magnetico",
+    "remote",
+    "remote-dict",
 ];
 const VERIFIED: [&str; 2] = ["network", "torrent-file"];
-const ALL: [&str; 6] = [
+const ALL: [&str; 8] = [
     "archived-dict",
     "bitmagnet",
     "bitmagnet-legacy",
     "magnetico",
     "network",
+    "remote",
+    "remote-dict",
     "torrent-file",
 ];
 
 /// Every kind, the unverified item too.
-const EVERYTHING: [&str; 7] = [
+const EVERYTHING: [&str; 9] = [
     "archived-dict",
     "bitmagnet",
     "bitmagnet-legacy",
     "magnetico",
     "network",
+    "remote",
+    "remote-dict",
     "torrent-file",
     "unverified",
 ];
@@ -341,13 +366,21 @@ fn a_network_fetch_verifies_a_partial_import_at_its_next_index_write() {
     );
     assert_eq!(
         names(&index, "verified:imported"),
-        ["archived-dict", "bitmagnet-legacy", "magnetico"]
+        [
+            "archived-dict",
+            "bitmagnet-legacy",
+            "magnetico",
+            "remote",
+            "remote-dict"
+        ]
     );
 }
 
 /// Every flag combination that bears on it, with and without an import
-/// record: `yes` exactly when the row isn't imported, the record says
-/// verified, or there's no record and the row has an info dict.
+/// record: `yes` exactly when the row isn't a remote worker's
+/// unverified find and either isn't imported, its record says verified,
+/// or there's no record and the row has an info dict. A remote row is
+/// `imported` whatever else it carries.
 #[test]
 fn stored_verified_over_every_combination() {
     let records = [
@@ -361,17 +394,21 @@ fn stored_verified_over_every_combination() {
         0,
         flags::FILES_PARTIAL,
         flags::PRIVATE,
-        flags::REMOTE_UNVERIFIED,
+        flags::PRIVATE_SOURCE,
         flags::BACKFILL | flags::V2,
+        flags::HYBRID | flags::V2 | flags::FILES_PARTIAL,
     ];
-    for imported in [false, true] {
+    for (imported, remote) in [(false, false), (true, false), (false, true), (true, true)] {
         for other in others {
             for info_size in [0, 1, 4096] {
                 for record in records {
-                    let row_flags = other | if imported { flags::IMPORTED } else { 0 };
-                    let want = if !imported
-                        || record == Some(Verification::Verified)
-                        || (record.is_none() && info_size > 0)
+                    let row_flags = other
+                        | if imported { flags::IMPORTED } else { 0 }
+                        | if remote { flags::REMOTE_UNVERIFIED } else { 0 };
+                    let want = if !remote
+                        && (!imported
+                            || record == Some(Verification::Verified)
+                            || (record.is_none() && info_size > 0))
                     {
                         Verified::Yes
                     } else {
@@ -395,15 +432,23 @@ fn stored_verified_over_every_combination() {
 /// reported partial, and a restart resumes from the last commit.
 #[test]
 fn an_older_index_rewrites_imports_to_imported_across_a_restart() {
+    // 1: before X-import-verified-no; 2: before X-remote-verified, which
+    // indexed a remote worker's rows `yes`.
+    for old in [1, 2] {
+        older_index_rewrites(old);
+    }
+}
+
+fn older_index_rewrites(old: u32) {
     let tmp = tempfile::tempdir().unwrap();
     let dir = index_dir(tmp.path());
     let (mut store, index) = library(tmp.path());
     drop(index);
-    rewrite(&dir, &mut store, Some(Verified::Yes));
-    let old = lodestar_search::Generations::current().with("verified", 1);
+    rewrite(&dir, &mut store, Some((Verified::Yes, old)));
+    let generations = lodestar_search::Generations::current().with("verified", old);
     let index = SearchIndex::open(&dir)
         .unwrap()
-        .with_generations(old)
+        .with_generations(generations)
         .unwrap();
     assert_eq!(index.availability("verified"), Availability::Ready);
     assert_eq!(names(&index, "verified:yes"), ALL, "the old claim");
