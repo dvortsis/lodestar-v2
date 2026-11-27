@@ -282,6 +282,35 @@ impl Default for Dht {
     }
 }
 
+/// The crawler switches' effective values (X-dht-switch-identity), one per
+/// `[dht]` switch, in a fixed order with names from code. The serving
+/// process exports them once at start as `lodestar_dht_switch{switch}`.
+pub type Switches = [(&'static str, bool); 13];
+
+impl Dht {
+    /// The value of each crawler switch after the compiled default, the
+    /// config file and the environment are combined: the same fields
+    /// [`Config::dht_config`] and [`Config::pipeline_config`] build the
+    /// crawler from, so the gauge can't disagree with what runs.
+    pub fn switches(&self) -> Switches {
+        [
+            ("coordinated_admission", self.coordinated_admission),
+            ("responder_hints", self.responder_hints),
+            ("streaming_peers", self.streaming_peers),
+            ("target_prefixes", self.target_prefixes),
+            ("utp", self.utp),
+            ("lookup_end", self.lookup_end),
+            ("preset_slots", self.preset_slots),
+            ("hint_first", self.hint_first),
+            ("sampler_cooldown_split", self.sampler_cooldown_split),
+            ("sample_backoff_escalate", self.sample_backoff_escalate),
+            ("soft_timeout", self.soft_timeout),
+            ("route_backoff", self.route_backoff),
+            ("safe_restart", self.safe_restart),
+        ]
+    }
+}
+
 /// The witness dir when neither the config nor `LODESTAR_DHT_WITNESS_DIR`
 /// sets one (CR-0d §1.5): a native install's state directory. The Docker
 /// image and the systemd unit set the variable; the Windows service picks
@@ -1482,6 +1511,103 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "exit_on_network_loss = true\n").unwrap();
         assert!(Config::load(Some(&path), no_env).is_err());
+    }
+
+    /// X-dht-switch-identity: the value for one switch name.
+    fn switch(c: &Config, name: &str) -> bool {
+        c.dht
+            .switches()
+            .iter()
+            .find(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("no switch {name}"))
+            .1
+    }
+
+    #[test]
+    fn switches_match_the_compiled_defaults() {
+        let c = Config::load(None, no_env).unwrap();
+        let s = c.dht.switches();
+        // 12 crawler switches and `safe_restart`, each named once.
+        let names: std::collections::BTreeSet<_> = s.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names.len(), 13);
+        // `safe_restart` is on by default (CR-0w), the rest off.
+        for (name, on) in s {
+            assert_eq!(on, name == "safe_restart", "{name}");
+        }
+        let d = Dht::default();
+        assert!(switch(&c, "safe_restart") == d.safe_restart && d.safe_restart);
+        assert!(switch(&c, "utp") == d.utp && !d.utp);
+    }
+
+    #[test]
+    fn each_switch_follows_its_own_variable_and_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let defaults = Dht::default().switches();
+        for (name, default) in defaults {
+            let want = !default;
+            let var = format!("LODESTAR_DHT_{}", name.to_uppercase());
+            let env = |k: &str| (k == var).then(|| want.to_string());
+            let by_env = Config::load(None, env).unwrap();
+            std::fs::write(&path, format!("[dht]\n{name} = {want}\n")).unwrap();
+            let by_file = Config::load(Some(&path), no_env).unwrap();
+            for (how, c) in [("environment", by_env), ("file", by_file)] {
+                // Exactly this switch moves, set by `how`.
+                for ((other, v), (_, d)) in c.dht.switches().into_iter().zip(defaults) {
+                    let expect = if other == name { want } else { d };
+                    assert_eq!(v, expect, "{other} with {name} set by {how}");
+                }
+            }
+        }
+        // The environment wins over the file, as for every other key.
+        std::fs::write(&path, "[dht]\nutp = true\nsafe_restart = false\n").unwrap();
+        let env = |k: &str| (k == "LODESTAR_DHT_UTP").then(|| "false".to_string());
+        let c = Config::load(Some(&path), env).unwrap();
+        assert!(!switch(&c, "utp") && !switch(&c, "safe_restart"));
+    }
+
+    #[test]
+    fn switches_agree_with_what_the_crawler_is_built_from() {
+        // A mix, so a swapped pair of names would show.
+        let on = [
+            "LODESTAR_DHT_COORDINATED_ADMISSION",
+            "LODESTAR_DHT_TARGET_PREFIXES",
+            "LODESTAR_DHT_LOOKUP_END",
+            "LODESTAR_DHT_HINT_FIRST",
+            "LODESTAR_DHT_SAMPLE_BACKOFF_ESCALATE",
+            "LODESTAR_DHT_ROUTE_BACKOFF",
+        ];
+        let env = |k: &str| {
+            if on.contains(&k) {
+                Some("true".to_string())
+            } else {
+                (k == "LODESTAR_DHT_SAFE_RESTART").then(|| "false".to_string())
+            }
+        };
+        for c in [
+            Config::load(None, no_env).unwrap(),
+            Config::load(None, env).unwrap(),
+        ] {
+            let d = c.dht_config();
+            let p = c.pipeline_config().unwrap();
+            let built = [
+                ("coordinated_admission", p.pool.coordinated_admission),
+                ("responder_hints", d.responder_hints),
+                ("streaming_peers", p.pool.streaming_peers),
+                ("target_prefixes", d.target_prefixes),
+                // Wired where the DHT starts (`services`), from `dht.utp`.
+                ("utp", c.dht.utp),
+                ("lookup_end", d.lookup_end),
+                ("preset_slots", d.preset_slots),
+                ("hint_first", d.hint_first && p.pool.hint_first),
+                ("sampler_cooldown_split", d.sampler_cooldown_split),
+                ("sample_backoff_escalate", d.sample_backoff_escalate),
+                ("soft_timeout", d.soft_timeout),
+                ("route_backoff", p.fetch.route_backoff),
+                ("safe_restart", d.restart.is_some()),
+            ];
+            assert_eq!(c.dht.switches(), built);
+        }
     }
 
     #[test]
