@@ -600,7 +600,8 @@ What it does:
 
 - When Lodestar stops cleanly, it saves a restart record. At the next start it checks that nothing else changed its data in between. If the check passes, it restores the waiting times and carries on.
 - If the check fails, Lodestar restores nothing and **samples at once**. A failed check never delays sampling. A first install, a crash, a restored backup and an image update all start sampling.
-- If Lodestar crashes again within a minute of starting, it holds sampling for up to a minute. That stops a restart loop from asking the same nodes over and over.
+- Sampling starts once Lodestar has found its first DHT nodes. It may hold for up to 10 seconds first, while it loads the restart record.
+- If Lodestar keeps crashing and restarting, it waits about a minute before asking the network again. That stops a restart loop from asking the same nodes over and over.
 
 **Recommended:** leave it on. It is on by default, and there is nothing to set up. To turn it off, set `safe_restart = false` under `[dht]` in `config.toml`, or the variable `LODESTAR_DHT_SAFE_RESTART=false`. Off, Lodestar still samples at once after every start; it re-asks some nodes early.
 
