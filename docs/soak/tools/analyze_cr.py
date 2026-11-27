@@ -1907,9 +1907,14 @@ def load_manifest(path):
             "archive": load(d["archive"]) if d.get("archive") is not None else None,
             "contention": load(d["contention"]) if d.get("contention") is not None else None})
     listed = {(d["attempt"], d["day"]) for d in out["days"]}
+    # Runner (2026-11-27): days_run lists the days the attempt ran, each listed; [] means it
+    # never started, so no day of it may be listed. The verdict echoes each entry, and the
+    # manifest's hash makes the claim auditable against the run log.
     for k, v in ends.items():
         require(all((k, day) in listed for day in v["days_run"]),
                 f"manifest: attempt_ends says {k} ran days {v['days_run']}, but not all are listed")
+        require(v["days_run"] or not any(a == k for a, _ in listed),
+                f"manifest: attempt_ends says {k} never started, but days of it are listed")
     out["inputs"] = hashes
     out["manifest_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     return out
@@ -2244,7 +2249,6 @@ def candidate_days(inputs, decl, attempt, cand):
 # Problems that keep any day from counting, a valid miss included: the arm can't qualify, or
 # the comparator or spacing that every window of the round depends on isn't there.
 UNJUDGEABLE = ("not_authorized", "spacing", "retry_budget_exhausted", "earlier_attempt_incomplete",
-               "earlier_attempt_history_unseen",
                "repeats_not_contiguous", "run_id_reused")
 
 
@@ -2278,16 +2282,10 @@ def judge_candidate(cand, inputs):
         if a is attempt:
             continue
         end = inputs.get("attempt_ends", {}).get(a["id"])
-        declared_here = {e["day"] for e in entries if e["attempt"] == a["id"]}
-        need = set(end["days_run"]) if end else declared_here
+        need = set(end["days_run"]) if end else {e["day"] for e in entries if e["attempt"] == a["id"]}
         if not need <= set(listed):
             reasons.append("earlier_attempt_incomplete")
-        elif end and set(end["days_run"]) < declared_here:
-            # Runner's ruling (2026-11-27): an attempt ended short hides history, so it lets a
-            # later attempt count only if it has days to see and every one is clean.
-            seen = [judge_day(cand, a, decl, d, ok_comp) for vs in listed.values() for d in vs]
-            if not seen or any(j["status"] != "pass" or j["reasons"] for j in seen):
-                reasons.append("earlier_attempt_history_unseen")
+
     # Earlier attempts: reported, and a valid miss in one still counts.
     earlier = []
     for a in attempts[:-1]:

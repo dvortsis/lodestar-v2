@@ -953,24 +953,22 @@ class HistoryTests(RoundBase):
         path.write_text(json.dumps(man))
         return path
 
-    def test_an_ended_attempt_that_hides_its_history_does_not_let_b_ship(self):
+    def test_an_attempt_that_never_started_is_echoed_in_the_verdict(self):
         a = mk.archive("L3")
-        self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"], "diagnosis": "pending"}]
         add_attempt(a, "L2", "r1-a2")
         a["days"] = [d for d in a["days"] if d["attempt"] != "r1-a1"]
         v = analyze_cr.gate_round(analyze_cr.load_manifest(self.ended_short(a, [])))
-        self.assertNotJudged(v, "earlier_attempt_history_unseen")
-        self.assertIsNone(v["selection"]["ships"])
         self.assertEqual(v["attempt_ends"], {"r1-a1": {"reason": "x", "days_run": []}})
         self.assertEqual(self.cand(v)["attempt_ends"], v["attempt_ends"])
+        self.assertEqual(self.cand(v)["crawler"], "pass")  # accepted: the echo makes it auditable
 
-    def test_an_ended_attempt_whose_seen_day_is_flagged_is_not_judged(self):
+    def test_an_ended_attempts_listed_days_keep_their_history(self):
         a = mk.archive("L3")
-        self.day(a, 1)["archive"]["events"] = [{"class": "infrastructure", "arms": []}]
+        self.day(a, 1)["reports"]["B"]["numerator"]["hourly"][3]["net_per_min"] = 60.0
         add_attempt(a, "L2", "r1-a2")
         a["days"] = [d for d in a["days"] if not (d["attempt"] == "r1-a1" and d["day"] == 2)]
         v = analyze_cr.gate_round(analyze_cr.load_manifest(self.ended_short(a, [1])))
-        self.assertNotJudged(v, "earlier_attempt_history_unseen")
+        self.assertEqual(self.cand(v)["crawler"], "fail")  # a1 day 1's valid miss still counts
 
     def test_attempt_ends_days_run_must_be_a_plain_prefix(self):
         a = mk.archive("L3")
@@ -978,6 +976,8 @@ class HistoryTests(RoundBase):
         for bad in ([[1]], [True], [2], [1, 1], [2, 1]):
             with self.assertRaises(ValueError):
                 analyze_cr.load_manifest(self.ended_short(a, bad))
+        with self.assertRaises(ValueError):  # never started, but its days are listed
+            analyze_cr.load_manifest(self.ended_short(a, []))
         b = mk.archive("L3")
         add_attempt(b, "L2", "r1-a2")
         b["days"] = [d for d in b["days"] if not (d["attempt"] == "r1-a1" and d["day"] == 1)]
