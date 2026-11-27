@@ -786,7 +786,8 @@ fn refiling_holds_back_items_and_claims_under_current_rules_only() {
         store.refile_claims(&rc, || true).unwrap(),
         Some(ClaimsRefiled {
             claims: 1,
-            torrents_deleted: vec![]
+            torrents_deleted: vec![],
+            rederive: false,
         })
     );
     assert!(store.torrent_claims(tid).unwrap().is_empty());
@@ -1402,7 +1403,8 @@ fn a_held_claim_decision_deletes_the_torrent() {
             store.refile_claims(&rc, || true).unwrap(),
             Some(ClaimsRefiled {
                 claims: 1,
-                torrents_deleted: vec![tid]
+                torrents_deleted: vec![tid],
+                rederive: false,
             })
         );
         assert!(store.torrent(tid).unwrap().is_none(), "{held:?}");
@@ -2101,7 +2103,8 @@ fn logged(store: &Store, id: i64) -> i64 {
 /// a row is served exactly when it holds an identification answer, every
 /// served row shapes the record, and each path that deletes claims (the
 /// source purge, a refresh's drop and a refile) logs the torrent for the
-/// index exactly when the deleted row shaped it.
+/// index exactly when the deleted row shaped it. The purge and the refile
+/// mark it for the backfill on the same test.
 #[test]
 fn served_identifications_and_record_shapes_agree_on_every_shape() {
     let mut checked = 0;
@@ -2121,6 +2124,15 @@ fn served_identifications_and_record_shapes_agree_on_every_shape() {
                 let p = prepared(&store, name);
                 let id = store_torrent(&mut store, &p, dht);
                 assert!(store.put_claims(id, enr, &c, false).unwrap());
+                // What the enrichment backfill writes once it has derived it.
+                store
+                    .connection()
+                    .execute(
+                        "INSERT INTO torrent_parsed (torrent_id, parser_ver, data)
+                         VALUES (?1, 7, x'00')",
+                        [id],
+                    )
+                    .unwrap();
                 id
             })
             .collect();
@@ -2139,15 +2151,38 @@ fn served_identifications_and_record_shapes_agree_on_every_shape() {
             source: enr,
             filtered: None,
         }];
+        let gen_before = store.class_gen().unwrap();
+        let refiled = store.refile_claims(&rc, || true).unwrap().unwrap();
+        assert_eq!(refiled.claims, 1);
+        assert_eq!(refiled.rederive, c.shapes_the_record(), "{c:?}");
+        // The refile, as the purge, re-derives what the claim shaped and
+        // refuses a batch that read it.
         assert_eq!(
-            store.refile_claims(&rc, || true).unwrap().unwrap().claims,
-            1
+            store.class_gen().unwrap() != gen_before,
+            c.shapes_the_record(),
+            "{c:?}"
         );
         store.set_source_state(enr, SourceState::Disabled).unwrap();
         purge_all(&mut store, enr, 100);
         for (&id, b) in ids.iter().zip(before) {
             assert_eq!(logged(&store, id) - b, want, "torrent {id}: {c:?}");
             assert!(store.served_identifications(id).unwrap().is_empty());
+        }
+        let ver = |id: i64| -> i64 {
+            store
+                .connection()
+                .query_row(
+                    "SELECT parser_ver FROM torrent_parsed WHERE torrent_id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        // A drop marks whatever it removed; the purge and the refile only
+        // what shaped the record.
+        assert_eq!(ver(ids[1]), 0);
+        for id in [ids[0], ids[2]] {
+            assert_eq!(ver(id) == 0, c.shapes_the_record(), "torrent {id}: {c:?}");
         }
     }
     // 22 built; refused: an empty details section (with and without an

@@ -151,6 +151,7 @@ impl Store {
             let Some((_, confidence)) = c.identification() else {
                 continue;
             };
+            // `identification` found the details section: it's there.
             let Some(d) = c.details else { continue };
             if !self.redistributes(source)? {
                 continue;
