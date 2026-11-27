@@ -5,7 +5,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod common;
@@ -19,6 +19,16 @@ fn metrics(port: u16) -> Option<String> {
     out.starts_with("HTTP/1.0 200").then_some(out)
 }
 
+/// The server, killed when the test ends, a panic included.
+struct Serve(Child);
+
+impl Drop for Serve {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 fn metrics_report_each_switch_as_the_process_resolved_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -28,21 +38,23 @@ fn metrics_report_each_switch_as_the_process_resolved_it() {
         "[scrape]\ntrackers = [\"udp://127.0.0.1:9\"]\n\n[dht]\ntarget_prefixes = true\nutp = false\n",
     )
     .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
-        .env("LODESTAR_DATA_DIR", dir.path())
-        .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
-        .env("LODESTAR_DHT_PORT", "0")
-        .env("LODESTAR_DHT_WITNESS_DIR", witness.path())
-        .env("LODESTAR_LOG", "info")
-        // The environment turns `utp` on over the file's `false`, and the
-        // on-by-default `safe_restart` off.
-        .env("LODESTAR_DHT_UTP", "true")
-        .env("LODESTAR_DHT_SAFE_RESTART", "false")
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stderr = child.stderr.take().unwrap();
+    let mut serve = Serve(
+        Command::new(env!("CARGO_BIN_EXE_lodestar"))
+            .env("LODESTAR_DATA_DIR", dir.path())
+            .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
+            .env("LODESTAR_DHT_PORT", "0")
+            .env("LODESTAR_DHT_WITNESS_DIR", witness.path())
+            .env("LODESTAR_LOG", "info")
+            // The environment turns `utp` on over the file's `false`, and the
+            // on-by-default `safe_restart` off.
+            .env("LODESTAR_DHT_UTP", "true")
+            .env("LODESTAR_DHT_SAFE_RESTART", "false")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stderr = serve.0.stderr.take().unwrap();
     let (port_tx, port_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         use std::io::BufRead;
@@ -63,14 +75,13 @@ fn metrics_report_each_switch_as_the_process_resolved_it() {
         if let Some(b) = metrics(port) {
             break b;
         }
-        if start.elapsed() > Duration::from_secs(30) {
-            let _ = child.kill();
-            panic!("/metrics didn't answer within 30 s");
-        }
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "/metrics didn't answer within 30 s"
+        );
         std::thread::sleep(Duration::from_millis(100));
     };
-    let _ = child.kill();
-    let _ = child.wait();
+    drop(serve);
 
     assert!(
         body.contains("# TYPE lodestar_dht_switch gauge\n"),

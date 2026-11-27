@@ -1595,8 +1595,6 @@ mod tests {
                 ("responder_hints", d.responder_hints),
                 ("streaming_peers", p.pool.streaming_peers),
                 ("target_prefixes", d.target_prefixes),
-                // Wired where the DHT starts (`services`), from `dht.utp`.
-                ("utp", c.dht.utp),
                 ("lookup_end", d.lookup_end),
                 ("preset_slots", d.preset_slots),
                 ("hint_first", d.hint_first && p.pool.hint_first),
@@ -1606,7 +1604,16 @@ mod tests {
                 ("route_backoff", p.fetch.route_backoff),
                 ("safe_restart", d.restart.is_some()),
             ];
-            assert_eq!(c.dht.switches(), built);
+            // `utp` has no built field here: `services` wires its socket
+            // from `dht.utp` where the DHT starts, so the real binary's
+            // test (`tests/dht_switch.rs`) checks it end to end.
+            let reported: Vec<_> = c
+                .dht
+                .switches()
+                .into_iter()
+                .filter(|(n, _)| *n != "utp")
+                .collect();
+            assert_eq!(reported, built);
         }
     }
 
