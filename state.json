@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T10:27:21Z",
+  "updated_at": "2026-11-27T10:30:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T10:27:21Z",
+    "updated": "2026-11-27T10:30:03Z",
     "items": [
       {
         "slot": 1,
@@ -11133,7 +11133,7 @@
         "role": "build",
         "agent": "claude",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "building: no start wait, safe restart on by default; merge timed against stage-1 images",
+        "doing": "accepted at 39d55841 (review and CI green); held for merge until the stage-1 image is pinned (check before 2026-11-28T12:00Z)",
         "since": "2026-11-27T07:31Z"
       },
       {
@@ -11229,7 +11229,8 @@
       "cr_ab_adm_process_start": "comparator result.json ended + 5 h 30 min (owner-adopted rule 2.2 reading: the window, not the process, must be >= ended + 12 h; analyze_cr spacing() agrees; 30 min runner margin)"
     },
     "notes": [
-      "2026-11-27T08:42Z: CR-0w (#1134) removes the start hold that the stage-1 run sheet's first-segment timing assumes (sampling held 6 h, ws about start + 7 h). Every stage-1 image stays at a commit before CR-0w merges, pinned by digest; the runner doesn't merge CR-0w until the stage-1 images are built and the run sheet is amended or stage 1 ends."
+      "2026-11-27T08:42Z: CR-0w (#1134) removes the start hold that the stage-1 run sheet's first-segment timing assumes (sampling held 6 h, ws about start + 7 h). Every stage-1 image stays at a commit before CR-0w merges, pinned by digest; the runner doesn't merge CR-0w until the stage-1 images are built and the run sheet is amended or stage 1 ends.",
+      "2026-11-27T10:30Z: CR-0w (#1134) accepted at 39d55841 and held. Stage-1 images come from release.yml's nightly on main (03:17Z). At the image check before 2026-11-28T12:00Z the runner pins the 2026-11-28 nightly (pre-CR-0w) by digest, then merges #1134. Run sheet line 66 already covers a build with no start hold, if a later image is ever needed."
     ]
   },
   "owner_answers": [
