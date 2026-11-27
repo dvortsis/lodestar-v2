@@ -288,6 +288,8 @@ placement:
   - X-setup-token-nits
   - X-first-run
   - X-client-handoff
+  - UX-start
+  - D-start
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -658,11 +660,13 @@ placement:
   - X-soft-absent-void
   - X-sampler-streak-metrics
   - X-capacity-rejection-source
+  - CR-0w
 - ws: ws-cr-live
   match:
   - CR-AB-*
   - CR-CP1
   - X-host-ab-runsheet
+  - CR-0w-soak
 - ws: ws-cr-tune
   match:
   - CR-5
@@ -739,6 +743,7 @@ placement:
   - UN-2
   - IRC-1
   - OUT-2
+  - X-irc-fuzz-seeds
 - ws: ws-m7-w4
   match:
   - RX-1
@@ -757,6 +762,7 @@ placement:
   - ENR-12
   - UP-2
   - X-watch-env
+  - X-watch-open-fstat
   - X-watch-stall-retry
   - /^ENR-[a-z]+$/
   - ENR-terms-api
@@ -764,11 +770,14 @@ placement:
   - X-snapshot-claims-retention
   - X-snapshot-followups-2
   - X-purge-rederive
+  - X-purge-index-shapes
   - X-restart-fuzz-v2
 - ws: ws-m7-w5
   match:
   - ENR-11
   - GS-4
+  - X-enr11-size-measure
+  - X-torznab-id-caps
   - GS-5
   - X-gs-followups
   - X-gs-followups-2
@@ -887,6 +896,7 @@ placement:
   match:
   - NOS-*
   - LEM-*
+  - X-tls-root-load-event
   - ADH-*
 - ws: ws-v08-gate
   match:
@@ -1983,6 +1993,21 @@ owner_queue:
   action: 'Optional: will you, or a person you choose, read TorBox''s current terms (and its abuse-system article) in a browser before v0.7 closes? Debrid cache status was skipped because no provider qualifies (docs/decisions/2026-11-23-ENR-debrid.md): TorBox appears to offer a cache check by hash (its changelog and third-party docs say so), but its docs and terms pages are script-rendered and couldn''t be read by a session. If the terms clearly allow a third-party app to check hashes with the user''s own key, the runner can relaunch ENR-debrid for TorBox within v0.7 under your Q4 answer. If they''re silent or ambiguous, that''s a grey case and comes back to you under §2.28'
   unblocks: Debrid cache status (a Cached on TorBox badge) in v0.7
   when: Optional, before v0.7 closes; nothing waits on it
+- n: 38
+  type: decision
+  action: 'Should the runner open draft security advisories for S8-25, S8-26 and S8-27? docs/security/v1/README.md §5 has you open them, as item 20 does for the earlier held findings, and says Claude sessions here can''t create one'
+  unblocks: Disclosure records for S8-25 to S8-27
+  when: Any time; the advisories before the fixes ship
+- n: 39
+  type: decision
+  action: May the runner delete HANDOVER.md from the runner-state branch?
+  unblocks: A runner-state branch without a stale handover note
+  when: Any time; until then it stays
+- n: 40
+  type: decision
+  action: 'May web/licenses/allow.json add CDLA-Permissive-2.0, the licence of webpki-root-certs (Mozilla''s root list)? X-sec-S8-25 (#1125) would bundle it. The runner first allowed it, then withdrew that: a licence change is a legal call and yours'
+  unblocks: Bundling Mozilla's root list, or a recorded no
+  when: Any time; X-sec-S8-25 lands without it
 
 gates:
 - id: G-v05

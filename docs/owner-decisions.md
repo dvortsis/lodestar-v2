@@ -784,9 +784,29 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Cloud now, Unraid later** (00:36Z): "Yes, go ahead with the tests." Asked whether that included the Unraid box, the owner chose "Cloud now, Unraid later". The cloud stage 1 starts now; the hold above stands.
 
 83. **Finish the running build slices, then support cloud testing and the API lane** (owner, in the runner session, 2026-11-23T06:09Z): "finish the build slices you've got going on and then focus on supporting the cloud testing and api session. Don't start any new slices unless the cloud testing environment or api runner needs something."
-    - **Runner's reading:** slices already running finish and merge as usual. A freed build slot stays empty. A queued follow-up waits. A new slice starts only when the cloud-testing session (X-test-vm) or the API lane needs one, and the runner records why. This pauses §2.81's four build sessions; testing sessions are unchanged.
+    - **Runner's reading:** slices already running finish and merge as usual. A freed build slot stays empty. A queued follow-up waits. A new slice starts only when the cloud-testing session (X-test-vm) or the API lane needs one, and the runner records why. This pauses §2.81's four build sessions; testing sessions are unchanged. *Superseded by §2.84 (2026-11-27): the runner resumed all work, so new slices start again.*
     - **Balances** (owner, the same session, about 06:30Z): "$154.86", then "I gave you the claude api balance. The AWS balance is $130.56".
     - **Spend (runner's reading):** §2.82's AWS stop is 90% of the lower of $130.56 and $133.72, so **$117.50 of new AWS spend from 2026-11-23T00:31Z**. Linode's cap and the fleet's are unchanged.
+
+84. **The runner's pause, an audit of the stand-in's merges, and the resume with the path to 100 first** (owner, 2026-11-24 and 2026-11-27).
+    - **Pause** (owner, in the runner session, 2026-11-24T06:30Z): "pause the agent runner until further notice". The runner disabled its heartbeat and recorded the pause in runner-state. While it was paused, a stand-in session ("Claude Duet") merged 16 PRs, #1108 to #1123.
+    - **Audit first** (owner, in the runner session, 2026-11-27): "Credits restored. Please look at the work Duet has completed first." The runner's audit is in `docs/decisions/2026-11-27-runner-records-r18.md`.
+    - **Resume** (owner, 2026-11-27, relayed by the path-to-100 session; the runner checked each message against that session's own events):
+      - 00:51Z, the owner's pick in a question with options: "Resume all runner work"
+      - 00:51:48Z: "The unraid machine is no longer throttled at 45w."
+      - 01:26Z: "THe runner should prioritize the new plan."
+      - 01:27Z: "But it can finish aany paused slices as needed"
+      - "Send message to the "Agent Runner" slice, not Claude Duet"
+      - In the stand-in's session, 00:54Z, relayed with the others: "Keep duet paused. I'll work with runner directly for now."
+    - **Runner's reading:**
+      - The pause ends. §2.83's "Don't start any new slices unless the cloud testing environment or api runner needs something" is superseded: build slots fill again, up to §2.81's four. Testing sessions are unchanged.
+      - "The new plan" is the path to 100 (r5 and r5.1, `docs/build-plan.md` §0.5). Paused slices may finish.
+      - The stand-in stays paused. The runner merges again, as before the pause.
+    - **Priority (the runner's, from these words):**
+      1. The path to 100: cr-ab-comp-2 on the Unraid box, run by the owner; then at least 12 h; then CR-AB-ADM and CR-AB-4 back to back; Checkpoint 1; then CR-AB-LC.
+      2. The audit's fix slices.
+      3. The stand-in's queue: X-restart-fuzz-v2, X-gs-followups-2 and the `docs/metrics.md` runner docs PR.
+      4. Tracking CR-0w (§2.77).
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
