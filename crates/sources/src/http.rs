@@ -1092,14 +1092,6 @@ impl<F: Fetch> Client<F> {
         &self.limiter
     }
 
-    /// The [`Fetch`] behind the limiter. A runtime that wraps it (with a
-    /// check of its own just before each request goes) builds a new
-    /// client from it and this client's [`limiter`](Self::limiter), so
-    /// the pacing is shared.
-    pub fn fetcher(&self) -> &F {
-        &self.fetch
-    }
-
     /// One poll of `unit` (a feed URL, an indexer id): waits out the
     /// unit's own back-off and the poll gate ([`HostLimiter::try_poll`]),
     /// then sends as [`send`](Self::send) does, but records the answer
@@ -1240,6 +1232,64 @@ impl<F: Fetch> Client<F> {
         let result = self.fetch.fetch(req).await;
         self.limiter.record(&host, &result, Instant::now());
         result
+    }
+}
+
+/// A check [`Client::checked`] runs before each request: true when it may
+/// go now.
+pub type Admit = Arc<dyn Fn() -> BoxFuture<'static, bool> + Send + Sync>;
+
+/// What a request [`Client::checked`]'s check refused fails with.
+pub const WITHHELD: &str = "withheld by the client's check";
+
+/// The [`Fetch`] behind a checked client: `admit`, then the inner fetch.
+struct Checked {
+    inner: Arc<dyn Fetch>,
+    admit: Admit,
+}
+
+impl Fetch for Checked {
+    fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
+        Box::pin(async move {
+            if !(self.admit)().await {
+                return Err(HttpError::EgressDown(WITHHELD.into()));
+            }
+            self.inner.fetch(req).await
+        })
+    }
+
+    fn fetch_stream<'a>(
+        &'a self,
+        req: &'a Request,
+        limits: StreamLimits,
+    ) -> BoxFuture<'a, Result<StreamResponse, HttpError>> {
+        Box::pin(async move {
+            if !(self.admit)().await {
+                return Err(HttpError::EgressDown(WITHHELD.into()));
+            }
+            self.inner.fetch_stream(req, limits).await
+        })
+    }
+}
+
+impl<F: Fetch + Clone + 'static> Client<F> {
+    /// This client with `admit` asked before every request it sends:
+    /// after the limiter's token and any back-off or pacing wait, just
+    /// before the request is handed to the fetch, on every path (`send`,
+    /// `poll`, `poll_stream`) and every attempt. `false` sends nothing and
+    /// fails with [`HttpError::EgressDown`], which doesn't back the host
+    /// off. The new client shares this one's limiter (the same tokens and
+    /// back-off, never a second budget), and checking a checked client
+    /// keeps both checks, so it only ever narrows what's sent. The fetch
+    /// itself stays private.
+    pub fn checked(&self, admit: Admit) -> Client {
+        Client {
+            fetch: Arc::new(Checked {
+                inner: Arc::new(self.fetch.clone()),
+                admit,
+            }),
+            limiter: self.limiter.clone(),
+        }
     }
 }
 
@@ -1510,6 +1560,121 @@ mod tests {
 
     fn sent(c: &Client<ByPath>) -> usize {
         c.fetch.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// A checked client over `fetch`, counting the checks and recording
+    /// when each ran; `open` decides.
+    fn counting(open: Arc<std::sync::atomic::AtomicBool>, log: Arc<Mutex<Vec<Instant>>>) -> Admit {
+        Arc::new(move || {
+            log.lock().unwrap().push(Instant::now());
+            let ok = open.load(std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move { ok })
+        })
+    }
+
+    fn base(interval: u64) -> (Client<Arc<ByPath>>, Arc<ByPath>) {
+        let fetch = Arc::new(ByPath(Default::default()));
+        let c = Client::new(
+            fetch.clone(),
+            HostLimiter::with_seed(limits(interval, 1), 7),
+        );
+        (c, fetch)
+    }
+
+    fn count(f: &ByPath) -> usize {
+        f.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Every attempt on every path asks the check, after the limiter's
+    /// waits: a host backing off is waited out before it runs.
+    #[tokio::test(start_paused = true)]
+    async fn a_checked_client_asks_after_every_wait_on_every_path() {
+        let (c, fetch) = base(0);
+        let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let k = c.checked(counting(open, log.clone()));
+        // A 503 backs the host off; the retry waits it out, then asks.
+        let failed = k.send(&Request::get("http://h.test/503")).await.unwrap();
+        assert_eq!(failed.status, 503);
+        let HostState::BackingOff { until, .. } = c.limiter().state("h.test", Instant::now())
+        else {
+            panic!("backing off");
+        };
+        k.send(&Request::get("http://h.test/200")).await.unwrap();
+        k.poll("unit", &Request::get("http://h.test/200"))
+            .await
+            .unwrap();
+        let limits = StreamLimits {
+            max_bytes: 1024,
+            timeout: Duration::from_secs(10),
+            idle: Duration::from_secs(10),
+        };
+        k.poll_stream("unit2", &Request::get("http://h.test/200"), limits)
+            .await
+            .unwrap();
+        let log = log.lock().unwrap().clone();
+        assert_eq!(log.len(), 4);
+        assert_eq!(count(&fetch), 4);
+        assert!(log[1] >= until, "asked before the back-off ended");
+    }
+
+    /// A refusal sends nothing, fails closed with `EgressDown`, and doesn't
+    /// back the host off.
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_check_sends_nothing() {
+        let (c, fetch) = base(0);
+        let open = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let k = c.checked(counting(open, Arc::default()));
+        let req = Request::get("http://h.test/200");
+        assert_eq!(
+            k.send(&req).await.unwrap_err(),
+            HttpError::EgressDown(WITHHELD.into())
+        );
+        assert!(k.poll("unit", &req).await.is_err());
+        let limits = StreamLimits {
+            max_bytes: 1024,
+            timeout: Duration::from_secs(10),
+            idle: Duration::from_secs(10),
+        };
+        assert!(k.poll_stream("unit2", &req, limits).await.is_err());
+        assert_eq!(count(&fetch), 0);
+        assert_eq!(
+            c.limiter().state("h.test", Instant::now()),
+            HostState::Ready
+        );
+    }
+
+    /// The checked client spends the original's tokens: one budget.
+    #[tokio::test(start_paused = true)]
+    async fn a_checked_client_shares_the_limiter() {
+        let (c, _) = base(60);
+        let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let k = c.checked(counting(open, Arc::default()));
+        k.send(&Request::get("http://h.test/200")).await.unwrap();
+        let w = c
+            .limiter()
+            .try_acquire("h.test", Instant::now())
+            .unwrap_err();
+        assert_eq!(w.reason, WaitReason::Rate);
+    }
+
+    /// Checking a checked client keeps both checks: either refusing sends
+    /// nothing.
+    #[tokio::test(start_paused = true)]
+    async fn checks_only_narrow() {
+        for (a, b) in [(true, false), (false, true), (true, true)] {
+            let (c, fetch) = base(0);
+            let (oa, ob) = (
+                Arc::new(std::sync::atomic::AtomicBool::new(a)),
+                Arc::new(std::sync::atomic::AtomicBool::new(b)),
+            );
+            let k = c
+                .checked(counting(oa, Arc::default()))
+                .checked(counting(ob, Arc::default()));
+            let sent = k.send(&Request::get("http://h.test/200")).await.is_ok();
+            assert_eq!(sent, a && b, "{a} {b}");
+            assert_eq!(count(&fetch), usize::from(a && b), "{a} {b}");
+        }
     }
 
     /// One indexer behind a manager that rate-limits us (or fails) stops

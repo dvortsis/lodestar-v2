@@ -3,34 +3,28 @@
 //! The enrichment runtimes ([`adult_enrich`](crate::adult_enrich) and
 //! [`identify`](crate::identify)) judge an item with their whole gate
 //! before they call the plugin, and again for every request the plugin
-//! makes: the plugin is handed a client of its own ([`for_item`]) on the
-//! same limiter (the pacing is shared), whose [`Fetch`] asks the runtime's
-//! gate again, for the same item and query, after the client's waits and
-//! just before each request is handed to the plugin's egress. Every way a
-//! plugin sends (`send`, `poll`, `poll_stream`) goes through it.
+//! makes: the plugin is handed only a checked client ([`for_item`],
+//! [`Client::checked`](lodestar_sources::Client::checked)) on the same
+//! limiter, which asks the runtime's gate again, for the same item and
+//! query, after the client's waits and just before each request is handed
+//! to the plugin's egress. Every way a plugin sends (`send`, `poll`,
+//! `poll_stream`) goes through it.
 //!
 //! - **Fail closed.** A gate that refuses, errs or panics, or a query that
 //!   differs, sends nothing, and the refusal holds for the rest of the
 //!   lookup: no later request of the same lookup goes, whatever the gate
 //!   would say by then.
 //! - **Not the host's fault.** A refused request fails with
-//!   [`HttpError::EgressDown`], which the limiter doesn't count against
-//!   the host.
+//!   [`HttpError::EgressDown`](lodestar_sources::HttpError::EgressDown),
+//!   which the limiter doesn't count against the host.
 //!
 //! Nothing here logs a name, a query or a hash.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use lodestar_sources::http::{StreamLimits, StreamResponse};
-use lodestar_sources::{BoxFuture, Client, Fetch, HttpError, Kit, Request, Response};
-
-/// What a refused request fails with.
-pub(crate) const WITHHELD: &str = "withheld by the enrichment gate";
-
-/// One request's check: true when it may go now. Called once per request,
-/// after the client's waits.
-pub(crate) type Admit = Arc<dyn Fn() -> BoxFuture<'static, bool> + Send + Sync>;
+use lodestar_sources::http::Admit;
+use lodestar_sources::{BoxFuture, Kit};
 
 /// A runtime's gate (its `check_with`, run on the blocking pool) for item
 /// `id` at time `now`.
@@ -68,76 +62,48 @@ impl<W: Copy> Outcome<W> {
             (why, self.sent.load(Ordering::Acquire))
         })
     }
+
+    /// Records a refusal for `why`, keeping the first reason.
+    fn refuse(&self, why: W) {
+        self.why
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert(why);
+        self.refused.store(true, Ordering::Release);
+    }
 }
 
-/// A [`Fetch`] that asks [`Admit`] before each request.
-struct Gated<W> {
-    inner: Arc<dyn Fetch>,
-    admit: Admit,
+/// The check for one lookup: `ok` decides each request, until one is
+/// refused; from then on every request of the lookup is.
+fn sticky<W: Copy + Send + Sync + 'static>(
     outcome: Arc<Outcome<W>>,
-}
-
-impl<W> Gated<W> {
-    async fn admitted(&self) -> bool {
-        if self.outcome.refused.load(Ordering::Acquire) {
-            return false;
-        }
-        let ok = (self.admit)().await;
-        if !ok {
-            self.outcome.refused.store(true, Ordering::Release);
-        }
-        // A refusal from a concurrent request of the same lookup counts.
-        let ok = ok && !self.outcome.refused.load(Ordering::Acquire);
-        if ok {
-            self.outcome.sent.store(true, Ordering::Release);
-        }
-        ok
-    }
-}
-
-impl<W: Send + Sync> Fetch for Gated<W> {
-    fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
+    ok: Arc<dyn Fn() -> BoxFuture<'static, Result<(), W>> + Send + Sync>,
+) -> Admit {
+    Arc::new(move || {
+        let (outcome, ok) = (outcome.clone(), ok.clone());
         Box::pin(async move {
-            if !self.admitted().await {
-                return Err(HttpError::EgressDown(WITHHELD.into()));
+            if outcome.refused.load(Ordering::Acquire) {
+                return false;
             }
-            self.inner.fetch(req).await
-        })
-    }
-
-    fn fetch_stream<'a>(
-        &'a self,
-        req: &'a Request,
-        limits: StreamLimits,
-    ) -> BoxFuture<'a, Result<StreamResponse, HttpError>> {
-        Box::pin(async move {
-            if !self.admitted().await {
-                return Err(HttpError::EgressDown(WITHHELD.into()));
+            if let Err(why) = ok().await {
+                outcome.refuse(why);
+                return false;
             }
-            self.inner.fetch_stream(req, limits).await
+            // A refusal from a concurrent request of the same lookup counts.
+            if outcome.refused.load(Ordering::Acquire) {
+                return false;
+            }
+            outcome.sent.store(true, Ordering::Release);
+            true
         })
-    }
+    })
 }
 
-/// The kit one lookup hands its plugin: `kit`'s state, and a client on
-/// `kit`'s limiter whose every request asks `admit` first.
-fn kit<W: Send + Sync + 'static>(kit: &Kit, admit: Admit, outcome: Arc<Outcome<W>>) -> Kit {
-    let fetch: Arc<dyn Fetch> = Arc::new(Gated {
-        inner: kit.http.fetcher().clone(),
-        admit,
-        outcome,
-    });
-    Kit {
-        state: kit.state.clone(),
-        http: Client::new(fetch, kit.http.limiter().clone()),
-    }
-}
-
-/// The kit for a lookup of item `id`, whose gate passed `expected`: each
-/// request asks `gate` again at `clock()` and goes only if it answers
-/// `expected` again. Otherwise the reason is kept: the gate's own,
-/// `changed` for a different candidate, `failed` for a store error or a
-/// panic.
+/// The kit for a lookup of item `id`, whose gate passed `expected`: `base`'s
+/// state, and only a checked client on `base`'s limiter. Each request asks
+/// `gate` again at `clock()` and goes only if it answers `expected` again.
+/// Otherwise the reason is kept: the gate's own, `changed` for a different
+/// candidate, `failed` for a store error or a panic.
 pub(crate) fn for_item<C, W>(
     base: &Kit,
     gate: Gate<C, W>,
@@ -152,34 +118,31 @@ where
     W: Copy + Send + Sync + 'static,
 {
     let outcome: Arc<Outcome<W>> = Arc::default();
-    let admit: Admit = {
-        let outcome = outcome.clone();
+    let ok: Arc<dyn Fn() -> BoxFuture<'static, Result<(), W>> + Send + Sync> =
         Arc::new(move || {
-            let (gate, outcome, expected) = (gate.clone(), outcome.clone(), expected.clone());
+            let (gate, expected) = (gate.clone(), expected.clone());
             Box::pin(async move {
-                let why = match gate(id, clock()).await {
-                    Ok(Ok(Ok(c))) if c == expected => return true,
-                    Ok(Ok(Ok(_))) => changed,
-                    Ok(Ok(Err(why))) => why,
-                    _ => failed,
-                };
-                outcome
-                    .why
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get_or_insert(why);
-                false
+                match gate(id, clock()).await {
+                    Ok(Ok(Ok(c))) if c == expected => Ok(()),
+                    Ok(Ok(Ok(_))) => Err(changed),
+                    Ok(Ok(Err(why))) => Err(why),
+                    _ => Err(failed),
+                }
             })
-        })
+        });
+    let kit = Kit {
+        state: base.state.clone(),
+        http: base.http.checked(sticky(outcome.clone(), ok)),
     };
-    (kit(base, admit, outcome.clone()), outcome)
+    (kit, outcome)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lodestar_sources::{HostLimiter, Policy};
-    use std::sync::Mutex;
+    use lodestar_sources::{
+        Fetch, HostLimiter, HttpError, Policy, Request, Response, http::WITHHELD,
+    };
     use std::sync::atomic::AtomicUsize;
 
     #[derive(Default)]
@@ -206,62 +169,70 @@ mod tests {
         )
     }
 
-    fn admit(open: Arc<AtomicBool>, asked: Arc<AtomicUsize>) -> Admit {
-        Arc::new(move || {
+    /// A gate whose answer the test sets: `Ok(1)` is the expected
+    /// candidate, `Ok(2)` a different one, `Err` a reason.
+    fn gate(answer: Arc<Mutex<Result<u8, char>>>, asked: Arc<AtomicUsize>) -> Gate<u8, char> {
+        Arc::new(move |_, _| {
             asked.fetch_add(1, Ordering::SeqCst);
-            let ok = open.load(Ordering::SeqCst);
-            Box::pin(async move { ok })
+            let a = *answer.lock().unwrap();
+            Box::pin(async move { Ok(Ok(a)) })
         })
     }
 
+    fn zero() -> i64 {
+        0
+    }
+
     #[tokio::test]
-    async fn every_path_asks_the_gate_before_it_sends() {
+    async fn each_request_asks_the_gate_and_a_refusal_holds_for_the_lookup() {
         let wire = Arc::new(Wire::default());
-        let (open, asked) = (Arc::new(AtomicBool::new(true)), Arc::default());
-        let outcome: Arc<Outcome<()>> = Arc::default();
-        let k = kit(
-            &base(wire.clone()),
-            admit(open, Arc::clone(&asked)),
-            outcome.clone(),
+        let base = base(wire.clone());
+        let answer = Arc::new(Mutex::new(Ok(1)));
+        let asked = Arc::new(AtomicUsize::new(0));
+        let (k, outcome) = for_item(
+            &base,
+            gate(answer.clone(), asked.clone()),
+            7,
+            1u8,
+            zero,
+            'c',
+            'f',
         );
         let req = Request::get("https://a.example.test/x");
         k.http.send(&req).await.unwrap();
         k.http.poll("unit", &req).await.unwrap();
-        let limits = StreamLimits {
-            max_bytes: 1024,
-            timeout: std::time::Duration::from_secs(10),
-            idle: std::time::Duration::from_secs(10),
-        };
-        k.http.poll_stream("unit2", &req, limits).await.unwrap();
-        assert_eq!(asked.load(Ordering::SeqCst), 3);
-        assert_eq!(wire.0.lock().unwrap().len(), 3);
+        assert_eq!(
+            (asked.load(Ordering::SeqCst), wire.0.lock().unwrap().len()),
+            (2, 2)
+        );
         assert!(outcome.refused().is_none());
+        *answer.lock().unwrap() = Err('r');
+        let e = k.http.send(&req).await.unwrap_err();
+        assert_eq!(e, HttpError::EgressDown(WITHHELD.into()));
+        assert_eq!(outcome.refused(), Some((Some('r'), true)));
+        // The gate passing again doesn't reopen this lookup, and isn't
+        // asked.
+        *answer.lock().unwrap() = Ok(1);
+        assert!(k.http.send(&req).await.is_err());
+        assert_eq!(
+            (asked.load(Ordering::SeqCst), wire.0.lock().unwrap().len()),
+            (3, 2)
+        );
     }
 
     #[tokio::test]
-    async fn a_refusal_sends_nothing_and_holds_for_the_lookup() {
+    async fn a_different_candidate_is_refused() {
         let wire = Arc::new(Wire::default());
-        let (open, asked) = (Arc::new(AtomicBool::new(false)), Arc::default());
         let base = base(wire.clone());
-        let outcome: Arc<Outcome<()>> = Arc::default();
-        let k = kit(
-            &base,
-            admit(open.clone(), Arc::clone(&asked)),
-            outcome.clone(),
+        let answer = Arc::new(Mutex::new(Ok(2)));
+        let (k, outcome) = for_item(&base, gate(answer, Arc::default()), 7, 1u8, zero, 'c', 'f');
+        assert!(
+            k.http
+                .send(&Request::get("https://a.example.test/x"))
+                .await
+                .is_err()
         );
-        let req = Request::get("https://a.example.test/x");
-        let e = k.http.send(&req).await.unwrap_err();
-        assert_eq!(e, HttpError::EgressDown(WITHHELD.into()));
-        assert_eq!(outcome.refused(), Some((None, false)));
-        // The gate opening again doesn't reopen this lookup.
-        open.store(true, Ordering::SeqCst);
-        assert!(k.http.send(&req).await.is_err());
+        assert_eq!(outcome.refused(), Some((Some('c'), false)));
         assert!(wire.0.lock().unwrap().is_empty());
-        // Not the host's fault: it isn't backed off.
-        let host = req.host().unwrap();
-        assert_eq!(
-            base.limiter().state(&host, tokio::time::Instant::now()),
-            lodestar_sources::HostState::Ready
-        );
     }
 }
