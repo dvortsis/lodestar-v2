@@ -93,8 +93,14 @@
 	// A new query starts at the first row again, as the list does through its resetKey. Unlike the
 	// list (so far), a row that keeps focus through the change (a re-sort answered while a row has
 	// focus) stays the active one instead, so j/k carry on from the focused row, as the arrows do.
+	// The first run is the mount, which keeps the row the parent carried in (a view change).
+	let mounted = false;
 	$effect(() => {
 		void results.shown;
+		if (!mounted) {
+			mounted = true;
+			return;
+		}
 		active = untrack(focusedRow) ?? 0;
 	});
 

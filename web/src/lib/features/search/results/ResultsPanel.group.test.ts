@@ -71,10 +71,7 @@ beforeEach(() => {
 	api.get.mockReset();
 	api.post.mockReset();
 	openDetail.mockReset();
-	api.get.mockImplementation(async (path: string) => {
-		if (path === '/torrents/{hash}/siblings') return siblings(versions);
-		throw new Error(`no ${path} in this test`);
-	});
+	mockSiblings(async () => siblings(versions));
 	api.post.mockResolvedValue(
 		page([], { hits: [best, hit(2)], total: 5, collapsed: true, groups: 2, groups_approx: false })
 	);
@@ -86,8 +83,10 @@ const rowOf = (testid: string) => screen.getByTestId(testid).closest<HTMLElement
 const announced = () => screen.getByTestId('results-announce').textContent;
 /** Siblings answered by `fn`; every other GET fails, as in beforeEach. */
 function mockSiblings(fn: () => Promise<unknown>) {
-	api.get.mockImplementation(async (path: string) => {
-		if (path === '/torrents/{hash}/siblings') return fn();
+	api.get.mockImplementation(async (path: string, opts?: { path?: { hash?: string } }) => {
+		// The API answers about the torrent asked for.
+		if (path === '/torrents/{hash}/siblings')
+			return { ...((await fn()) as object), hash: opts?.path?.hash };
 		throw new Error(`no ${path} in this test`);
 	});
 }
@@ -348,6 +347,34 @@ describe('ResultsPanel, grouped', () => {
 			selection.toggle(hit(2).hash, false); // leave nothing selected for the next test
 		}
 	});
+
+	// A table row made active by the arrow keys follows its torrent into the other views.
+	for (const [name, url] of [
+		['List', '/search?q=lantern'],
+		['Cards', '/search?q=lantern&density=cards']
+	] as const) {
+		it(`keeps the same torrent active from the Table into the ${name}`, async () => {
+			api.post.mockResolvedValue(
+				page([], { hits: [best, hit(2), hit(3)], total: 5, collapsed: true, groups: 2 })
+			);
+			visit('/search?q=lantern&view=table');
+			render(ResultsPanel, { focusBar: () => {} });
+			const table = await screen.findByRole('table', {}, WAIT);
+			await waitFor(() => expect(table.querySelectorAll('tbody tr').length).toBe(3), WAIT);
+			await fireEvent.keyDown(screen.getByTestId('table-row-1'), { key: 'ArrowDown' }); // row 2
+			visit(url);
+			await waitFor(() => expect(screen.queryByRole('table')).toBeNull(), WAIT);
+			await screen.findByTestId(`result-${hit(2).hash}`, {}, WAIT);
+			await waitFor(() => expect(commands.get('results.select')).toBeDefined(), WAIT);
+			const { selection } = await import('../bulk/selection.svelte');
+			try {
+				commands.get('results.select')!();
+				expect(selection.has(hit(2).hash)).toBe(true);
+			} finally {
+				selection.toggle(hit(2).hash, false); // leave nothing selected for the next test
+			}
+		});
+	}
 
 	it('the Table shows one row per group, with an open group left to the List', async () => {
 		await openGroup();

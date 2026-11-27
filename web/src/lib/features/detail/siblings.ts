@@ -48,7 +48,14 @@ function fly(hash: string): Flight {
 			});
 			while (answers.size > LIMIT) answers.delete(answers.keys().next().value as string);
 		}
-		for (const fn of [...flight.listeners]) fn(state);
+		// One section that throws must not stop the others hearing the answer.
+		for (const fn of [...flight.listeners]) {
+			try {
+				fn(state);
+			} catch (e) {
+				console.error(e);
+			}
+		}
 	};
 	// Through a resolved promise, so a client that throws at once fails the same way as a request.
 	// The answer and the failure are separate handlers: a section that throws on a ready answer must
@@ -79,6 +86,9 @@ export function loadSiblings(
 	const generation = detailGeneration();
 	const kept = answers.get(hash);
 	if (!again && kept?.generation === generation && Date.now() - kept.at <= FRESH_MS) {
+		// A read keeps the answer among the newest.
+		answers.delete(hash);
+		answers.set(hash, kept);
 		set({ status: 'ready', siblings: kept.siblings });
 		return () => {};
 	}
