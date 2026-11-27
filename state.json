@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T17:25Z",
+    "updated": "2026-11-27T17:55Z",
     "items": [
       {
         "slot": 1,
@@ -11129,12 +11129,12 @@
       },
       {
         "slot": 2,
-        "slice": "CR-0w",
-        "role": "build",
-        "agent": "claude",
+        "slice": "X-dht-switch-identity",
+        "role": "slice",
+        "agent": "session_01MMjhn8WvVr2UNVUP4UKoLa",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "accepted at 39d55841 (review and CI green); held for merge until the stage-1 image is pinned (check before 2026-11-28T12:00Z)",
-        "since": "2026-11-27T07:31Z"
+        "doing": "building the switch gauge (revised path to 100 \u00a75.1, critical path)",
+        "since": "2026-11-27T17:55Z"
       },
       {
         "slot": 3,

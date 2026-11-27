@@ -1,6 +1,6 @@
 # X-dht-switch-identity: a read-only gauge of the crawler's effective switch values
 
-**From:** the runner, 2026-11-27T18:05Z. **Model:** Opus. **Branch:** `slice/X-dht-switch-identity`. **PR title:** `X-dht-switch-identity: Report the crawler switches' effective values as a gauge`.
+**From:** the runner, 2026-11-27T17:55Z. **Model:** Opus. **Branch:** `slice/X-dht-switch-identity`. **PR title:** `X-dht-switch-identity: Report the crawler switches' effective values as a gauge`.
 
 **Why (owner, 2026-11-27):** the owner approved the revised path to 100 (O1–O4), `docs/plan/2026-11-27-revised-path-to-100.md` revision 6. It is on branch `claude/gifted-feynman-siwhjc` (commit 4ee28954e) and not yet on `main`; read it with `git fetch origin claude/gifted-feynman-siwhjc` and `git show FETCH_HEAD:docs/plan/2026-11-27-revised-path-to-100.md`. This slice is its §5.1, and it's on the critical path: round 1's collector (§5.2 item 1, slice X-cr-round1-harness, running in parallel) reads this gauge to record what each arm actually ran. Today the binary exposes no runtime value for the 12 switches, so an environment dump can't show an image's compiled defaults (plan §5 table). **Target: PR ready by 2026-11-28T12:00Z.**
 
