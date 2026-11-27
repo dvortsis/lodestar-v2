@@ -876,7 +876,7 @@ The uTP share of fetches is `fetch_attempts_total{transport="utp"}` over the sum
 
 ## Crawler switches (X-dht-switch-identity, 2026-11-27)
 
-One gauge says which crawler switches this process runs with ([the decision](decisions/2026-11-27-X-dht-switch-identity.md)). Each value is the switch's **effective** value: the compiled default, then `config.toml`'s `[dht]` key, then its `LODESTAR_DHT_*` variable, read from the same resolved config the DHT and the fetch pool are built from. It's set once at start and never changes while the process runs; none of these switches is in the Settings UI, so a change needs a restart. It's rendered by the serving process whether or not the DHT is enabled. The intensity preset isn't in it: the settings can change it at runtime, so read it from the settings API.
+One gauge says which crawler switches this process runs with ([the decision](decisions/2026-11-27-X-dht-switch-identity.md)). Each value is the switch's **effective** value: the compiled default, then `config.toml`'s `[dht]` key, then its `LODESTAR_DHT_*` variable, read from the same resolved config the DHT and the fetch pool are built from. It's set once at start and never changes while the process runs; none of these switches is in the Settings UI, so a change needs a restart. It's rendered by the serving process whether or not the DHT is enabled; with `dht.enabled = false` it still shows what the config resolved, but the DHT's switches then have nothing to act on. The intensity preset isn't in it: the settings can change it at runtime, so read it from the settings API.
 
 | Series | Type | Meaning |
 |---|---|---|
