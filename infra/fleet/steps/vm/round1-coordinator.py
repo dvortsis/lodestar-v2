@@ -444,6 +444,7 @@ def measuring(day, host):
 GRAMMAR = re.compile(r"^(?:(?:ok|fail|skip) [a-z0-9_]{1,64}|count [a-z0-9_]{1,80} [0-9]{1,12})$")
 LEAK_FILES = ("leak-test.sh", "block-lib.sh", "compose.yaml")
 LEAK_TIMEOUT = 1500  # the step's own 900 s, and margin for a loaded host
+LEAK_CLEANUP_SECONDS = 120  # after TERM, the test's EXIT trap releases its rules and captures
 
 
 def run_leak_test(cfg, host, arm):
@@ -457,10 +458,17 @@ def run_leak_test(cfg, host, arm):
         for name in LEAK_FILES:
             shutil.copyfile(HERE / name, Path(work) / name)
         env = {"LODESTAR_ARM": a["suffix"][1:], "LODESTAR_UI_PORT": str(a["port"]), "LODESTAR_GLUETUN_RESTART": "no"}
-        rc, out = host.run(["bash", str(Path(work) / "leak-test.sh"), work, a["stack"]], env=env, timeout=LEAK_TIMEOUT)
+        # `timeout` sends TERM, so the test's own traps release its guards, its endpoint block and
+        # its captures before the folder goes (a kill from Python would skip them); Python's own
+        # limit is longer, for that cleanup (steps/remote.py runs steps the same way).
+        rc, out = host.run(["timeout", "-s", "TERM", str(LEAK_TIMEOUT), "bash", str(Path(work) / "leak-test.sh"),
+                            work, a["stack"]], env=env, timeout=LEAK_TIMEOUT + LEAK_CLEANUP_SECONDS)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    return [ln for ln in (out or "").splitlines() if GRAMMAR.fullmatch(ln)]
+    lines = [ln for ln in (out or "").splitlines() if GRAMMAR.fullmatch(ln)]
+    if rc is None or rc == 124:  # timed out: never a pass, whatever it printed before
+        lines += ["fail leak_test_timed_out", "fail leak_test"]
+    return lines
 
 
 def leak_lock(cfg):
@@ -492,7 +500,7 @@ def cmd_leak(cfg, day, host, args):
     finally:
         lock.close()
     text = "\n".join(lines_out) + "\n"
-    n = len(s["arms"][args.arm]["leak_tests"]) + 1
+    n = len(list(day.dir.glob(f"leak-{args.arm}-*.log"))) + 1  # every run numbered, `not_run` ones too
     log = day.dir / f"leak-{args.arm}-{args.phase}-{n}.log"
     log.write_text(text, encoding="utf-8")
     result = leak_verdict(text)
@@ -542,11 +550,12 @@ def cmd_up(cfg, day, host, args):
     for arm in day.arms():
         env = dict(stack_env(cfg, arm), **arm_switch_env(day.entry(arm)))
         rc, _ = host.run(compose(cfg, arm, "--profile", "block", "up", "-d", "lodestar"), env=env, timeout=300)
-        if rc != 0:  # no partial day: what started is stopped again
-            for other in up:
+        if rc != 0:  # no partial day: what started is stopped again, the failing arm too (its
+            # containers may be up although the command failed or timed out)
+            for other in up + [arm]:
                 rc2, _ = host.run(compose(cfg, other, "stop"), env=stack_env(cfg, other), timeout=300)
                 lines.append(f"{'ok' if rc2 == 0 else 'fail'} stack_stopped arm={other}")
-            raise Partial(lines, f"arm {arm}'s stack didn't start; the arms already up were stopped again")
+            raise Partial(lines, f"arm {arm}'s stack didn't start; every arm's stack, its own too, was stopped again")
         up.append(arm)
         lines.append(f"ok up arm={arm}")
     return lines

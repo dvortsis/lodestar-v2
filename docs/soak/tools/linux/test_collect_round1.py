@@ -275,6 +275,23 @@ class PlacementAndIdentityTests(Round1Base):
                 - collect.datetime.fromisoformat(final["time"].replace("Z", "+00:00"))).total_seconds()
         self.assertLessEqual(late, collect.BOUNDARY_SECONDS)
 
+    def test_a_slow_final_retry_is_stamped_when_it_began(self):
+        calls = []
+
+        def slow():
+            calls.append(1)
+            if len(calls) == 4:
+                raise OSError("echo service hiccup")
+            if len(calls) == 5:
+                self.clock.t += 45  # a read that takes 45 s
+            return EXIT_IP["B"]
+        self.round1_run(egress=slow)
+        final = [r for r in self.rows() if 2 in (r.get("boundary") or [])][0]
+        retry = final["egress_retries"][-1]
+        began = (collect.datetime.fromisoformat(retry["utc"].replace("Z", "+00:00"))
+                 - collect.datetime.fromisoformat(final["time"].replace("Z", "+00:00"))).total_seconds()
+        self.assertEqual((retry["read"], began), ("ok", collect.FINAL_EGRESS_GAP))
+
     def test_boundaries_carry_the_gauge_even_when_the_api_fails(self):
         api = FakeAPI()
         real = api.__call__

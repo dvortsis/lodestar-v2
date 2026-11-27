@@ -2464,14 +2464,16 @@ class Collector:
                       + ("; stop and investigate" if result["status"] == "trip" else ""))
 
     def final_egress_retries(self, boundary_elapsed, started):
-        """Up to FINAL_EGRESS_TRIES more egress reads, FINAL_EGRESS_GAP s apart, while still
-        within BOUNDARY_SECONDS of the final boundary; stops at the first that reads."""
+        """Up to FINAL_EGRESS_TRIES more egress reads, FINAL_EGRESS_GAP s apart, each starting
+        within BOUNDARY_SECONDS of the final boundary and stamped with its start (a read can
+        take a while; when it began is what the ± 90 s rule judges); stops at the first that reads."""
         out = []
         for _ in range(FINAL_EGRESS_TRIES):
             if self.clock() - started + FINAL_EGRESS_GAP > boundary_elapsed + BOUNDARY_SECONDS:
                 break
             self.sleep(FINAL_EGRESS_GAP)
-            reading = dict(self.egress.check(self.instance.process_id), utc=iso(self.now()))
+            stamp = iso(self.now())
+            reading = dict(self.egress.check(self.instance.process_id), utc=stamp)
             out.append(reading)
             if reading["read"] == "ok":
                 break

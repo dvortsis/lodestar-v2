@@ -271,8 +271,9 @@ def rehearsal_medians(rows):
 
 def hourly_coverage(rows, arms, start=None, end=None):
     """Per UTC hour from `start` to `end` (every hour, an empty one at 0): the slots expected
-    (360) and the share each series covers. A tunnel slot counts when its probe ran (answered
-    or lost); a disk slot when the device was read."""
+    and the share each series covers. A tunnel slot counts when its probe ran (answered or
+    lost); a disk slot when the device was read. The first and last hours are partial, so
+    their expected slots are those in the part covered, and only a real gap reads under 98 %."""
     hours = {}
     if start is not None and end is not None:
         t = start.replace(minute=0, second=0, microsecond=0)
@@ -289,9 +290,18 @@ def hourly_coverage(rows, arms, start=None, end=None):
         for arm in arms:
             t_ = (row.get("tunnels") or {}).get(arm)
             h["tunnel_" + arm] = h.get("tunnel_" + arm, 0) + (isinstance(t_, dict) and isinstance(t_.get("lost"), bool))
-    expected = 3600 // INTERVAL
-    return [{"hour_utc": k, "expected": expected,
-             "coverage": {s: round(v / expected, 4) for s, v in sorted(h.items())}} for k, h in sorted(hours.items())]
+    def expected(hour):
+        lo, hi = parse_utc(hour), parse_utc(hour) + timedelta(hours=1)
+        if start is not None:
+            lo = max(lo, start)
+        if end is not None:
+            hi = min(hi, end + timedelta(seconds=INTERVAL))  # the slot that starts at `end` counts
+        return max(1, math.ceil((hi - lo).total_seconds() / INTERVAL))
+    out = []
+    for k, h in sorted(hours.items()):
+        n = expected(k)
+        out.append({"hour_utc": k, "expected": n, "coverage": {s: round(min(v, n) / n, 4) for s, v in sorted(h.items())}})
+    return out
 
 
 def assemble(rows, device, headers, rehearsal_rows=None, end=None):
