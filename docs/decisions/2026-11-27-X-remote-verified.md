@@ -20,6 +20,7 @@ A torrent a remote worker brought in is indexed `verified:imported`, never `veri
 
 ## Wording (runner's grant)
 - **The Imported help text covers both kinds of row:** "Not checked against the torrent's hash: from another indexer or a remote worker." (zh: 未与种子的哈希核对：来自另一个索引器或工作节点。). The label stays "Imported", the `verified:imported` value's name.
+- **The glossary splits the two meanings (runner, option A):** a new `verified_imported` row covers the badge and the `verified:imported` value (imports and remote finds), and the `imported` row, the import term, is unchanged. Insights' imported counts and `flag:imported` stay keyed on `IMPORTED`, so a worker's find still counts as crawled there.
 - **It's no longer than #1139's text,** so the size limits #1139 set hold without a raise (Alert route 35.38 of 35.39 KB, Search results 44.07 of 44.09 KB, Search cards 8.16 of 8.17 KB). A longer first draft went over by 30–38 B.
 - **The API doc comments** on `imported`, `verified` and `AstVerified::Imported` say the same; `openapi.json` and `schema.d.ts` are regenerated.
 
