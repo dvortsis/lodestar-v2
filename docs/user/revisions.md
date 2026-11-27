@@ -2,6 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 3.6 | 2026-11-27T13:00:00Z | Section 8.6: when every routed source says a certificate isn't trusted, the log line to look for (newer than v0.5.1). |
 | 3.5 | 2026-11-27T12:00:00Z | Section 8.6: how Lodestar checks server certificates when a source's or companion's route isn't direct, and what to do when it reports a certificate it doesn't trust (newer than v0.5.1). |
 | 3.4 | 2026-11-22T13:00:00Z | Section 4.8: a variable set on the Lodestar service is lost on every install or update, including Install now. Use the setting in Settings → Updates instead, or set the variable again, with the steps and how to undo it. |
 | 3.3 | 2026-11-15T12:18:00Z | From a test run of the Docker install. Section 2.4: a callout to do section 3.3 first when you use a VPN. Section 2.5: v0.5.1 ends on **Setup complete**; the next release asks for the Legal Notice first and opens **Finish setting up** (planned). Section 3.3: a worked Docker Compose file for Lodestar behind gluetun, for v0.5.1, with the post-rules and a check; the companion templates are marked newer than v0.5.1. Section 3.7: backup and restore with Docker Compose and a named volume, the Unraid restore now uses `lodestar reindex`, and a new part on rebuilding the search index. Section 6.1: the image row also matches `failed to resolve reference … not found`, and the parent-folder row is gone. |

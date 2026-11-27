@@ -154,18 +154,119 @@ fn roots() -> &'static Roots {
     ROOTS.get_or_init(|| {
         // A loader that panics (the Windows one unwraps) leaves no roots:
         // routed clients then aren't built, so their routes stay down.
-        let native = std::panic::catch_unwind(os_roots).unwrap_or_default();
-        match std::panic::catch_unwind(os_disallowed) {
-            Ok(Some(disallowed)) => usable(without(native, &disallowed)),
-            // A distrust list that can't be read trusts nothing.
-            Ok(None) | Err(_) => usable(Vec::new()),
-        }
+        let native = std::panic::catch_unwind(os_roots).ok();
+        let disallowed = std::panic::catch_unwind(os_disallowed).ok().flatten();
+        let (roots, tally) = load(native, disallowed);
+        report(&tally);
+        roots
     })
 }
 
-/// The roots in the OS store: files on Linux, the ROOT store on Windows.
-fn os_roots() -> Vec<CertificateDer<'static>> {
-    rustls_native_certs::load_native_certs().certs
+/// What one read of the OS store found, for the load event
+/// (`integrations.tls_roots_loaded` or `integrations.tls_roots_degraded`):
+/// counts, and whether each list could be read. Never a certificate's
+/// subject, issuer or fingerprint, a path, or an error's text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Tally {
+    /// Certificates the store gave.
+    found: usize,
+    /// Errors `rustls-native-certs` reported (a file or entry it
+    /// couldn't read or parse).
+    load_errors: usize,
+    /// The store's loader panicked: nothing was read.
+    store_unreadable: bool,
+    /// The Disallowed list couldn't be read, so nothing was kept.
+    disallowed_unreadable: bool,
+    /// Dropped: listed in the Disallowed store (Windows).
+    disallowed: usize,
+    /// Dropped: the same certificate again.
+    duplicates: usize,
+    /// Dropped: webpki doesn't accept it as a trust anchor.
+    unusable: usize,
+    /// Trusted.
+    kept: usize,
+}
+
+impl Tally {
+    /// Roots were kept and nothing failed. Disallowed and duplicate
+    /// certificates are the store working as meant, not failures.
+    fn healthy(&self) -> bool {
+        self.kept > 0
+            && self.load_errors == 0
+            && self.unusable == 0
+            && !self.store_unreadable
+            && !self.disallowed_unreadable
+    }
+}
+
+/// The roots from what the store gave (`native`: its certificates and
+/// how many errors its loader reported; `None` when the loader panicked)
+/// and the Disallowed list (`None` when it couldn't be read, which trusts
+/// nothing), with what was found and dropped.
+fn load(
+    native: Option<(Vec<CertificateDer<'static>>, usize)>,
+    disallowed: Option<Vec<Vec<u8>>>,
+) -> (Roots, Tally) {
+    let mut tally = Tally {
+        store_unreadable: native.is_none(),
+        disallowed_unreadable: disallowed.is_none(),
+        ..Tally::default()
+    };
+    let (certs, errors) = native.unwrap_or_default();
+    tally.found = certs.len();
+    tally.load_errors = errors;
+    let Some(disallowed) = disallowed else {
+        // A distrust list that can't be read trusts nothing.
+        return (usable(Vec::new(), &mut tally), tally);
+    };
+    let allowed = without(certs, &disallowed);
+    tally.disallowed = tally.found - allowed.len();
+    (usable(allowed, &mut tally), tally)
+}
+
+/// Logs one read of the OS store: info when it's [`Tally::healthy`],
+/// warn otherwise. Counts and fixed words only.
+fn report(t: &Tally) {
+    use crate::log_events::{TLS_ROOTS_DEGRADED, TLS_ROOTS_LOADED};
+    let store = if t.store_unreadable {
+        "unreadable"
+    } else {
+        "read"
+    };
+    let disallowed_list = match (cfg!(windows), t.disallowed_unreadable) {
+        (_, true) => "unreadable",
+        (true, false) => "read",
+        // Only Windows has a Disallowed store.
+        (false, false) => "none",
+    };
+    macro_rules! emit {
+        ($event:ident) => {
+            lodestar_log::log_event!(
+                $event,
+                found = t.found,
+                load_errors = t.load_errors,
+                unusable = t.unusable,
+                duplicates = t.duplicates,
+                disallowed = t.disallowed,
+                kept = t.kept,
+                store = store,
+                disallowed_list = disallowed_list,
+            )
+        };
+    }
+    if t.healthy() {
+        emit!(TLS_ROOTS_LOADED);
+    } else {
+        emit!(TLS_ROOTS_DEGRADED);
+    }
+}
+
+/// The roots in the OS store (files on Linux, the ROOT store on
+/// Windows), and how many errors the loader reported. Only the count
+/// leaves here: an error's text can name a path or a certificate.
+fn os_roots() -> (Vec<CertificateDer<'static>>, usize) {
+    let r = rustls_native_certs::load_native_certs();
+    (r.certs, r.errors.len())
 }
 
 /// The certificates the OS store marks as distrusted, which no root may
@@ -193,18 +294,23 @@ fn without(
         .collect()
 }
 
-/// The certificates webpki accepts as trust anchors, each once.
-fn usable(certs: impl IntoIterator<Item = CertificateDer<'static>>) -> Roots {
+/// The certificates webpki accepts as trust anchors, each once, counting
+/// the duplicates and unusable ones dropped into `tally`.
+fn usable(certs: impl IntoIterator<Item = CertificateDer<'static>>, tally: &mut Tally) -> Roots {
     let mut kept: Vec<CertificateDer<'static>> = Vec::new();
     let mut store = RootCertStore::empty();
     for c in certs {
         if kept.iter().any(|k| k.as_ref() == c.as_ref()) {
+            tally.duplicates += 1;
             continue;
         }
         if store.add(c.clone()).is_ok() {
             kept.push(c);
+        } else {
+            tally.unusable += 1;
         }
     }
+    tally.kept = kept.len();
     (kept, Arc::new(store))
 }
 
@@ -397,7 +503,7 @@ mod tests {
         };
         // Given the test CA as its roots, the routed client connects: the
         // OS verifier wouldn't trust that CA.
-        let (_, ours) = usable([fixture("ca.der")]);
+        let (_, ours) = usable([fixture("ca.der")], &mut Tally::default());
         assert_eq!(get(&client(Some(ours)), port).await, Ok(200));
         // With the OS-store roots it refuses the certificate, and
         // says so.
@@ -433,12 +539,178 @@ mod tests {
     #[test]
     fn unusable_and_duplicate_roots_are_dropped() {
         let ca = fixture("ca.der");
-        let (kept, store) = usable([ca.clone(), CertificateDer::from(vec![1, 2, 3]), ca]);
+        let mut tally = Tally::default();
+        let (kept, store) = usable(
+            [ca.clone(), CertificateDer::from(vec![1, 2, 3]), ca],
+            &mut tally,
+        );
         assert_eq!(kept.len(), 1);
         assert_eq!(store.len(), 1);
+        assert_eq!((tally.duplicates, tally.unusable, tally.kept), (1, 1, 1));
         assert!(
             self_contained_verifier(Arc::new(RootCertStore::empty()), provider()).is_err(),
             "no roots, no verifier"
+        );
+    }
+
+    fn garbage() -> CertificateDer<'static> {
+        CertificateDer::from(vec![1, 2, 3])
+    }
+
+    #[test]
+    fn a_load_counts_what_it_found_and_dropped() {
+        let (ca, server) = (fixture("ca.der"), fixture("server.der"));
+        let store = vec![ca.clone(), garbage(), ca.clone(), server.clone()];
+        let ((kept, roots), t) = load(Some((store, 2)), Some(vec![server.to_vec()]));
+        assert_eq!(kept, vec![ca]);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(
+            t,
+            Tally {
+                found: 4,
+                load_errors: 2,
+                disallowed: 1,
+                duplicates: 1,
+                unusable: 1,
+                kept: 1,
+                ..Tally::default()
+            }
+        );
+        assert_eq!(t.found, t.disallowed + t.duplicates + t.unusable + t.kept);
+        assert!(!t.healthy(), "load errors and an unusable root warn");
+        // Only good and duplicate certificates: nothing failed.
+        let (_, t) = load(Some((vec![fixture("ca.der"); 2], 0)), Some(Vec::new()));
+        assert_eq!((t.found, t.duplicates, t.kept), (2, 1, 1));
+        assert!(t.healthy());
+    }
+
+    #[test]
+    fn a_fail_closed_load_keeps_nothing() {
+        // The Disallowed list can't be read: nothing is trusted.
+        let ((kept, roots), t) = load(Some((vec![fixture("ca.der")], 0)), None);
+        assert!(kept.is_empty() && roots.is_empty());
+        assert!(t.disallowed_unreadable && !t.store_unreadable);
+        assert_eq!((t.found, t.kept), (1, 0));
+        assert!(!t.healthy());
+        // The store's loader panicked.
+        let ((kept, _), t) = load(None, Some(Vec::new()));
+        assert!(kept.is_empty());
+        assert!(t.store_unreadable && !t.disallowed_unreadable);
+        assert_eq!((t.found, t.kept), (0, 0));
+        assert!(!t.healthy());
+    }
+
+    #[test]
+    fn a_store_with_nothing_usable_keeps_nothing() {
+        let ((kept, roots), t) = load(Some((vec![garbage(), garbage()], 0)), Some(Vec::new()));
+        assert!(kept.is_empty() && roots.is_empty());
+        // Duplicates are counted among kept roots only, so an unusable
+        // certificate counts as unusable each time.
+        assert_eq!((t.found, t.duplicates, t.unusable, t.kept), (2, 0, 2, 0));
+        assert!(!t.healthy());
+        let (_, t) = load(Some((Vec::new(), 0)), Some(Vec::new()));
+        assert_eq!(t, Tally::default());
+        assert!(!t.healthy(), "an empty store warns");
+    }
+
+    /// Each record of the two load events, as its event id and its
+    /// fields' names and values.
+    mod capture {
+        use std::sync::{Mutex, Once};
+
+        use lodestar_log::{Record, Sink, Value};
+
+        pub(super) type Line = (&'static str, Vec<(&'static str, String)>);
+
+        static LINES: Mutex<Vec<Line>> = Mutex::new(Vec::new());
+
+        struct Capture;
+
+        impl Sink for Capture {
+            fn record(&self, r: &Record<'_>) {
+                if !r.event.id.starts_with("integrations.tls_roots_") {
+                    return;
+                }
+                let fields = r
+                    .fields
+                    .iter()
+                    .map(|(n, v)| {
+                        let v = match v {
+                            Value::Size(n) => n.to_string(),
+                            Value::Label(l) => (*l).to_owned(),
+                            other => panic!("{n}: not a count or a fixed word: {other:?}"),
+                        };
+                        (*n, v)
+                    })
+                    .collect();
+                LINES
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((r.event.id, fields));
+            }
+        }
+
+        static CAPTURE: Capture = Capture;
+
+        pub(super) fn install() {
+            static ONCE: Once = Once::new();
+            ONCE.call_once(|| {
+                lodestar_log::set_sink(&CAPTURE).expect("the only sink in this test binary");
+            });
+        }
+
+        pub(super) fn take() -> Vec<Line> {
+            std::mem::take(&mut *LINES.lock().unwrap_or_else(|e| e.into_inner()))
+        }
+    }
+
+    #[test]
+    fn the_load_event_carries_exactly_its_catalogued_fields() {
+        use crate::log_events::{TLS_ROOTS_DEGRADED, TLS_ROOTS_LOADED};
+        capture::install();
+        let healthy = load(Some((vec![fixture("ca.der")], 0)), Some(Vec::new())).1;
+        let degraded = load(Some((vec![fixture("ca.der"), garbage()], 1)), None).1;
+        report(&healthy);
+        report(&degraded);
+        let lines = capture::take();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(
+            TLS_ROOTS_LOADED::EVENT.fields,
+            TLS_ROOTS_DEGRADED::EVENT.fields
+        );
+        assert_eq!(TLS_ROOTS_LOADED::EVENT.level, lodestar_log::Level::Info);
+        assert_eq!(TLS_ROOTS_DEGRADED::EVENT.level, lodestar_log::Level::Warn);
+        for ((id, fields), event) in lines
+            .iter()
+            .zip([&TLS_ROOTS_LOADED::EVENT, &TLS_ROOTS_DEGRADED::EVENT])
+        {
+            assert_eq!(*id, event.id);
+            let names: Vec<&str> = fields.iter().map(|(n, _)| *n).collect();
+            let declared: Vec<&str> = event.fields.iter().map(|(n, _)| *n).collect();
+            assert_eq!(names, declared, "{id}");
+        }
+        let value = |i: usize, name: &str| {
+            lines[i]
+                .1
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.as_str())
+                .unwrap()
+        };
+        assert_eq!(
+            [value(0, "found"), value(0, "kept"), value(0, "store")],
+            ["1", "1", "read"]
+        );
+        let list = if cfg!(windows) { "read" } else { "none" };
+        assert_eq!(value(0, "disallowed_list"), list);
+        assert_eq!(
+            [
+                value(1, "found"),
+                value(1, "load_errors"),
+                value(1, "kept"),
+                value(1, "disallowed_list")
+            ],
+            ["2", "1", "0", "unreadable"]
         );
     }
 
@@ -456,7 +728,7 @@ mod tests {
 
     #[test]
     fn the_verifier_checks_chain_and_name() {
-        let (_, ours) = usable([fixture("ca.der")]);
+        let (_, ours) = usable([fixture("ca.der")], &mut Tally::default());
         assert!(verify(Arc::clone(&ours), "mail.test").is_ok());
         assert!(matches!(
             verify(ours, "other.test"),

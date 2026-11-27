@@ -290,6 +290,8 @@ The screen says the same under **If this companion's route uses a SOCKS5 proxy**
 
 On Windows, a source on such a route can fail to verify a site whose root certificate isn't in Windows' store yet. It then reports **the server's certificate isn't trusted**.
 
+If every source on such a route reports it, search Lodestar's log for `integrations.tls_roots_degraded`. That line counts the root certificates Lodestar found and kept, and says whether Windows' store couldn't be read (newer than v0.5.1).
+
 > [!WARNING]
 > Don't open the site in a browser on this computer outside the VPN to fix it. That visit leaves your normal network, which is what the route is there to prevent. Add the root certificate with the steps below instead.
 
