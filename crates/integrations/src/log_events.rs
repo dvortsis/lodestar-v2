@@ -61,14 +61,14 @@ lodestar_log::catalogue! {
         fields: { found: Size, load_errors: Size, unusable: Size, duplicates: Size, disallowed: Size, kept: Size, store: Label, disallowed_list: Label },
     }
     /// The same read, when a certificate or list couldn't be read or
-    /// used, or no root was kept (routed connections then stay down, or
+    /// used, or no usable root was kept (an empty store included) (routed connections then stay down, or
     /// fail with "the server's certificate isn't trusted"). The same
     /// fields as `integrations.tls_roots_loaded`.
     TLS_ROOTS_DEGRADED {
         id: "integrations.tls_roots_degraded",
         component: Integrations,
         level: Warn,
-        message: "Some certificate roots for routed connections couldn't be read or used",
+        message: "Some certificate roots for routed connections couldn't be read or used, or none is usable",
         fields: { found: Size, load_errors: Size, unusable: Size, duplicates: Size, disallowed: Size, kept: Size, store: Label, disallowed_list: Label },
     }
     /// One delivery attempt of a notification.

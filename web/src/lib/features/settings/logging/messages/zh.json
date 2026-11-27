@@ -518,7 +518,7 @@
 	"settings_logging_ev_integrations_tls_roots_loaded_n": "证书根已加载",
 	"settings_logging_ev_integrations_tls_roots_loaded_h": "Lodestar 为 VPN 或代理路由找到并保留的根证书数量。",
 	"settings_logging_ev_integrations_tls_roots_degraded_n": "证书根不完整",
-	"settings_logging_ev_integrations_tls_roots_degraded_h": "部分用于 VPN 或代理路由的根证书无法读取或使用。",
+	"settings_logging_ev_integrations_tls_roots_degraded_h": "部分用于 VPN 或代理路由的根证书无法读取或使用，或没有可用的根证书。",
 	"settings_logging_ev_integrations_notify_attempt_n": "通知发送尝试",
 	"settings_logging_ev_integrations_notify_attempt_h": "一次通知投递尝试。",
 	"settings_logging_ev_integrations_notify_retry_n": "通知重试",

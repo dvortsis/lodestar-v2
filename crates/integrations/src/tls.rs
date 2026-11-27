@@ -270,7 +270,7 @@ fn os_roots() -> (Vec<CertificateDer<'static>>, usize) {
 }
 
 /// The certificates the OS store marks as distrusted, which no root may
-/// be: Windows' Disallowed store (current user and machine). `None`
+/// be: the current user's Disallowed store on Windows. `None`
 /// when it can't be read. Elsewhere there is no such store.
 #[cfg(windows)]
 fn os_disallowed() -> Option<Vec<Vec<u8>>> {
@@ -613,110 +613,82 @@ mod tests {
         assert!(!t.healthy(), "an empty store warns");
     }
 
-    /// Each record of the two load events, as its event id and its
-    /// fields' names and values.
-    mod capture {
-        use std::sync::{Mutex, Once};
-
-        use lodestar_log::{Record, Sink, Value};
-
-        pub(super) type Line = (&'static str, Vec<(&'static str, String)>);
-
-        static LINES: Mutex<Vec<Line>> = Mutex::new(Vec::new());
-
-        struct Capture;
-
-        impl Sink for Capture {
-            fn record(&self, r: &Record<'_>) {
-                if !r.event.id.starts_with("integrations.tls_roots_") {
-                    return;
-                }
-                let fields = r
-                    .fields
-                    .iter()
-                    .map(|(n, v)| {
-                        let v = match v {
-                            Value::Size(n) => n.to_string(),
-                            Value::Label(l) => (*l).to_owned(),
-                            other => panic!("{n}: not a count or a fixed word: {other:?}"),
-                        };
-                        (*n, v)
-                    })
-                    .collect();
-                LINES
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push((r.event.id, fields));
-            }
-        }
-
-        static CAPTURE: Capture = Capture;
-
-        pub(super) fn install() {
-            static ONCE: Once = Once::new();
-            ONCE.call_once(|| {
-                lodestar_log::set_sink(&CAPTURE).expect("the only sink in this test binary");
-            });
-        }
-
-        pub(super) fn take() -> Vec<Line> {
-            std::mem::take(&mut *LINES.lock().unwrap_or_else(|e| e.into_inner()))
-        }
-    }
-
+    /// The load event, as written through the `tracing` fallback that
+    /// `test_support::capture_logs` reads (no sink is installed here, so
+    /// other tests' captures keep working): exactly one line per load, at
+    /// the catalogued level, with exactly the catalogued fields, each a
+    /// count or a fixed word.
     #[test]
     fn the_load_event_carries_exactly_its_catalogued_fields() {
         use crate::log_events::{TLS_ROOTS_DEGRADED, TLS_ROOTS_LOADED};
-        // The process's own load first, so its record (which other tests
-        // here may trigger at any time) never lands in the capture.
-        let _ = self_contained_roots();
-        capture::install();
-        let healthy = load(Some((vec![fixture("ca.der")], 0)), Some(Vec::new())).1;
-        let degraded = load(Some((vec![fixture("ca.der"), garbage()], 1)), None).1;
-        // Exactly one event per load.
+        let logs = crate::test_support::capture_logs();
+        // Counts no other test uses, so this test finds its own lines.
+        let healthy = Tally {
+            found: 7341,
+            kept: 7341,
+            ..Tally::default()
+        };
+        let degraded = Tally {
+            found: 7342,
+            load_errors: 3,
+            disallowed_unreadable: true,
+            ..Tally::default()
+        };
+        assert!(healthy.healthy() && !degraded.healthy());
         report(&healthy);
-        let mut lines = capture::take();
-        assert_eq!(lines.len(), 1, "{lines:?}");
         report(&degraded);
-        lines.extend(capture::take());
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        let contents = logs.contents();
         assert_eq!(
             TLS_ROOTS_LOADED::EVENT.fields,
             TLS_ROOTS_DEGRADED::EVENT.fields
         );
-        assert_eq!(TLS_ROOTS_LOADED::EVENT.level, lodestar_log::Level::Info);
-        assert_eq!(TLS_ROOTS_DEGRADED::EVENT.level, lodestar_log::Level::Warn);
-        for ((id, fields), event) in lines
-            .iter()
-            .zip([&TLS_ROOTS_LOADED::EVENT, &TLS_ROOTS_DEGRADED::EVENT])
-        {
-            assert_eq!(*id, event.id);
+        for (found, event, level) in [
+            ("7341", &TLS_ROOTS_LOADED::EVENT, "INFO"),
+            ("7342", &TLS_ROOTS_DEGRADED::EVENT, "WARN"),
+        ] {
+            let lines: Vec<&str> = contents
+                .lines()
+                .filter(|l| l.contains(&format!(" found={found} ")))
+                .collect();
+            assert_eq!(lines.len(), 1, "one event per load: {lines:?}");
+            let line = lines[0];
+            assert!(line.contains(level), "{line}");
+            assert!(line.contains(event.id), "{line}");
+            let (_, rest) = line.split_once(event.message).expect(line);
+            let fields: Vec<(&str, &str)> = rest
+                .split_whitespace()
+                .filter_map(|t| t.split_once('='))
+                .filter(|(n, _)| *n != "event")
+                .collect();
             let names: Vec<&str> = fields.iter().map(|(n, _)| *n).collect();
             let declared: Vec<&str> = event.fields.iter().map(|(n, _)| *n).collect();
-            assert_eq!(names, declared, "{id}");
+            assert_eq!(names, declared, "{line}");
+            for (n, v) in &fields {
+                assert!(
+                    v.parse::<u64>().is_ok() || ["read", "unreadable", "none"].contains(v),
+                    "{n}={v}: not a count or a fixed word"
+                );
+            }
         }
-        let value = |i: usize, name: &str| {
-            lines[i]
-                .1
-                .iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, v)| v.as_str())
+        let line = |found: &str| {
+            contents
+                .lines()
+                .find(|l| l.contains(&format!(" found={found} ")))
                 .unwrap()
+                .to_owned()
         };
-        assert_eq!(
-            [value(0, "found"), value(0, "kept"), value(0, "store")],
-            ["1", "1", "read"]
-        );
         let list = if cfg!(windows) { "read" } else { "none" };
-        assert_eq!(value(0, "disallowed_list"), list);
-        assert_eq!(
-            [
-                value(1, "found"),
-                value(1, "load_errors"),
-                value(1, "kept"),
-                value(1, "disallowed_list")
-            ],
-            ["2", "1", "0", "unreadable"]
+        let ok = line("7341");
+        assert!(
+            ok.contains(" kept=7341 store=read disallowed_list="),
+            "{ok}"
+        );
+        assert!(ok.contains(&format!("disallowed_list={list}")), "{ok}");
+        let bad = line("7342");
+        assert!(bad.contains(" load_errors=3 "), "{bad}");
+        assert!(
+            bad.contains(" kept=0 store=read disallowed_list=unreadable"),
+            "{bad}"
         );
     }
 
