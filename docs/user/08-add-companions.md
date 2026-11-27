@@ -288,13 +288,28 @@ The screen says the same under **If this companion's route uses a SOCKS5 proxy**
 - It doesn't check whether a certificate was revoked (cancelled early by its issuer). A direct route uses your operating system's own check, which can.
 - There is nothing to set.
 
-On Windows, a source on such a route can fail to verify a site whose root certificate isn't on the computer yet. It then reports **the server's certificate isn't trusted**, even though the site opens normally in your browser. To fix it:
+On Windows, a source on such a route can fail to verify a site whose root certificate isn't in Windows' store yet. It then reports **the server's certificate isn't trusted**.
 
-1. Open the site once in Microsoft Edge on the computer that runs Lodestar. Windows adds the root certificate it needs.
-2. If that doesn't help, run Windows Update.
-3. Try the source again.
+> [!WARNING]
+> Don't open the site in a browser on this computer outside the VPN to fix it. That visit leaves your normal network, which is what the route is there to prevent. Add the root certificate with the steps below instead.
 
-Result: the source connects. On Docker, update the Lodestar image instead.
+To add the root certificate without contacting the site:
+
+1. Select **Start**, type `cmd`, right-click **Command Prompt** and select **Run as administrator**. Windows asks whether to let it make changes to your device: select **Yes**.
+2. Download Microsoft's list of root certificates. This contacts Windows Update, not the site. In that Command Prompt, paste:
+
+   ```bat
+   certutil -generateSSTFromWU roots.sst
+   ```
+3. Double-click `roots.sst`. Find the root certificate the site's operator names, right-click it, select **All Tasks** > **Export**, and save it as `root.cer`.
+4. Add only that certificate to **Trusted Root Certification Authorities**. In the same Command Prompt, paste:
+
+   ```bat
+   certutil -addstore Root root.cer
+   ```
+5. Restart Lodestar. It reads the root certificates once, when it starts.
+
+   **Result:** `certutil` reports that the certificate was added. Then try the source again. To undo step 4, run `certutil -delstore Root "<name>"` with the certificate's name. On Docker, update the Lodestar image instead.
 
 **Passwords and keys.** A companion Lodestar installed has a generated password or key. To see it, select **Passwords and keys** on the row, then **Show**, enter **Your Lodestar password** and select **Show it**. Lodestar asks every time and never remembers it. The value stays until you select **Hide**.
 

@@ -152,11 +152,45 @@ static ROOTS: OnceLock<Roots> = OnceLock::new();
 
 fn roots() -> &'static Roots {
     ROOTS.get_or_init(|| {
-        // Files on Linux, the system keychains on macOS, the ROOT store on
-        // Windows.
-        let native = rustls_native_certs::load_native_certs().certs;
-        usable(native)
+        // A loader that panics (the Windows one unwraps) leaves no roots:
+        // routed clients then aren't built, so their routes stay down.
+        let native = std::panic::catch_unwind(os_roots).unwrap_or_default();
+        match std::panic::catch_unwind(os_disallowed) {
+            Ok(Some(disallowed)) => usable(without(native, &disallowed)),
+            // A distrust list that can't be read trusts nothing.
+            Ok(None) | Err(_) => usable(Vec::new()),
+        }
     })
+}
+
+/// The roots in the OS store: files on Linux, the ROOT store on Windows.
+fn os_roots() -> Vec<CertificateDer<'static>> {
+    rustls_native_certs::load_native_certs().certs
+}
+
+/// The certificates the OS store marks as distrusted, which no root may
+/// be: Windows' Disallowed store (current user and machine). `None`
+/// when it can't be read. Elsewhere there is no such store.
+#[cfg(windows)]
+fn os_disallowed() -> Option<Vec<Vec<u8>>> {
+    let store = schannel::cert_store::CertStore::open_current_user("Disallowed").ok()?;
+    Some(store.certs().map(|c| c.to_der().to_vec()).collect())
+}
+
+#[cfg(not(windows))]
+fn os_disallowed() -> Option<Vec<Vec<u8>>> {
+    Some(Vec::new())
+}
+
+/// `certs` without any that `disallowed` lists.
+fn without(
+    certs: Vec<CertificateDer<'static>>,
+    disallowed: &[Vec<u8>],
+) -> Vec<CertificateDer<'static>> {
+    certs
+        .into_iter()
+        .filter(|c| !disallowed.iter().any(|d| d.as_slice() == c.as_ref()))
+        .collect()
 }
 
 /// The certificates webpki accepts as trust anchors, each once.
@@ -385,6 +419,15 @@ mod tests {
             assert!(!roots[..i].iter().any(|k| k.as_ref() == r.as_ref()));
         }
         assert_eq!(self_contained_store().len(), roots.len());
+    }
+
+    #[test]
+    fn a_distrusted_root_is_dropped() {
+        let ca = fixture("ca.der");
+        let other = fixture("server.der");
+        let kept = without(vec![ca.clone(), other.clone()], &[ca.as_ref().to_vec()]);
+        assert_eq!(kept, vec![other.clone()]);
+        assert_eq!(without(vec![ca.clone()], &[]), vec![ca]);
     }
 
     #[test]

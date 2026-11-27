@@ -34,6 +34,11 @@ tokio = { version = "1.54.1", features = ["rt", "net", "sync", "time"] }
 tracing = "0.1.44"
 zeroize = "1.9.1"
 
+# The Disallowed store, read with the ROOT store (`tls`); already in the
+# lock file through rustls-native-certs, at this version.
+[target.'cfg(windows)'.dependencies]
+schannel = "=0.1.30"
+
 [lints]
 workspace = true
 

@@ -1914,6 +1914,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-platform-verifier",
+ "schannel",
  "serde",
  "serde_json",
  "tempfile",
@@ -2143,6 +2144,7 @@ dependencies = [
  "reqwest",
  "rustls",
  "tokio",
+ "tokio-rustls",
  "url",
 ]
 

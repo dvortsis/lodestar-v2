@@ -1069,8 +1069,10 @@ impl PluginEgress {
                 HttpError::NotReady(lodestar_integrations::net::NOT_READY.into())
             }
             e => {
-                if matches!(e, NetError::Connect | NetError::Timeout)
-                    && self.probe.ttl().is_some()
+                if matches!(
+                    e,
+                    NetError::Connect | NetError::Certificate | NetError::Timeout
+                ) && self.probe.ttl().is_some()
                     && let RouteState::Down(reason) = self.check_now().await
                 {
                     Counters::bump(&self.counters.kill_switch_aborts);
@@ -1257,8 +1259,10 @@ impl EgressBody {
         match read {
             Ok(chunk) => Ok(chunk),
             Err(e) => {
-                if matches!(e, NetError::Connect | NetError::Timeout | NetError::Http)
-                    && checked
+                if matches!(
+                    e,
+                    NetError::Connect | NetError::Certificate | NetError::Timeout | NetError::Http
+                ) && checked
                     && let Err(reason) = probe.probe().await
                 {
                     Counters::bump(&counters.kill_switch_aborts);
