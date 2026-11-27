@@ -208,6 +208,25 @@ struct Recorder {
     /// Sends each query as a request (one host: the limiter paces it).
     send: bool,
     live: Arc<AtomicUsize>,
+    /// Waits here before each request, as a request waits in its client
+    /// for the host's pacing, until the test lets it go.
+    hold: Option<Arc<Hold>>,
+}
+
+/// Where a lookup waits before its request: `waiting` counts lookups that
+/// reached it, and each permit added lets one go on.
+struct Hold {
+    waiting: AtomicUsize,
+    go: tokio::sync::Semaphore,
+}
+
+impl Default for Hold {
+    fn default() -> Hold {
+        Hold {
+            waiting: AtomicUsize::new(0),
+            go: tokio::sync::Semaphore::new(0),
+        }
+    }
 }
 
 impl Recorder {
@@ -219,6 +238,7 @@ impl Recorder {
             hang: false,
             send: false,
             live: Arc::default(),
+            hold: None,
         })
     }
 
@@ -258,6 +278,10 @@ impl AdultEnricher for Recorder {
             self.live.fetch_add(1, Ordering::SeqCst);
             let _live = Live(self.live.clone());
             self.queries.lock().unwrap().push(query.clone());
+            if let Some(hold) = &self.hold {
+                hold.waiting.fetch_add(1, Ordering::SeqCst);
+                hold.go.acquire().await.unwrap().forget();
+            }
             if self.send {
                 let q = query.text().join(" ");
                 let url = format!(
@@ -2110,4 +2134,131 @@ fn consent_withdrawn_between_the_check_and_the_write_stores_nothing() {
     assert!(s.torrent_claims(id).unwrap().is_empty());
     assert_eq!(stats.refused.load(Ordering::Relaxed), 1);
     assert!(s.source_secret_names(MANIFEST.id).unwrap().is_empty());
+}
+
+/// What can change while a lookup waits to send.
+#[derive(Debug, Clone, Copy)]
+enum Change {
+    Nothing,
+    ShowAdultOff,
+    KillSwitch,
+    SourceOff,
+    ConsentWithdrawn,
+    Rule(Action),
+    HashHeld,
+    MarkedNotAdult,
+}
+
+/// The gate is asked again when each request goes, not only when the
+/// lookup starts: whatever changes between the two
+/// (any plugin-wide condition, a rule, a hold, a correction), its request
+/// isn't sent, and the answer is neither emitted nor cached. With nothing
+/// changed, the one request goes.
+/// The wire is the runtime's own client: a plugin handed that client
+/// rather than the checked one would send in every case.
+#[tokio::test]
+async fn the_gate_is_asked_again_when_the_request_goes() {
+    let changes = [
+        Change::Nothing,
+        Change::ShowAdultOff,
+        Change::KillSwitch,
+        Change::SourceOff,
+        Change::ConsentWithdrawn,
+        Change::Rule(Action::Hide),
+        Change::Rule(Action::Drop),
+        Change::Rule(Action::Quarantine),
+        Change::HashHeld,
+        Change::MarkedNotAdult,
+    ];
+    for change in changes {
+        let (mut s, dht, enr) = store();
+        let name = "Garden Scene Quarx";
+        let (id, key) = put(&mut s, name, dht, 0, true);
+        let hold = Arc::new(Hold::default());
+        let plugin = Arc::new(Recorder {
+            send: true,
+            hold: Some(hold.clone()),
+            ..Arc::into_inner(Recorder::new(Some(section(Some(Kind2::Scene), "Garden")))).unwrap()
+        });
+        let store = Arc::new(Mutex::new(s));
+        let filter = stand_in();
+        let flags = on();
+        let state = Arc::new(MemoryState::new());
+        let mut r = run_with_state(
+            plugin,
+            store.clone(),
+            filter.clone(),
+            AdultSources::default(),
+            flags.clone(),
+            enr,
+            interest_only(),
+            state.clone(),
+        );
+        assert!(r.interest.opened(id));
+        until("the lookup to wait", || {
+            hold.waiting.load(Ordering::SeqCst) == 1
+        })
+        .await;
+        {
+            let mut s = store.lock().unwrap();
+            match change {
+                Change::Nothing => {}
+                Change::ShowAdultOff => flags.show_adult.store(false, Ordering::SeqCst),
+                Change::KillSwitch => flags.tripped.store(true, Ordering::SeqCst),
+                Change::SourceOff => s.set_source_state(enr, SourceState::Disabled).unwrap(),
+                Change::ConsentWithdrawn => {
+                    s.update_source_secrets(enr, &[], &["api_key"], None)
+                        .unwrap();
+                }
+                Change::Rule(a) => rule(&filter, "quarx", a),
+                Change::HashHeld => {
+                    s.connection()
+                        .execute(
+                            "INSERT INTO quarantine (hash, rule, sealed, at, expires_at) \
+                             VALUES (?1, 'CS-2a', NULL, 0, 9)",
+                            [&key.0[..]],
+                        )
+                        .unwrap();
+                }
+                Change::MarkedNotAdult => {
+                    s.set_correction(
+                        id,
+                        ClassCorrection {
+                            adult: Some(false),
+                            not_junk: false,
+                        },
+                    )
+                    .unwrap();
+                    let e = enrich_with_rule(name, &[], Some(false));
+                    s.set_enrichments(&[(id, e)]).unwrap();
+                }
+            }
+        }
+        hold.go.add_permits(1);
+        until("the lookup to finish", || {
+            r.stats.done.load(Ordering::SeqCst) >= 1
+        })
+        .await;
+        let sent = r.wire.0.lock().unwrap().len();
+        let withheld = r.stats.withheld.load(Ordering::SeqCst);
+        let emitted = r.found.try_recv();
+        let _ = r.stop.send(true);
+        let _ = r.task.await;
+        if matches!(change, Change::Nothing) {
+            assert_eq!((sent, withheld), (1, 0), "{change:?}");
+            assert!(emitted.is_ok(), "{change:?}: the match is emitted");
+            let bucket = format!("enr1/cache/{:03}", id.rem_euclid(adult_enrich::BUCKETS));
+            assert!(
+                state.get(&bucket).await.unwrap().is_some(),
+                "the hit is cached"
+            );
+        } else {
+            assert_eq!((sent, withheld), (0, 1), "{change:?}");
+            assert!(emitted.is_err(), "{change:?}: nothing is emitted");
+            assert_eq!(r.stats.matched.load(Ordering::SeqCst), 0, "{change:?}");
+            // Nor cached: tried again once the change is undone.
+            let bucket = format!("enr1/cache/{:03}", id.rem_euclid(adult_enrich::BUCKETS));
+            assert_eq!(state.get(&bucket).await.unwrap(), None, "{change:?}");
+        }
+    }
 }

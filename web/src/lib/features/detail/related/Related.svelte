@@ -15,7 +15,7 @@
 	import { TYPE_LABELS } from '$lib/util/content-labels';
 	import { compareHref, torrentHref } from '$lib/features/compare/href';
 	import type { SearchHit, TorrentDetail } from '../cache';
-	import { getContext, tick } from 'svelte';
+	import { getContext, onMount, tick } from 'svelte';
 	import { loadSiblings, type Loaded } from '../siblings';
 	import {
 		COMPARE_MAX,
@@ -46,6 +46,23 @@
 	let heading = $state<HTMLElement>();
 	// One request with Parsed (siblings.ts); a Retry asks again.
 	$effect(() => loadSiblings(detail.hash, (s) => (loaded = s), attempt > 0));
+	// Show all asked for this section: take focus once, unless the user has moved on.
+	onMount(() => {
+		const host = heading?.closest<HTMLElement>('.ls-detail-host');
+		if (host?.dataset.ask !== detail.hash) return;
+		delete host.dataset.ask;
+		const at = document.activeElement;
+		if (!at || at === document.body || at === host.querySelector('h2[tabindex]'))
+			heading?.focus({ preventScroll: true });
+	});
+	// A withheld answer removes the section: focus it holds goes to the drawer's title, not <body>.
+	$effect.pre(() => {
+		if (loaded.status === 'withheld' && heading && document.activeElement === heading)
+			heading
+				.closest('[data-testid="drawer"]')
+				?.querySelector<HTMLElement>('h2[tabindex]')
+				?.focus();
+	});
 	// Retry replaces the failed block (and its button) with the loading one: keep focus in the section.
 	async function retry() {
 		attempt++;

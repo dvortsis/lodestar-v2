@@ -21,6 +21,12 @@ const totalOf = (r: ListRow | undefined) =>
 const group = (hits: SearchHit[], truncated = false) => ({
 	other_versions: { hits, reason: null, status: 'available', truncated }
 });
+/** Answers every siblings request about the hash asked for, as the API does. */
+const echo = (g: ReturnType<typeof group>, once = false) => {
+	const impl = async (_p: string, o: { path: { hash: string } }) => ({ ...g, hash: o.path.hash });
+	if (once) get.mockImplementationOnce(impl);
+	else get.mockImplementation(impl);
+};
 const kinds = (rows: ReturnType<ReturnType<typeof createExpand>['rows']>) =>
 	rows.map((r) => (isGroupRow(r) ? `${r.row}:${hitOf(r).id}` : `hit:${r.id}`));
 const key = (k: string, mods: Partial<KeyboardEventInit> = {}) =>
@@ -49,7 +55,10 @@ describe('createExpand', () => {
 			signal: expect.any(AbortSignal)
 		});
 		// The best row itself is never listed under itself.
-		answer(group([best, ...[11, 12, 13, 14, 15, 16, 17].map((n) => hit(n))]));
+		answer({
+			...group([best, ...[11, 12, 13, 14, 15, 16, 17].map((n) => hit(n))]),
+			hash: best.hash
+		});
 		await vi.waitFor(() => expect(x.rows(hits)).toHaveLength(SHOWN + 3), WAIT);
 		expect(kinds(x.rows(hits))).toEqual([
 			'hit:1',
@@ -70,14 +79,14 @@ describe('createExpand', () => {
 	});
 
 	it('shows Show all only when there is more than the rows in place', async () => {
-		get.mockResolvedValue(group([hit(11), hit(12)]));
+		echo(group([hit(11), hit(12)]));
 		const best = hit(1, { others: 2 });
 		const x = createExpand();
 		x.expand(best);
 		await vi.waitFor(() => expect(x.rows([best])).toHaveLength(3), WAIT);
 		expect(kinds(x.rows([best]))).toEqual(['hit:1', 'version:11', 'version:12']);
 		// A truncated list has more on the server.
-		get.mockResolvedValue(group([hit(11)], true));
+		echo(group([hit(11)], true));
 		const other = hit(2, { others: 1 });
 		x.expand(other);
 		await vi.waitFor(() => expect(kinds(x.rows([other]))).toContain('more:2'), WAIT);
@@ -87,7 +96,7 @@ describe('createExpand', () => {
 	});
 
 	it('counts Show all from the larger of the query matches and the versions listed', async () => {
-		get.mockResolvedValue(group([11, 12, 13, 14, 15, 16].map((n) => hit(n))));
+		echo(group([11, 12, 13, 14, 15, 16].map((n) => hit(n))));
 		const best = hit(1, { others: 2 }); // 2 match the query, 6 versions exist
 		const x = createExpand();
 		x.expand(best);
@@ -97,7 +106,7 @@ describe('createExpand', () => {
 	});
 
 	it('says when nothing came back, and retries a failed load', async () => {
-		get.mockResolvedValueOnce(group([]));
+		echo(group([]), true);
 		const a = hit(1, { others: 1 });
 		const x = createExpand();
 		x.expand(a);
@@ -107,11 +116,19 @@ describe('createExpand', () => {
 		const b = hit(2, { others: 1 });
 		x.expand(b);
 		await vi.waitFor(() => expect(kinds(x.rows([b]))).toEqual(['hit:2', 'failed:2']), WAIT);
-		get.mockResolvedValueOnce(group([hit(21)]));
+		echo(group([hit(21)]), true);
 		x.expand(b); // a failed group is fetched again
 		await vi.waitFor(() => expect(kinds(x.rows([b]))).toEqual(['hit:2', 'version:21']), WAIT);
 		x.expand(b); // an open one is not
 		expect(get).toHaveBeenCalledTimes(3);
+	});
+
+	it('treats an answer about another torrent as a failure', async () => {
+		get.mockResolvedValueOnce({ ...group([hit(21)]), hash: hit(99).hash });
+		const a = hit(1, { others: 1 });
+		const x = createExpand();
+		x.expand(a);
+		await vi.waitFor(() => expect(kinds(x.rows([a]))).toEqual(['hit:1', 'failed:1']), WAIT);
 	});
 
 	it('never opens a row without other versions', () => {
@@ -138,7 +155,7 @@ describe('createExpand', () => {
 	});
 
 	it('closes every group when the query changes', async () => {
-		get.mockResolvedValue(group([hit(11)]));
+		echo(group([hit(11)]));
 		const a = hit(1, { others: 1 });
 		const x = createExpand();
 		x.follow('q1');
@@ -165,7 +182,7 @@ describe('createExpand', () => {
 
 	describe('keys', () => {
 		it('→ opens the focused group and ← closes it', async () => {
-			get.mockResolvedValue(group([hit(11)]));
+			echo(group([hit(11)]));
 			const a = hit(1, { others: 1 });
 			const x = createExpand();
 			const right = key('ArrowRight');
@@ -179,7 +196,7 @@ describe('createExpand', () => {
 		});
 
 		it('← on a version closes its group and sends focus to the best row', async () => {
-			get.mockResolvedValue(group([hit(11)]));
+			echo(group([hit(11)]));
 			const a = hit(1, { others: 1 });
 			const x = createExpand();
 			x.expand(a);

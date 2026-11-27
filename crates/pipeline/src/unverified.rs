@@ -986,6 +986,18 @@ pub fn ingest(
                 UnverifiedStats::add(&stats.refused, 1);
                 continue;
             };
+            // An identification for an item that's Adult now, by any
+            // reading the runtime's gate uses, under the filter as it is
+            // now: refused, so a general service's answer never sits on an
+            // adult item (Q5), however the item became adult meanwhile.
+            if identification {
+                let live = ctx.filter.map(Handle::current);
+                let engine = live.as_deref().unwrap_or(engine);
+                if crate::identify::adult_now(store, engine, ctx.adult, row.id, now)? {
+                    UnverifiedStats::add(&stats.refused, 1);
+                    continue;
+                }
+            }
             Some((row.id, Some(row.name)))
         } else {
             None

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { tick } from 'svelte';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { ApiError } from '$lib/api/client';
 import { clearDetailCaches } from '../cache';
 import { HASH, searchHit } from '../fixtures';
 
@@ -77,6 +79,18 @@ describe('Parsed', () => {
 		for (const word of ['Resolution', 'Codec', 'Language', 'Group', 'Edition']) {
 			expect(screen.queryByText(word)).toBeNull();
 		}
+	});
+
+	it('shows no spans, and no error, when the API withholds the torrent', async () => {
+		get.mockRejectedValue(new ApiError(404, 'torrent_not_found', ''));
+		render(Parsed, { hash: HASH, hit: searchHit() });
+		await waitFor(() => expect(get).toHaveBeenCalled(), { timeout: 10_000 });
+		// The 404 has been delivered; the section reacts to it on the next flush.
+		await expect(get.mock.results[0]!.value).rejects.toBeInstanceOf(ApiError);
+		await tick();
+		expect(screen.queryByTestId('detail-parsed-years')).toBeNull();
+		expect(screen.queryByText("Couldn't load the parsed details.")).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
 	});
 
 	it('uses singular labels for one plain value, plural for several or a range', async () => {

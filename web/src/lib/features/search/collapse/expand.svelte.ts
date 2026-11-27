@@ -82,6 +82,8 @@ export function createExpand(options: ExpandOptions = {}) {
 				signal: ctl.signal
 			});
 			if (requests.get(hit.hash) !== ctl) return;
+			// The answer must be about the torrent asked for, as siblings.ts requires.
+			if (r.hash !== hit.hash) throw new Error('siblings answered for another torrent');
 			const group = r.other_versions;
 			const versions = group.hits.filter((h) => h.hash !== hit.hash);
 			set(hit.hash, { status: 'ready', versions, truncated: group.truncated });
