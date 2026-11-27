@@ -1,4 +1,4 @@
-# X-dht-switch-identity decisions (PR pending)
+# X-dht-switch-identity decisions (#1146)
 
 The running binary now reports which crawler switches it runs with, so round 1's collector records each arm's effective values instead of guessing compiled defaults from the environment (`docs/plan/2026-11-27-revised-path-to-100.md` §5.1, §5.2 item 1). No switch default, preset or behaviour changes.
 
