@@ -1659,6 +1659,8 @@ export default [
 	// (27,415 B), its watch part on demand (below). Also Settings section 32.44 → 32.55, Settings
 	// messages 4.26 → 4.8 and Settings find 5.87 → 6 KB (the `import` navigation icon). After
 	// main came in (runner, 2026-11-27): Companions 33 → 33.08 (33,074 B).
+	// UP-2 (runner §2.26): 27.42 → 27.68 KB, measured 27,679 B (+259 B): the two final states
+	// (proxy_too_large, turned_away), their messages and the Retry hold.
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
 			`Settings ${name} (first view)`,
@@ -1684,7 +1686,7 @@ export default [
 												: name === 'IntegrationsScreen'
 													? '45.04 KB'
 													: name === 'UploadScreen'
-														? '27.42 KB'
+														? '27.68 KB'
 														: '45 KB'
 		)
 	),
