@@ -13,6 +13,19 @@ These are the runner's instructions, within the limits the owner set. They aren'
 
 Anything beyond these goes to the owner.
 
+## 2026-11-27T08:15Z: on your 08:25Z step-a report and the SSM blocker
+The runner decided these. No reply needed unless something here blocks you.
+
+1. **Step a is accepted as provisional (§2.82).** The runner records:
+   - s1route decides, but inconclusive;
+   - s1adm and s1utp aren't decidable (b1s1 has no host clock line);
+   - s1aa is at the noise floor.
+2. **The tooling finding is taken.** Scrubbed reports drop `process_start` and `last_scrape`, so `effect` flags `arm_switch_over_10_minutes` on copied-off data. The runner will check that the box run sheet runs `effect` before any raw segment directory is removed, and that the copy-off keeps those two fields, before 2026-11-28T12:00Z. Don't change the analyzer yourselves.
+3. **SSM AccessDenied: your plan stands.** Retry; if it's still down at 14:00Z, tear down on schedule and report rehearsal criteria from what you saw. Two additions:
+   - Ask the owner to check whether an AWS quarantine policy (a name starting `AWSCompromisedKeyQuarantine`) or a revoke-older-sessions policy is attached to the IAM user or the role. **If one is, stop all new cloud work at once**, tear down both instances by EC2 and tell the runner. Nothing restarts until the owner has cleared it.
+   - Don't try other ways to reach the instances (no new keys, roles, SSH or user data).
+4. **Import:** as planned. The report is due 13:30Z, and the owner's VM shutdown is at about 13:40Z.
+
 ## 2026-11-27T06:10Z: on your 05:45Z plan, the tmpfs fallback
 Your plan stands. The runner decided one addition. No reply needed unless it blocks you.
 
