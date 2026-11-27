@@ -950,7 +950,6 @@ def ledger(a, b):
     # CR-LOOKUP-END's early end is an end on values too. Older binaries don't render it, so
     # it counts as 0 there and their numbers are unchanged (X-cr-round1-collect-fixes).
     early = optional_delta(a, b, LEDGER["ended"], reason=collect.LEDGER_EARLY_VALUES)
-    parts["ended_on_enough_values"] = early
     parts["ended_on_values"] = None if any(r is None for r in reasons) else sum(reasons) + (early or 0)
     ended, answered = parts["lookups_ended"], parts["peer_lookups_answered"]
 
@@ -959,7 +958,9 @@ def ledger(a, b):
     return {"W_seconds": per(parts["residence_seconds"], ended), "q": per(parts["peer_lookup_queries"], ended),
             "y": per(parts["stored"], ended),
             "seconds_per_answered": per(parts["peer_lookup_seconds"], answered), **parts,
-            "absent": sorted(k for k, v in parts.items() if v is None)}
+            "absent": sorted(k for k, v in parts.items() if v is None),
+            # Only where rendered, so an older run's report is unchanged.
+            **({"ended_on_enough_values": early} if early is not None else {})}
 
 
 def lookup_cost_pair(checks, window, switches, preset, judged=None):
