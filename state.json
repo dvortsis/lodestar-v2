@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T15:39:07Z",
+  "updated_at": "2026-11-27T17:25Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T15:39:07Z",
+    "updated": "2026-11-27T17:25Z",
     "items": [
       {
         "slot": 1,
@@ -11124,7 +11124,7 @@
         "role": "build",
         "agent": "claude",
         "session": "session_01MMjhn8dWsf8cB7dBNZrTcU",
-        "doing": "building (release blocker)",
+        "doing": "#1142 CI on 40b1b941",
         "since": "2026-11-27T14:34Z"
       },
       {
@@ -11142,17 +11142,17 @@
         "role": "build",
         "agent": "claude",
         "session": "session_01MMjhnC8xWNQaf7ssYaxCym",
-        "doing": "step 0: remote intake hashing report",
+        "doing": "#1143 in review",
         "since": "2026-11-27T15:36Z"
       },
       {
         "slot": 4,
-        "slice": "X-claims-size",
+        "slice": "X-import-drain-memory",
         "role": "build",
         "agent": "claude",
-        "session": "session_01MMjhnCJG6k74cLW98Cc2qX",
-        "doing": "#1141 stripped to bench fixes; in review",
-        "since": "2026-11-27T12:51:35Z"
+        "session": "session_01MMjhn8Vk45KrXtoM9AXh1o",
+        "doing": "step 0: drain memory measurement",
+        "since": "2026-11-27T17:25Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
