@@ -5,6 +5,8 @@ A torrent a remote worker brought in is indexed `verified:imported`, never `veri
 ## What the coordinator checks of a remote record (step 0)
 - **It never hashes the info dict to the key, and can't.** The wire format never carries `pieces` (`crates/pipeline/src/wire/results.rs`, WK-6), and the swarm hashes and leased key come from the worker. The intake (`remote.rs` `build`, WK-9) rebuilds the file list from the worker's blob, checks it against the worker's own `size`, `file_count` and piece count, and rebuilds the flags and enrichment. That's consistency, not a hash to the key.
 - **That holds for every remote record.** `archive_raw` only decides whether the worker's raw dict is kept, and it's never hashed either.
+- **This is a trust ruling, not a missing check.** The worker hashes the dict during its own fetch (§19.4); the coordinator just can't confirm it. So `yes` would rest on the worker's word.
+- **A remote result that upgrades a partial import** keeps `IMPORTED`, gains `REMOTE_UNVERIFIED`, and its import record is marked `verified` (`store` `verified_upgrade`) on the worker's word. Checking the flag first keeps that row `imported` too. Anything else that reads `import_quality` still sees `verified`; that predates this slice and is left for WK-13 (below).
 - **Only WK-13's re-verification checks a remote row,** by re-fetching its dict, and only it clears `REMOTE_UNVERIFIED` (`2026-11-07-WK-9.md`). It isn't built yet.
 
 ## The rule (`stored_verified`, `crates/search/src/doc.rs`)
@@ -24,3 +26,5 @@ A torrent a remote worker brought in is indexed `verified:imported`, never `veri
 ## For WK-13
 - **When it clears `REMOTE_UNVERIFIED`, it must log the torrent for reindexing** (`reindex_log`), or the row stays `imported` in the index after it's re-verified. The runner adds this to WK-13's notes.
 - **A row that fails re-verification** is WK-13's to handle (quarantine, purge). Until then it stays `imported`.
+- **Scale: whether WK-13 re-verifies every remote row or a sample decides how many stay `imported`.** §19.4 samples 0.5% of each worker's results; WK-13's notes say it clears the flag on remote rows. If only samples are re-verified, about 99.5% of worker finds stay `imported` (shown by default, out of `verified:yes`) for good. This is the owner's flag under §2.19: WK-13 should say which, and whether a passing sample vouches for its worker's other rows.
+- **An import record marked `verified` by a remote upgrade** should go back to WK-13's rule as well, so nothing that reads `import_quality` takes the worker's word.
