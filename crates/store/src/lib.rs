@@ -15,7 +15,6 @@
 
 mod api_keys;
 pub mod claims;
-pub mod claims_dict;
 mod collections;
 mod compress;
 pub mod filetree;
@@ -603,8 +602,6 @@ const FILE_DICT_SETTING: &str = "file_dict";
 pub struct Store {
     conn: Connection,
     codec: BlobCodec,
-    /// The claims dictionaries (X-claims-size, [`claims_dict`]).
-    claims_dicts: claims_dict::ClaimsDicts,
     config: StoreConfig,
     /// A WAL scrub after a delete couldn't finish (a reader held an old
     /// snapshot): the next delete or purge tries again. When another
@@ -675,10 +672,7 @@ impl Store {
     fn load(conn: Connection, config: StoreConfig) -> Result<Store> {
         let mut codec = BlobCodec::new(config.compression_level);
         {
-            // The claims dictionaries are `claims_dict`'s, loaded when a blob
-            // names one.
-            let mut stmt =
-                conn.prepare("SELECT id, data FROM zstd_dicts WHERE kind <> 'claims'")?;
+            let mut stmt = conn.prepare("SELECT id, data FROM zstd_dicts")?;
             let rows =
                 stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
             for row in rows {
@@ -697,11 +691,9 @@ impl Store {
             active_dict_present(&conn, id)?;
         }
         codec.set_active(active);
-        let claims_dicts = claims_dict::ClaimsDicts::load(&conn)?;
         Ok(Store {
             conn,
             codec,
-            claims_dicts,
             config,
             scrub_pending: false,
             path: None,
@@ -756,7 +748,6 @@ impl Store {
         let Store {
             conn,
             codec,
-            claims_dicts: _,
             config,
             scrub_pending: _,
             path: _,
@@ -1816,13 +1807,9 @@ fn active_dict_present(conn: &Connection, id: i64) -> Result<()> {
 }
 
 fn codec_has(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
-    conn.query_row(
-        "SELECT 1 FROM zstd_dicts WHERE id = ?1 AND kind <> 'claims'",
-        [id],
-        |_| Ok(()),
-    )
-    .optional()
-    .map(|r| r.is_some())
+    conn.query_row("SELECT 1 FROM zstd_dicts WHERE id = ?1", [id], |_| Ok(()))
+        .optional()
+        .map(|r| r.is_some())
 }
 
 /// Two indexed lookups. Written with `OR`, SQLite scans the whole table.

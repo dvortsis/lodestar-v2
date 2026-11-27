@@ -1,85 +1,53 @@
 # X-claims-size decisions
 
-Slice X-claims-size (runner brief, 2026-11-27T12:51Z; runner's choice of levers, 2026-11-27T13:11Z): identification answers' claims blobs made smaller with a trained zstd dictionary. Spec: architecture §3, `docs/decisions/2026-11-27-X-enr11-size-measure.md`. No budget or `ci.yml` change; one marker migration, V17.
+Slice X-claims-size (runner brief, 2026-11-27T12:51Z): try to shrink identification answers' share of the store before any §3 budget moves (§2.26). Spec: architecture §3, `docs/decisions/2026-11-27-X-enr11-size-measure.md`. The runner's decision (2026-11-27T15:09Z) is that no lever is built. This PR keeps the measurements and the `size-report` fixes. There is no budget, schema or `ci.yml` change, and the gate stays at 0 %.
 
-## What was measured (step 2)
-At CI's size, 50,000 torrents, seed 1. Each lever was applied to a copy of `size-report`'s store and vacuumed; the claims tables fill in id order, so their deltas carry over to the unvacuumed gate figure.
+## What was measured
+- **Method:** CI's size, 50,000 torrents, seed 1, at the 0, 60 and 100 % identified shares.
+  - The levers (b) and (c) were applied to a copy of `size-report`'s store, which was then vacuumed. The claims tables fill in id order, so their deltas carry over to the unvacuumed gate figure.
+  - The dictionary rows are full `size-report` runs, with the dictionary trained in the run as the writer would train it: at the 1,000th answer, without rewriting older rows.
+  - At 0 % no lever changes anything, because there are no claims rows.
 
-| Lever, store bytes per torrent | 60 % | 100 % | Needs |
+| Store, bytes per torrent | 60 % | 100 % | Would need |
 |---|---:|---:|---|
 | main | 1114.4 | 1224.5 | |
-| (a) dictionary 16 / 32 / 64 KiB | −43.9 / −51.4 / −57.7 | | no migration |
-| (a) dictionary 112 KiB, magicless frame | −64.6 | −108.1 | no migration |
-| (b) 8 alternative titles | about −22 without a dictionary, −1 with | | |
-| (c1) drop `torrent_claims_source` | −6.6 | −11.1 | a schema slot |
+| (a) zstd dictionary trained on the stored answers, 112 KiB | 1055.5 (−58.9) | 1123.0 (−101.5) | a new blob codec, a trainer and a migration |
+| (a) the same, trained on templates with every source value replaced | 1107.2 (−7.2) | 1210.4 (−14.1) | the same |
+| (b) 8 alternative titles instead of 32 | about −22 | | |
+| (c1) drop `torrent_claims_source` | −6.6 | −11.1 | a migration |
 | (c2) `torrent_claims` `WITHOUT ROWID` | −9.2 | −16.4 | a table rebuild |
+| (c1) and (c2) | −14.1 | −24.6 | a table rebuild |
 
-- **The runner chose (a) alone** (§2.26). (c1) and (c2) save 7–14 B for a table change, and (c1) slows `mark_claims_unenriched`, a long transaction already flagged in #1138's review. (c2) suits rows under about 200 B, and claims rows can reach 1.18 MB.
-- **(b) isn't available:** the drawer's API shows every stored title, up to 32 (`identification()` in `crates/api/src/torrents.rs`), and the content-safety check judges each one (`details_alone` in `crates/pipeline/src/unverified.rs`). With a dictionary it would save under 2 B anyway.
-- **No lever brings the 60 % share within 976 B.** The store already holds 949.3 B at 0 %, which leaves about 49 B per answer, page and index overhead included. A dictionary-compressed answer is still about 124 B.
+Dictionary sizes probed per blob, before the runs: 16, 32 and 64 KiB saved 44, 51 and 58 B per torrent at 60 %. 112 KiB with the zstd magic left out saved 65 B.
 
-## The format: codec 2 (`crates/store/src/claims.rs`)
-- **A codec, not a layout:** `version · 2 · dict_id:uvar · the zstd frame without its 4-byte magic`. The version byte stays first, so the SQL that filters on it (`served_identifications`, the identify sweep) is unchanged. The magic is put back before decompressing, so no zstd experimental feature is needed. The frame carries no dictionary id and no checksum; the blob's own id is the only one.
-- **Old blobs read as before:** codecs 0 and 1 are untouched, and every blob `main` writes decodes (a test writes `main`'s encoding into a store, opens it, trains, rewrites and reads both).
-- **Fails closed:** `decode` knows no dictionary and refuses every codec 2 blob with `ClaimsError::Dictionary(id)`. `decode_with` asks its `Inflate` for that id and never tries another. The store's reads treat such a row as unreadable, as they treat a corrupt one: left out of `torrent_claims`, never served, logged for reindexing when dropped (the safe side), and passed over by the sweeps.
-- **A lookup that fails isn't a verdict on the row:** when the dictionary can't be read just then (a store error), the read fails (`ClaimsError::Unavailable`, a store `Compression` error of kind `NotFound`, as for a missing file-tree dictionary) and is tried again. Otherwise the re-judge, which removes unreadable claims, could delete readable answers on a transient error. A dictionary row zstd won't take is corruption and reads as unknown.
-- **Written only when smaller:** a blob the dictionary doesn't shrink is stored raw (codec 0), and never shorter than the tables' 7-byte minimum, so the schema's `CHECK` holds.
+## Why each lever was dropped
+- **(a) A dictionary can't keep what it learned from.**
+  - The runner's security review of #1141 found answers' titles verbatim in a dictionary trained on them: 743 of 1,000 test titles were still there after every claim was dropped.
+  - A dictionary is kept for good, in the store and in every snapshot and backup. That would break the ENR terms retention (TMDB's 180 days, `docs/decisions/2026-11-20-X-snapshot-claims-retention.md`), the source purge (§18.5) and content-safety removals.
+  - **Trained on templates instead,** the dictionary learns only the layout: field presence, counts, lengths, the id schemes and their fixed letters, and primary language subtags. Every title, genre and id character, and every number, is replaced by a same-class placeholder.
+  - That saves 7.2 B per torrent at 60 %, below the runner's floor of about 25 B. Nearly all of the saving had been title vocabulary shared across answers, which is the source content the retention and purge rules forbid a dictionary to keep.
+  - A new codec, a trainer and a schema migration (needed so an older build refuses the store rather than deleting rows it can't read) aren't worth 7 B.
+- **(b) Fewer stored titles: the titles are shown and judged.**
+  - The drawer's API shows every stored title, up to 32 (`identification()` in `crates/api/src/torrents.rs`).
+  - The content-safety check judges each one (`details_alone` in `crates/pipeline/src/unverified.rs`).
+- **(c1) and (c2) save 7–14 B for a migration.**
+  - (c1) would also slow `mark_claims_unenriched`, a long transaction #1138's review flagged. Without `torrent_claims_source`, its subquery reads each row by its index entry instead of from a covering index.
+  - (c2) suits rows under about 200 B, and claims rows can reach 1.18 MB.
+  - Every other claims query plans through the primary key or `torrent_claims_stored` either way (checked with `EXPLAIN QUERY PLAN`).
 
-## The dictionary (`crates/store/src/claims_dict.rs`)
-- **Stored as the file trees' are:** a `zstd_dicts` row of kind `claims`, and the settings row `claims_dict` naming the active one. Both are written in one short transaction, so the setting never names a dictionary that isn't there. A store whose setting does is refused at open, as for the file trees.
-- **Trained once, by the writer:** at each flush, while no dictionary is active (an in-memory check, so it costs nothing afterwards), the writer asks the store whether at least `MIN_ROWS` (1,000) answers are stored. Answers are version 3 rows of an identify source, one with a terms record. When they are, the store reads at most `MAX_SAMPLES` (4,000) of them and `MAX_SAMPLE_BYTES` (4 MiB) in all, through the `(source_id, …)` indexes. It skips any over 16 KiB, trains a dictionary of up to `DICT_SIZE` (112 KiB, the file trees' size) outside any transaction, and installs it. A second connection installing first wins; the other stores nothing. Once the setting exists nothing trains again, restarts included. There is no retraining; one would take a new id.
-- **One Info event,** `pipeline.claims_dict_trained`, with the sample count and the dictionary's size (log-catalogue owns granted by the runner, 2026-11-27T13:15Z).
-- **Errors don't stall the writer:** a failed training is reported (`pipeline.store_write_failed`) and the next waits `TRAIN_RETRY` (an hour). A failed install (a busy store, say) keeps the trained dictionary, and the next flush installs it without training again. Training takes 0.08 s at 1,000 samples and at the 4,000-sample cap (130 and 524 KiB of samples, release build), so the writer's pause is short.
-- **A connection that finds another's dictionary active takes it up** and writes with it from then on.
-- **Used for answers only:** claims with a details section are written with it; feed claims and unverified items keep codecs 0 and 1. If zstd fails on one answer, that answer is written as before instead of refused.
-- **Each connection loads only the dictionaries it needs:** the file-tree codec no longer loads claims dictionaries, and a file-tree setting can't name one.
-- **Readers find a new dictionary themselves:** a connection opened before training loads the dictionary from `zstd_dicts` the first time a blob names it, then keeps its decompressor.
-- **Never deleted or replaced in place.** Nothing in this slice deletes a `zstd_dicts` row.
+## The budget
+- **The store stays over at the realistic share:** about 1114 B per torrent at 60 % against 976, and 1224 B at 100 %. At 0 % it holds 949.3 B, so the claims tables could take only about 27 B per torrent, about 49 B per answer with pages and indexes. An answer's blob alone averages 237 B.
+- **The budget decision goes to the runner.** CI's `size-report --gate` stays at the 0 % share, and `ci.yml` is untouched.
 
-## Migration V17: an older build refuses the store
-- **The store's rule is that an older build refuses a newer store and changes nothing** (`older_builds_refuse_a_newer_store_untouched`). Without a schema bump, a build from before this slice would read codec 2 rows as an unknown codec, that is, unreadable. It would stop serving those answers, and its re-judge would remove each one it reached. No pre-upgrade snapshot would exist to roll back to either. So the runner gave this slice a schema slot (2026-11-27T14:22Z).
-- **V17 changes no table.** It records that claims blobs may be codec 2, and the version alone does the work:
-  - a V16 or older build refuses a V17 store, untouched;
-  - the upgrade from V16 takes the usual `pre-v17` snapshot, which the update rollback restores;
-  - a V16 store's codec 0 and 1 answers migrate byte for byte and read unchanged.
-  Each has a test in `schema.rs`.
-- **The runner named V16; V16 is X-unverified-cap-index's,** already on `main`, so this is V17.
-- **The snapshot purge's plan for V17 is V15's and V16's** (`snapshots::Plan::KNOWN_THROUGH`): it deletes claims by SQL and never reads them.
+## Also found, for later
+- **About 60 B per torrent of the 0 % figure is slack from `size-report` itself.**
+  - Its train-then-`recompress_files` step rewrites every file-tree blob in place and leaves partly filled pages. VACUUM takes the 60 % store from 1113.8 to 1047.6 B per torrent: 46 B in `torrent_files`, 12.5 B in `torrents`.
+  - The slack is there at 0 % too.
+- **Production never trains the file-tree dictionary.** Only tests and `size-report` call `train_file_dict`. So the §3 file-tree figure (346 B blobs) assumes a dictionary real stores don't have.
+- The runner noted both for follow-ups (2026-11-27T13:11Z).
 
-## No background rewrite
-- **Rows written before the dictionary keep their codec 1 blobs** (runner, 2026-11-27T13:11Z). Training happens at the 1,000th answer, so at most about 1,000 rows (plus any stored while a check was pending) stay larger: about 112 B each, about 0.1 MB in all, whatever the store's size.
-- **They shrink anyway when refreshed:** ENR-10 refreshes an answer before its retention runs out (150 of 180 days by default), and the refresh is written with the dictionary.
-- A rewrite pass would cost a long write path and its own tests for that.
-
-## Result
-`size-report --torrents 50000 --identified 0,60,100` with this slice:
-
-| Part, bytes per torrent | 0 % | 60 % (54.7 % of the corpus) | 100 % (90.8 %) | Budget |
-|---|---:|---:|---:|---:|
-| Canonical store | 949.3 | 1055.5 (main 1114.4) | 1123.0 (main 1224.5) | 976 |
-| Claims blob mean | — | 128 B (main 237) | 126 B (main 238) | |
-| Torrent index | 550.5 | 613.1 | 642.6 | 560 |
-
-- **The dictionary is trained from the first 1,000 answers.** 26,353 of 27,353 blobs use it at 124 B each; the 1,000 written before it average 236 B. The measured saving uses the dictionary as production builds it: trained at the threshold, with no rewrite.
-- **The saving may be smaller on real stores.** Synthetic titles draw on a fixed 600-word vocabulary per script, so a real catalogue's answers share less than the corpus's do.
-- **Costs:**
-  - Writing an answer is no slower: 31.5 µs per blob with the dictionary against 38.5 µs, at zstd 19.
-  - Reading is faster, since the decompressor is kept: 0.7 µs against 16 µs.
-  - Storing 27,353 answers, training included, takes 5.5 s against 5.1 s.
-  - The 112 KiB dictionary is 2.3 B per torrent at 50,000 torrents and nothing at 10M.
-- **The size gate stays at 0 %** (`ci.yml` untouched): the 60 % share is still 79.5 B over 976. Any budget change is the runner's, decided later.
-- **`size-report` checks for the dictionary every 50 answers,** about what one plugin stores between two of the writer's flushes at a full day's budget. It prints the dictionary's size and how many rows use it.
-
-## Also in this slice
-- **Paths beyond the brief's owns:** the runner granted `crates/pipeline/src/writer.rs`, `crates/pipeline/src/identify.rs` (unused in the end) and the log-catalogue files. This slice also edits:
-  - `crates/store/src/lib.rs`: the module, the `Store` field, and the file-tree codec skipping claims dictionaries;
-  - `crates/store/src/identify_sweep.rs`: `served_identifications` reads codec 2;
-  - `bench/Cargo.toml`: the dependency below;
-  - `crates/store/src/schema.rs`: V17 and the tests that pin the latest version.
-  The runner granted these (2026-11-27T14:22Z). `crates/store/src/snapshots.rs` gets two lines, V17's purge plan, which the runner was told about.
-- **`synth::answer` goes through `Identification::into_claims`** (the plugin API's own conversion and clamps), and the terms record comes from `Terms { redistribute: true, .. }.record()` (#1136's review nits). `lodestar-sources` moves from the bench's dev-dependencies to its dependencies for that; the pipeline already depends on it, so nothing new is compiled.
-- **`docs/decisions/2026-11-27-X-enr11-size-measure.md`:** the "default share" heading now says "realistic share" (brief).
-
-## Found, for later (runner, 2026-11-27T13:11Z)
-- **Production never trains the file-tree dictionary.** Only tests and `size-report` call `train_file_dict`, so the §3 file-tree figure (346 B blobs) assumes a dictionary real stores don't have.
-- **`size-report`'s train-then-recompress rewrite leaves about 60 B per torrent of partly filled pages** (VACUUM takes the 60 % store from 1113.8 to 1047.6 B: 46 B in `torrent_files`, 12.5 B in `torrents`). The slack is there at 0 % too, so the 0 % figure carries it.
+## What this PR changes
+- **`synth::answer` goes through `Identification::into_claims`** (#1136's review). The bench's answers now take the plugin API's own conversion and clamps, then the store's model as `store_claims` maps a details-only find.
+- **The terms record comes from `Terms { redistribute: true, .. }.record()`** (#1136's review), not hand-written bytes. It's the strict default otherwise, so it also sets the adult-marker flag, as a real plugin's record does.
+- **`lodestar-sources` moves to the bench's `[dependencies]`** for those two. The pipeline already depends on it, so nothing new is compiled.
+- **`docs/decisions/2026-11-27-X-enr11-size-measure.md`:** its "default share" heading now says "realistic share" (brief).

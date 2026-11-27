@@ -143,14 +143,8 @@ impl Store {
                 continue;
             }
             // A row that doesn't decode is dropped, as everywhere else.
-            let c = match self.decode_claims(&data) {
-                Ok(c) => c,
-                // A failed dictionary lookup fails the read: the index
-                // tries again, rather than drop a servable answer.
-                Err(claims::ClaimsError::Unavailable(_)) => {
-                    return Err(crate::claims_dict::unavailable());
-                }
-                Err(_) => continue,
+            let Ok(c) = claims::decode(&data) else {
+                continue;
             };
             // The claims-shape rule's own test (`Claims::identification`):
             // a purge reindexes every torrent losing an answer served here.

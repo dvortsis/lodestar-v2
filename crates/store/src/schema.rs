@@ -27,19 +27,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (14, V14),
     (15, V15),
     (16, V16),
-    (17, V17),
 ];
-
-/// X-claims-size (`docs/decisions/2026-11-27-X-claims-size.md`): claims
-/// blobs may now be codec 2 (`claims::ZSTD_DICT`), compressed with a
-/// trained dictionary kept in `zstd_dicts` (kind `claims`, named by the
-/// `claims_dict` setting). Nothing in the schema changes: the version is
-/// what makes an older build, which would read codec 2 rows as unreadable
-/// and remove them, refuse the store, and the upgrade takes the usual
-/// pre-migration snapshot for a rollback.
-const V17: &str = "
--- Codec 2 claims blobs (X-claims-size); no schema change.
-";
 
 /// X-unverified-cap-index (`docs/decisions/2026-11-23-X-unverified-cap-index.md`):
 /// the usenet cap's eviction and count without scanning the tier. Additive
@@ -1737,12 +1725,13 @@ mod tests {
 
     /// Older builds opening this build's store refuse it as newer and
     /// change nothing: no migration, no snapshot, the file as it was. The
-    /// v0.5.1 code path (migrations through V12) and V13 to V16 builds all
-    /// refuse a V17 store, and so do their read-only connections.
+    /// v0.5.1 code path (migrations through V12) and V13, V14 and V15
+    /// builds all refuse a V16 store, and so do their read-only
+    /// connections.
     #[test]
     fn older_builds_refuse_a_newer_store_untouched() {
         let latest = latest_schema_version();
-        assert_eq!(latest, 17);
+        assert_eq!(latest, 16);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lodestar.db");
         drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
@@ -1756,7 +1745,7 @@ mod tests {
         };
         let (files, bytes) = (listing(), std::fs::read(&path).unwrap());
 
-        for older in [12, 13, 14, 15, 16] {
+        for older in [12, 13, 14, 15] {
             let mut conn = Connection::open(&path).unwrap();
             configure(&conn, 0).unwrap();
             let err =
@@ -1840,7 +1829,7 @@ mod tests {
         };
 
         // Up.
-        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..16]).unwrap();
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
         assert_eq!(version(&conn), 16);
         let snapshot = dir.path().join("lodestar.pre-v16.db");
         assert!(snapshot.exists(), "pre-V16 snapshot");
@@ -1857,7 +1846,7 @@ mod tests {
         assert_eq!(rows(&conn), 5);
         assert_eq!(counts(&conn), vec![(0, 1), (4, 4)]);
         // Once only: a second open finds it current and takes no snapshot.
-        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..16]).unwrap();
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
         assert_eq!(version(&conn), 16);
         assert!(!dir.path().join("lodestar.pre-v16.1.db").exists());
         drop(conn);
@@ -1887,89 +1876,11 @@ mod tests {
         insert(&conn, 7, 4, &[0x77; 32]);
 
         // Up again: the backfill counts what the V15 build left.
-        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..16]).unwrap();
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
         assert_eq!(version(&conn), 16);
         assert!(dir.path().join("lodestar.pre-v16.1.db").exists());
         assert_eq!(counts(&conn), vec![(0, 2), (4, 3)]);
         assert_eq!(count_check(&conn), 0);
-    }
-
-    /// V17 on a V16 store holding codec 1 answers (X-claims-size): it
-    /// takes the pre-V17 snapshot, keeps every row byte for byte, and the
-    /// store reads the answers unchanged and writes codec 2 once it has a
-    /// dictionary. A V16 build refuses the result
-    /// ([`older_builds_refuse_a_newer_store_untouched`]).
-    #[test]
-    fn v17_keeps_a_v16_stores_answers_and_takes_a_snapshot() {
-        use crate::claims::{self, Claims, Details, ExternalId};
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lodestar.db");
-        let mut conn = Connection::open(&path).unwrap();
-        configure(&conn, 0).unwrap();
-        migrate_creating(&mut conn, Some(&path), &MIGRATIONS[..16], Some(CREATED)).unwrap();
-        assert_eq!(version(&conn), 16);
-        let answer = |i: i64| Claims {
-            ids: vec![ExternalId {
-                scheme: "wikidata".into(),
-                value: format!("Q{}", 7 + i),
-            }],
-            details: Some(Box::new(Details {
-                canonical_title: Some(format!("A Work Called {i}")),
-                year: Some(1999),
-                match_confidence: Some(90),
-                ..Details::default()
-            })),
-            ..Claims::default()
-        };
-        conn.execute_batch(
-            "INSERT INTO sources (id, plugin, version, state, added_at) VALUES
-                 (0, 'dht', '1', 0, 0), (1, 'wikidata', '1', 0, 0);",
-        )
-        .unwrap();
-        for i in 1..=3i64 {
-            let mut hash = [0u8; 20];
-            hash[0] = i as u8;
-            conn.execute(
-                "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
-                     file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
-                 VALUES (?1, ?2, 't', 0, 0, 0, 0, 0, 0, 0, 0, 0)",
-                rusqlite::params![i, &hash[..]],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO torrent_claims (torrent_id, source_id, flags, data, stored_at)
-                 VALUES (?1, 1, 0, ?2, 5)",
-                rusqlite::params![i, claims::encode(&answer(i), 19).unwrap()],
-            )
-            .unwrap();
-        }
-        let blobs = |conn: &Connection| -> Vec<Vec<u8>> {
-            let mut stmt = conn
-                .prepare("SELECT data FROM torrent_claims ORDER BY torrent_id")
-                .unwrap();
-            stmt.query_map([], |r| r.get(0))
-                .unwrap()
-                .collect::<rusqlite::Result<_>>()
-                .unwrap()
-        };
-        let before = blobs(&conn);
-
-        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
-        assert_eq!(version(&conn), 17);
-        assert!(
-            dir.path().join("lodestar.pre-v17.db").exists(),
-            "pre-V17 snapshot"
-        );
-        assert_eq!(blobs(&conn), before, "rows unchanged");
-        drop(conn);
-        let store = crate::Store::open(&path, crate::StoreConfig::default()).unwrap();
-        for i in 1..=3i64 {
-            assert_eq!(
-                store.torrent_claims(i).unwrap()[0].claims.as_ref(),
-                Some(&answer(i))
-            );
-        }
-        assert_eq!(store.active_claims_dict(), None);
     }
 
     /// Networks whose kept count isn't their `count(*)`.

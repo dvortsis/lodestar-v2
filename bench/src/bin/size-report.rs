@@ -471,12 +471,6 @@ fn work_of(content_type: Option<i64>, name: &str) -> Option<Work> {
     })
 }
 
-/// Answers between two checks for the claims dictionary. The writer
-/// checks at every flush (5 s); one plugin at its full daily budget
-/// (100,000 lookups) stores about 6 answers in that time, so a check every
-/// 50 trains a little later than the writer would, never earlier.
-const TRAIN_CHECK_EVERY: u64 = 50;
-
 /// Stores a served answer on `percent` of the identifiable torrents, from
 /// one enrichment source whose terms allow passing answers on, the way
 /// `lodestar_pipeline::identify` writes them (`put_claims_at`). Returns
@@ -519,12 +513,6 @@ fn identify(
         let claims = synth::answer(seed, id as u64, work, &synth::work_title(&name));
         if store.put_claims_at(id, source, &claims, false, synth::EPOCH)? {
             identified += 1;
-        }
-        // The writer checks at each flush (X-claims-size), so the
-        // dictionary is trained once the store holds enough answers, and
-        // those stored before it keep their codec 1 blobs.
-        if identified % TRAIN_CHECK_EVERY == 0 && store.active_claims_dict().is_none() {
-            store.train_claims_dict()?;
         }
     }
     Ok((identifiable, identified))
@@ -600,28 +588,6 @@ fn measure(
             terms as f64 / answered.max(1) as f64,
             titles as f64 / answered.max(1) as f64,
             claims_bytes / answered.max(1) as f64
-        );
-        // The claims dictionary (X-claims-size): how many blobs use it,
-        // and their mean beside the codec 1 ones written before it.
-        let (dict_rows, dict_bytes, dict_size): (i64, f64, f64) = conn.query_row(
-            "SELECT count(*), total(length(data)),
-                 (SELECT total(length(data)) FROM zstd_dicts WHERE kind = 'claims')
-             FROM torrent_claims WHERE substr(data, 2, 1) = x'02'",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?;
-        let rows: i64 = conn.query_row("SELECT count(*) FROM torrent_claims", [], |r| r.get(0))?;
-        println!(
-            "  claims dictionary   {} ({:.1} KiB); {} of {} rows use it, {:.0} B mean, \
-             {:.0} B mean without",
-            store
-                .active_claims_dict()
-                .map_or_else(|| "none".to_owned(), |id| format!("id {id}")),
-            dict_size / 1024.0,
-            group(dict_rows as u64),
-            group(rows as u64),
-            dict_bytes / dict_rows.max(1) as f64,
-            (claims_bytes - dict_bytes) / (rows - dict_rows).max(1) as f64,
         );
         if answered != t.identified || answered == 0 {
             invalid.push(format!(

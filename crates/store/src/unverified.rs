@@ -32,7 +32,6 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 
 use crate::claims::{self, Claims};
-use crate::claims_dict::ClaimsDicts;
 use crate::filter::{self, Filtered};
 use crate::insights::SearchableCodes;
 use crate::sources::{SourceId, SourceState};
@@ -559,10 +558,7 @@ impl Store {
         at: Option<i64>,
         consent: Option<&mut ConsentCheck<'_>>,
     ) -> Result<bool> {
-        let blob = self
-            .claims_dicts
-            .encode(&self.conn, claims, self.config.compression_level)
-            .map_err(|_| Error::Invalid("claims over a limit"))?;
+        let blob = encode(claims, self.config.compression_level)?;
         let tx = begin_write(&mut self.conn)?;
         check_running(&tx, source)?;
         if let Some(consent) = consent
@@ -630,7 +626,7 @@ impl Store {
         };
         let mut shaped = false;
         for id in &ids {
-            shaped |= drop_one(&self.claims_dicts, &tx, *id, source)? == Some(true);
+            shaped |= drop_one(&tx, *id, source)? == Some(true);
         }
         // A backfill batch that read an expired answer would write its
         // title back over the mark (§20.9): it's refused instead.
@@ -676,7 +672,7 @@ impl Store {
             let mut rows = stmt.query([source.get()])?;
             while let Some(r) = rows.next()? {
                 let data: &[u8] = r.get_ref(1)?.as_blob().map_err(rusqlite::Error::from)?;
-                if shaped_or_unreadable(&self.claims_dicts, &tx, data) {
+                if shaped_or_unreadable(data) {
                     log.execute([r.get::<_, i64>(0)?])?;
                     shaped = true;
                 }
@@ -695,7 +691,7 @@ impl Store {
     /// (ENR-terms). False when it had none.
     pub fn drop_claims(&mut self, torrent_id: i64, source: SourceId) -> Result<bool> {
         let tx = begin_write(&mut self.conn)?;
-        let dropped = drop_one(&self.claims_dicts, &tx, torrent_id, source)?;
+        let dropped = drop_one(&tx, torrent_id, source)?;
         // As [`Store::drop_claims_outside`]: a batch that read the answer
         // is refused.
         if dropped == Some(true) {
@@ -712,9 +708,7 @@ impl Store {
             "SELECT torrent_id, source_id, flags, data FROM torrent_claims
              WHERE torrent_id = ?1 ORDER BY source_id",
         )?;
-        let rows = stmt.query_map([torrent_id], |r| {
-            read_claims(&self.claims_dicts, &self.conn, r)
-        })?;
+        let rows = stmt.query_map([torrent_id], read_claims)?;
         let mut out = Vec::new();
         for row in rows {
             let c = row??;
@@ -864,7 +858,7 @@ impl Store {
         )?;
         let rows = stmt.query_map(
             params![after.0, after.1.get(), limit.clamp(1, MAX_PAGE) as i64],
-            |r| read_claims(&self.claims_dicts, &self.conn, r),
+            read_claims,
         )?;
         let mut out = Vec::new();
         let mut bytes = 0;
@@ -973,7 +967,7 @@ impl Store {
             // An answer the index serves, and a match or title the record
             // took from it, go with the claim (X-purge-index-shapes), in
             // this transaction, as the purge's Claims stage does.
-            if shaped_or_unreadable(&self.claims_dicts, &tx, &data) {
+            if shaped_or_unreadable(&data) {
                 tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
                     .execute([r.torrent_id])?;
                 tx.prepare_cached(
@@ -1278,7 +1272,7 @@ impl Store {
                     // up, and a batch may already have read the claim.
                     // A source holds one row per torrent, so each is
                     // logged once a step.
-                    if shaped_or_unreadable(&self.claims_dicts, &tx, data) {
+                    if shaped_or_unreadable(data) {
                         mark.execute(params![id])?;
                         log.execute(params![id])?;
                         marked = true;
@@ -1904,8 +1898,8 @@ fn write_claims(
 /// index entry ([`Claims::shapes_the_record`](crate::claims::Claims::shapes_the_record)).
 /// One that doesn't decode counts: re-deriving and reindexing is the safe
 /// side.
-fn shaped_or_unreadable(dicts: &ClaimsDicts, conn: &Connection, data: &[u8]) -> bool {
-    !matches!(dicts.decode(conn, data), Ok(c) if !c.shapes_the_record())
+fn shaped_or_unreadable(data: &[u8]) -> bool {
+    !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record())
 }
 
 /// Deletes one claims row and marks its torrent for the backfill, and
@@ -1914,12 +1908,7 @@ fn shaped_or_unreadable(dicts: &ClaimsDicts, conn: &Connection, data: &[u8]) -> 
 /// there was one: the caller moves the classification generation once for
 /// its transaction when any shaped (X-claims-refile-rearm). `None` when
 /// there was none.
-fn drop_one(
-    dicts: &ClaimsDicts,
-    conn: &Connection,
-    torrent_id: i64,
-    source: SourceId,
-) -> Result<Option<bool>> {
+fn drop_one(conn: &Connection, torrent_id: i64, source: SourceId) -> Result<Option<bool>> {
     let lost: Option<Vec<u8>> = conn
         .prepare_cached(
             "DELETE FROM torrent_claims WHERE torrent_id = ?1 AND source_id = ?2 RETURNING data",
@@ -1929,7 +1918,7 @@ fn drop_one(
     let Some(data) = lost else { return Ok(None) };
     conn.prepare_cached("UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1")?
         .execute([torrent_id])?;
-    let shaped = shaped_or_unreadable(dicts, conn, &data);
+    let shaped = shaped_or_unreadable(&data);
     if shaped {
         conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
             .execute([torrent_id])?;
@@ -1937,30 +1926,14 @@ fn drop_one(
     Ok(Some(shaped))
 }
 
-/// A `torrent_id, source_id, flags, data` row, its claims read with
-/// `dicts` (codec 2 included). Claims that don't decode are `None`; a
-/// dictionary that couldn't be looked up fails the read.
-fn read_claims(
-    dicts: &ClaimsDicts,
-    conn: &Connection,
-    r: &rusqlite::Row<'_>,
-) -> rusqlite::Result<Result<StoredClaims>> {
-    let (torrent_id, source, flags): (i64, i64, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
-    let data = r.get_ref(3)?.as_blob().map_err(rusqlite::Error::from)?;
-    let claims = match dicts.decode(conn, data) {
-        Ok(c) => Some(c),
-        // A dictionary lookup that failed says nothing of the row: the
-        // read fails and is retried, so no caller drops a readable claim.
-        Err(claims::ClaimsError::Unavailable(_)) => {
-            return Ok(Err(crate::claims_dict::unavailable()));
-        }
-        Err(_) => None,
-    };
+fn read_claims(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<StoredClaims>> {
+    let (torrent_id, source, flags, data): (i64, i64, i64, Vec<u8>) =
+        (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
     Ok(SourceId::from_sql(source).map(|source| StoredClaims {
         torrent_id,
         source,
         private_source: flags & 1 != 0,
-        claims,
+        claims: claims::decode(&data).ok(),
     }))
 }
 

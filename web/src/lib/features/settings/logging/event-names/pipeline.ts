@@ -40,10 +40,6 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_pipeline_source_state_changed_n,
 		m.settings_logging_ev_pipeline_source_state_changed_h
 	],
-	'pipeline.claims_dict_trained': [
-		m.settings_logging_ev_pipeline_claims_dict_trained_n,
-		m.settings_logging_ev_pipeline_claims_dict_trained_h
-	],
 	'pipeline.starting': [
 		m.settings_logging_ev_pipeline_starting_n,
 		m.settings_logging_ev_pipeline_starting_h
