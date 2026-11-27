@@ -2242,6 +2242,11 @@ def judge_candidate(cand, inputs):
         days[k] = vs[-1]
     if any(j["status"] == "pass" for j in replaced):
         reasons.append("repeat_of_a_judged_day")
+    # Only an evidenced infrastructure fault repeats a day (§6.3, event class 1): contention
+    # calls for a solo confirmation, a product failure for a diagnosis, never a repeat.
+    if any(j["status"] == "not_judged" and not {"infrastructure_fault", "peer_infrastructure_fault"} & set(j["reasons"])
+           for j in replaced):
+        reasons.append("repeat_without_infrastructure_fault")
     out["replaced_days"] = [{"day": j["day"], "repeat": j["repeat"], "status": j["status"], "reasons": j["reasons"]}
                             for j in replaced]
     declared_days = sorted({e["day"] for e in entries if e["attempt"] == attempt["id"]})
@@ -2278,8 +2283,8 @@ def judge_candidate(cand, inputs):
         reasons.append("retry_budget_exhausted")
     out["days"] = judged
     every = earlier + replaced + judged
-    out["solo_confirmation_required"] = any(j.get("solo_confirmation_required") for j in judged)
-    out["solo_confirmation_failed"] = any(j.get("solo_confirmation_failed") for j in judged)
+    out["solo_confirmation_required"] = any(j.get("solo_confirmation_required") for j in replaced + judged)
+    out["solo_confirmation_failed"] = any(j.get("solo_confirmation_failed") for j in replaced + judged)
     out["product_failure"] = any(j.get("product_failure") for j in every)
     misses = [j for j in every if j["status"] == "fail"]
     out["valid_misses"] = [{"attempt": j["attempt"], "day": j["day"], "repeat": j["repeat"]} for j in misses]

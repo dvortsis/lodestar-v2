@@ -700,6 +700,37 @@ class ValidityTests(RoundBase):
         self.assertEqual([d["status"] for d in self.cand(v)["replaced_days"]], ["fail"])
         self.assertEqual(v["selection"]["trail"][0]["disposition"], "valid_miss")
 
+    def repeat_day1(self, a, setup):
+        setup(self.day(a, 1))
+        again = json.loads(json.dumps(self.day(a, 1)))
+        again["repeat"] = 1
+        again["archive"]["events"] = []
+        again["contention"] = mk.host_samples(again["reports"])
+        for r in again["reports"].values():
+            r["verdict"] = "valid"
+            r["binding"]["placement"]["repeat"] = 1
+            r["binding"]["run_id"] += "-repeat1"
+        a["days"].append(again)
+        return self.gate(a)
+
+    def test_a_contention_breach_is_not_repeated(self):
+        def breach(d):
+            for s in d["contention"]["samples"]:
+                s["cpu"] = 0.9
+        v = self.repeat_day1(mk.archive("L3"), breach)
+        self.assertNotJudged(v, "repeat_without_infrastructure_fault")
+        self.assertTrue(self.cand(v)["solo_confirmation_required"])
+
+    def test_a_product_failure_under_diagnosis_is_not_repeated(self):
+        v = self.repeat_day1(mk.archive("L3"), lambda d: d["archive"].update(
+            events=[{"class": "product", "arms": ["B"], "diagnosis": "pending"}]))
+        self.assertNotJudged(v, "repeat_without_infrastructure_fault")
+        self.assertIsNone(v["selection"]["ships"])
+
+    def test_a_void_day_is_not_repeated(self):
+        v = self.repeat_day1(mk.archive("L3"), lambda d: d["reports"]["B"].update(verdict="void"))
+        self.assertNotJudged(v, "repeat_without_infrastructure_fault")
+
     def test_a_repeat_of_a_passing_day_is_not_judged(self):
         a = mk.archive("L3")
         again = json.loads(json.dumps(self.day(a, 1)))
