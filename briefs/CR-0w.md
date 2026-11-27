@@ -1,6 +1,6 @@
 # CR-0w: Remove the start wait
 
-**Runner brief, 2026-11-27T07:55Z.** Core, Opus (DHT protocol behaviour, restart format, concurrency). Target ≤ 1,500 changed lines; if the work runs larger, split it with the runner before pushing (for example the CR-SIM golden re-record as a second PR). An Opus protocol review and a fresh Opus review gate the merge.
+**Runner brief, 2026-11-27T07:29Z.** Core, Opus (DHT protocol behaviour, restart format, concurrency). Target ≤ 1,500 changed lines; if the work runs larger, split it with the runner before pushing (for example the CR-SIM golden re-record as a second PR). An Opus protocol review and a fresh Opus review gate the merge.
 - **Branch:** `slice/CR-0w` from fresh `origin/main` (with #1131, X-sec-S8-27, merged as 9ac5ad66).
 - **PR title:** `CR-0w: Remove the start wait: no sampling suppression after any start, no blanket gate across a restart, safe restart on by default`.
 - Follow `.claude/skills/steward/SKILL.md`. The runner merges; you never do.

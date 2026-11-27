@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T06:39Z",
+    "updated": "2026-11-27T07:31Z",
     "items": [
       {
         "slot": 1,
@@ -11129,13 +11129,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-sec-S8-27",
+        "slice": "CR-0w",
         "role": "build",
-        "model": "opus",
         "agent": "claude",
-        "doing": "building (held fix; brief briefs/X-sec-S8-27.md)",
-        "since": "2026-11-27T04:32Z",
-        "session": "session_01MMjhnAwa8TWKLvTTYshnWo"
+        "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
+        "doing": "building: no start wait, safe restart on by default; merge timed against stage-1 images",
+        "since": "2026-11-27T07:31Z"
       },
       {
         "slot": 3,
