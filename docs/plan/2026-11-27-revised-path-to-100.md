@@ -1,4 +1,4 @@
-# Revised path to 100/min: all-on first, on the box (2026-11-27, revision 4)
+# Revised path to 100/min: all-on first, on the box (2026-11-27, revision 5)
 
 **Status:** a proposal for independent review. It is not decided. Nothing here changes an owner decision until the owner says so (`docs/owner-decisions.md`). Nothing changes CR-SPEC until a decisions file is merged before the run it governs (`docs/decisions/2026-11-02-CR-SPEC.md`, header).
 
@@ -7,7 +7,8 @@
 **Revisions:**
 - **Revision 2** answered a first review that covered revision 1 up to §2.3.
 - **Revision 3** answered the full review of revision 1.
-- **Revision 4** answers the review of revision 3 (§12): per-arm VPN isolation, a replication-proof gate, the shipping rule after a memory-only miss, a defaults-only transfer, and deterministic retry rules.
+- **Revision 4** answered the review of revision 3: per-arm VPN isolation, a replication-proof gate, the shipping rule after a memory-only miss, a defaults-only transfer, and deterministic retry rules.
+- **Revision 5** answers the review of revision 4 (§12): judgeable layouts, segment validity in the new gate, the retry loop, leak-test isolation, and the order of operations.
 
 **Why now:** the bitmagnet comparator cr-ab-comp-2 runs on the box from 2026-11-27T17:00Z to about 2026-11-28T18:00Z. The next box slot opens 12 h after its window ends (CR-SPEC rule 2.2). The current sequence spends that slot on CR-AB-ADM, the first of about six serial live stages. This proposal spends it on a run that can pass the gate. First it fixes the harness so it judges that run correctly (§5).
 
@@ -202,21 +203,28 @@ The current tools can't judge round 1 correctly (code on `main` at ebd148d4b):
 3. **One VPN per arm.**
    - **Compose:** parameterized per arm, with distinct container names, ports, data and state directories, and witness directories.
    - **Leak test:** takes the arm's identity. It targets that arm's gluetun namespace with probe names unique to the arm.
-   - **Fixture:** testing one tunnel leaves the other arms' containers running.
+   - **Host state scoped to the arm:** each arm gets its own Compose bridge. The leak test's `DOCKER-USER` guard and egress counter carry an arm-specific comment tag (today one shared tag, `lodestar-leak-egress`). Cleanup, including failure cleanup, deletes only the target arm's rules.
+   - **Fixture:** while one arm's leak test runs and while its failure cleanup runs, every other arm's guards stay present and its egress identity is unchanged. Its tunnel traffic keeps flowing, checked by its counter rising, not by container liveness alone.
 4. **Egress identity.**
    - **Each check:** at every hourly boundary, the collector reads the public IP from inside its own crawler's network namespace. It records a salted hash of the address, never the address itself.
    - **The round's salt:** kept outside the archive.
-   - **`gate-round`:** compares the hashes across arms and days. It requires the declared exit for each arm and day, three distinct exits on each day, and the declared rotation.
-5. **`gate-round` (a new command; `gate` stays as it is for historical runs).** It judges one candidate's two daily `comb` reports and passes only if all of these hold:
-   - each report is bound to its declared round, day, candidate, exit, host and spec commit;
-   - the two have distinct run IDs;
-   - each shows fresh-store evidence;
-   - the two 24 h windows don't overlap;
-   - the exits match the declared rotation;
-   - each report's contention verdict is `ok` (§6.3);
-   - each passes the three tests (§6.4);
-   - the booked comparator's report and timeline are supplied, and rule 2.2 spacing has no problems.
-   - **A missing comparator or any spacing problem** gives `not_judged`.
+   - **The exit assignment:** each day's archive also holds the mapping of exit labels (X, Y, Z) to that round's hashes, written when the stacks come up and checked against every boundary reading.
+5. **`gate-round` (a new command; `gate` stays as it is for historical runs).**
+   - **Inputs:**
+     - the round's declaration, with its selected layout (§6.3);
+     - for each day, the full roster: every declared arm's `comb` report and that day's egress archive;
+     - the booked comparator's report and timeline.
+   - **It judges one candidate** and passes only if all of these hold:
+     - **the candidate is authorized:** declared as a candidate, not diagnostic. A diagnostic arm is never eligible, whatever its measurements;
+     - **validity:** both of the candidate's reports are `valid`, not rehearsal, and 24 h `comb` windows (the existing `gate`'s checks). An `invalid` or `void` report gives `not_judged`, even if every rate passes;
+     - **binding:** each report is bound to its declared round, day, candidate, exit, host and spec commit, with distinct run IDs;
+     - **fresh and separate:** each shows fresh-store evidence, and the two windows don't overlap;
+     - **the layout held:** on each day, every arm the layout declares has a report and was active through the candidate's window, with no arm beyond them. Each active arm had its own distinct exit at every boundary;
+     - **the rotation:** the candidate's two days used two different exits, as declared;
+     - **contention:** each day's verdict is `ok` (§6.3);
+     - **the tests:** each window passes the three crawler tests (§6.4);
+     - **spacing:** rule 2.2 has no problems.
+   - **Any missing input gives `not_judged`:** a missing peer report in a declared concurrent day, missing egress evidence, or a missing comparator. So does any layout or spacing problem.
 6. **Memory fit on the measured window.** The `anon` slope and its 95% bound are fitted over `ws + 12 h` to `ws + 24 h` of each day's window, not from the first baseline sample.
 7. **Fixtures, each with an expected verdict:**
 
@@ -231,8 +239,14 @@ The current tools can't judge round 1 correctly (code on `main` at ebd148d4b):
 | missing comparator | `not_judged` |
 | comparator spacing violation | `not_judged` |
 | contention breach on one day | `not_judged` for acceptance; solo confirmation required |
+| every rate passes, but the segment is void (a preset mismatch) | `not_judged` |
+| a diagnostic A whose measurements all pass | ineligible (`not_judged` for A) |
+| three-arm layout, both days valid and passing | `pass` |
+| two-arm layout (C dropped), A and B swapped across two exits | `pass` |
+| solo confirmation: one arm, two days on two exits | `pass` |
+| a declared concurrent day with one peer's report missing | `not_judged` |
 | CR-0w first start | `T_open` within minutes |
-| one arm's leak test | the other arms keep running |
+| one arm's leak test, and its failure cleanup | the other arms' guards, egress identity and tunnel traffic are intact |
 
 8. **Run sheet** (a round-1 sheet beside the stage-1 one):
    - **After each day's window:** stop every crawler, copy off and validate each archived segment with `segment`, and read the archive back.
@@ -290,8 +304,15 @@ A candidate's two daily windows give two separate verdicts:
 | 2 | Y | Z | X |
 
 - **What two days cover:** 6 of 9 arm–exit pairings. That supports an absolute pass on two observed exits per candidate. Day, exit and treatment interactions stay unresolved, and round 1 makes no comparative claim.
-- **If the rehearsal drops C:** A and B swap across the same two verified exits on day 2.
-- **Concurrency** is fixed after the rehearsal for both days.
+**Permitted layouts, declared before the rehearsal.** The rehearsal selects one, the selection is recorded in the round's archive, and it's fixed for both days:
+
+| Layout | Day 1 | Day 2 | When |
+|---|---|---|---|
+| **L3** | B–X, A–Y, C–Z | B–Y, A–Z, C–X | the rehearsal keeps C |
+| **L2** | B–X, A–Y | B–Y, A–X | the drop-C rule fires |
+| **S** (solo confirmation) | the candidate alone on one exit | the candidate alone on a different exit | after demonstrated contention (below) |
+
+`gate-round` checks the run against the selected layout (§5.2 item 5).
 
 **Days and timing:**
 - **Every day starts fresh:** new stores, data, state and witness directories, and node identities, including after the rehearsal. No restart inside a window.
@@ -301,8 +322,13 @@ A candidate's two daily windows give two separate verdicts:
   - leak tests before the day's starts and after all of that day's windows close;
   - restart drills after day 2's windows close.
 
-**Rehearsal (2 h, inside the 12 h gap; not a measurement):**
+**Rehearsal (inside the 12 h gap; not a measurement):**
 - **Setup:** all three arms on their day-1 exits, each passing its own leak test before and after. Fresh stores, deleted after.
+- **How it ends:**
+  - **Normally:** when every arm has supplied the drop-C rule's 60 active minutes.
+  - **If it runs out of time:** the rehearsal stops at 4 h. Any arm that hasn't supplied 60 active minutes by then fails the rehearsal.
+    - **If that arm is C,** C is dropped (layout L2), and the rule below is applied to A and B.
+    - **If it's a candidate,** round 1 doesn't start. Its setup is diagnosed and fixed, the rehearsal is repeated, and the booking slips day for day.
 - **The drop-C rule, frozen in the decisions file before the rehearsal:**
   - **Interval:** the rehearsal's last 60 min, starting only once every arm is crawling (sampling, and stored above 0 in the previous 10 min).
   - **The rule:** if host CPU p95 exceeds 70% of 8 vCPU, or steal p95 exceeds 3%, C is dropped. Those are tighter than the contention thresholds, to leave margin.
@@ -314,18 +340,22 @@ A candidate's two daily windows give two separate verdicts:
   - `/data` latency as the 10 s average time per completed write from `/proc/diskstats` deltas.
   - Percentiles are nearest-rank over every 10 s sample in the window.
 - **Thresholds:** CPU p95 ≤ 80% of 8 vCPU, steal p95 ≤ 5%, `/data` write latency p99 ≤ 50 ms.
-- **A breach with no infrastructure fault is demonstrated contention.** The day can't count for acceptance. That candidate needs a **solo confirmation:** two days alone on the host, under the same rules.
+- **A breach with no infrastructure fault is demonstrated contention.** The day can't count for acceptance, and that candidate needs a **solo confirmation:** layout S, under the same rules.
+- **If a solo run breaches the same thresholds,** the confirmation is recorded as failed and the miss report follows (§3.4). There's no further retry.
 
 **Events are classified in this order, and the first that applies decides:**
-1. **Infrastructure fault:** any of
-   - a host, VM or `/data` fault;
-   - a tunnel without a handshake for more than 180 s on any arm;
+1. **Evidenced infrastructure fault.** The event is shown by evidence outside the Lodestar process:
+   - a host, VM, `/data` or uplink fault in host logs or the collector's host series;
+   - a tunnel without a handshake for more than 180 s;
    - handshake gaps on two or more tunnels at once (a shared uplink);
-   - any arm down for more than 5 min;
    - a failed leak test.
-   - **Then:** every arm's window for that day is invalid, the event is published, and **the whole concurrent day is repeated,** from fresh stores, with the same arms and exits. No solo confirmation.
-2. **Demonstrated contention:** a threshold breach with no infrastructure fault that day. **Then:** solo confirmation for that candidate.
-3. **Neither:** the day stands.
+   - **Then:** every affected arm's window for that day is invalid, and the event is published with its evidence. **The whole concurrent day is repeated** automatically, from fresh stores, with the same layout and exits. No solo confirmation.
+2. **Product failure.** An arm's Lodestar process panics, is killed for memory, exits, or fails health checks, with no evidenced infrastructure fault.
+   - **The failing arm:** its window is invalid, and the cause is published with logs and memory series.
+   - **If the failing arm is a candidate,** its qualification is withheld pending diagnosis by the runner and a fresh reviewer. There's no automatic retry. A fix makes a new candidate, whose two-day count starts again. A diagnosis that finds an infrastructure cause after all reclassifies the event under 1.
+   - **Its peers:** losing an arm breaks the declared layout, so their windows that day are `not_judged` for acceptance. The day is repeated for them only once the failing arm is diagnosed. A diagnostic arm (C, or a diagnostic A) that fails again is dropped, and the layout changes only by the rules above.
+3. **Demonstrated contention:** a threshold breach with neither of the above that day. **Then:** solo confirmation (layout S) for that candidate.
+4. **None of these:** the day stands.
 
 - **Windows are never stitched** (rule 6.7).
 - **A valid miss** on either day ends that candidate's two-day claim (§6.4).
@@ -347,6 +377,7 @@ A candidate's two daily windows give two separate verdicts:
 - **Why the bound, not the point:** soak r3 measured 1.88 MiB/h and failed with an upper bound of 2.33.
 
 **What counts:**
+- **Only an authorized candidate qualifies,** on two `valid`, non-rehearsal, 24 h `comb` windows (§5.2 item 5). A diagnostic arm is never eligible, however its measurements turn out.
 - **A valid miss** on either day ends that candidate's two-day claim. The second day is a replicate, not a second chance.
 - **A memory fix creates a new candidate,** whose two-day count starts again.
 - **When a candidate ships,** its day-1 window is CR-COMB's acceptance window and G-v06-crawler's evidence (§8 item 3), and `gate-round` is the verdict of record.
@@ -355,7 +386,9 @@ A candidate's two daily windows give two separate verdicts:
 1. **Build from the qualified revision:** the CR-COMB defaults change is a commit on the qualified image's revision.
 2. **Record both digests:** the qualified image's and the shipping image's.
 3. **Check the diff:** the diff between the two revisions may only promote the tested settings to defaults (`crates/lodestar/src/config.rs` defaults, plus their tests and docs). The runner checks it, and a fresh reviewer confirms. Any behaviour change, including a dependency update, needs fresh qualification.
-4. **Check the effective settings:** a fresh start of the shipping image, with no environment and no config file, must report the qualified candidate's exact preset and 12 switch values through the settings API and §5.1's gauge.
+4. **Check the effective settings:** a fresh start of the shipping image, with no environment and no config file, must report the qualified candidate's exact preset, 12 switch values and `safe_restart` through the settings API and §5.1's gauge.
+
+**The order:** qualify the candidate (`gate-round` and shipping eligibility), then build the defaults-only image (steps 1–2), verify it (steps 3–4), and only then ship: the CR-COMB defaults change merges and the release uses that image.
 
 ### 6.6 Diagnostics (every arm, every hour)
 - Every CR-SPEC rule 6.10 series, plus the §4 ledger series.
@@ -393,7 +426,7 @@ The round-2 fix comes from round 1's measurements:
    - each has its own verified exit, with distinct hashes checked hourly (§5.2 item 4);
    - each passes its own leak test before and after;
    - concurrency is fixed for the round.
-   - The rehearsal, contention and event rules of §6.3 are part of the spec.
+   - The permitted layouts (L3, L2, S), the rehearsal and its ending rule, the contention rule, and the event classification of §6.3 are part of the spec, frozen before the rehearsal.
 3. **Acceptance (rules 6, 6.1 and 6.8):** CR-COMB's acceptance evidence may be a declared candidate's two round-1 windows when `gate-round` passes them (§5.2 item 5) and the candidate is shipping-eligible (§6.2). The qualification transfers only by §6.5's defaults-only rule.
 4. **Memory:** the fit uses measured-window hours 12–24 (§5.2 item 6).
 5. **Rehearsal:** a non-measurement Lodestar process may run within rule 2.2's 12 h after the comparator's window, from a store deleted afterwards.
@@ -411,16 +444,19 @@ The round-2 fix comes from round 1's measurements:
 3. **Merge CR-0w (#1134).** Its hold kept the stage-1 images' 6 h start timing (runner-state, 2026-11-27T10:30Z), and those stages no longer run.
 4. **Pin the round-1 image** after 2 and 3, by digest. Record it in the decisions file with every arm's declaration (§8 item 1) and the frozen drop-C rule (§6.3).
 5. **Optional cloud screen at Aggressive** (16 h, about $2.70). It's blocked while the X-test-vm lanes' SSM access is denied and until the owner has checked for an AWS quarantine policy (runner inbox, 2026-11-27T08:15Z). It never delays the box.
-6. **Box prep:** three per-arm stacks (§5.2 item 3) on three PIA servers with verified distinct egress hashes, each passing its own leak test; the power setting unchanged for the block.
+6. **Box prep, staged:**
+   - **During the comparator:** only files are staged: Compose files, declarations, the salt, and the pulled, pinned image. Nothing starts.
+   - **After the comparator's actual window end** (its `result.json` `ended`): bring up the three per-arm stacks on three PIA servers, verify distinct egress hashes, run each arm's leak test, then the rehearsal.
+   - The power setting stays unchanged for the block.
 
-**The CR-COMB defaults slice** is built after a candidate ships, on the qualified revision (§6.5).
+**The CR-COMB defaults change** comes after qualification: qualify, build and verify the defaults-only image, then ship (§6.5).
 
 **Calendar (estimate):**
 
 | Step | When (UTC) |
 |---|---|
 | Comparator window end | about 11-28T18:00Z |
-| Rehearsal | within the next 12 h |
+| Live stack bring-up, leak tests, rehearsal | after the comparator's window end, within the next 12 h |
 | Day 1 window | starts ≥ comparator end + 12 h; ends about 11-30T07:30Z |
 | Day 2 window | ends about 12-01T09:00Z |
 | Gate verdict | about 12-01, if no rerun or solo confirmation is needed |
@@ -486,6 +522,16 @@ The round-2 fix comes from round 1's measurements:
 | 5. Deterministic rehearsal and retry rules | §6.3: a frozen drop-C rule over a defined interval; 10 s sampling with nearest-rank percentiles; an ordered event classification (an infrastructure fault repeats the concurrent day; only demonstrated contention leads to solo days); disruptive steps outside every window |
 | CR-0 label | §2.1: stored torrents, not the CR-SPEC numerator |
 | Commands that fit the design | §5.2 item 8 and §11: `segment` per day with read-back, crawlers stopped before the swap, `gate-round` after day 2, raw archives kept; `effect` not used |
+
+**Review of revision 4, answered in revision 5:**
+
+| Finding | Change |
+|---|---|
+| 1. Make every permitted layout judgeable: the gate took only the candidate's reports and assumed three exits | §6.3: layouts L3, L2 and S declared before the rehearsal, with the selection recorded. §5.2 item 4: an exit-label-to-hash mapping per day. §5.2 item 5: `gate-round` takes the full roster and egress archive, and checks a distinct exit per active arm, two exits per candidate and the declared concurrency; a missing peer report is `not_judged`. Passing fixtures for L3, L2 and S |
+| 2. Preserve segment validity in the new gate | §5.2 item 5: two `valid`, non-rehearsal, 24 h `comb` reports of an authorized candidate. Fixtures: void with passing rates, and a diagnostic A with passing measurements, both `not_judged`. §6.4 |
+| 3. Close the retry loop | §6.3: only evidenced infrastructure faults retry automatically. A product failure (panic, OOM, exit) invalidates the window, is published, and withholds qualification pending diagnosis; a fix is a new candidate. A solo run that breaches the thresholds is a failed confirmation, and the miss report follows. The rehearsal stops at 4 h, with a rule for an arm that never supplies 60 active minutes |
+| 4. Test the other arms' VPN protection during leak-test cleanup | §5.2 item 3: a per-arm bridge, arm-tagged `DOCKER-USER` guard and counter, scoped cleanup; the fixture checks other arms' guards, egress identity and traffic during the test and its failure cleanup |
+| 5. Order of operations | §9: only files staged during the comparator; live bring-up and leak tests after its actual window end. §6.5: qualify, build and verify the defaults-only image, then ship; `safe_restart` included in the comparison |
 
 ## Sources
 - `docs/reviews/2026-11-20-path-to-100-review.md`
