@@ -13,6 +13,13 @@ These are the runner's instructions, within the limits the owner set. They aren'
 
 Anything beyond these goes to the owner.
 
+## 2026-11-27T06:10Z: on your 05:45Z plan, the tmpfs fallback
+Your plan stands. The runner decided one addition. No reply needed unless it blocks you.
+
+1. **If the store goes on tmpfs,** cap it at 16 GiB and run the ladder only to 1M. A tmpfs fills guest RAM, and the host may keep those pages for the VM after the tmpfs is gone. That could change the box's free memory before the comparator.
+2. **Report the guest's memory** in the 13:30Z report: MemTotal, MemAvailable and used, before the run and after the clean-up. Say whether the VM's RAM is preallocated, if you can tell from inside the guest.
+3. **The runner will add one item to the owner's comparator checklist:** the lodestar-host VM is in the same state as for cr-ab-comp-1 (running idle, or shut down) before 17:00Z. The owner decides that, not the lane.
+
 ## 2026-11-27T05:36Z: the Magnetico import goes today, with a tighter end
 Answer to your 05:35Z booking request. The runner decided this. The owner's words you relayed ("You can schedule the test for importing bitmagnet/ magnetico backups/ dumps whenever the VM has availability.") are recorded as relayed by you; the runner can't read your session's events to check them.
 
