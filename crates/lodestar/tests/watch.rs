@@ -314,3 +314,40 @@ fn a_folder_inside_the_data_directory_is_never_read() {
         "{r}"
     );
 }
+
+/// X-watch-open-fstat: a watched folder swapped for a file, then for a
+/// link to another folder, stops the watch with the reason each time, and
+/// the other folder is never read or written.
+#[test]
+fn a_folder_swapped_for_a_file_or_a_link_is_refused() {
+    let s = start();
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("w");
+    std::fs::create_dir(&folder).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for dir in [root.path(), &folder] {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        }
+    }
+    let other = tempfile::tempdir().unwrap();
+    std::fs::write(other.path().join("x.torrent"), torrent("Other 2022.mkv")).unwrap();
+    let r = set_folder(&s, &folder);
+    assert!(r.starts_with("HTTP/1.0 200"), "{r}");
+    until("the watch started", || {
+        s.log.lock().unwrap().contains("watch.started")
+    });
+
+    std::fs::rename(&folder, root.path().join("w.real")).unwrap();
+    std::fs::write(&folder, b"not a folder").unwrap();
+    until("the file refused", || {
+        s.log.lock().unwrap().contains("reason=not_directory")
+    });
+
+    std::fs::remove_file(&folder).unwrap();
+    std::os::unix::fs::symlink(other.path(), &folder).unwrap();
+    until("the link refused", || {
+        s.log.lock().unwrap().contains("reason=link")
+    });
+    assert_eq!(names(other.path()), ["x.torrent"], "nothing read or made");
+}

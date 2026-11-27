@@ -58,7 +58,9 @@ use lodestar_pipeline::local_torrent::{Closed, MAX_BYTES, Outcome, Uploads};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::settings::watch_folder::{After, FolderProblem, Watch, folder_problem, is_link};
+#[cfg(not(unix))]
+use crate::settings::watch_folder::is_link;
+use crate::settings::watch_folder::{After, FolderProblem, Watch, folder_problem};
 
 /// How often the folder is looked at: 10 s (≥ 5 s, plan §4.3; a §2.26
 /// number). A file is read on the second poll that sees it unchanged, so
@@ -851,7 +853,17 @@ enum MoveError {
 
 /// The folder for one poll, opened without following links, with its
 /// `added/` and `failed/` checked.
+///
+/// Every check describes the folder that was opened, not whatever its
+/// path names a moment later (X-watch-open-fstat). On Unix every step
+/// after the open goes through `fd`: its type and the data-directory
+/// rule are read from the handle, and the listing, each entry and both
+/// subfolders through it. Windows has no handle-relative calls without
+/// `unsafe`, so the path is checked to still name the held folder (by
+/// volume serial and file index) after the open, after the listing and
+/// after each read, and the poll stops on a mismatch.
 struct Folder {
+    #[cfg(not(unix))]
     path: PathBuf,
     #[cfg(unix)]
     fd: rustix::fd::OwnedFd,
@@ -859,14 +871,15 @@ struct Folder {
     /// delete sharing: none can be renamed, deleted or replaced by a
     /// junction until it ends (rv-765 I2). Unix uses `fd` instead.
     #[cfg(windows)]
-    _held: Vec<std::fs::File>,
+    held: Vec<std::fs::File>,
 }
 
 impl Folder {
     /// The folder as it is now: checked again every poll (its shape and
     /// the data-directory rule, so a folder swapped for a link, or for one
     /// inside the data directory, is never read), then opened without
-    /// following it and its `added/` and `failed/` checked.
+    /// following it, checked again through what was opened, and its
+    /// `added/` and `failed/` checked.
     fn open(path: &Path, data_dir: &Path) -> Result<Folder, Problem> {
         if let Some(p) = folder_problem(path, data_dir) {
             return Err(Problem::Folder(p));
@@ -886,6 +899,13 @@ impl Folder {
                 _ => Problem::Unreadable,
             })?
         };
+        // The path checks above may have seen another folder, should a
+        // parent have been swapped between them and the open: the same
+        // checks again, through the handle.
+        #[cfg(unix)]
+        if let Some(p) = handle_problem(&fd, data_dir).map_err(|_| Problem::Unreadable)? {
+            return Err(Problem::Folder(p));
+        }
         #[cfg(windows)]
         let held = hold(
             path,
@@ -895,27 +915,87 @@ impl Folder {
         )?;
         #[cfg_attr(not(windows), allow(unused_mut))]
         let mut f = Folder {
+            #[cfg(not(unix))]
             path: path.to_path_buf(),
             #[cfg(unix)]
             fd,
             #[cfg(windows)]
-            _held: vec![held],
+            held: vec![held],
         };
+        // The held folder can't be renamed or deleted now, so the path
+        // checks again describe it, as long as the path still names it.
+        #[cfg(windows)]
+        {
+            if let Some(p) = folder_problem(path, data_dir) {
+                return Err(Problem::Folder(p));
+            }
+            if !f.still_here() {
+                return Err(Problem::Unreadable);
+            }
+        }
         for sub in [ADDED, FAILED] {
             f.subfolder(sub)?;
             #[cfg(windows)]
-            f._held.push(hold(
+            f.held.push(hold(
                 &path.join(sub),
                 Problem::SubfolderLink,
                 Problem::SubfolderNotDirectory,
                 Problem::SubfolderCreate,
             )?);
         }
+        #[cfg(windows)]
+        if !f.still_here() {
+            return Err(Problem::Unreadable);
+        }
         Ok(f)
+    }
+
+    /// Whether the path still names the folder held open, by volume
+    /// serial and file index: a parent junction pointed elsewhere since
+    /// the open would make every path-based step act on another folder.
+    #[cfg(windows)]
+    fn still_here(&self) -> bool {
+        let Some(Ok(held)) = self.held.first().map(std::fs::File::try_clone) else {
+            return false;
+        };
+        match (
+            same_file::Handle::from_path(&self.path),
+            same_file::Handle::from_file(held),
+        ) {
+            (Ok(now), Ok(held)) => now == held,
+            _ => false,
+        }
     }
 
     /// Checks `name` inside the folder is a real directory, creating it
     /// when it's missing. A link there stops the watch.
+    #[cfg(unix)]
+    fn subfolder(&self, name: &str) -> Result<(), Problem> {
+        use rustix::fs::{AtFlags, FileType, statat};
+        let check = |st: rustix::fs::Stat| match FileType::from_raw_mode(st.st_mode) {
+            FileType::Symlink => Err(Problem::SubfolderLink),
+            FileType::Directory => Ok(()),
+            _ => Err(Problem::SubfolderNotDirectory),
+        };
+        match statat(&self.fd, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(st) => check(st),
+            Err(rustix::io::Errno::NOENT) => {
+                match rustix::fs::mkdirat(&self.fd, name, rustix::fs::Mode::from(0o777)) {
+                    Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                    Err(_) => return Err(Problem::SubfolderCreate),
+                }
+                check(
+                    statat(&self.fd, name, AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(|_| Problem::SubfolderCreate)?,
+                )
+            }
+            Err(_) => Err(Problem::SubfolderCreate),
+        }
+    }
+
+    /// Checks `name` inside the folder is a real directory, creating it
+    /// when it's missing. A link there stops the watch.
+    #[cfg(not(unix))]
     fn subfolder(&self, name: &str) -> Result<(), Problem> {
         let path = self.path.join(name);
         let check = |meta: &std::fs::Metadata| {
@@ -930,12 +1010,7 @@ impl Folder {
         match std::fs::symlink_metadata(&path) {
             Ok(meta) => check(&meta),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                #[cfg(unix)]
-                let made = rustix::fs::mkdirat(&self.fd, name, rustix::fs::Mode::from(0o777))
-                    .map_err(std::io::Error::from);
-                #[cfg(not(unix))]
-                let made = std::fs::create_dir(&path);
-                match made {
+                match std::fs::create_dir(&path) {
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(_) => return Err(Problem::SubfolderCreate),
@@ -956,24 +1031,51 @@ impl Folder {
     fn list(&self) -> std::io::Result<(Vec<OsString>, bool)> {
         let mut names = Vec::new();
         let mut whole = true;
-        for (read, entry) in std::fs::read_dir(&self.path)?.enumerate() {
+        // Through the handle on Unix; `.` and `..` skipped, as `read_dir`
+        // does, before anything is counted.
+        #[cfg(unix)]
+        let entries = rustix::fs::Dir::read_from(&self.fd)?
+            .map(|e| {
+                use std::os::unix::ffi::OsStrExt;
+                e.map(|e| OsStr::from_bytes(e.file_name().to_bytes()).to_os_string())
+            })
+            .filter(|e| !e.as_ref().is_ok_and(|n| n == "." || n == ".."));
+        #[cfg(windows)]
+        let entries = std::fs::read_dir(&self.path)?.map(|e| e.map(|e| e.file_name()));
+        for (read, entry) in entries.enumerate() {
             if read == MAX_LIST || names.len() == MAX_SCAN {
                 whole = false;
                 break;
             }
-            let Ok(entry) = entry else {
+            let Ok(name) = entry else {
                 whole = false;
                 continue;
             };
-            let name = entry.file_name();
             if is_torrent_name(&name) {
                 names.push(name);
             }
+        }
+        #[cfg(windows)]
+        if !self.still_here() {
+            return Err(std::io::ErrorKind::NotFound.into());
         }
         Ok((names, whole))
     }
 
     /// What `name` is, read without following it.
+    #[cfg(unix)]
+    fn entry(&self, name: &OsStr) -> Option<Entry> {
+        use rustix::fs::{AtFlags, FileType};
+        let st = rustix::fs::statat(&self.fd, name, AtFlags::SYMLINK_NOFOLLOW).ok()?;
+        Some(match FileType::from_raw_mode(st.st_mode) {
+            FileType::Symlink => Entry::Link,
+            FileType::RegularFile => Entry::File(shape(&st)),
+            _ => Entry::Other,
+        })
+    }
+
+    /// What `name` is, read without following it.
+    #[cfg(not(unix))]
     fn entry(&self, name: &OsStr) -> Option<Entry> {
         let meta = std::fs::symlink_metadata(self.path.join(name)).ok()?;
         Some(if is_link(&meta) {
@@ -1032,6 +1134,10 @@ impl Folder {
         let mut body = Vec::with_capacity(meta.len() as usize);
         match file.take(MAX_BYTES as u64 + 1).read_to_end(&mut body) {
             Ok(_) if body.len() > MAX_BYTES => Taken::Refuse(Cause::TooLarge),
+            // Opened by its path on Windows: only a file of the held
+            // folder counts. Judged afresh by a later poll otherwise.
+            #[cfg(windows)]
+            Ok(_) if !self.still_here() => Taken::Wait,
             Ok(_) => Taken::Body(body),
             Err(e) if busy(&e) => Taken::Wait,
             Err(_) => Taken::Refuse(Cause::Unreadable),
@@ -1191,6 +1297,84 @@ impl Folder {
         let found = std::fs::symlink_metadata(self.path.join(name)).map(drop);
         found.is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
     }
+}
+
+/// `..` from a handle as far as it goes, at most this many times.
+#[cfg(unix)]
+const MAX_DEPTH: usize = 1024;
+
+/// The folder `dir` is and every folder above it, found by `..` from the
+/// handle, never by a path: where the folder really is now, whatever its
+/// path names. `..` needs only search permission, which reaching the
+/// folder took.
+#[cfg(unix)]
+fn ancestry(dir: impl rustix::fd::AsFd) -> rustix::io::Result<Vec<rustix::fs::Stat>> {
+    let mut chain = vec![rustix::fs::fstat(&dir)?];
+    let mut up = String::new();
+    for _ in 0..MAX_DEPTH {
+        up.push_str("../");
+        let st = rustix::fs::statat(&dir, up.as_str(), rustix::fs::AtFlags::empty())?;
+        // `..` of the root is the root.
+        if chain.last().is_some_and(|last| same(last, &st)) {
+            return Ok(chain);
+        }
+        chain.push(st);
+    }
+    Err(rustix::io::Errno::NAMETOOLONG)
+}
+
+/// The same file: device and inode.
+#[cfg(unix)]
+fn same(a: &rustix::fs::Stat, b: &rustix::fs::Stat) -> bool {
+    a.st_dev == b.st_dev && a.st_ino == b.st_ino
+}
+
+/// [`folder_problem`]'s type and data-directory rule, through the opened
+/// folder's handle (X-watch-open-fstat). A data directory that can't be
+/// opened leaves the path check alone to decide, as it does today.
+#[cfg(unix)]
+fn handle_problem(
+    folder: &rustix::fd::OwnedFd,
+    data_dir: &Path,
+) -> rustix::io::Result<Option<FolderProblem>> {
+    use rustix::fs::{FileType, Mode, OFlags};
+    let here = ancestry(folder)?;
+    if !FileType::from_raw_mode(here[0].st_mode).is_dir() {
+        return Ok(Some(FolderProblem::NotDirectory));
+    }
+    let Ok(data) = rustix::fs::open(
+        data_dir,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) else {
+        return Ok(None);
+    };
+    let data = ancestry(&data)?;
+    Ok(if here.iter().any(|d| same(d, &data[0])) {
+        Some(FolderProblem::InsideDataDir)
+    } else if data.iter().any(|d| same(d, &here[0])) {
+        Some(FolderProblem::HoldsDataDir)
+    } else {
+        None
+    })
+}
+
+/// A file's size and modification time from `stat`, as
+/// [`std::fs::Metadata`] gives them, so a listing compares with the open
+/// file's own metadata in [`Folder::read`].
+#[cfg(unix)]
+// The fields' types differ by target.
+#[allow(clippy::unnecessary_cast)]
+fn shape(st: &rustix::fs::Stat) -> Shape {
+    let (secs, nanos) = (st.st_mtime as i64, st.st_mtime_nsec as u32);
+    let modified = if secs >= 0 {
+        SystemTime::UNIX_EPOCH.checked_add(Duration::new(secs as u64, nanos))
+    } else {
+        SystemTime::UNIX_EPOCH
+            .checked_sub(Duration::from_secs(secs.unsigned_abs()))
+            .and_then(|t| t.checked_add(Duration::from_nanos(u64::from(nanos))))
+    };
+    (st.st_size as u64, modified)
 }
 
 /// Opens the directory at `path` itself, never what a junction there
@@ -2277,6 +2461,113 @@ mod tests {
             );
         }
 
+        /// X-watch-open-fstat: a parent swapped for a link to another
+        /// folder after the open changes nothing for that poll. It lists,
+        /// reads and moves only what's in the folder it opened, never the
+        /// other one. The next poll follows the path, parent links
+        /// included, as it always has.
+        #[test]
+        fn a_parent_swapped_after_the_open_still_reads_the_opened_folder() {
+            let root = tempfile::tempdir().unwrap();
+            let data = tempfile::tempdir().unwrap();
+            let (mine, other) = (root.path().join("p/w"), root.path().join("o/w"));
+            std::fs::create_dir_all(&mine).unwrap();
+            std::fs::create_dir_all(&other).unwrap();
+            std::fs::write(mine.join("a.torrent"), b"MINE").unwrap();
+            std::fs::write(other.join("b.torrent"), b"OTHER").unwrap();
+            let f = Folder::open(&mine, data.path()).unwrap();
+            let moved = root.path().join("p.old");
+            std::fs::rename(root.path().join("p"), &moved).unwrap();
+            std::os::unix::fs::symlink(root.path().join("o"), root.path().join("p")).unwrap();
+            assert_eq!(std::fs::read(mine.join("b.torrent")).unwrap(), b"OTHER");
+
+            let (names, whole) = f.list().unwrap();
+            assert_eq!((names, whole), (vec![OsString::from("a.torrent")], true));
+            assert!(f.entry(OsStr::new("b.torrent")).is_none());
+            let Some(Entry::File(shape)) = f.entry(OsStr::new("a.torrent")) else {
+                panic!("a.torrent is a file");
+            };
+            assert!(matches!(
+                f.read(OsStr::new("a.torrent"), shape),
+                Taken::Body(b) if b == b"MINE"
+            ));
+            assert!(f.move_out(OsStr::new("a.torrent"), None).is_ok());
+            assert!(moved.join("w").join(ADDED).join("a.torrent").exists());
+            assert!(!other.join(ADDED).exists(), "nothing made in the other");
+            assert_eq!(std::fs::read(other.join("b.torrent")).unwrap(), b"OTHER");
+
+            let next = Folder::open(&mine, data.path()).unwrap();
+            assert_eq!(next.list().unwrap().0, [OsString::from("b.torrent")]);
+        }
+
+        /// X-watch-open-fstat: the data-directory rule read through the
+        /// opened folder's handle, so a folder that passed the path check
+        /// but turns out, once open, to be in the data directory (or to
+        /// hold it) is refused.
+        #[test]
+        fn the_data_directory_rule_is_read_through_the_handle() {
+            use rustix::fs::{Mode, OFlags};
+            let data = tempfile::tempdir().unwrap();
+            let elsewhere = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(data.path().join("in/deeper")).unwrap();
+            let open = |p: &Path| {
+                rustix::fs::open(
+                    p,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .unwrap()
+            };
+            let problem = |p: &Path| handle_problem(&open(p), data.path()).unwrap();
+            for inside in [data.path(), &data.path().join("in/deeper")] {
+                assert_eq!(problem(inside), Some(FolderProblem::InsideDataDir));
+            }
+            let above = data.path().parent().unwrap();
+            assert_eq!(problem(above), Some(FolderProblem::HoldsDataDir));
+            assert_eq!(problem(Path::new("/")), Some(FolderProblem::HoldsDataDir));
+            assert_eq!(problem(elsewhere.path()), None);
+            // `..` from the root ends the walk at the root.
+            assert_eq!(ancestry(open(Path::new("/"))).unwrap().len(), 1);
+        }
+
+        /// A listing's shape for a file is the one its open handle gives,
+        /// to the nanosecond, so a still file is read on its second poll.
+        #[test]
+        fn a_listed_shape_is_the_open_files_shape() {
+            let t = T::new();
+            t.put("a.torrent", b"fine");
+            let file = std::fs::File::options()
+                .write(true)
+                .open(t.dir().join("a.torrent"))
+                .unwrap();
+            let when = SystemTime::UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_789);
+            file.set_modified(when).unwrap();
+            let meta = file.metadata().unwrap();
+            let f = Folder::open(t.dir(), t.data.path()).unwrap();
+            let Some(Entry::File(shape)) = f.entry(OsStr::new("a.torrent")) else {
+                panic!("a.torrent is a file");
+            };
+            assert_eq!(shape, (meta.len(), meta.modified().ok()));
+            assert_eq!(shape, (4, Some(when)));
+        }
+
+        /// A file in place of the folder, or of `added/`, is refused.
+        #[test]
+        fn a_file_in_place_of_a_folder_is_refused() {
+            let t = T::new();
+            let file = t.dir().join("plain");
+            std::fs::write(&file, b"x").unwrap();
+            assert_eq!(
+                Folder::open(&file, t.data.path()).err(),
+                Some(Problem::Folder(FolderProblem::NotDirectory))
+            );
+            std::fs::write(t.dir().join(ADDED), b"x").unwrap();
+            assert_eq!(
+                Folder::open(t.dir(), t.data.path()).err(),
+                Some(Problem::SubfolderNotDirectory)
+            );
+        }
+
         /// A file that can't be moved (here, its name in `failed/` would
         /// be too long, which binds even for root) is remembered, never
         /// read again, reported once each, and a full set stops the watch.
@@ -2431,6 +2722,37 @@ mod tests {
             assert!(std::fs::rename(t.dir(), &moved).is_err());
             drop(f);
             std::fs::rename(t.dir().join(ADDED), t.dir().join("x")).unwrap();
+        }
+
+        /// X-watch-open-fstat: a parent junction pointed at another
+        /// folder after the open stops the poll. Nothing is listed or
+        /// read from the other folder through the old path.
+        #[test]
+        fn a_parent_junction_pointed_elsewhere_stops_the_poll() {
+            let root = tempfile::tempdir().unwrap();
+            let data = tempfile::tempdir().unwrap();
+            let (x, y) = (root.path().join("x"), root.path().join("y"));
+            std::fs::create_dir_all(x.join("w")).unwrap();
+            std::fs::create_dir_all(y.join("w")).unwrap();
+            std::fs::write(y.join("w").join("b.torrent"), b"OTHER").unwrap();
+            let j = root.path().join("j");
+            junction(&j, &x);
+            let f = Folder::open(&j.join("w"), data.path()).unwrap();
+            assert!(f.list().is_ok());
+            std::fs::remove_dir(&j).unwrap();
+            junction(&j, &y);
+            assert!(f.list().is_err(), "the other folder is never listed");
+            let Some(Entry::File(shape)) = f.entry(OsStr::new("b.torrent")) else {
+                panic!("b.torrent is a file through the path");
+            };
+            assert!(matches!(
+                f.read(OsStr::new("b.torrent"), shape),
+                Taken::Wait
+            ));
+            drop(f);
+            // The next poll follows the path, as it always has.
+            let next = Folder::open(&j.join("w"), data.path()).unwrap();
+            assert_eq!(next.list().unwrap().0, [OsString::from("b.torrent")]);
         }
 
         /// rv-765 I1: a file held open without delete sharing is never
