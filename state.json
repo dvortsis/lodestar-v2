@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T01:35Z",
+  "updated_at": "2026-11-27T02:00Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,16 +11116,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T01:35Z",
+    "updated": "2026-11-27T02:00Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-soft-absent-void",
+        "slice": "X-gs-followups-2",
         "role": "build",
-        "model": "opus",
-        "agent": "session_01MMjhnBE6Jp9HvVjaX94y7c",
-        "doing": "building: analyzer voids a soft B-arm segment without the soft-timeout counter (path to 100)",
-        "since": "2026-11-27T01:35Z"
+        "model": "sonnet",
+        "agent": "pending",
+        "doing": "starting: Related and Parsed follow-ups (queued by the stand-in)",
+        "since": "2026-11-27T02:00Z"
       },
       {
         "slot": 2,
@@ -12007,6 +12007,13 @@
       "slice": "X-filter15-fix",
       "merged": "d56d0f6d",
       "at": "2026-11-14T16:11Z"
+    },
+    {
+      "pr": 1124,
+      "slice": "X-soft-absent-void",
+      "sha": "0baf8546ed6703ba2758c37f5368852e2cd494bc",
+      "at": "2026-11-27T02:00Z",
+      "note": "fresh Opus MERGE (7/7 mutations killed); \u00a72.19 flag in r18"
     }
   ],
   "review_sessions": [],
@@ -12208,11 +12215,6 @@
     "metrics docs PR (held by owner pause): also docs/metrics.md:677 and crates/lodestar/src/metrics.rs:1643 help text: dht_sample_spill_slots now counts live cooldowns only (rv-1122)"
   ],
   "owns_locks": {
-    "X-soft-absent-void": [
-      "docs/soak/tools/analyze_cr.py",
-      "docs/soak/tools/test_analyze_cr_soft.py",
-      "infra/fleet/tests/test_block.py"
-    ],
     "X-restart-fuzz-v2": [
       "fuzz/fuzz_targets/dht_restart.rs",
       "fuzz/corpus/dht_restart/**",
