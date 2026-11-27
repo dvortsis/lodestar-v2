@@ -7,107 +7,107 @@ swarm: catalogue=20000 live=9108 held=61320 distinct_held=19026 max_peers=12
 fetch: unreachable=300‰ ok=450‰@900ms slow=100‰@6000ms refuse=250‰@80ms connect_timeout=4000ms timeout=8000ms
 pool: sockets=400 per_ip=2 max_pending=200000 max_lookups=256 lookup_wait=30s retry_backoff=120s max_attempts=4
 
-# leg 1: a first start with dht.safe_restart on, sampling 20 min after its suppression
-suppression=21604s samples_in_suppression=0 first_sample_at=21604s reason_at_stop=first_start stored=958 stored_first_hour=0
-samples: sent=2979 answered=1931 errors=654 unanswered=394 sample_failures=1048 sealed=0 sample_stale=0
+# leg 1: a first start with dht.safe_restart on, sampling at once for 20 min
+first_sample_at=1s reason_at_stop=first_start stored=976
+samples: sent=2988 answered=1942 errors=652 unanswered=394 sample_failures=1046 sealed=0 sample_stale=0
 
 # leg 2: 120s later, dht.safe_restart on
 
 # per minute: counter deltas; gauges sampled each second as mean/max
 min admitted rejected completed peers_found fetch_started fetched stored harvested dht_active dht_queued pool_lookups pool_active
-  1 51 9177 49 19 52 8 8 80 4/32 0/0 8/256 2/8
-  2 126 30 109 65 140 50 50 859 12/32 0/0 13/32 6/15
-  3 224 9210 225 113 269 95 95 1207 21/32 0/0 26/250 14/20
-  4 186 76 190 95 213 85 85 959 20/32 0/0 21/32 9/18
-  5 255 9261 249 97 203 89 89 963 24/32 0/0 29/249 10/16
-  6 244 112 233 105 240 99 99 1107 25/32 0/0 26/32 12/21
-  7 214 9240 232 99 213 93 93 625 20/32 0/0 25/246 10/20
-  8 230 138 218 95 224 90 90 937 23/32 0/0 24/32 11/20
-  9 239 9394 251 104 271 98 98 792 24/32 0/0 29/251 15/21
- 10 222 117 203 82 202 74 74 722 22/32 0/0 23/32 9/17
- 11 230 9235 241 80 200 78 78 616 23/32 0/0 28/252 10/20
- 12 218 144 207 70 159 64 64 738 22/32 0/0 24/32 7/15
- 13 246 9269 253 73 150 66 66 695 25/32 0/0 30/246 7/15
- 14 230 129 223 72 156 61 61 969 24/32 0/0 26/32 8/16
- 15 224 9282 238 63 138 56 56 818 25/32 0/0 30/244 7/12
- 16 224 94 212 68 157 69 69 643 21/32 0/0 22/32 7/15
- 17 208 9415 215 55 128 49 49 433 23/32 0/0 31/256 5/11
- 18 174 27 180 26 78 26 26 208 15/32 0/0 16/32 4/9
- 19 185 9157 177 40 107 32 32 237 19/32 0/0 27/248 4/10
- 20 132 6 144 20 54 21 21 279 13/32 0/0 14/32 2/10
- 21 136 9135 140 10 32 10 10 139 13/32 0/0 21/252 2/8
- 22 82 0 80 17 35 16 16 209 8/14 0/0 8/17 1/6
- 23 122 9140 126 19 41 19 19 203 12/32 0/0 20/248 1/7
- 24 66 0 61 7 13 5 5 235 6/13 0/0 7/14 0/4
- 25 122 9359 124 16 52 14 14 219 13/32 0/0 21/256 2/7
- 26 78 0 78 18 40 19 19 382 8/18 0/0 9/19 1/6
- 27 76 9145 78 16 37 12 12 241 8/32 0/0 15/246 1/7
- 28 61 0 57 21 42 22 22 320 5/14 0/0 6/14 2/4
- 29 109 9130 117 37 76 33 33 237 11/32 0/0 19/248 4/12
- 30 17 0 20 9 26 11 11 217 1/4 0/0 1/4 0/4
- 31 67 9105 67 15 35 13 13 207 7/32 0/0 14/249 1/7
- 32 9 0 10 10 21 10 10 171 0/2 0/0 0/2 0/2
- 33 80 9405 80 21 58 7 7 174 7/32 0/0 15/256 3/13
- 34 11 0 10 10 21 9 9 236 0/3 0/0 1/3 1/4
- 35 61 9067 62 31 70 31 31 137 4/32 0/0 11/245 2/11
- 36 8 0 7 7 13 5 5 139 0/4 0/0 0/4 0/2
- 37 89 9040 89 29 73 26 26 93 7/32 0/0 15/249 3/9
- 38 8 0 8 8 16 10 10 84 0/3 0/0 0/3 0/2
- 39 82 9009 81 19 45 17 17 95 7/32 0/0 14/245 2/6
- 40 5 0 7 7 13 8 8 48 0/3 0/0 0/3 0/2
- 41 95 9245 93 14 28 8 8 71 7/32 0/0 11/256 1/6
- 42 6 0 7 7 22 7 7 42 0/3 0/0 0/3 1/3
- 43 57 9037 56 18 33 16 16 53 6/32 0/0 13/249 1/9
- 44 30 0 25 6 12 5 5 71 2/10 0/0 2/10 0/2
- 45 126 9033 126 27 62 25 25 71 11/32 0/0 19/250 3/9
- 46 69 0 68 3 21 5 5 57 7/17 0/0 7/17 1/3
- 47 128 9001 133 24 60 20 20 57 11/31 0/0 19/246 3/13
- 48 67 0 65 10 16 11 11 74 6/10 0/0 7/11 0/2
- 49 131 9199 134 7 26 5 5 20 12/31 0/0 19/249 1/4
- 50 74 0 66 2 5 2 2 61 6/11 0/0 6/12 0/1
- 51 115 8973 115 24 44 16 16 50 10/32 0/0 17/250 2/10
- 52 85 0 85 6 20 8 8 50 8/15 0/0 9/16 0/3
- 53 143 8958 142 13 24 12 12 59 13/32 0/0 21/244 1/4
- 54 54 0 59 3 8 3 3 30 5/10 0/0 5/11 0/1
- 55 128 8942 124 11 21 9 9 32 12/32 0/0 20/247 0/6
- 56 57 0 58 2 4 2 2 15 6/10 0/0 6/11 0/1
- 57 139 9176 143 2 7 1 1 4 13/32 0/0 17/250 0/2
- 58 63 0 54 0 0 0 0 3 6/14 0/0 6/14 0/0
- 59 73 8926 82 6 16 5 5 3 7/32 0/0 14/244 0/5
- 60 36 0 38 0 0 0 0 2 3/7 0/0 4/8 0/0
-steady (after 3 warmup min), per min: admitted=116.2 rejected=4510.9 completed=116.5 fetched=28.2 stored=28.2
+  1 41 9140 38 15 58 10 10 20 3/32 0/0 7/256 3/11
+  2 173 42 146 91 182 63 63 1067 16/32 0/0 18/32 8/20
+  3 183 9175 201 117 323 99 99 1013 20/32 0/0 25/250 18/24
+  4 217 72 203 94 233 98 98 969 22/32 0/0 23/32 11/22
+  5 231 9242 241 107 234 95 95 1025 26/32 0/0 30/240 11/18
+  6 227 87 218 86 205 73 73 849 22/32 0/0 24/32 10/19
+  7 256 9221 259 110 246 104 104 823 26/32 0/0 31/242 12/23
+  8 267 112 257 110 235 104 104 1131 25/31 0/0 27/32 12/20
+  9 243 9332 244 88 217 82 82 630 25/32 0/0 30/256 10/19
+ 10 224 93 223 81 188 80 80 671 23/31 0/0 24/32 9/15
+ 11 191 9206 197 59 150 51 51 570 19/32 0/0 24/244 7/14
+ 12 250 118 244 79 157 67 67 832 24/32 0/0 26/32 7/11
+ 13 211 9250 217 55 161 59 59 744 23/32 0/0 27/246 8/15
+ 14 247 113 244 71 157 63 63 1011 24/32 0/0 26/32 7/12
+ 15 217 9238 223 79 181 75 75 745 24/32 0/0 29/250 8/15
+ 16 246 80 241 76 180 65 65 723 23/32 0/0 25/32 9/14
+ 17 209 9433 223 54 128 51 51 310 23/31 0/0 30/256 6/13
+ 18 198 20 185 28 76 26 26 335 18/32 0/0 19/32 4/9
+ 19 136 9165 151 20 51 19 19 129 15/32 0/0 23/248 3/9
+ 20 119 0 103 2 3 2 2 244 11/28 0/0 11/29 0/2
+ 21 103 9159 121 19 34 18 18 206 12/32 0/0 20/250 1/5
+ 22 80 0 87 4 14 4 4 234 8/14 0/0 8/14 0/3
+ 23 113 9122 110 18 40 14 14 285 10/32 0/0 17/244 1/9
+ 24 67 0 61 4 9 5 5 157 6/14 0/0 6/15 0/2
+ 25 134 9348 140 27 73 20 20 264 14/32 0/0 21/255 4/10
+ 26 110 0 107 37 72 38 38 386 11/29 0/0 12/31 3/10
+ 27 92 9137 97 28 55 26 26 205 9/32 0/0 17/248 2/7
+ 28 30 0 32 12 25 9 9 204 3/8 0/0 3/10 1/4
+ 29 78 9130 79 27 61 25 25 283 8/32 0/0 15/245 3/12
+ 30 13 0 12 12 24 9 9 210 0/6 0/0 1/6 1/4
+ 31 94 9105 94 37 110 31 31 265 10/32 0/0 17/251 5/14
+ 32 9 0 9 8 30 12 12 168 0/4 0/0 0/4 1/4
+ 33 88 9424 89 21 64 13 13 172 9/32 0/0 16/253 3/7
+ 34 14 0 13 13 27 15 15 170 1/4 0/0 1/4 1/5
+ 35 55 9067 57 25 57 19 19 184 4/32 0/0 12/245 3/12
+ 36 19 0 19 19 36 17 17 135 2/8 0/0 2/8 1/4
+ 37 83 9038 82 25 71 20 20 103 7/32 0/0 15/251 3/12
+ 38 12 0 13 13 48 13 13 72 1/7 0/0 1/7 2/6
+ 39 95 9005 95 19 59 17 17 78 7/32 0/0 15/250 3/9
+ 40 5 0 5 4 11 5 5 68 0/2 0/0 0/2 0/2
+ 41 78 9267 76 10 22 4 4 56 7/32 0/0 15/250 1/6
+ 42 5 0 7 7 22 8 8 40 0/2 0/0 0/2 1/3
+ 43 55 8997 54 21 56 19 19 62 4/32 0/0 12/252 2/11
+ 44 36 0 28 3 3 3 3 30 2/9 0/0 2/10 0/1
+ 45 111 9009 115 14 31 13 13 47 10/32 0/0 18/250 1/4
+ 46 69 0 68 8 19 8 8 72 7/14 0/0 8/14 1/3
+ 47 129 9005 125 16 39 15 15 69 11/32 0/0 19/244 1/10
+ 48 66 0 70 6 10 6 6 59 6/10 0/0 6/10 0/2
+ 49 151 9250 144 15 38 8 8 51 13/32 0/0 21/246 2/8
+ 50 78 0 81 4 10 3 3 48 7/14 0/0 8/14 0/3
+ 51 112 8955 116 21 38 19 19 54 10/32 0/0 17/248 1/9
+ 52 81 0 73 1 1 1 1 41 7/13 0/0 7/14 0/1
+ 53 117 8943 124 14 27 13 13 34 11/32 0/0 19/244 1/7
+ 54 89 0 83 6 16 5 5 38 9/16 0/0 10/17 0/2
+ 55 111 8932 120 5 11 4 4 28 10/32 0/0 15/240 0/4
+ 56 58 0 55 2 3 2 2 10 5/9 0/0 5/10 0/1
+ 57 139 9207 142 10 24 6 6 12 13/32 0/0 21/249 1/5
+ 58 70 0 69 0 0 0 0 8 6/11 0/0 7/11 0/0
+ 59 78 8907 82 8 18 6 6 3 9/32 0/0 16/245 0/7
+ 60 20 0 17 0 0 0 0 0 1/5 0/0 1/5 0/0
+steady (after 3 warmup min), per min: admitted=116.4 rejected=4505.1 completed=116.6 fetched=27.8 stored=27.8
 
 # DHT node stats at the end (node::StatsSnapshot), one per line
-packets_in=122194
-packets_out=144092
+packets_in=122470
+packets_out=144683
 malformed_in=0
 queries_in=0
-responses_in=121618
-errors_in=576
-queries_out=144092
-timeouts=21879
-throttled=39
+responses_in=121858
+errors_in=612
+queries_out=144683
+timeouts=22197
+throttled=0
 send_errors=0
 spoofed=0
 routing_nodes=69
-outstanding=18
-harvested_sample=18498
+outstanding=14
+harvested_sample=18452
 harvest_dropped=0
-lookups_completed=7024
-samples_sent=3409
-sample_failures=151
-sample_cooling=1960
+lookups_completed=7029
+samples_sent=3398
+sample_failures=163
+sample_cooling=1954
 sample_inflight=0
 sample_stale=0
 sample_frontier=0
 sample_deferred=0
-peer_admitted=7027
-peer_rejected=275538
-peer_rejected_capacity=275538
+peer_admitted=7033
+peer_rejected=275146
+peer_rejected_capacity=275146
 peer_rejected_paused=0
 peer_rejected_caller_closed=0
 peer_ack_failed=0
-peer_command_full=183687
+peer_command_full=182721
 peer_command_closed=0
 peer_cancelled=0
 peer_queued_dropped_caller_closed=0
@@ -115,14 +115,14 @@ peer_queued_dropped_paused=0
 peer_active=3
 peer_queued=0
 lookup_scheduled=10
-lookup_deadlines=1
+lookup_deadlines=3
 denied=0
 
 # fetch pool stats at the end (PoolStats)
-pending=15944 active=0 waiting=15944 lookups=3 lookup_backlog=0
-fetched=1760 duplicates=15861 finder_full=0 finder_closed=0 lookup_unaccepted=459225 retry_unaccepted=419489
-failures: Unreachable=1275 TimedOut=724 Refused=783 EncryptionFailed=0 Invalid=0 Oversize=0 HashMismatch=0
-lost: NoPeers=932 TimedOut=37 Refused=37 EncryptionFailed=0 Oversize=0 Invalid=0 Blocked=0 Evicted=0 GaveUp=0 Unreachable=56
+pending=15958 active=0 waiting=15958 lookups=4 lookup_backlog=0
+fetched=1759 duplicates=15768 finder_full=0 finder_closed=0 lookup_unaccepted=457867 retry_unaccepted=417984
+failures: Unreachable=1329 TimedOut=761 Refused=824 EncryptionFailed=0 Invalid=0 Oversize=0 HashMismatch=0
+lost: NoPeers=925 TimedOut=35 Refused=39 EncryptionFailed=0 Oversize=0 Invalid=0 Blocked=0 Evicted=0 GaveUp=0 Unreachable=64
 evicted_service: unaccepted=0 lookup=0 peers=0 fetch=0
 admission_waits=0
 admission_wait_cancelled=0
@@ -144,21 +144,21 @@ dht_stream_seen_full=0
 dht_stream_terminals=0
 dht_stream_first_batches=0
 dht_stream_first_batch_millis=0
-funnel: Harvested=2637 PeerFound=1953 Fetched=1760 Lost=0
+funnel: Harvested=2684 PeerFound=1965 Fetched=1759 Lost=0
 
 # scripted network
-queries=210925 ping=1604 find_node=64424 get_peers=138509 sample=6388 other=0
-to_dead=24072 to_unknown=0 lost=7398 rate_limited=314 errors=897 unsupported=648 sample_early=0 replies=179141 values_replies=24052
-discoveries_dropped=0 pool_queue_at_end=15944
+queries=210738 ping=0 find_node=64066 get_peers=140286 sample=6386 other=0
+to_dead=24459 to_unknown=0 lost=7344 rate_limited=386 errors=888 unsupported=648 sample_early=0 replies=178549 values_replies=24309
+discoveries_dropped=0 pool_queue_at_end=15958
 # (the network's tallies cover both legs; `sample` leaves out the samples sent while stopping)
 
 # restart: leg 2 against leg 1's restrictions
-reason=resumed restart_obligations_restored=1995 restart_obligations_pending=1048 restart_obligations_refused=631698 restart_obligations_honoured=947
-leg1_nodes_sampled=2000 restricted_at_restart=1995 expired_at_restart=5 expired_resampled=5
-expiring_in_leg2=947 resampled_after_expiry=947 delay_after_expiry_s median=11 max=375
-sampled_before_expiry=0 fresh_nodes_sampled=0 first_sample_after_start=43s
-samples: sent=3409 answered=3258 errors=15 unanswered=136 sample_failures=151 sealed=0 sample_stale=0
-restart_cost: stored in the first 60 min, fresh start=0 leg 2=1760
+reason=resumed restart_obligations_restored=2000 restart_obligations_pending=1046 restart_obligations_refused=639648 restart_obligations_honoured=954
+leg1_nodes_sampled=2000 restricted_at_restart=2000 expired_at_restart=0 expired_resampled=0
+expiring_in_leg2=954 resampled_after_expiry=954 delay_after_expiry_s median=13 max=226
+sampled_before_expiry=0 fresh_nodes_sampled=0 first_sample_after_start=59s
+samples: sent=3398 answered=3235 errors=17 unanswered=146 sample_failures=163 sealed=0 sample_stale=0
+restart_cost: stored in the first 20 min, fresh start=976 leg 2=1286
 
-outcome_log events=45510 fnv64=08d0652f8dd45990
-fingerprint=f84dac29588abce2
+outcome_log events=45695 fnv64=92bbf6f6e635b95a
+fingerprint=82f641d49e7b71bb

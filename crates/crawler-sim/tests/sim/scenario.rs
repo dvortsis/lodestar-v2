@@ -25,16 +25,16 @@ pub struct Scenario {
     pub ledger: bool,
 }
 
-/// CR-SIM-restart: leg 1 starts fresh with `dht.safe_restart` on, sits out
-/// its first-start suppression (6 h plus the query timeout), samples for
-/// `leg1_minutes` and stops cleanly. After `gap_s`, leg 2 starts from the
+/// CR-SIM-restart: leg 1 starts fresh with `dht.safe_restart` on, samples
+/// at once for `leg1_minutes` (CR-0w: no first-start wait) and stops
+/// cleanly. After `gap_s`, leg 2 starts from the
 /// same data and witness dirs against the same network.
 #[derive(Debug, Clone, Copy)]
 pub struct Restart {
     pub leg1_minutes: u32,
     pub gap_s: u64,
-    /// `dht.safe_restart` in leg 2. Off is the negative control: the full
-    /// suppression again.
+    /// `dht.safe_restart` in leg 2. Off is the unproven restart: nothing
+    /// restored, sampling at once.
     pub safe_restart: bool,
 }
 
@@ -290,8 +290,8 @@ pub fn admission_pressure() -> Scenario {
 
 /// CR-0d's restored restrictions end to end: a clean restart with
 /// `dht.safe_restart` on. Intervals of 15 min ± 25% keep restored
-/// obligations pending well into leg 2; leg 2's hour is the restart-cost
-/// baseline against leg 1's fresh 6 h suppression.
+/// obligations pending well into leg 2; leg 2's first 20 minutes are the
+/// restart-cost baseline against leg 1's fresh start of the same length.
 pub fn restart_honoured() -> Scenario {
     let mut s = base("restart-honoured");
     s.minutes = 60;

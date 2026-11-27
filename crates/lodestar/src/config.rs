@@ -182,9 +182,11 @@ pub struct Dht {
     pub passive: bool,
     /// BEP 43: don't answer queries.
     pub read_only: bool,
-    /// CR-0d: resume sampling after a clean restart instead of waiting the
-    /// full six hours, when the crash-safe proof allows it. Off by default
-    /// (docs/decisions/2026-10-30-CR-0d.md); not in the Settings UI.
+    /// CR-0d: after a clean restart the crash-safe proof allows, honour
+    /// the last run's per-node BEP 51 intervals instead of asking those
+    /// nodes again early. Sampling starts at once either way (owner §2.77).
+    /// On by default since CR-0w (docs/decisions/2026-11-27-CR-0w.md); not
+    /// in the Settings UI.
     pub safe_restart: bool,
     /// Where the restart proof keeps its generation witness. It must be
     /// outside the data directory and must not be backed up with it. Unset
@@ -262,7 +264,7 @@ impl Default for Dht {
             sample: d.harvest.sample,
             passive: d.harvest.passive,
             read_only: d.read_only,
-            safe_restart: false,
+            safe_restart: true,
             restart_witness_dir: None,
             coordinated_admission: false,
             responder_hints: false,
@@ -1483,13 +1485,29 @@ mod tests {
     }
 
     #[test]
-    fn safe_restart_is_off_unless_asked_for() {
-        // Off by default: no restart proof, today's suppression.
+    fn safe_restart_is_on_unless_turned_off() {
+        // On by default (CR-0w): the restart proof runs, and the start
+        // never waits either way.
         let c = Config::load(None, no_env).unwrap();
+        assert!(c.dht.safe_restart);
+        assert!(c.dht_config().restart.is_some());
+        assert_eq!(c.dht_config().sample_start_delay, None, "no start wait");
+        // The environment or the file turns it off.
+        let off = |k: &str| (k == "LODESTAR_DHT_SAFE_RESTART").then(|| "false".to_string());
+        let c = Config::load(None, off).unwrap();
         assert!(!c.dht.safe_restart);
         assert!(c.dht_config().restart.is_none());
-        // The environment turns it on; the witness dir defaults to the
-        // platform's state directory.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\nsafe_restart = false\n").unwrap();
+        assert!(
+            Config::load(Some(&path), no_env)
+                .unwrap()
+                .dht_config()
+                .restart
+                .is_none()
+        );
+        // The witness dir defaults to the platform's state directory.
         let env = |k: &str| match k {
             "LODESTAR_DHT_SAFE_RESTART" => Some("true".to_string()),
             "HOME" => Some("/home/me".to_string()),
