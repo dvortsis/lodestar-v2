@@ -471,6 +471,12 @@ fn work_of(content_type: Option<i64>, name: &str) -> Option<Work> {
     })
 }
 
+/// Answers between two checks for the claims dictionary. The writer
+/// checks at every flush (5 s); one plugin at its full daily budget
+/// (100,000 lookups) stores about 6 answers in that time, so a check every
+/// 50 trains a little later than the writer would, never earlier.
+const TRAIN_CHECK_EVERY: u64 = 50;
+
 /// Stores a served answer on `percent` of the identifiable torrents, from
 /// one enrichment source whose terms allow passing answers on, the way
 /// `lodestar_pipeline::identify` writes them (`put_claims_at`). Returns
@@ -478,11 +484,6 @@ fn work_of(content_type: Option<i64>, name: &str) -> Option<Work> {
 /// written at 0 %, so that report is the one before ENR-11. Private
 /// torrents (`flags::PRIVACY`) are never looked up (ENR-10), so they
 /// aren't identifiable.
-/// Answers between two checks for the claims dictionary: about what one
-/// plugin stores between two of the writer's flushes at a full day's
-/// budget, rounded up (100,000 lookups a day is about 6 per 5 s flush).
-const TRAIN_CHECK_EVERY: u64 = 50;
-
 fn identify(
     store: &mut Store,
     seed: u64,

@@ -175,11 +175,6 @@ pub(crate) struct Writer {
 #[cfg(test)]
 pub(crate) type MarkedHook = fn(&Store, &HeldSet, &Handle, &[[u8; 20]]);
 
-/// After a batch that marked `pending` committed or rolled back: tells
-/// intake to refuse those the store holds and clears the marks, asked
-/// under `HeldSet`'s lock, so a release since isn't undone and a hold is
-/// never missed (`2026-10-31-B-held-exact.md`,
-/// `2026-10-31-B-held-precommit.md`). On a store error every hash goes in.
 /// The one Info event for a trained claims dictionary (X-claims-size).
 fn log_claims_dict(t: &lodestar_store::claims_dict::Trained) {
     lodestar_log::log_event!(
@@ -189,6 +184,11 @@ fn log_claims_dict(t: &lodestar_store::claims_dict::Trained) {
     );
 }
 
+/// After a batch that marked `pending` committed or rolled back: tells
+/// intake to refuse those the store holds and clears the marks, asked
+/// under `HeldSet`'s lock, so a release since isn't undone and a hold is
+/// never missed (`2026-10-31-B-held-exact.md`,
+/// `2026-10-31-B-held-precommit.md`). On a store error every hash goes in.
 fn hold_committed(store: &Store, pending: Option<Pending<'_>>, ingest: bool) {
     let Some(pending) = pending else { return };
     if let Err(e) = pending.settle(|hs| store.held_among(hs)) {
@@ -733,15 +733,13 @@ impl Writer {
         }
     }
 
-    /// Removes expired quarantine (its keys become fetchable again, except
-    /// adult holds, which stay refused as tombstones) and filter hits past
-    /// their retention.
     /// Trains the store's claims dictionary once enough identification
     /// answers are stored (X-claims-size, `lodestar_store::claims_dict`):
     /// nothing once one is active, which the store knows without a query.
     /// Sampling and training run outside any transaction; the dictionary
-    /// and its setting are stored in one short one. An error leaves it for
-    /// the next flush.
+    /// and its setting are stored in one short one. An error is logged; the
+    /// store waits before training again after a failed training, and
+    /// installs the dictionary it kept after a failed install.
     async fn train_claims_dict(&mut self) {
         let Some(store) = self.store.take_if(|s| s.active_claims_dict().is_none()) else {
             return;
@@ -754,11 +752,19 @@ impl Writer {
         .await
         .expect("claims dictionary task");
         self.store = Some(store);
-        if let Ok(Some(t)) = result {
-            log_claims_dict(&t);
+        match result {
+            Ok(Some(t)) => log_claims_dict(&t),
+            Ok(None) => {}
+            Err(e) => lodestar_log::log_event!(
+                crate::log_events::STORE_WRITE_FAILED,
+                error = crate::log_events::store_error(&e)
+            ),
         }
     }
 
+    /// Removes expired quarantine (its keys become fetchable again, except
+    /// adult holds, which stay refused as tombstones) and filter hits past
+    /// their retention.
     async fn purge(&mut self) {
         let now = unix_now();
         self.last_purge = now;

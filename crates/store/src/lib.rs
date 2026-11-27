@@ -675,7 +675,10 @@ impl Store {
     fn load(conn: Connection, config: StoreConfig) -> Result<Store> {
         let mut codec = BlobCodec::new(config.compression_level);
         {
-            let mut stmt = conn.prepare("SELECT id, data FROM zstd_dicts")?;
+            // The claims dictionaries are `claims_dict`'s, loaded when a blob
+            // names one.
+            let mut stmt =
+                conn.prepare("SELECT id, data FROM zstd_dicts WHERE kind <> 'claims'")?;
             let rows =
                 stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
             for row in rows {
@@ -1813,9 +1816,13 @@ fn active_dict_present(conn: &Connection, id: i64) -> Result<()> {
 }
 
 fn codec_has(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
-    conn.query_row("SELECT 1 FROM zstd_dicts WHERE id = ?1", [id], |_| Ok(()))
-        .optional()
-        .map(|r| r.is_some())
+    conn.query_row(
+        "SELECT 1 FROM zstd_dicts WHERE id = ?1 AND kind <> 'claims'",
+        [id],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|r| r.is_some())
 }
 
 /// Two indexed lookups. Written with `OR`, SQLite scans the whole table.

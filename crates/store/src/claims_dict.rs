@@ -36,7 +36,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use zstd::bulk::{Compressor, Decompressor};
 use zstd::zstd_safe::CParameter;
 
-use crate::claims::{self, Claims, ClaimsError, VERSION_DETAILS};
+use crate::claims::{self, Claims, ClaimsError, Inflated, VERSION_DETAILS};
 use crate::identify_sweep::TERMS_KEY;
 use crate::{Error, Result, Store};
 
@@ -57,6 +57,9 @@ pub const DICT_SIZE: usize = 112 << 10;
 /// Fewer readable samples than this (big or unreadable rows skipped)
 /// train nothing.
 const MIN_SAMPLES: usize = 256;
+/// After a failed training, how long the next waits: training reads and
+/// trains from scratch, and the writer waits for it.
+pub const TRAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// What [`Store::train_claims_dict`] trained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +78,11 @@ pub(crate) struct ClaimsDicts {
     active: Option<i64>,
     compressor: Option<(i64, i32, Compressor<'static>)>,
     decompressors: Mutex<HashMap<i64, Decompressor<'static>>>,
+    /// A trained dictionary whose install failed (a busy store, say), with
+    /// its sample count: the next attempt installs it without training.
+    pending: Option<(usize, Vec<u8>)>,
+    /// No training before this, after one failed.
+    retry_at: Option<std::time::Instant>,
 }
 
 impl std::fmt::Debug for ClaimsDicts {
@@ -115,6 +123,8 @@ impl ClaimsDicts {
             active,
             compressor: None,
             decompressors: Mutex::new(HashMap::new()),
+            pending: None,
+            retry_at: None,
         })
     }
 
@@ -147,7 +157,11 @@ impl ClaimsDicts {
             self.compressor = Some((id, level, z));
         }
         let (_, _, z) = self.compressor.as_mut().expect("just set");
-        claims::encode_dict(c, id, z)
+        match claims::encode_dict(c, id, z) {
+            // zstd failing costs the saving, not the answer.
+            Err(ClaimsError::Compression) => claims::encode(c, level),
+            r => r,
+        }
     }
 
     /// Reads a stored blob of any codec, loading a dictionary it names
@@ -195,20 +209,42 @@ struct Lazy<'a> {
 }
 
 impl claims::Inflate for Lazy<'_> {
-    fn inflate(
-        &mut self,
-        id: i64,
-        frame: &[u8],
-        capacity: usize,
-    ) -> Option<std::io::Result<Vec<u8>>> {
+    fn inflate(&mut self, id: i64, frame: &[u8], capacity: usize) -> Inflated {
         if !self.map.contains_key(&id) {
-            // Not found, or the lookup failed: the blob is refused.
-            let dict = dict_bytes(self.conn, id).ok()??;
-            self.map
-                .insert(id, Decompressor::with_dictionary(&dict).ok()?);
+            let dict = match dict_bytes(self.conn, id) {
+                Ok(Some(dict)) => dict,
+                // Not stored: the blob is refused.
+                Ok(None) => return Inflated::Unknown,
+                // A store error isn't a verdict on the blob.
+                Err(_) => return Inflated::Unavailable,
+            };
+            // Stored bytes zstd won't take are a corrupt dictionary: its
+            // blobs read as unreadable, as any corrupt row does.
+            let Ok(d) = Decompressor::with_dictionary(&dict) else {
+                return Inflated::Unknown;
+            };
+            self.map.insert(id, d);
         }
-        Some(self.map.get_mut(&id)?.decompress(frame, capacity))
+        match self
+            .map
+            .get_mut(&id)
+            .expect("just inserted")
+            .decompress(frame, capacity)
+        {
+            Ok(plain) => Inflated::Plain(plain),
+            Err(_) => Inflated::Failed,
+        }
     }
+}
+
+/// The error for a read that met a dictionary it couldn't look up: the
+/// store's fault, not the row's (as a missing file-tree dictionary is,
+/// `compress::BlobCodec::decompress`), so the batch is tried again.
+pub(crate) fn unavailable() -> Error {
+    Error::Compression(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "claims dictionary unavailable",
+    ))
 }
 
 /// Trains a dictionary of at most `max_size` bytes from `samples` (plain
@@ -300,24 +336,147 @@ impl Store {
 
     /// Trains the claims dictionary once it's due
     /// ([`claims_dict_samples`](Store::claims_dict_samples)), outside any
-    /// transaction, and installs it. `None` when it isn't due.
+    /// transaction, and installs it. `None` when it isn't due, or another
+    /// connection installed one first (this one then uses it).
+    ///
+    /// A failed training waits [`TRAIN_RETRY`] before the next. A failed
+    /// install keeps the trained dictionary, and the next call installs it
+    /// without training again. Either error is returned for the caller to
+    /// report.
     pub fn train_claims_dict(&mut self) -> Result<Option<Trained>> {
-        let Some(samples) = self.claims_dict_samples()? else {
+        self.train_claims_dict_with(|s| train(s, DICT_SIZE))
+    }
+
+    /// [`train_claims_dict`](Store::train_claims_dict) with its trainer.
+    fn train_claims_dict_with(
+        &mut self,
+        trainer: impl FnOnce(&[Vec<u8>]) -> std::io::Result<Vec<u8>>,
+    ) -> Result<Option<Trained>> {
+        if self.claims_dicts.active.is_some() || self.adopt_claims_dict()? {
             return Ok(None);
+        }
+        let (samples, dict) = match self.claims_dicts.pending.take() {
+            Some(p) => p,
+            None => {
+                if self
+                    .claims_dicts
+                    .retry_at
+                    .is_some_and(|at| std::time::Instant::now() < at)
+                {
+                    return Ok(None);
+                }
+                let Some(samples) = self.claims_dict_samples()? else {
+                    return Ok(None);
+                };
+                match trainer(&samples) {
+                    Ok(dict) => (samples.len(), dict),
+                    Err(e) => {
+                        self.claims_dicts.retry_at = Some(std::time::Instant::now() + TRAIN_RETRY);
+                        return Err(e.into());
+                    }
+                }
+            }
         };
-        let dict = train(&samples, DICT_SIZE)?;
-        Ok(self
-            .install_claims_dict(samples.len(), &dict)?
-            .map(|id| Trained {
+        match self.install_claims_dict(samples, &dict) {
+            Ok(Some(id)) => Ok(Some(Trained {
                 id,
-                samples: samples.len(),
+                samples,
                 bytes: dict.len(),
-            }))
+            })),
+            Ok(None) => {
+                self.adopt_claims_dict()?;
+                Ok(None)
+            }
+            Err(e) => {
+                self.claims_dicts.pending = Some((samples, dict));
+                Err(e)
+            }
+        }
+    }
+
+    /// Takes up the dictionary another connection made active: true when
+    /// there's one.
+    fn adopt_claims_dict(&mut self) -> Result<bool> {
+        let Some(id) = active_setting(&self.conn)? else {
+            return Ok(false);
+        };
+        if dict_bytes(&self.conn, id)?.is_none() {
+            return Err(Error::Corrupt("the active claims dictionary is missing"));
+        }
+        self.claims_dicts.active = Some(id);
+        self.claims_dicts.compressor = None;
+        self.claims_dicts.pending = None;
+        Ok(true)
     }
 
     /// Reads a stored claims blob of any codec with this store's
     /// dictionaries.
     pub fn decode_claims(&self, blob: &[u8]) -> std::result::Result<Claims, ClaimsError> {
         self.claims_dicts.decode(&self.conn, blob)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StoreConfig;
+    use crate::claims::{Details, ExternalId};
+
+    /// A training that fails is reported, and the next waits
+    /// [`TRAIN_RETRY`], so the writer isn't held up by it at every flush.
+    #[test]
+    fn a_failed_training_waits_before_the_next() {
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        store.register_source("dht", "1", 1).unwrap();
+        let source = store.register_source("wikidata", "1", 1).unwrap();
+        store
+            .set_plugin_state(
+                source,
+                TERMS_KEY,
+                Some(&[1, 0b110, 0, 0, 0, 0, 0, 0xed, 0x4e, 0]),
+            )
+            .unwrap();
+        for i in 1..=MIN_ROWS as i64 {
+            let mut hash = [0u8; 20];
+            hash[..8].copy_from_slice(&i.to_be_bytes());
+            store
+                .conn
+                .execute(
+                    "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                         file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
+                     VALUES (?1, ?2, 't', 0, 0, 0, 0, 0, 0, 0, 0, 0)",
+                    params![i, &hash[..]],
+                )
+                .unwrap();
+            let c = Claims {
+                ids: vec![ExternalId {
+                    scheme: "wikidata".into(),
+                    value: format!("Q{i}"),
+                }],
+                details: Some(Box::new(Details {
+                    canonical_title: Some(format!("Work {i}")),
+                    ..Details::default()
+                })),
+                ..Claims::default()
+            };
+            assert!(store.put_claims_at(i, source, &c, false, 1).unwrap());
+        }
+        let calls = std::cell::Cell::new(0);
+        let refuse = |_: &[Vec<u8>]| -> std::io::Result<Vec<u8>> {
+            calls.set(calls.get() + 1);
+            Err(std::io::Error::other("refused"))
+        };
+        assert!(store.train_claims_dict_with(refuse).is_err());
+        assert_eq!(calls.get(), 1);
+        // Within the wait: nothing is sampled or trained.
+        assert_eq!(store.train_claims_dict_with(refuse).unwrap(), None);
+        assert_eq!(calls.get(), 1, "no second training within the wait");
+        // After it, training runs again (and succeeds here).
+        store.claims_dicts.retry_at = Some(std::time::Instant::now());
+        let t = store
+            .train_claims_dict()
+            .unwrap()
+            .expect("trained after the wait");
+        assert_eq!(store.active_claims_dict(), Some(t.id));
     }
 }

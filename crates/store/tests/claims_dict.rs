@@ -2,7 +2,7 @@
 //! restarts, readers, and failing closed on a dictionary that isn't there.
 
 use lodestar_store::claims::{
-    self, AltTitle, Claims, ClaimsError, Details, ExternalId, Inflate, ZSTD_DICT,
+    self, AltTitle, Claims, ClaimsError, Details, ExternalId, Inflate, Inflated, ZSTD_DICT,
 };
 use lodestar_store::claims_dict::{self, MIN_ROWS};
 use lodestar_store::identify_sweep::{SweepState, TERMS_KEY};
@@ -122,12 +122,7 @@ fn Fixed(id: i64, bytes: Vec<u8>) -> FixedDict {
 struct FixedDict(i64, Vec<u8>);
 
 impl Inflate for FixedDict {
-    fn inflate(
-        &mut self,
-        id: i64,
-        frame: &[u8],
-        capacity: usize,
-    ) -> Option<std::io::Result<Vec<u8>>> {
+    fn inflate(&mut self, id: i64, frame: &[u8], capacity: usize) -> Inflated {
         claims::Dictionary {
             id: self.0,
             bytes: &self.1,
@@ -483,4 +478,85 @@ fn the_queries_keep_their_plans() {
         assert!(p.contains(index), "{sql}: {p}");
         assert!(!p.contains("SCAN torrent_claims"), "{sql}: {p}");
     }
+}
+
+/// A dictionary lookup that fails (here, its table is out of reach) fails
+/// the read instead of making a readable row look unreadable; it reads
+/// again once the store does.
+#[test]
+fn a_failed_dictionary_lookup_fails_the_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.db");
+    let mut store = Store::open(&path, StoreConfig::default()).unwrap();
+    let source = sources(&mut store);
+    answers(&mut store, source, 1, MIN_ROWS as u64 + 1);
+    store.train_claims_dict().unwrap().unwrap();
+    answers(&mut store, source, 2000, 2001);
+    drop(store);
+    // A fresh connection has no decompressor yet.
+    let store = Store::open(&path, StoreConfig::default()).unwrap();
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    raw.execute_batch("ALTER TABLE zstd_dicts RENAME TO zstd_dicts_away")
+        .unwrap();
+    assert!(
+        store.torrent_claims(2000).is_err(),
+        "not read as unreadable"
+    );
+    assert!(store.served_identifications(2000).is_err());
+    // Rows that need no dictionary still read.
+    assert_eq!(store.torrent_claims(1).unwrap().len(), 1);
+    raw.execute_batch("ALTER TABLE zstd_dicts_away RENAME TO zstd_dicts")
+        .unwrap();
+    assert_eq!(
+        store.torrent_claims(2000).unwrap()[0].claims.as_ref(),
+        Some(&answer(2000))
+    );
+}
+
+/// An install that fails keeps the trained dictionary: the next call
+/// installs it without sampling or training again.
+#[test]
+fn a_failed_install_is_retried_without_training() {
+    let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+    let source = sources(&mut store);
+    answers(&mut store, source, 1, MIN_ROWS as u64 + 1);
+    store
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER refuse BEFORE INSERT ON settings WHEN new.key = 'claims_dict'
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )
+        .unwrap();
+    assert!(store.train_claims_dict().is_err());
+    assert_eq!(store.active_claims_dict(), None);
+    assert_eq!(claims_dicts(&store), 0, "nothing half-installed");
+    // With no answers left a new training would find nothing to train on.
+    store
+        .connection()
+        .execute_batch("DROP TRIGGER refuse; DELETE FROM torrent_claims;")
+        .unwrap();
+    let t = store
+        .train_claims_dict()
+        .unwrap()
+        .expect("the kept dictionary");
+    assert_eq!(t.samples, MIN_ROWS);
+    assert_eq!(store.active_claims_dict(), Some(t.id));
+}
+
+/// A connection that finds another's dictionary active takes it up.
+#[test]
+fn a_connection_adopts_a_dictionary_installed_elsewhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.db");
+    let mut a = Store::open(&path, StoreConfig::default()).unwrap();
+    let source = sources(&mut a);
+    answers(&mut a, source, 1, MIN_ROWS as u64 + 1);
+    let mut b = Store::open(&path, StoreConfig::default()).unwrap();
+    let id = b.train_claims_dict().unwrap().unwrap().id;
+    assert_eq!(a.active_claims_dict(), None);
+    assert_eq!(a.train_claims_dict().unwrap(), None);
+    assert_eq!(a.active_claims_dict(), Some(id));
+    answers(&mut a, source, 2000, 2001);
+    assert_eq!(codec_of(&a, 2000), ZSTD_DICT);
+    assert_eq!(claims_dicts(&a), 1);
 }

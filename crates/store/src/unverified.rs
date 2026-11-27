@@ -1938,7 +1938,8 @@ fn drop_one(
 }
 
 /// A `torrent_id, source_id, flags, data` row, its claims read with
-/// `dicts` (codec 2 included). Claims that don't decode are `None`.
+/// `dicts` (codec 2 included). Claims that don't decode are `None`; a
+/// dictionary that couldn't be looked up fails the read.
 fn read_claims(
     dicts: &ClaimsDicts,
     conn: &Connection,
@@ -1946,11 +1947,20 @@ fn read_claims(
 ) -> rusqlite::Result<Result<StoredClaims>> {
     let (torrent_id, source, flags): (i64, i64, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
     let data = r.get_ref(3)?.as_blob().map_err(rusqlite::Error::from)?;
+    let claims = match dicts.decode(conn, data) {
+        Ok(c) => Some(c),
+        // A dictionary lookup that failed says nothing of the row: the
+        // read fails and is retried, so no caller drops a readable claim.
+        Err(claims::ClaimsError::Unavailable(_)) => {
+            return Ok(Err(crate::claims_dict::unavailable()));
+        }
+        Err(_) => None,
+    };
     Ok(SourceId::from_sql(source).map(|source| StoredClaims {
         torrent_id,
         source,
         private_source: flags & 1 != 0,
-        claims: dicts.decode(conn, data).ok(),
+        claims,
     }))
 }
 

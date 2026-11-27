@@ -957,6 +957,10 @@ pub enum ClaimsError {
     Limit(&'static str),
     /// A codec 2 blob names a dictionary that isn't known here.
     Dictionary(i64),
+    /// A codec 2 blob's dictionary couldn't be looked up just now (a store
+    /// error): the blob isn't known to be unreadable, so callers retry
+    /// rather than treat it as such.
+    Unavailable(i64),
 }
 
 impl fmt::Display for ClaimsError {
@@ -970,6 +974,7 @@ impl fmt::Display for ClaimsError {
             ClaimsError::Malformed(w) => write!(f, "malformed claims: {w}"),
             ClaimsError::Limit(w) => write!(f, "claims over a limit: {w}"),
             ClaimsError::Dictionary(id) => write!(f, "claims dictionary {id} isn't known"),
+            ClaimsError::Unavailable(id) => write!(f, "claims dictionary {id} is unavailable"),
         }
     }
 }
@@ -1027,18 +1032,26 @@ pub fn encode_dict(
     Ok(out)
 }
 
+/// What an [`Inflate`] made of a codec 2 frame.
+#[derive(Debug)]
+pub enum Inflated {
+    /// The plain body.
+    Plain(Vec<u8>),
+    /// No dictionary has this id: the blob is refused
+    /// ([`ClaimsError::Dictionary`]), never read with another one.
+    Unknown,
+    /// The dictionary couldn't be looked up just now (a store error): the
+    /// blob may be fine ([`ClaimsError::Unavailable`]).
+    Unavailable,
+    /// The frame doesn't decompress with it, or not within the capacity.
+    Failed,
+}
+
 /// Decompresses a codec 2 frame for [`decode_with`].
 pub trait Inflate {
     /// `frame` (a whole zstd frame, its magic restored) decompressed with
-    /// dictionary `id` into at most `capacity` bytes. `None` when `id`
-    /// isn't a dictionary this knows: the blob is refused, never read with
-    /// another one.
-    fn inflate(
-        &mut self,
-        id: i64,
-        frame: &[u8],
-        capacity: usize,
-    ) -> Option<std::io::Result<Vec<u8>>>;
+    /// dictionary `id` into at most `capacity` bytes.
+    fn inflate(&mut self, id: i64, frame: &[u8], capacity: usize) -> Inflated;
 }
 
 /// One dictionary under one id: for tests, fuzzing and tools. The store
@@ -1050,16 +1063,16 @@ pub struct Dictionary<'a> {
 }
 
 impl Inflate for Dictionary<'_> {
-    fn inflate(
-        &mut self,
-        id: i64,
-        frame: &[u8],
-        capacity: usize,
-    ) -> Option<std::io::Result<Vec<u8>>> {
-        (id == self.id).then(|| {
-            zstd::bulk::Decompressor::with_dictionary(self.bytes)
-                .and_then(|mut d| d.decompress(frame, capacity))
-        })
+    fn inflate(&mut self, id: i64, frame: &[u8], capacity: usize) -> Inflated {
+        if id != self.id {
+            return Inflated::Unknown;
+        }
+        match zstd::bulk::Decompressor::with_dictionary(self.bytes)
+            .and_then(|mut d| d.decompress(frame, capacity))
+        {
+            Ok(plain) => Inflated::Plain(plain),
+            Err(_) => Inflated::Failed,
+        }
     }
 }
 
@@ -1067,8 +1080,8 @@ impl Inflate for Dictionary<'_> {
 struct NoDictionaries;
 
 impl Inflate for NoDictionaries {
-    fn inflate(&mut self, _: i64, _: &[u8], _: usize) -> Option<std::io::Result<Vec<u8>>> {
-        None
+    fn inflate(&mut self, _: i64, _: &[u8], _: usize) -> Inflated {
+        Inflated::Unknown
     }
 }
 
@@ -1148,10 +1161,12 @@ fn decode_body(codec: u8, body: &[u8], dicts: &mut dyn Inflate) -> Result<Claims
             frame.extend_from_slice(&ZSTD_MAGIC);
             frame.extend_from_slice(r.rest);
             let capacity = declared(&frame)?;
-            let plain = dicts
-                .inflate(id, &frame, capacity)
-                .ok_or(ClaimsError::Dictionary(id))?
-                .map_err(|_| ClaimsError::Compression)?;
+            let plain = match dicts.inflate(id, &frame, capacity) {
+                Inflated::Plain(plain) => plain,
+                Inflated::Unknown => return Err(ClaimsError::Dictionary(id)),
+                Inflated::Unavailable => return Err(ClaimsError::Unavailable(id)),
+                Inflated::Failed => return Err(ClaimsError::Compression),
+            };
             if plain.len() > MAX_PLAIN {
                 return Err(ClaimsError::Limit("body"));
             }
