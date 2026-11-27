@@ -231,13 +231,9 @@ describe('how it works', () => {
 			expect.stringContaining('Search')
 		]);
 		const cold = screen.getByTestId('wizard-how-cold').textContent;
-		expect(cold).toContain(
-			'After every start, including restarts and updates, sampling waits 6 hours before it resumes.'
-		);
-		expect(cold).toContain(
-			'Full speed starts after those 6 hours. With safe restart on, later clean restarts skip the wait.'
-		);
-		expect(cold).not.toMatch(/days and weeks/);
+		expect(cold).toContain('starts looking as soon as it has joined the network');
+		expect(cold).toContain('keeps growing over days and weeks');
+		expect(cold).not.toMatch(/6 hours|six hours|waits|skip the wait/i);
 		expect(document.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
 	});
 });
@@ -314,12 +310,14 @@ describe('storage step filesystem warning', () => {
 });
 
 describe('done step', () => {
-	it('repeats the six-hour wait and when full speed starts', async () => {
+	it('says the index grows over days and weeks, with no wait, and shows live counts', async () => {
 		start('done');
 		await heading('Done');
-		expect((await screen.findByTestId('wizard-done-wait')).textContent).toContain(
-			'Full speed starts after those 6 hours. With safe restart on, later clean restarts skip the wait.'
-		);
+		const text = (await screen.findByTestId('wizard-done-wait')).textContent;
+		expect(text).toContain('keeps growing over days and weeks');
+		expect(text).not.toMatch(/6 hours|waits/i);
+		expect(await screen.findByTestId('wizard-live')).toBeTruthy();
+		expect(screen.getByTestId('wizard-live-stored').textContent).toBe('—');
 	});
 });
 

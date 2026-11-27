@@ -19,18 +19,16 @@ export type PillKind =
 	| 'rebuilding'
 	| 'failed'
 	| 'starting'
+	| 'warming'
 	| 'stalled'
 	| 'restart';
 
 /** Why the pill says "Stalled": the API's own reason, or `no_progress` (nothing stored for a window). */
 export type StallReason = 'writer_stalled' | 'cohort_stalled' | 'index_lag' | 'no_progress';
 
-/** Why the pill says "Starting" when it isn't the usual wait: the restart record can't be written. */
-export type StartReason = 'restart_record';
-
 /** What the progress facts add to the pill (`progress.ts` decides); null = nothing to add. */
 export type ProgressOverlay =
-	{ kind: 'starting'; reason?: StartReason } | { kind: 'stalled'; reason: StallReason } | null;
+	{ kind: 'starting' } | { kind: 'warming' } | { kind: 'stalled'; reason: StallReason } | null;
 
 export interface PillState {
 	kind: PillKind;
@@ -39,8 +37,11 @@ export interface PillState {
 	/** Rebuild progress; null outside a rebuild. */
 	done: number | null;
 	total: number | null;
-	/** Set when `kind` is `stalled`, and when `starting` is held up by the restart record. */
-	reason?: StallReason | StartReason;
+	/** Set when `kind` is `stalled`. */
+	reason?: StallReason;
+	/** Keys found and torrents stored since the start (`warming` only); null = unknown. */
+	found?: number | null;
+	stored?: number | null;
 }
 
 const REBUILDING = new Set<RebuildSnapshot['phase']>(['building', 'finishing', 'swapping']);
@@ -66,10 +67,26 @@ export function pillState(input: {
 	if (!crawler) return { kind: 'unknown', ...none };
 	if (crawler.paused && !restartNeeded)
 		return { kind: 'paused', torrents: crawler.torrents, done: null, total: null };
+	// Starting: the DHT has no routing nodes yet (null is "off" or "not reported", not this), or the
+	// server holds sampling back. Warming up: a start with nothing stored yet, showing what's found.
+	const start =
+		(crawler.dht_nodes === 0 && progress?.kind !== 'stalled') || progress?.kind === 'starting'
+			? 'starting'
+			: progress?.kind === 'warming' && crawler.stored === 0
+				? 'warming'
+				: null;
+	if (start)
+		return {
+			...none,
+			kind: start,
+			torrents: crawler.torrents,
+			found: crawler.harvested,
+			stored: crawler.stored
+		};
 	const working = crawler.fetch_active > 0 || crawler.fetch_pending > 0;
 	// An idle crawler has no writer to be stuck on. A starved pipeline is idle too, though, so the
 	// stored-rate verdict (`no_progress`) and the other reasons stand.
-	if (progress && (working || progress.reason !== 'writer_stalled'))
+	if (progress?.kind === 'stalled' && (working || progress.reason !== 'writer_stalled'))
 		return { ...none, torrents: crawler.torrents, ...progress };
 	// Only over the calm states: a stall, a rebuild or a lost connection matter more.
 	if (restartNeeded) return { ...none, kind: 'restart', torrents: crawler.torrents };

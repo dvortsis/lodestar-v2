@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import StatusPill from './StatusPill.svelte';
 import {
-	STARTUP_SUPPRESSION_S,
 	START_GRACE_S,
 	createProgressSource,
 	overlayOf,
@@ -18,7 +17,7 @@ vi.mock('$lib/api/client', async (actual) => ({
 	api: { get }
 }));
 
-const CLEAR_S = STARTUP_SUPPRESSION_S + 2 * 3600;
+const CLEAR_S = START_GRACE_S + 2 * 3600;
 
 const crawler = (over: Partial<CrawlerSnapshot> = {}): CrawlerSnapshot => ({
 	at: 1,
@@ -57,13 +56,19 @@ describe('pill progress states', () => {
 	});
 
 	it.each(['writer_stalled', 'cohort_stalled'] as const)(
-		'%s: a stall once past the startup suppression, "starting" inside it',
+		'%s: a stall once past the start grace; before it, warming up while nothing is stored',
 		(reason) => {
-			const old = pill(progress({ reasons: [reason], uptimeS: 5 * 3600 + STARTUP_SUPPRESSION_S }));
-			expect(old).toMatchObject({ kind: 'stalled', reason });
-			for (const uptimeS of [60, 5 * 3600]) {
-				expect(pill(progress({ reasons: [reason], uptimeS })).kind).toBe('starting');
-			}
+			const fresh = crawler({ stored: 0 });
+			expect(pill(progress({ reasons: [reason], uptimeS: START_GRACE_S }))).toMatchObject({
+				kind: 'stalled',
+				reason
+			});
+			expect(pill(progress({ reasons: [reason], uptimeS: 60 }), fresh).kind).toBe('warming');
+			expect(pill(progress({ reasons: [reason], uptimeS: START_GRACE_S - 1 }), fresh).kind).toBe(
+				'warming'
+			);
+			// Something stored since the start: it is simply working.
+			expect(pill(progress({ reasons: [reason], uptimeS: 60 })).kind).toBe('crawling');
 		}
 	);
 
@@ -76,7 +81,7 @@ describe('pill progress states', () => {
 		}
 	});
 
-	it('stalled: nothing stored for a reported window that lies after the startup suppression', () => {
+	it('stalled: nothing stored for a reported window that lies after the start grace', () => {
 		const s = pill(progress({ ingestPerHour: 0, fetchedPerHour: 0, uptimeS: CLEAR_S }));
 		expect(s).toMatchObject({ kind: 'stalled', reason: 'no_progress' });
 	});
@@ -124,14 +129,30 @@ describe('pill progress states', () => {
 		expect(lag).toMatchObject({ kind: 'stalled', reason: 'index_lag' });
 	});
 
-	it('starting: under six hours up with nothing flowing yet', () => {
-		const s = pill(
-			progress({ ingestPerHour: 0, fetchedPerHour: 0, uptimeS: STARTUP_SUPPRESSION_S - 1 })
-		);
-		expect(s.kind).toBe('starting');
-		expect(pill(progress({ ingestPerHour: null, fetchedPerHour: null, uptimeS: 30 })).kind).toBe(
-			'starting'
-		);
+	it('starting: only while the DHT has no routing nodes, never for hours', () => {
+		const joining = crawler({ dht_nodes: 0, stored: 0 });
+		const p = progress({ ingestPerHour: 0, fetchedPerHour: 0, uptimeS: 30 });
+		expect(pill(p, joining).kind).toBe('starting');
+		// Once it has nodes, a quiet start is "warming up", with the live counts.
+		expect(pill(p, crawler({ dht_nodes: 3, stored: 0, harvested: 12 }))).toMatchObject({
+			kind: 'warming',
+			found: 12,
+			stored: 0
+		});
+		// Null nodes (the DHT is off, or hasn't reported) is not "joining".
+		expect(pill(p, crawler({ dht_nodes: null, stored: 0 })).kind).toBe('warming');
+		// A quiet crawler six hours in is not starting or warming up: the stall rules decide.
+		const old = progress({ ingestPerHour: 0, fetchedPerHour: 0, uptimeS: 6 * 3600 });
+		expect(pill(old, crawler({ stored: 0 }))).toMatchObject({
+			kind: 'stalled',
+			reason: 'no_progress'
+		});
+	});
+
+	it('warming up ends at the first stored torrent', () => {
+		const p = progress({ uptimeS: 120, ingestPerHour: null, fetchedPerHour: null });
+		expect(pill(p, crawler({ stored: 0 })).kind).toBe('warming');
+		expect(pill(p, crawler({ stored: 1 })).kind).toBe('crawling');
 	});
 
 	it('starting does not hide a healthy young crawler', () => {
@@ -153,14 +174,12 @@ describe('pill progress states', () => {
 			expect(s.kind).toBe('starting');
 		});
 
-		it('a restart record it cannot write says so, and is never a stall', () => {
-			expect(
-				pill(progress({ ...quiet, uptimeS: 2 * DAY, ...held('invalidate_failed') }))
-			).toMatchObject({ kind: 'starting', reason: 'restart_record' });
-			// `locked` may be a filesystem without locks, which waits the usual six hours.
-			const locked = pill(progress({ ...quiet, uptimeS: 60, ...held('locked') }));
-			expect(locked.kind).toBe('starting');
-			expect(locked.reason).toBeUndefined();
+		it('every reason (the start hold, the crash-loop guard) reads as plain "Starting"', () => {
+			for (const reason of ['locked', 'dirty', 'invalidate_failed']) {
+				const s = pill(progress({ ...quiet, uptimeS: 2 * DAY, ...held(reason, 10) }));
+				expect(s.kind).toBe('starting');
+				expect(s.reason).toBeUndefined();
+			}
 		});
 
 		it('sampling at once (a resumed restart): quiet reasons count after the start grace', () => {
@@ -201,9 +220,14 @@ describe('pill progress states', () => {
 			});
 		});
 
-		it('unknown: falls back to the uptime bound', () => {
-			const s = pill(progress({ ...quiet, uptimeS: 600, sampling: undefined }));
-			expect(s.kind).toBe('starting');
+		it('absent or null: sampling is not blocked, so never "Starting" from the clock', () => {
+			for (const sampling of [undefined, null]) {
+				for (const uptimeS of [30, 600, 6 * 3600]) {
+					const s = pill(progress({ ...quiet, uptimeS, sampling }));
+					expect(s.kind).not.toBe('starting');
+				}
+			}
+			expect(overlayOf(progress({ uptimeS: DAY, sampling: undefined }))).toBeNull();
 		});
 	});
 
@@ -236,21 +260,26 @@ describe('StatusPill progress states', () => {
 		expect(screen.getByTestId('status-pill-announce').textContent).toContain('Open Insights');
 	});
 
-	it('starting: says when sampling resumes', () => {
+	it('starting: says sampling begins once the DHT has joined, with no wait named', () => {
 		render(StatusPill, { state: { kind: 'starting', ...none } });
 		expect(screen.getByTestId('status-pill-text').textContent).toBe('Starting');
-		expect(screen.getByTestId('status-pill-announce').textContent).toContain(
-			'sampling resumes after up to 6 h'
-		);
+		const help = screen.getByTestId('status-pill-announce').textContent;
+		expect(help).toContain('as soon as Lodestar has joined the DHT');
+		expect(help).not.toMatch(/\d\s*h\b/);
 	});
 
-	it('starting on the restart record: says what sampling waits for', () => {
-		render(StatusPill, { state: { kind: 'starting', ...none, reason: 'restart_record' } });
-		const link = screen.getByTestId('status-pill');
-		expect(link.getAttribute('data-reason')).toBe('restart_record');
-		expect(screen.getByTestId('status-pill-announce').textContent).toContain(
-			'save its restart record'
-		);
+	it('warming up: live counts found and stored, and no promise of speed', () => {
+		render(StatusPill, { state: { kind: 'warming', ...none, found: 1200, stored: 0 } });
+		expect(screen.getByTestId('status-pill-text').textContent).toBe('Warming up');
+		expect(screen.getByTestId('status-pill-count').textContent).toContain('1.2K found · 0 stored');
+		const help = screen.getByTestId('status-pill-announce').textContent;
+		expect(help).toContain('days and weeks');
+		expect(screen.getByTestId('status-pill').querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+	});
+
+	it('warming up with unknown counts shows "—", never 0', () => {
+		render(StatusPill, { state: { kind: 'warming', ...none, found: null, stored: null } });
+		expect(screen.getByTestId('status-pill-count').textContent).toContain('— found · — stored');
 	});
 
 	it('the other states announce nothing extra', () => {

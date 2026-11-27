@@ -5,28 +5,25 @@ import { api } from '$lib/api/client';
 import type { ProgressOverlay, StallReason } from './status';
 
 /**
- * The startup sampling suppression (docs/metrics.md `dht_sample_suppression_seconds`; the CR-0
- * decision): up to six hours (plus the query timeout, covered by the extra minute) after a start
- * the crawler may legitimately store nothing. `GET /stats` says whether it is on now
- * (`sampling_blocked`, CR-0d); only when that isn't known does the pill compare `uptime_s` with
- * this bound.
+ * Since CR-0w nothing waits hours to sample: it starts once the DHT has bootstrapped, after a
+ * start hold of at most 10 s, or up to a minute after repeated crashes. `GET /stats` says when it
+ * is held (`sampling_blocked`). The UI is embedded in its own server, so there is no older server
+ * to guess for: absent or null means sampling isn't blocked (decision: UX-start).
  */
-export const STARTUP_SUPPRESSION_S = 6 * 60 * 60 + 60;
 
 /**
  * `ingest_per_hour` is the last full UTC hour, which can start up to two hours back, so the
- * zero-rate rule waits until that whole window lies after the suppression.
+ * zero-rate rule waits until that whole window lies after the start grace.
  */
 const REPORTED_HOUR_S = 2 * 60 * 60;
-const WINDOW_CLEAR_S = STARTUP_SUPPRESSION_S + REPORTED_HOUR_S;
 
 export type SamplingBlocked = components['schemas']['SamplingBlocked'];
 
 /** The progress facts the pill reads, taken from `GET /stats` and the Insights overview. */
 export interface ProgressSnapshot {
 	/**
-	 * `sampling_blocked` (`GET /stats`): why the DHT holds back its samples; null = it doesn't (or
-	 * the DHT is off); undefined = not known.
+	 * `sampling_blocked` (`GET /stats`): why the DHT holds back its samples; null or undefined =
+	 * it doesn't (or the DHT is off, or `/stats` didn't answer).
 	 */
 	sampling?: SamplingBlocked | null;
 	/** The uptime at which sampling was last seen to stop being held back; null = not seen. */
@@ -47,28 +44,20 @@ const STALL_REASONS: readonly StallReason[] = ['writer_stalled', 'cohort_stalled
 const QUIET_REASONS: readonly string[] = ['writer_stalled', 'cohort_stalled'];
 
 /**
- * The restart record can't be written, so sampling waits on that, not on the clock. (`locked` can
- * also be a filesystem without locks, which waits the usual six hours, so it isn't named here.)
- */
-const RECORD_REASONS: readonly string[] = ['invalidate_failed'];
-
-/**
  * After a start that samples at once (a resumed restart, or the DHT off), the first torrents take a
  * few minutes to be fetched and stored; the server's "nothing stored" reasons don't count before
  * this.
  */
 export const START_GRACE_S = 15 * 60;
+const WINDOW_CLEAR_S = START_GRACE_S + REPORTED_HOUR_S;
 
-/** Sampling is held back: as the server says, or, when it doesn't say, by the uptime bound. */
-const isYoung = (p: ProgressSnapshot) =>
-	p.sampling !== undefined
-		? p.sampling !== null
-		: p.uptimeS !== null && p.uptimeS < STARTUP_SUPPRESSION_S;
+/** Sampling is held back, as the server says (the start hold, or the crash-loop guard). */
+const isYoung = (p: ProgressSnapshot) => !!p.sampling;
 
 /**
  * Whether a "nothing stored" reason counts: not while sampling is held back, nor in the grace after
  * the start or after sampling was last held back. `cohort_stalled` looks back over two full hours,
- * so after a suppression it waits that long.
+ * so after sampling was held back it waits that long.
  */
 const quietCounts = (p: ProgressSnapshot, reason: string) => {
 	if (isYoung(p)) return false;
@@ -87,11 +76,11 @@ const windowClear = (p: ProgressSnapshot) =>
 
 /**
  * A stall while the crawler runs: a reason the API names, or a stored rate of 0 over a window the
- * API reports that lies wholly after the startup suppression. A rate that isn't known is not a
+ * API reports that lies wholly after the start. A rate that isn't known is not a
  * stall, and fetching that doesn't reach the store is exactly the stall to catch, so the fetch
- * rate plays no part. Inside the suppression the server's "nothing stored" reasons
+ * rate plays no part. While just started the server's "nothing stored" reasons
  * (`writer_stalled`, `cohort_stalled`) are what a fresh start looks like, so they don't count
- * there; `index_lag` always does.
+ * then; `index_lag` always does.
  */
 export function stallReason(p: ProgressSnapshot): StallReason | null {
 	const named = STALL_REASONS.find(
@@ -106,20 +95,16 @@ export function stallReason(p: ProgressSnapshot): StallReason | null {
 	return named ?? null;
 }
 
-/** Under six hours up and either nothing flowing yet or the server's "nothing stored" reasons. */
-const startingUp = (p: ProgressSnapshot) =>
-	isYoung(p) &&
-	(p.reasons.some((r) => QUIET_REASONS.includes(r)) ||
-		!((p.ingestPerHour ?? 0) > 0 || (p.fetchedPerHour ?? 0) > 0));
-
-/** The pill's extra state for these facts, if any. */
+/**
+ * The pill's extra state for these facts, if any. `warming` is a start inside its grace: the pill
+ * turns it into "Warming up" while the crawler has stored nothing since the start, and into
+ * "Starting" while the DHT has no routing nodes (it reads both from the crawler snapshot).
+ */
 export function overlayOf(p: ProgressSnapshot): ProgressOverlay {
 	const reason = stallReason(p);
 	if (reason) return { kind: 'stalled', reason };
-	if (!startingUp(p)) return null;
-	return p.sampling && RECORD_REASONS.includes(p.sampling.reason)
-		? { kind: 'starting', reason: 'restart_record' }
-		: { kind: 'starting' };
+	if (p.sampling) return { kind: 'starting' };
+	return p.uptimeS !== null && p.uptimeS < START_GRACE_S ? { kind: 'warming' } : null;
 }
 
 /** `/stats` is asked this often; the rates are the server's, never computed here. */

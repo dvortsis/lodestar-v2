@@ -35,7 +35,13 @@
 		>
 			{#snippet illustration()}<StateScene id="searching_crawling" />{/snippet}
 			{#snippet action()}
-				<dl class="ins-counters">
+				<dl class="ins-counters" aria-label={m.insights_overview_starting_pipeline()}>
+					<div>
+						<dt>{m.insights_overview_starting_nodes()}</dt>
+						<dd data-testid="insights-starting-nodes">
+							{formatCount(live?.dht_nodes, locale)}
+						</dd>
+					</div>
 					<div>
 						<dt>{m.harvested()}</dt>
 						<dd data-testid="insights-starting-harvested">

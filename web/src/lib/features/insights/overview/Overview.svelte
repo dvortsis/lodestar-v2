@@ -164,6 +164,8 @@
 					m.insights_overview_stale_other({ reason: overview.stale.reason }))
 			: ''
 	);
+	/** Nothing has been through the whole pipeline yet: show it instead of empty charts. */
+	const firstHour = $derived(!paused && insights.startup === 'yes');
 	const health = $derived(
 		healthSentence({
 			phase: insights.phase,
@@ -274,100 +276,108 @@
 					/>
 				{/if}
 
-				<section id="insights-status" class="ins-section" aria-labelledby="insights-status-heading">
-					<h2 id="insights-status-heading" class="ins-heading" tabindex="-1">
-						{m.insights_overview_status_title()}
-					</h2>
-					<p class="ins-sub">{m.insights_overview_status_time()}</p>
-					<KpiRow kpi={overview.kpi} annotations={overview.annotations} />
-				</section>
+				<!-- Empty charts say nothing in the first hour; the pipeline above shows the progress, and the
+				     charts take over with the first completed cohort (startup is no longer "yes"). -->
+				{#if !firstHour}
+					<section
+						id="insights-status"
+						class="ins-section"
+						aria-labelledby="insights-status-heading"
+					>
+						<h2 id="insights-status-heading" class="ins-heading" tabindex="-1">
+							{m.insights_overview_status_title()}
+						</h2>
+						<p class="ins-sub">{m.insights_overview_status_time()}</p>
+						<KpiRow kpi={overview.kpi} annotations={overview.annotations} />
+					</section>
 
-				<!-- §10.9.6. The DOM is the wide order (trend, needs attention, funnel), so focus follows
+					<!-- §10.9.6. The DOM is the wide order (trend, needs attention, funnel), so focus follows
 				     what a keyboard user on a wide screen sees (WCAG 2.4.3). On a narrow screen CSS order
 				     puts needs attention and the funnel before the trend, as the plan shows. -->
-				<div class="ins-story" data-calm={overview.exceptions.length === 0 ? '' : undefined}>
+					<div class="ins-story" data-calm={overview.exceptions.length === 0 ? '' : undefined}>
+						<section
+							id="insights-movement"
+							class="ins-section ins-movement"
+							aria-labelledby="insights-movement-heading"
+						>
+							<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
+								{m.insights_overview_movement_title()}
+							</h2>
+							<p class="ins-sub">
+								{m.insights_overview_movement_time({
+									tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
+								})}
+							</p>
+							<Lazy
+								load={() => import('./Movement.svelte')}
+								props={{ overview, query, rangeText }}
+								height="ins-sk-movement"
+							/>
+						</section>
+						<section
+							id="insights-exceptions"
+							class="ins-section ins-exceptions"
+							aria-labelledby="insights-exceptions-heading"
+						>
+							<h2 id="insights-exceptions-heading" class="ins-heading" tabindex="-1">
+								{m.insights_overview_exceptions_title()}
+							</h2>
+							<p class="ins-sub">{m.insights_overview_exceptions_time()}</p>
+							<Exceptions exceptions={overview.exceptions} />
+							{#if overview.exceptions.length}
+								<a
+									class="ins-link target"
+									href={resolve(csvHref('exceptions', query) as Route)}
+									download
+									data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
+								>
+							{/if}
+						</section>
+						<section
+							id="insights-funnel"
+							class="ins-section ins-funnel"
+							aria-labelledby="insights-funnel-heading"
+						>
+							<h2 id="insights-funnel-heading" class="ins-heading" tabindex="-1">
+								{m.insights_overview_funnel_heading()}
+							</h2>
+							<p class="ins-sub">{m.insights_overview_funnel_time()}</p>
+							<Lazy
+								load={() => import('./Funnel.svelte')}
+								props={{ overview, query, rangeText }}
+								height="ins-sk-funnel"
+							/>
+						</section>
+					</div>
+
 					<section
-						id="insights-movement"
-						class="ins-section ins-movement"
-						aria-labelledby="insights-movement-heading"
+						id="insights-segments"
+						class="ins-section"
+						aria-labelledby="insights-segments-heading"
 					>
-						<h2 id="insights-movement-heading" class="ins-heading" tabindex="-1">
-							{m.insights_overview_movement_title()}
+						<h2 id="insights-segments-heading" class="ins-heading" tabindex="-1">
+							{m.insights_overview_segments_title()}
 						</h2>
-						<p class="ins-sub">
-							{m.insights_overview_movement_time({
-								tz: bucketTimeZone(overview.range.bucket, displayTimeZone())
-							})}
-						</p>
+						<p class="ins-sub">{m.insights_overview_segments_time()}</p>
 						<Lazy
-							load={() => import('./Movement.svelte')}
-							props={{ overview, query, rangeText }}
-							height="ins-sk-movement"
-						/>
-					</section>
-					<section
-						id="insights-exceptions"
-						class="ins-section ins-exceptions"
-						aria-labelledby="insights-exceptions-heading"
-					>
-						<h2 id="insights-exceptions-heading" class="ins-heading" tabindex="-1">
-							{m.insights_overview_exceptions_title()}
-						</h2>
-						<p class="ins-sub">{m.insights_overview_exceptions_time()}</p>
-						<Exceptions exceptions={overview.exceptions} />
-						{#if overview.exceptions.length}
-							<a
-								class="ins-link target"
-								href={resolve(csvHref('exceptions', query) as Route)}
-								download
-								data-testid="insights-exceptions-csv">{m.insights_overview_csv()}</a
-							>
-						{/if}
-					</section>
-					<section
-						id="insights-funnel"
-						class="ins-section ins-funnel"
-						aria-labelledby="insights-funnel-heading"
-					>
-						<h2 id="insights-funnel-heading" class="ins-heading" tabindex="-1">
-							{m.insights_overview_funnel_heading()}
-						</h2>
-						<p class="ins-sub">{m.insights_overview_funnel_time()}</p>
-						<Lazy
-							load={() => import('./Funnel.svelte')}
-							props={{ overview, query, rangeText }}
+							load={() => import('./Segments.svelte')}
+							props={{ segments: overview.segments, query, rangeText }}
 							height="ins-sk-funnel"
 						/>
 					</section>
-				</div>
 
-				<section
-					id="insights-segments"
-					class="ins-section"
-					aria-labelledby="insights-segments-heading"
-				>
-					<h2 id="insights-segments-heading" class="ins-heading" tabindex="-1">
-						{m.insights_overview_segments_title()}
-					</h2>
-					<p class="ins-sub">{m.insights_overview_segments_time()}</p>
-					<Lazy
-						load={() => import('./Segments.svelte')}
-						props={{ segments: overview.segments, query, rangeText }}
-						height="ins-sk-funnel"
-					/>
-				</section>
-
-				<section id="insights-serve" class="ins-section" aria-labelledby="insights-serve-heading">
-					<h2 id="insights-serve-heading" class="ins-heading" tabindex="-1">
-						{m.insights_overview_serve_title()}
-					</h2>
-					<p class="ins-sub">{m.insights_overview_serve_time()}</p>
-					<Lazy
-						load={() => import('./ServePanel.svelte')}
-						props={{ serve: overview.serve, query }}
-						height="ins-sk-kpi"
-					/>
-				</section>
+					<section id="insights-serve" class="ins-section" aria-labelledby="insights-serve-heading">
+						<h2 id="insights-serve-heading" class="ins-heading" tabindex="-1">
+							{m.insights_overview_serve_title()}
+						</h2>
+						<p class="ins-sub">{m.insights_overview_serve_time()}</p>
+						<Lazy
+							load={() => import('./ServePanel.svelte')}
+							props={{ serve: overview.serve, query }}
+							height="ins-sk-kpi"
+						/>
+					</section>
+				{/if}
 
 				<section id="insights-detail" class="ins-section" aria-labelledby="insights-detail-heading">
 					<h2 id="insights-detail-heading" class="ins-heading" tabindex="-1">

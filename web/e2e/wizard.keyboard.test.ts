@@ -117,7 +117,7 @@ test.describe('first-run wizard', () => {
 		await kbd.press('Enter');
 		await expect(h2(page, 'How it works')).toBeFocused();
 		await expect(page.getByTestId('wizard-how-cold')).toContainText(
-			'Full speed starts after those 6 hours'
+			'The index keeps growing over days and weeks'
 		);
 		await expectNoA11yViolations(page);
 

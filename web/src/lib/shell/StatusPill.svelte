@@ -11,6 +11,7 @@
 	import IconUnknown from '~icons/ph/circle-dashed-bold';
 	import IconConnecting from '~icons/ph/circle-notch-bold';
 	import IconStarting from '~icons/ph/hourglass-medium-bold';
+	import IconWarming from '~icons/ph/flame-bold';
 	import IconStalled from '~icons/ph/warning-octagon-bold';
 	import IconRestart from '~icons/ph/power-bold';
 	import { resolve } from '$app/paths';
@@ -37,6 +38,7 @@
 		rebuilding: IconRebuild,
 		failed: IconWarning,
 		starting: IconStarting,
+		warming: IconWarming,
 		stalled: IconStalled,
 		restart: IconRestart
 	};
@@ -51,6 +53,7 @@
 		rebuilding: () => m.shell_status_rebuilding(),
 		failed: () => m.shell_status_failed(),
 		starting: () => m.shell_status_starting(),
+		warming: () => m.shell_status_warming(),
 		stalled: () => m.shell_status_stalled(),
 		restart: () => m.shell_status_restart()
 	};
@@ -58,10 +61,8 @@
 	// words alone say "Stalled"; this says what it means and where to look).
 	const help: Partial<Record<PillKind, () => string>> = {
 		restart: () => m.shell_status_restart_help(),
-		starting: () =>
-			state.reason === 'restart_record'
-				? m.shell_status_record_help()
-				: m.shell_status_starting_help(),
+		starting: () => m.shell_status_starting_help(),
+		warming: () => m.shell_status_warming_help(),
 		stalled: () =>
 			state.reason === 'index_lag' ? m.shell_status_lag_help() : m.shell_status_stalled_help()
 	};
@@ -73,6 +74,7 @@
 			state.kind === 'idle' ||
 			state.kind === 'paused' ||
 			state.kind === 'starting' ||
+			state.kind === 'warming' ||
 			state.kind === 'stalled'
 	);
 	// The fleet (WK-17): " · N workers · X/h" after the count, with paused and offline when above zero.
@@ -87,11 +89,16 @@
 					done: formatCount(state.done, locale),
 					total: formatCount(state.total, locale)
 				})
-			: showsCount
-				? (state.torrents === 1 ? m.shell_status_torrents_one : m.shell_status_torrents)({
-						count: formatCompact(state.torrents, locale)
+			: state.kind === 'warming'
+				? m.shell_status_warming_counts({
+						found: formatCompact(state.found ?? null, locale),
+						stored: formatCompact(state.stored ?? null, locale)
 					})
-				: ''
+				: showsCount
+					? (state.torrents === 1 ? m.shell_status_torrents_one : m.shell_status_torrents)({
+							count: formatCompact(state.torrents, locale)
+						})
+					: ''
 	);
 </script>
 
