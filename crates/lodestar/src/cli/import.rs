@@ -366,6 +366,13 @@ fn open_exclusive(config: &Config) -> Outcome<Store> {
     }
 }
 
+/// Marks the hot-column snapshot stale before the store's torrents
+/// change ([`lodestar_pipeline::invalidate_hot`]).
+fn invalidate_hot(store: &Store) -> Outcome {
+    lodestar_pipeline::invalidate_hot(store.connection())
+        .map_err(failed("marking the hot-column snapshot stale"))
+}
+
 /// An opened source and what it says about its size.
 struct Opened {
     adapter: Adapter,
@@ -921,6 +928,11 @@ async fn run_job(
     limit: Option<u64>,
     json: bool,
 ) -> Outcome {
+    // The import adds torrents (and so last-seen values) the hot-column
+    // snapshot doesn't have: it's marked stale before the first write, so
+    // the next start rebuilds the columns, even after a crash part-way
+    // (X-import-hot-stamp).
+    invalidate_hot(store)?;
     // An empty store is marked as judged by this build's core, which
     // judges what the import stores, so the server doesn't judge it again.
     lodestar_pipeline::core_rejudge::seed_if_empty(store)
@@ -1399,6 +1411,9 @@ fn remove(config: &Config, id: i64, yes: bool, json: bool) -> Outcome {
             return Ok(());
         }
     }
+    // Removal deletes torrents and their swarm rows: the snapshot would
+    // still hold them (X-import-hot-stamp).
+    invalidate_hot(&store)?;
     let r = remove_all(&mut store, id)?;
     let _ = store.checkpoint();
     if json {

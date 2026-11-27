@@ -374,7 +374,8 @@ pub fn restore(
         .map_err(index_note)?;
     let copied = std::fs::copy(&snapshot.path, &staged)
         .map_err(failed(format!("copying {}", snapshot.path.display())))
-        .and_then(|_| purge_staged(lock.conn(), &staged, now));
+        .and_then(|_| mark_hot_stale(&staged))
+        .and_then(|()| purge_staged(lock.conn(), &staged, now));
     if let Err(e) = copied {
         remove_stage(&staged);
         lock.release()?;
@@ -389,6 +390,21 @@ pub fn restore(
         index_aside,
         schema: snap_schema,
     }))
+}
+
+/// Marks the staged copy's hot-column snapshot stale: the copy brings
+/// back the stamp it was taken with, and the purge then changes its
+/// torrents, so a hot folder that stamp still matches (no clean shutdown
+/// since) would load columns the restored store disagrees with. The next
+/// start rebuilds them (X-import-hot-stamp). Before the purge, which folds
+/// in and checks for any WAL this write leaves.
+fn mark_hot_stale(staged: &Path) -> Outcome {
+    let conn = lodestar_store::rusqlite::Connection::open(staged)
+        .map_err(failed(format!("opening {}", staged.display())))?;
+    lodestar_pipeline::invalidate_hot(&conn)
+        .map_err(failed("marking the hot-column snapshot stale"))?;
+    conn.close()
+        .map_err(|(_, e)| Failure::Failed(format!("closing {}: {e}", staged.display())))
 }
 
 /// Applies the store's deletions and holds to the staged copy (see
@@ -548,6 +564,57 @@ mod tests {
         assert_eq!(hashes(&db, "snapshot_deletions"), [vec![1; 20]]);
         // The undo copy is the store as it was.
         assert_eq!(hashes(&r.kept, "torrents"), [vec![2; 20]]);
+    }
+
+    /// X-import-hot-stamp: the snapshot brings back the hot-column stamp
+    /// it was taken with, which the hot folder still matches when no clean
+    /// shutdown ran since. The restore marks it stale, so the next start
+    /// rebuilds the columns rather than load the deleted torrent's.
+    #[test]
+    fn a_rollback_makes_the_next_start_rebuild_the_hot_columns() {
+        use lodestar_store::{Col, HotColumns, NEVER, Store, StoreConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            data_dir: dir.path().to_path_buf(),
+            ..Config::default()
+        };
+        let db = config.db_path();
+        let hot_dir = dir.path().join("hot");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        insert_torrent(store.connection(), 1, [1; 20]);
+        insert_torrent(store.connection(), 2, [2; 20]);
+        // A clean shutdown's snapshot, then a pre-migration copy holding
+        // its stamp.
+        let hot = HotColumns::new();
+        store.load_hot(&hot).unwrap();
+        lodestar_pipeline::save_hot(&mut store, &hot, &hot_dir).unwrap();
+        let path = dir.path().join("lodestar.pre-v13.db");
+        store
+            .connection()
+            .execute("VACUUM INTO ?1", [path.to_string_lossy()])
+            .unwrap();
+        store
+            .connection()
+            .execute("DELETE FROM torrents WHERE id = 1", [])
+            .unwrap();
+        drop(store);
+        let snap = snapshots(&db).unwrap().remove(0);
+        restore(&config, &snap, unix_now(), |_| Ok(true))
+            .unwrap()
+            .unwrap();
+
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let (hot, from_snapshot) = lodestar_pipeline::open_hot(&mut store, &hot_dir).unwrap();
+        assert!(
+            !from_snapshot,
+            "the restored stamp must not load the snapshot"
+        );
+        assert_eq!(
+            hot.get(Col::LastSeen, 1),
+            NEVER,
+            "deleted since the snapshot"
+        );
+        assert_eq!(hot.get(Col::LastSeen, 2), 0);
     }
 
     /// Holds recorded after the snapshot survive the rollback: the

@@ -1062,3 +1062,95 @@ fn status_shows_a_running_imports_live_progress() {
     assert_eq!(full["live"], false);
     assert_eq!(keys(&full["counters"]), keys(&live["counters"]));
 }
+
+/// A clean shutdown's hot-column snapshot of the store as it is now, in
+/// the folder the server uses.
+fn snapshot_hot(config: &Config) {
+    let mut store = Store::open(config.db_path(), StoreConfig::default()).unwrap();
+    let hot = lodestar_store::HotColumns::new();
+    store.load_hot(&hot).unwrap();
+    lodestar_pipeline::save_hot(&mut store, &hot, &config.data_dir.join("hot")).unwrap();
+}
+
+/// The next start's hot columns, and whether they came from the snapshot.
+fn start_hot(config: &Config) -> (lodestar_store::HotColumns, bool) {
+    let mut store = Store::open(config.db_path(), StoreConfig::default()).unwrap();
+    lodestar_pipeline::open_hot(&mut store, &config.data_dir.join("hot")).unwrap()
+}
+
+fn torrent_ids(config: &Config) -> Vec<u64> {
+    let store = Store::open(config.db_path(), StoreConfig::default()).unwrap();
+    let mut stmt = store
+        .connection()
+        .prepare("SELECT id FROM torrents ORDER BY id")
+        .unwrap();
+    stmt.query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .map(|id| id.unwrap() as u64)
+        .collect()
+}
+
+/// X-import-hot-stamp: an offline import (start, resume) or removal marks
+/// the hot-column snapshot stale before its first write, so the next start
+/// rebuilds the columns and sees the torrents it changed. A verb that
+/// doesn't change torrents (cancel) keeps the snapshot.
+#[test]
+fn an_offline_import_makes_the_next_start_rebuild_the_hot_columns() {
+    use lodestar_store::{Col, NEVER};
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 700);
+    let config = data(&dir.path().join("data"));
+    let args = magnetico(&src);
+
+    // Start: the pilot's first batch.
+    snapshot_hot(&config);
+    block_on(start(&config, &args, Some(1), true, None)).unwrap();
+    let ids = torrent_ids(&config);
+    assert_eq!(ids.len(), 500);
+    let (hot, from_snapshot) = start_hot(&config);
+    assert!(!from_snapshot, "start must mark the snapshot stale");
+    assert!(ids.iter().all(|&id| hot.get(Col::LastSeen, id) != NEVER));
+
+    // Resume: the rest.
+    snapshot_hot(&config);
+    block_on(resume(&config, 1, &args, None, true)).unwrap();
+    let all = torrent_ids(&config);
+    assert_eq!(all.len(), 700);
+    let (hot, from_snapshot) = start_hot(&config);
+    assert!(!from_snapshot, "resume must mark the snapshot stale");
+    assert!(all.iter().all(|&id| hot.get(Col::LastSeen, id) != NEVER));
+
+    // Cancel changes no torrent: the snapshot stays good.
+    snapshot_hot(&config);
+    run(
+        &config,
+        ImportArgs {
+            action: Action::Cancel { job: 1 },
+        },
+    )
+    .unwrap();
+    assert!(start_hot(&config).1, "cancel keeps the snapshot");
+
+    // Remove takes the torrents back: the snapshot still has them.
+    snapshot_hot(&config);
+    remove(&config, 1, true, true).unwrap();
+    assert!(torrent_ids(&config).is_empty());
+    let (hot, from_snapshot) = start_hot(&config);
+    assert!(!from_snapshot, "remove must mark the snapshot stale");
+    assert!(all.iter().all(|&id| hot.get(Col::LastSeen, id) == NEVER));
+}
+
+/// The stamp is cleared at the start of the run, after the source and the
+/// store's room are checked: an import refused before then wrote nothing,
+/// and leaves the snapshot good.
+#[test]
+fn an_import_refused_before_its_first_write_keeps_the_hot_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = data(&dir.path().join("data"));
+    snapshot_hot(&config);
+    let missing = magnetico(&dir.path().join("nope.sqlite3"));
+    assert!(block_on(start(&config, &missing, None, true, None)).is_err());
+    assert!(block_on(resume(&config, 1, &missing, None, true)).is_err());
+    assert!(start_hot(&config).1);
+}
