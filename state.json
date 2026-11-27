@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T10:53:20Z",
+  "updated_at": "2026-11-27T12:29:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T10:53:20Z",
+    "updated": "2026-11-27T12:29:45Z",
     "items": [
       {
         "slot": 1,
@@ -11124,7 +11124,7 @@
         "role": "build",
         "agent": "claude",
         "session": "session_01MMjhnBYvsxSGDbhAEgUbG8",
-        "doing": "building: imports index verified:imported, not yes",
+        "doing": "PR #1139 open, under review",
         "since": "2026-11-27T10:27:21Z"
       },
       {
@@ -11138,12 +11138,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-tls-root-load-event",
+        "slice": "X-watch-open-fstat",
         "role": "build",
         "agent": "claude",
-        "session": "session_01MMjhnA9mp9Fx3GWphzArEK",
-        "doing": "building: catalogued root-load counts event",
-        "since": "2026-11-27T09:00:31Z"
+        "session": "session_01MMjhn9qvWsn7Gc3vmbw61L",
+        "doing": "building: watch folder checks the opened handle, not the path",
+        "since": "2026-11-27T12:29:45Z"
       },
       {
         "slot": 4,
@@ -11151,7 +11151,7 @@
         "role": "build",
         "agent": "claude",
         "session": "session_01MMjhnC1MrsEPkrs2L4N2pZ",
-        "doing": "building: refile re-arms the writer; drop_one and terms changes bump class_gen and log",
+        "doing": "PR #1138 open, review MERGE, CI running",
         "since": "2026-11-27T10:53:20Z"
       }
     ],
