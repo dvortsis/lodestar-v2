@@ -851,6 +851,16 @@ enum MoveError {
     Left,
 }
 
+/// Points in [`Folder::open_with`] between a check and the next step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// The path checked, the folder not yet opened.
+    Checked,
+    /// The folder opened (held, on Windows), not yet checked again.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Opened,
+}
+
 /// The folder for one poll, opened without following links, with its
 /// `added/` and `failed/` checked.
 ///
@@ -861,8 +871,9 @@ enum MoveError {
 /// subfolders through it. Windows has no handle-relative calls without
 /// `unsafe`, so the path is checked to still name the held folder (by
 /// volume serial and file index) after the open, after the listing,
-/// before and after each read and before each move or removal, and the
-/// poll stops on a mismatch.
+/// before, during and after each read and before each move or removal.
+/// On a mismatch a read waits for a later poll, and anything else stops
+/// the poll.
 struct Folder {
     #[cfg(not(unix))]
     path: PathBuf,
@@ -882,9 +893,20 @@ impl Folder {
     /// following it, checked again through what was opened, and its
     /// `added/` and `failed/` checked.
     fn open(path: &Path, data_dir: &Path) -> Result<Folder, Problem> {
+        Folder::open_with(path, data_dir, |_| {})
+    }
+
+    /// [`Folder::open`], calling `between` at each [`Stage`]: where a test
+    /// swaps the folder or a parent to show the later checks catch it.
+    fn open_with(
+        path: &Path,
+        data_dir: &Path,
+        mut between: impl FnMut(Stage),
+    ) -> Result<Folder, Problem> {
         if let Some(p) = folder_problem(path, data_dir) {
             return Err(Problem::Folder(p));
         }
+        between(Stage::Checked);
         #[cfg(unix)]
         let fd = {
             use rustix::fs::{Mode, OFlags};
@@ -914,6 +936,7 @@ impl Folder {
             Problem::Folder(FolderProblem::NotDirectory),
             Problem::Unreadable,
         )?;
+        between(Stage::Opened);
         #[cfg_attr(not(windows), allow(unused_mut))]
         let mut f = Folder {
             #[cfg(not(unix))]
@@ -1092,6 +1115,11 @@ impl Folder {
     /// the handle: a regular file, the shape it was listed with, one link
     /// to it (Unix), and within the cap, read through a limit.
     fn read(&self, name: &OsStr, shape: Shape) -> Taken {
+        // By path on Windows: only through the held folder.
+        #[cfg(windows)]
+        if !self.still_here() {
+            return Taken::Wait;
+        }
         let file = match self.open_file(name) {
             Ok(f) => f,
             Err(e) => {
@@ -1542,7 +1570,9 @@ async fn apply(
     }
     *shown = None;
     let (folder, data) = (w.folder.clone(), w.data_dir.clone());
-    let problem = blocking(move || folder_problem(&folder, &data).map(Problem::Folder)).await;
+    // Checked as a poll checks it, through what's opened, so a folder the
+    // handle refuses is never shown as started first (X-watch-open-fstat).
+    let problem = blocking(move || Folder::open(&folder, &data).err()).await;
     show(problem, shown);
     Some(w)
 }
@@ -1634,6 +1664,17 @@ mod tests {
             v.sort();
             v
         }
+    }
+
+    /// The names in `dir`, sorted.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    fn t_names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
     }
 
     /// Two polls: the first sees each file, the second takes it.
@@ -2517,6 +2558,60 @@ mod tests {
             assert_eq!(next.list().unwrap().0, [OsString::from("b.torrent")]);
         }
 
+        /// X-watch-open-fstat (#1104's race): a parent swapped for a link
+        /// into the data directory between the path check and the open is
+        /// caught by the check through the handle.
+        #[test]
+        fn a_parent_swapped_into_the_data_directory_before_the_open_is_refused() {
+            let root = tempfile::tempdir().unwrap();
+            let data = tempfile::tempdir().unwrap();
+            let folder = root.path().join("p/w");
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::create_dir(data.path().join("w")).unwrap();
+            std::fs::write(data.path().join("w/in.torrent"), b"fine").unwrap();
+            let got = Folder::open_with(&folder, data.path(), |stage| {
+                if stage == Stage::Checked {
+                    std::fs::rename(root.path().join("p"), root.path().join("p.old")).unwrap();
+                    std::os::unix::fs::symlink(data.path(), root.path().join("p")).unwrap();
+                }
+            });
+            assert_eq!(
+                got.err(),
+                Some(Problem::Folder(FolderProblem::InsideDataDir))
+            );
+            assert_eq!(t_names(&data.path().join("w")), ["in.torrent"]);
+        }
+
+        /// X-watch-open-fstat: the folder itself swapped for a link
+        /// between the path check and the open is never followed.
+        #[test]
+        fn the_folder_swapped_for_a_link_before_the_open_is_refused() {
+            let root = tempfile::tempdir().unwrap();
+            let data = tempfile::tempdir().unwrap();
+            let other = tempfile::tempdir().unwrap();
+            let folder = root.path().join("w");
+            std::fs::create_dir(&folder).unwrap();
+            let got = Folder::open_with(&folder, data.path(), |stage| {
+                if stage == Stage::Checked {
+                    std::fs::rename(&folder, root.path().join("w.real")).unwrap();
+                    std::os::unix::fs::symlink(other.path(), &folder).unwrap();
+                }
+            });
+            // `O_DIRECTORY | O_NOFOLLOW` on a link: `ENOTDIR` on Linux,
+            // `ELOOP` elsewhere. Refused, never followed, either way.
+            let got = got.err();
+            assert!(
+                matches!(
+                    got,
+                    Some(Problem::Folder(
+                        FolderProblem::Link | FolderProblem::NotDirectory
+                    ))
+                ),
+                "{got:?}"
+            );
+            assert!(t_names(other.path()).is_empty(), "nothing made there");
+        }
+
         /// X-watch-open-fstat: the data-directory rule read through the
         /// opened folder's handle, so a folder that passed the path check
         /// but turns out, once open, to be in the data directory (or to
@@ -2787,6 +2882,53 @@ mod tests {
             // The next poll follows the path, as it always has.
             let next = Folder::open(&j.join("w"), data.path()).unwrap();
             assert_eq!(next.list().unwrap().0, [OsString::from("b.torrent")]);
+        }
+
+        /// X-watch-open-fstat (#1104's race): a parent junction pointed
+        /// into the data directory between the path check and the hold is
+        /// caught by the path checks made again once the folder is held.
+        #[test]
+        fn a_parent_junction_into_the_data_directory_before_the_hold_is_refused() {
+            let root = tempfile::tempdir().unwrap();
+            let data = tempfile::tempdir().unwrap();
+            let x = root.path().join("x");
+            std::fs::create_dir_all(x.join("w")).unwrap();
+            std::fs::create_dir(data.path().join("w")).unwrap();
+            let j = root.path().join("j");
+            junction(&j, &x);
+            let got = Folder::open_with(&j.join("w"), data.path(), |stage| {
+                if stage == Stage::Checked {
+                    std::fs::remove_dir(&j).unwrap();
+                    junction(&j, data.path());
+                }
+            });
+            assert_eq!(
+                got.err(),
+                Some(Problem::Folder(FolderProblem::InsideDataDir))
+            );
+            assert!(t_names(&data.path().join("w")).is_empty());
+        }
+
+        /// X-watch-open-fstat: a parent junction pointed elsewhere once
+        /// the folder is held, but before it's checked again, is caught
+        /// by the identity check.
+        #[test]
+        fn a_parent_junction_pointed_elsewhere_after_the_hold_is_refused() {
+            let root = tempfile::tempdir().unwrap();
+            let data = tempfile::tempdir().unwrap();
+            let (x, y) = (root.path().join("x"), root.path().join("y"));
+            std::fs::create_dir_all(x.join("w")).unwrap();
+            std::fs::create_dir_all(y.join("w")).unwrap();
+            let j = root.path().join("j");
+            junction(&j, &x);
+            let got = Folder::open_with(&j.join("w"), data.path(), |stage| {
+                if stage == Stage::Opened {
+                    std::fs::remove_dir(&j).unwrap();
+                    junction(&j, &y);
+                }
+            });
+            assert_eq!(got.err(), Some(Problem::Unreadable));
+            assert!(t_names(&y.join("w")).is_empty(), "nothing made there");
         }
 
         /// rv-765 I1: a file held open without delete sharing is never
