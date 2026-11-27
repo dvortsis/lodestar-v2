@@ -291,6 +291,27 @@ class DeclarationSchemaTests(unittest.TestCase):
         d["arms"] += again["arms"]
         self.refused(d)  # L2 → L2 doesn't drop an arm
 
+    def test_section_6_1s_arm_table_is_enforced(self):
+        for arm, change in (("B", {"switches": dict(mk.ALL_OFF)}), ("B", {"preset": "aggressive"}),
+                            ("A", {"preset": "balanced"}), ("C", {"role": "candidate"}),
+                            ("C", {"switches": dict(mk.ALL_ON)}), ("B", {"role": "diagnostic"}),
+                            ("B", {"switches": dict(mk.ALL_ON, route_backoff=True)})):
+            d = self.decl()
+            for e in d["arms"]:
+                if e["arm"] == arm:
+                    e.update(change)
+            self.refused(d)
+        d = self.decl()
+        for e in d["arms"]:
+            if e["arm"] == "A":
+                e["role"] = "diagnostic"
+        analyze_cr.check_declaration(d)  # A may be either, as declared
+
+    def test_an_arm_outside_the_table_is_refused(self):
+        d = self.decl()
+        d["arms"][0].update(arm="D", role="diagnostic", preset="balanced", switches=dict(mk.ALL_OFF))
+        self.refused(d)
+
     def test_other_contention_thresholds_are_refused(self):
         d = self.decl()
         d["contention"] = dict(analyze_cr.CONTENTION, cpu_p95_max=0.9)
@@ -318,6 +339,14 @@ class BundleEvidenceTests(SegmentBase):
             report = self.judge(sim)
             self.assertEqual(report["verdict"], "void", switch)
             self.assertIn(f"{switch}_evidence", report["verdict_reasons"])
+
+    def test_a_gauge_row_absent_at_one_scrape_voids(self):
+        sim = Round1Sim()
+        drop = lambda e, i: 2000 < e < 2070
+        sim.edits.append((drop, lambda row, lines: lines.__setitem__(slice(None), [
+            x for x in lines if not x.startswith('lodestar_dht_sample_cooling_reason{reason="first_failure"}')])))
+        report = self.judge(sim)
+        self.assertIn("sample_backoff_escalate_evidence", report["verdict_reasons"])
 
     def test_an_on_switch_with_a_measured_zero_voids(self):
         sim = Round1Sim()
@@ -838,6 +867,141 @@ class ValidityTests(RoundBase):
         self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
 
 
+def add_attempt(a, layout, attempt, fresh=None):
+    """Append a fresh attempt (from make_archive) to archive `a`, with distinct run IDs and,
+    by default, days after the existing ones."""
+    later = mk.archive(layout, attempt=attempt)
+    a["declaration"]["attempts"] += later["declaration"]["attempts"]
+    a["declaration"]["arms"] += later["declaration"]["arms"]
+    shift = timedelta(days=3 * (len(a["declaration"]["attempts"]) - 1))
+    for d in later["days"]:
+        for r in d["reports"].values():
+            for k in ("process_start_utc", "window_start_utc", "window_end_utc", "last_scrape_utc"):
+                r["timeline"][k] = mk.iso(analyze_cr.parse_utc(r["timeline"][k]) + shift)
+            r["binding"]["ended_utc"] = mk.iso(analyze_cr.parse_utc(r["binding"]["ended_utc"]) + shift)
+        for arm in d["archive"]["arms"].values():
+            for k in ("active_from_utc", "active_through_utc"):
+                arm[k] = mk.iso(analyze_cr.parse_utc(arm[k]) + shift)
+            for e in arm["egress"]:
+                e["utc"] = mk.iso(analyze_cr.parse_utc(e["utc"]) + shift)
+        for smp in d["contention"]["samples"]:
+            smp["utc"] = mk.iso(analyze_cr.parse_utc(smp["utc"]) + shift)
+    a["days"] += later["days"]
+    return a
+
+
+def lose_b_probes(day):
+    """2 % of B's tunnel probes lost through its window: a network breach on B alone."""
+    for k, smp in enumerate(day["contention"]["samples"]):
+        if k % 50 == 0:
+            smp["tunnels"]["B"] = {"rtt_ms": None, "lost": True}
+
+
+class HistoryTests(RoundBase):
+    """Runner review of #1147: history across attempts, and a manifest complete against the
+    declaration."""
+
+    def test_a_breach_then_a_fresh_non_solo_attempt_still_needs_solo_confirmation(self):
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))
+        add_attempt(a, "L2", "r1-a2")
+        v = self.gate(a)
+        self.assertNotJudged(v, "solo_confirmation_required")
+
+    def test_a_breach_then_a_passing_solo_confirmation_passes(self):
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))
+        add_attempt(a, "S", "r1-a2")
+        self.assertEqual(self.cand(self.gate(a))["crawler"], "pass")
+
+    def test_a_product_failure_on_the_same_digest_withholds_qualification(self):
+        for diagnosis in ("product", "pending"):
+            a = mk.archive("L3")
+            self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"], "diagnosis": diagnosis}]
+            add_attempt(a, "L2", "r1-a2")
+            v = self.gate(a)
+            self.assertNotJudged(v, "product_failure_on_this_digest")
+            if diagnosis == "pending":  # withheld: B isn't terminal, so A isn't read
+                self.assertEqual(v["selection"]["state"], "pending_retry")
+            else:  # diagnosed: B's claim ends, and A (clean in its own fresh attempt) is read
+                self.assertEqual(v["selection"]["trail"][0]["disposition"], "product_failure")
+                self.assertNotEqual(v["selection"]["ships"], "B")
+
+    def test_a_product_failure_on_another_digest_does_not_carry_over(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"], "diagnosis": "product"}]
+        a["declaration"]["attempts"][0]["candidate_digests"]["B"] = "sha256:" + "0" * 64
+        add_attempt(a, "L2", "r1-a2")
+        c = self.cand(self.gate(a))
+        self.assertNotIn("product_failure_on_this_digest", c["reasons"])
+        self.assertFalse(c["product_failure"])
+
+    def test_a_failed_solo_confirmation_has_no_further_retry_and_a_is_read(self):
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))
+        add_attempt(a, "S", "r1-a2")
+        lose_b_probes(self.day(a, 2, "r1-a2"))  # the solo confirmation breaches too
+        add_attempt(a, "S", "r1-a3")
+        v = self.gate(a)
+        self.assertNotJudged(v, "solo_confirmation_failed")
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
+        self.assertEqual(v["selection"]["ships"], "A")  # A's own windows were clean
+
+    def test_l3_then_l3_after_an_infrastructure_day_is_refused(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "infrastructure", "arms": []}]
+        with self.assertRaises(ValueError):
+            self.gate(add_attempt(a, "L3", "r1-a2"))
+
+    def test_omitting_an_earlier_attempts_days_is_not_judged(self):
+        a = mk.archive("L3")
+        self.day(a, 2)["reports"]["B"]["numerator"]["hourly"][3]["net_per_min"] = 60.0  # a1: a valid miss
+        add_attempt(a, "L2", "r1-a2")
+        a["days"] = [d for d in a["days"] if d["attempt"] != "r1-a1"]
+        self.assertNotJudged(self.gate(a), "earlier_attempt_incomplete")
+
+    def test_an_earlier_attempt_with_a_recorded_end_needs_only_the_days_it_ran(self):
+        a = mk.archive("L3")
+        add_attempt(a, "L2", "r1-a2")
+        a["days"] = [d for d in a["days"] if not (d["attempt"] == "r1-a1" and d["day"] == 2)]
+        path = mk.write(self.root / "ended", a)
+        man = json.loads(path.read_text())
+        man["attempt_ends"] = {"r1-a1": {"reason": "C dropped after day 1", "days_run": [1]}}
+        path.write_text(json.dumps(man))
+        v = analyze_cr.gate_round(analyze_cr.load_manifest(path))
+        self.assertEqual(self.cand(v)["crawler"], "pass")
+
+    def test_a_repeat_without_its_repeat_0_is_not_judged(self):
+        a = mk.archive("L3")
+        d1 = self.day(a, 1)
+        d1["repeat"] = 1
+        for r in d1["reports"].values():
+            r["binding"]["placement"]["repeat"] = 1
+        self.assertNotJudged(self.gate(a), "repeats_not_contiguous")
+
+    def test_only_repeat_3_listed_is_not_judged(self):
+        a = mk.archive("L3")
+        d1 = self.day(a, 1)
+        d1["repeat"] = 3
+        for r in d1["reports"].values():
+            r["binding"]["placement"]["repeat"] = 3
+        v = self.gate(a)
+        self.assertNotJudged(v, "repeats_not_contiguous")
+        self.assertNotJudged(v, "retry_budget_exhausted")
+
+    def test_an_undeclared_attempt_in_the_manifest_is_an_error(self):
+        a = mk.archive("L3")
+        self.day(a, 2)["attempt"] = "r1-a9"
+        with self.assertRaises(ValueError):
+            self.gate(a)
+
+    def test_a_run_id_reused_across_attempts_is_not_judged(self):
+        a = mk.archive("L3")
+        add_attempt(a, "L2", "r1-a2")
+        self.day(a, 1, "r1-a2")["reports"]["B"]["binding"]["run_id"] = "r1-a1-d1-B"
+        self.assertNotJudged(self.gate(a), "run_id_reused")
+
+
 class ComparatorTests(RoundBase):
     def test_missing_comparator(self):
         a = mk.archive("L3")
@@ -846,15 +1010,35 @@ class ComparatorTests(RoundBase):
 
     def test_comparator_spacing_violation(self):
         a = mk.archive("L3")
-        # Day 1's processes start 11 h after the comparator's window end, its windows 12 h 01 min
-        # after; moving the comparator 30 min later puts every day-1 window inside the 12 h.
+        # Day 1's processes start 12 h after the comparator's window end, its windows 13 h 01 min
+        # after; moving the comparator 90 min later puts every day-1 window inside the 12 h.
         t = a["comparator"]["timeline"]
         for k in ("window_end_utc", "last_scrape_utc"):
-            t[k] = mk.iso(analyze_cr.parse_utc(t[k]) + timedelta(minutes=30))
+            t[k] = mk.iso(analyze_cr.parse_utc(t[k]) + timedelta(minutes=90))
         a["comparator"]["binding"]["ended_utc"] = mk.iso(analyze_cr.parse_utc(t["window_end_utc"]) + timedelta(seconds=40))
         v = self.gate(a)
         self.assertNotJudged(v, "spacing")
         self.assertIn("lodestar_window_within_12h_after_comparator", self.cand(v)["spacing_problems"])
+        self.assertIn("lodestar_before_comparator_end_plus_12h", self.cand(v)["spacing_problems"])
+
+    def shift_comparator(self, a, delta):
+        c = a["comparator"]
+        for k in ("process_start_utc", "window_start_utc", "window_end_utc", "last_scrape_utc"):
+            c["timeline"][k] = mk.iso(analyze_cr.parse_utc(c["timeline"][k]) + delta)
+        c["binding"]["ended_utc"] = mk.iso(analyze_cr.parse_utc(c["binding"]["ended_utc"]) + delta)
+
+    def test_a_comparator_after_the_round_is_not_judged(self):
+        a = mk.archive("L3")
+        self.shift_comparator(a, timedelta(days=10))
+        v = self.gate(a)
+        self.assertNotJudged(v, "spacing")
+        self.assertIn("lodestar_before_comparator_end_plus_12h", self.cand(v)["spacing_problems"])
+
+    def test_a_process_one_second_inside_the_12h_is_not_judged(self):
+        a = mk.archive("L3")
+        self.shift_comparator(a, timedelta(seconds=1))  # B's day-1 process starts at end + 12 h - 1 s
+        self.assertIn("lodestar_before_comparator_end_plus_12h", self.cand(self.gate(a))["spacing_problems"])
+        self.assertEqual(self.cand(self.gate(mk.archive("L3")))["spacing_problems"], [])  # exactly 12 h passes
 
     def test_spacing_reads_the_window_end_never_ended(self):
         a = mk.archive("L3")
@@ -927,6 +1111,37 @@ class ContentionTests(RoundBase):
         day1 = self.cand(self.gate(a))["days"][0]
         self.assertEqual(day1["contention"]["network_hours_breached"], [9])
 
+    def test_an_uplink_counter_reset_is_not_judged(self):
+        for before, after in ((1000, 5), (100, 0)):
+            a = mk.archive("L3")
+            ws = self.ws(a, 1)
+            self.set(a, 1, lambda s: s.update(uplink_drops_total=before), None, ws + timedelta(hours=4))
+            self.set(a, 1, lambda s: s.update(uplink_drops_total=after), ws + timedelta(hours=4))
+            day1 = self.cand(self.gate(a))["days"][0]
+            self.assertEqual(day1["contention"]["reasons"], ["uplink_counter_reset"])
+
+    def test_uplink_drops_are_summed_step_by_step(self):
+        a = mk.archive("L3")
+        ws = self.ws(a, 1)
+        self.set(a, 1, lambda s: s.update(uplink_drops_total=2), ws + timedelta(hours=6, minutes=10),
+                 ws + timedelta(hours=6, minutes=20))
+        self.set(a, 1, lambda s: s.update(uplink_drops_total=2), ws + timedelta(hours=6, minutes=20))
+        day1 = self.cand(self.gate(a))["days"][0]
+        self.assertEqual(day1["contention"]["network_hours_breached"], [6])
+
+    def test_a_missing_tunnel_probe_counts_as_lost(self):
+        a = mk.archive("L3")
+        ws = self.ws(a, 1)
+        n = [0]
+
+        def drop_probe(s):
+            n[0] += 1
+            if n[0] % 50 == 0:  # 2 % of hour 8's probes missing, the rest present
+                del s["tunnels"]["B"]
+        self.set(a, 1, drop_probe, ws + timedelta(hours=8), ws + timedelta(hours=9))
+        day1 = self.cand(self.gate(a))["days"][0]
+        self.assertEqual(day1["contention"]["network_hours_breached"], [8])
+
     def test_rtt_over_twice_the_rehearsal_median(self):
         a = mk.archive("L3")
         ws = self.ws(a, 1)
@@ -972,6 +1187,7 @@ class ContentionTests(RoundBase):
         c = self.cand(self.gate(a))
         self.assertTrue(c["solo_confirmation_failed"])
         self.assertFalse(c["solo_confirmation_required"])
+        self.assertEqual(self.gate(a)["selection"]["trail"][0]["disposition"], "out_of_retries")
 
     def test_a_window_that_is_not_a_multiple_of_ten_seconds(self):
         a = mk.archive("L3")
@@ -1100,6 +1316,11 @@ class ManifestTests(RoundBase):
         v = self.gate(mk.archive("L3"))
         self.assertEqual(len(v["inputs"]), 1 + 1 + 2 * (3 + 2))
 
+    def test_the_analyzer_hash_is_in_the_verdict_and_the_segment_report(self):
+        self.assertEqual(self.gate(mk.archive("L3"))["analyzer_sha256"], analyze_cr.ANALYZER_SHA256)
+        report = analyze_cr.analyze_segment(Round1Sim().write(self.root / "seg-h"), None, declaration())
+        self.assertEqual(report["round1"]["analyzer_sha256"], analyze_cr.ANALYZER_SHA256)
+
     def test_the_same_archive_gives_an_identical_result(self):
         path = mk.write(self.root / "m", mk.archive("L3"))
         out = []
@@ -1114,6 +1335,7 @@ class ManifestTests(RoundBase):
         archive: a change in either shows here."""
         v = self.gate(mk.archive("L3"))
         v.pop("manifest_sha256")  # the manifest names temporary paths' contents only
+        self.assertEqual(v.pop("analyzer_sha256"), analyze_cr.ANALYZER_SHA256)  # changes with every edit
         self.assertEqual(json.loads(json.dumps(v)), json.loads(GOLDEN.read_text()))
 
     def test_a_real_segment_report_is_read(self):

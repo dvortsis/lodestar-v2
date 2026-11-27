@@ -49,7 +49,7 @@ PRESET = {"B": "balanced", "A": "aggressive", "C": "balanced"}
 COMP_START = datetime(2026, 11, 27, 5, 0, tzinfo=timezone.utc)
 COMP_WS = COMP_START + timedelta(hours=1)
 COMP_END = COMP_WS + timedelta(hours=24)
-DAY_START = {1: COMP_END + timedelta(hours=11), 2: COMP_END + timedelta(hours=38)}
+DAY_START = {1: COMP_END + timedelta(hours=12), 2: COMP_END + timedelta(hours=38)}
 STAGGER = {"B": 0, "A": 3, "C": 6}  # minutes: staggered starts and finishes (§6.3)
 
 

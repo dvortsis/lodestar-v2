@@ -410,7 +410,7 @@ def analyze_segment(root, winners=None, declaration=None):
     entry = None
     if declaration is not None:
         entry = declared_entry(declaration, run)
-        report["round1"] = {"declared": entry, "placement": run.get("round1")}
+        report["round1"] = {"declared": entry, "placement": run.get("round1"), "analyzer_sha256": ANALYZER_SHA256}
         checks.add("5.5", "declaration_entry_found", entry is not None, "invalid",
                    None if entry else {"placement": run.get("round1")})
     if not ok:
@@ -1769,6 +1769,8 @@ CONTENTION = {"interval_seconds": 10, "coverage_min": 0.98, "cpu_p95_max": 0.80,
               "disk_write_p99_ms_max": 50.0, "tunnel_loss_max": 0.01, "tunnel_rtt_p95_over_rehearsal_max": 2.0,
               "uplink_drops_max": 0}
 HASH = re.compile(r"^[0-9a-f]{16,128}$")  # a salted hash, never an address
+# The analyzer's own SHA-256, in every round-1 output, so a reproduction pins its version.
+ANALYZER_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 RUN_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 
 
@@ -1826,6 +1828,16 @@ def check_declaration(decl):
                 f"declaration: entry {key} names exactly the 12 switches, each true or false")
         require(e.get("exit") in EXIT_LABELS, f"declaration: entry {key}'s exit label")
         require(isinstance(e.get("image_digest"), str) and e["image_digest"], f"declaration: entry {key}'s image digest")
+    # §6.1's arms: B and A all-on but route_backoff (O3), B Balanced and A Aggressive; C the
+    # explicit all-off Balanced control, diagnostic. A is a candidate only if O2 authorized it.
+    all_on = {s: s != "route_backoff" for s in ROUND_SWITCHES}
+    table = {"B": (("candidate",), "balanced", all_on), "A": (ROLES, "aggressive", all_on),
+             "C": (("diagnostic",), "balanced", {s: False for s in ROUND_SWITCHES})}
+    for e in arms:
+        require(e["arm"] in table, f"declaration: arm {e['arm']} isn't one of §6.1's arms (B, A, C)")
+        roles, preset, switches = table[e["arm"]]
+        require(e["role"] in roles and e["preset"] == preset and e["switches"] == switches,
+                f"declaration: arm {e['arm']}'s role, preset or switches differ from §6.1's table")
     for e in arms:  # a role is the arm's for the whole round
         require(all(o["role"] == e["role"] for o in arms if o["arm"] == e["arm"]),
                 f"declaration: arm {e['arm']} has one role")
@@ -1873,10 +1885,18 @@ def load_manifest(path):
 
     out = {"declaration": check_declaration(load(man.get("declaration"))),
            "comparator": load(man["comparator"]) if man.get("comparator") is not None else None, "days": []}
+    declared = {a["id"] for a in out["declaration"]["attempts"]}
+    ends = man.get("attempt_ends") or {}
+    require(isinstance(ends, dict) and all(k in declared and isinstance(v, dict) and isinstance(v.get("reason"), str)
+                                           and isinstance(v.get("days_run"), list)
+                                           and set(v["days_run"]) <= {1, 2} for k, v in ends.items()),
+            "manifest: attempt_ends maps a declared attempt to {reason, days_run}")
+    out["attempt_ends"] = ends
     for d in man.get("days") or []:
         require(isinstance(d, dict) and d.get("day") in (1, 2) and isinstance(d.get("attempt"), str)
                 and type(d.get("repeat", 0)) is int and d.get("repeat", 0) >= 0,
                 "manifest: each day has its attempt, day and repeat (an integer from 0)")
+        require(d["attempt"] in declared, f"manifest: attempt {d['attempt']} isn't in the declaration")
         out["days"].append({
             "attempt": d["attempt"], "day": d["day"], "repeat": d.get("repeat", 0),
             "reports": {arm: load(ref) for arm, ref in sorted((d.get("reports") or {}).items())},
@@ -1937,6 +1957,10 @@ def contention(samples, arm, ws, we, device):
     tunnel = [None if s is None else (s.get("tunnels") or {}).get(arm) for s in slots]
     tun_cov = sum(isinstance(t, dict) and isinstance(t.get("lost"), bool) for t in tunnel) / n if n else 0.0
     up, up_cov = series(lambda s: num(s.get("uplink_drops_total")))
+    # A counter that goes down was reset: the drops across the reset can't be read.
+    readings = [v for v in up if v is not None]
+    if any(b < a for a, b in zip(readings, readings[1:])):
+        return {"verdict": "not_judged", "reasons": ["uplink_counter_reset"], "intervals": n}
     # Disk: no completed write in an interval is excluded with nothing in flight, over otherwise.
     disk, disk_seen = [], 0
     for s in slots:
@@ -1978,7 +2002,7 @@ def contention(samples, arm, ws, we, device):
         # The counter from the hour's last reading before it (or its first) to its last.
         drops = [v for v in up[max(0, lo - 1):hi] if v is not None]
         rec = {"hour": h, "loss": lost / len(part), "rtt_p95_ms": nearest_rank(rtts, 0.95),
-               "uplink_drops": (drops[-1] - drops[0]) if len(drops) >= 2 else None}
+               "uplink_drops": sum(max(0, b - a) for a, b in zip(drops, drops[1:])) if len(drops) >= 2 else None}
         rec["ok"] = (rec["loss"] <= c["tunnel_loss_max"]
                      and rec["rtt_p95_ms"] <= c["tunnel_rtt_p95_over_rehearsal_max"] * median
                      and rec["uplink_drops"] is not None and rec["uplink_drops"] <= c["uplink_drops_max"])
@@ -2211,7 +2235,8 @@ def candidate_days(inputs, decl, attempt, cand):
 
 # Problems that keep any day from counting, a valid miss included: the arm can't qualify, or
 # the comparator or spacing that every window of the round depends on isn't there.
-UNJUDGEABLE = ("not_authorized", "spacing", "retry_budget_exhausted")
+UNJUDGEABLE = ("not_authorized", "spacing", "retry_budget_exhausted", "earlier_attempt_incomplete",
+               "repeats_not_contiguous", "run_id_reused")
 
 
 def judge_candidate(cand, inputs):
@@ -2234,11 +2259,25 @@ def judge_candidate(cand, inputs):
     out["comparator_problems"] = comp
     reasons += comp
     ok_comp = not comp
+    # Every attempt's days must be in the manifest: an earlier attempt's declared days, or the
+    # days its recorded end says ran; and each (attempt, day)'s repeats run 0..k.
+    for a in attempts:
+        listed = candidate_days(inputs, decl, a, cand)
+        for k, vs in listed.items():
+            if [d["repeat"] for d in vs] != list(range(len(vs))):
+                reasons.append("repeats_not_contiguous")
+        if a is attempt:
+            continue
+        end = inputs.get("attempt_ends", {}).get(a["id"])
+        need = set(end["days_run"]) if end else {e["day"] for e in entries if e["attempt"] == a["id"]}
+        if not need <= set(listed):
+            reasons.append("earlier_attempt_incomplete")
     # Earlier attempts: reported, and a valid miss in one still counts.
     earlier = []
     for a in attempts[:-1]:
         for k, versions in candidate_days(inputs, decl, a, cand).items():
-            earlier += [judge_day(cand, a, decl, d, ok_comp) for d in versions]
+            earlier += [dict(judge_day(cand, a, decl, d, ok_comp), layout=a["layout"],
+                             digest=a["candidate_digests"].get(cand)) for d in versions]
     out["earlier_attempts"] = [{"attempt": j["attempt"], "day": j["day"], "repeat": j["repeat"],
                                 "status": j["status"], "reasons": j["reasons"]} for j in earlier]
     # This attempt: a repeated day replaces the one it repeats only if that one wasn't judged
@@ -2248,7 +2287,8 @@ def judge_candidate(cand, inputs):
     for k, vs in versions.items():
         if len({d["repeat"] for d in vs}) != len(vs):
             reasons.append("repeat_supplied_twice")
-        js = [judge_day(cand, attempt, decl, d, ok_comp) for d in vs]
+        js = [dict(judge_day(cand, attempt, decl, d, ok_comp), layout=attempt["layout"],
+                   digest=attempt["candidate_digests"].get(cand)) for d in vs]
         replaced += js[:-1]
         judged.append(js[-1])
         days[k] = vs[-1]
@@ -2284,20 +2324,47 @@ def judge_candidate(cand, inputs):
     if inputs["comparator"] is not None:
         timelines = [r.get("timeline") or {} for d in inputs["days"] for r in d["reports"].values()]
         problems = spacing(inputs["comparator"], timelines)
+        # §6.3: the round follows its comparator. Every Lodestar process and window starts at
+        # or after the comparator's window end + 12 h (a comparator after the round is no use).
+        cend = utc((inputs["comparator"].get("timeline") or {}).get("window_end_utc"))
+        if cend is None or any(utc(t.get(k)) is None or utc(t.get(k)) < cend + timedelta(seconds=COMPARATOR_CLEAR)
+                               for t in timelines for k in ("process_start_utc", "window_start_utc")):
+            problems = sorted(set(problems) | {"lodestar_before_comparator_end_plus_12h"})
         out["spacing_problems"] = problems
         if problems:
             reasons.append("spacing")
     # §6.3: at most two repeated days per round, whatever the cause (a solo confirmation's
     # own two days are attempts of their own, repeat 0, so they never count).
-    repeats = sum(1 for d in inputs["days"] if d["repeat"] > 0)
+    # Run IDs are unique across the whole manifest, the comparator's included.
+    ids = [(r.get("binding") or {}).get("run_id") for d in inputs["days"] for r in d["reports"].values()]
+    ids += [((inputs["comparator"] or {}).get("binding") or {}).get("run_id")] if inputs["comparator"] else []
+    if len(set(ids)) != len(ids):
+        reasons.append("run_id_reused")
+    # A day listed only as repeat k still implies k repeats (the gap itself is not judged).
+    top = {}
+    for d in inputs["days"]:
+        top[(d["attempt"], d["day"])] = max(top.get((d["attempt"], d["day"]), 0), d["repeat"])
+    repeats = sum(top.values())
     out["retry_budget_exhausted"] = repeats > RETRY_BUDGET
     if out["retry_budget_exhausted"]:
         reasons.append("retry_budget_exhausted")
     out["days"] = judged
     every = earlier + replaced + judged
-    out["solo_confirmation_required"] = any(j.get("solo_confirmation_required") for j in replaced + judged)
-    out["solo_confirmation_failed"] = any(j.get("solo_confirmation_failed") for j in replaced + judged)
-    out["product_failure"] = any(j.get("product_failure") for j in every)
+    # History across attempts (§6.3). A breach outside S needs a solo confirmation after it;
+    # a failed solo confirmation has no further retry; a product failure on this digest,
+    # diagnosed or pending, withholds qualification (a fix makes a new candidate).
+    breached = {j["attempt"] for j in every if j.get("solo_confirmation_required")}
+    out["solo_confirmation_required"] = bool(breached) and not (attempt["layout"] == "S" and attempt["id"] not in breached)
+    if out["solo_confirmation_required"]:
+        reasons.append("solo_confirmation_required")
+    out["solo_confirmation_failed"] = any(j.get("solo_confirmation_failed") for j in every)
+    if out["solo_confirmation_failed"]:
+        reasons.append("solo_confirmation_failed")
+    digest = attempt["candidate_digests"].get(cand)
+    same = [j for j in every if j["digest"] == digest]
+    out["product_failure"] = any(j.get("product_failure") for j in same)
+    if any("product_failure" in j["reasons"] or "product_failure_under_diagnosis" in j["reasons"] for j in same):
+        reasons.append("product_failure_on_this_digest")
     misses = [j for j in every if j["status"] == "fail"]
     out["valid_misses"] = [{"attempt": j["attempt"], "day": j["day"], "repeat": j["repeat"]} for j in misses]
     status = [j["status"] for j in judged]
@@ -2319,16 +2386,16 @@ def judge_candidate(cand, inputs):
 
 def disposition(c):
     """§6.2: whether a candidate's outcome is terminal, and what it is."""
+    if c.get("product_failure"):
+        return "product_failure"
+    if c.get("retry_budget_exhausted") or c.get("solo_confirmation_failed"):
+        return "out_of_retries"
     if c["shipping_eligible"]:
         return "shipping_eligible"
     if c["crawler"] == "pass" and c["memory"] == "fail":
         return "crawler_accepted_memory_fails"
     if c["crawler"] == "fail":
         return "valid_miss"
-    if c.get("product_failure"):
-        return "product_failure"
-    if c.get("retry_budget_exhausted") or c.get("solo_confirmation_failed"):
-        return "out_of_retries"
     return None  # incomplete: the retry rule (§6.3)
 
 
@@ -2360,7 +2427,7 @@ def gate_round(inputs):
     arms = sorted({e["arm"] for e in decl["arms"]})
     judged = {arm: judge_candidate(arm, inputs) for arm in arms}
     out = {"schema": 1, "kind": "cr_round1_verdict", "spec": SPEC, "plan": "docs/plan/2026-11-27-revised-path-to-100.md",
-           "round": decl["round"], "manifest_sha256": inputs["manifest_sha256"],
+           "round": decl["round"], "manifest_sha256": inputs["manifest_sha256"], "analyzer_sha256": ANALYZER_SHA256,
            "inputs": dict(sorted(inputs["inputs"].items())), "contention_thresholds": CONTENTION,
            "candidates": {a: j for a, j in judged.items() if j["role"] == "candidate"},
            "diagnostics": {a: j for a, j in judged.items() if j["role"] != "candidate"}}
