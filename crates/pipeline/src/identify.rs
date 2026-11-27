@@ -656,13 +656,23 @@ impl IdentifySource {
 
     /// Raises `flag`, the writer's backfill flag (the host passes
     /// `PipelineConfig::reenrich`, as the writer's other jobs get it), when
-    /// recording the plugin's terms marks torrents to be derived again
-    /// ([`record_terms`]), so a title they no longer allow leaves the
+    /// the runtime marks torrents to be derived again: recording the
+    /// plugin's terms ([`record_terms`]), a refresh that no longer matches,
+    /// or the retention sweep. A title they no longer allow leaves the
     /// record at once. Without it, the marks wait for the writer's next
     /// backfill pass.
     pub fn with_reenrich(mut self, flag: Arc<AtomicBool>) -> IdentifySource {
         self.reenrich = Some(flag);
         self
+    }
+
+    /// Starts the writer's backfill pass ([`IdentifySource::with_reenrich`]):
+    /// this runtime marked torrents to be derived again, by a terms
+    /// change, a refresh's drop or the retention sweep.
+    fn rearm(&self) {
+        if let Some(flag) = &self.reenrich {
+            flag.store(true, Ordering::Release);
+        }
     }
 
     pub fn stats(&self) -> Arc<IdentifyStats> {
@@ -703,8 +713,8 @@ impl IdentifySource {
         };
         match recorded {
             Ok(Ok(marked)) => {
-                if marked && let Some(flag) = &self.reenrich {
-                    flag.store(true, Ordering::Release);
+                if marked {
+                    self.rearm();
                 }
             }
             _ => bump(&self.stats.unrecorded),
@@ -744,6 +754,10 @@ impl IdentifySource {
                     }
                     let n = swept.dropped.len();
                     self.stats.expired.fetch_add(n as u64, Ordering::Relaxed);
+                    // Each expired row marked its torrent: their titles go now.
+                    if n > 0 {
+                        self.rearm();
+                    }
                     if n >= SWEEP_BATCH {
                         sweep_at = Instant::now();
                     }
@@ -1042,6 +1056,8 @@ impl IdentifySource {
                     .await;
                     if matches!(dropped, Ok(Ok(true))) {
                         bump(&self.stats.refresh_dropped);
+                        // The drop marked the torrent: its title goes now.
+                        self.rearm();
                     }
                 }
                 Cache::remember(state, id, now.saturating_add(MISS_TTL_SECS), now).await;

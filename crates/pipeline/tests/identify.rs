@@ -1646,7 +1646,8 @@ async fn a_stale_claim_is_refreshed_and_a_miss_drops_it() {
     claim_at(&mut s, id, dht, noon() - 900 * DAY);
     let store = Arc::new(Mutex::new(s));
     let plugin = Recorder::new(Some(answer("The Film")));
-    let r = run(
+    let flag = Arc::new(AtomicBool::new(false));
+    let r = run_rearming(
         plugin.clone(),
         store.clone(),
         stand_in(),
@@ -1656,18 +1657,22 @@ async fn a_stale_claim_is_refreshed_and_a_miss_drops_it() {
         interest_only(),
         Arc::new(MemoryState::new()),
         &[id],
+        Some(flag.clone()),
     );
     until("the hit", || n(&r.stats.matched) == 1).await;
     // The writer would store it; stamped now, it's young and cached.
     claim_at(&mut store.lock().unwrap(), id, src, noon());
     assert!(r.interest.opened(id));
     until("the cache", || n(&r.stats.cached) == 1).await;
+    assert!(!flag.load(Ordering::Acquire), "nothing marked yet");
     // 160 days old: past the 150-day refresh age.
     claim_at(&mut store.lock().unwrap(), id, src, noon() - 160 * DAY);
     *plugin.answer.lock().unwrap() = None;
     assert!(r.interest.opened(id));
     until("the refresh", || n(&r.stats.refresh_dropped) == 1).await;
     r.stop().await;
+    // X-claims-refile-rearm: the drop starts the writer's backfill pass.
+    assert!(flag.load(Ordering::Acquire), "the backfill starts");
     assert_eq!(plugin.titles().len(), 2);
     let s = store.lock().unwrap();
     assert_eq!(s.claims_stored_at(id, src).unwrap(), None);
@@ -1701,7 +1706,8 @@ async fn the_runtime_sweeps_its_expired_claims() {
     }
     let due = identify::SWEEP_BATCH as u64 + 3;
     let store = Arc::new(Mutex::new(s));
-    let r = run(
+    let flag = Arc::new(AtomicBool::new(false));
+    let r = run_rearming(
         Recorder::new(None),
         store.clone(),
         stand_in(),
@@ -1711,9 +1717,12 @@ async fn the_runtime_sweeps_its_expired_claims() {
         interest_only(),
         Arc::new(MemoryState::new()),
         &[],
+        Some(flag.clone()),
     );
     until("the sweeps", || n(&r.stats.expired) == due).await;
     r.stop().await;
+    // X-claims-refile-rearm: the expiry starts the writer's backfill pass.
+    assert!(flag.load(Ordering::Acquire), "the backfill starts");
     let s = store.lock().unwrap();
     assert_eq!(s.claims_stored_at(old, src).unwrap(), None);
     assert_eq!(

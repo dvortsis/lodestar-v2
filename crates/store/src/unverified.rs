@@ -662,8 +662,9 @@ impl Store {
         )?;
         let mut shaped = false;
         {
-            // Through the `(source_id, …)` index, one row at a time: only
-            // the ids logged are kept.
+            // Through the `(source_id, …)` index, one row at a time:
+            // nothing is collected, each logged row is inserted as it's
+            // read.
             let mut stmt = tx.prepare_cached(
                 "SELECT torrent_id, data FROM torrent_claims WHERE source_id = ?1",
             )?;

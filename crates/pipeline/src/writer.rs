@@ -3464,7 +3464,11 @@ mod tests {
         });
         assert!(!w.reenrich.load(Ordering::Acquire));
         w.sweep = unverified::Sweep::default();
-        while !w.sweep.done {
+        for step in 0.. {
+            if w.sweep.done {
+                break;
+            }
+            assert!(step < 1000, "the sweep never finished: {:?}", w.sweep);
             w.refile_unverified().await;
         }
         let store = w.store.as_ref().unwrap();
