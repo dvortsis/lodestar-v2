@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T19:48:22Z",
+    "updated": "2026-11-27T20:20:07Z",
     "items": [
       {
         "slot": 1,
@@ -11129,12 +11129,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-dht-switch-identity",
-        "role": "slice",
-        "agent": "session_01MMjhn8WvVr2UNVUP4UKoLa",
+        "slice": "D-start",
+        "role": "build",
+        "agent": "session_01MMjhnBjXMTmQsGpkb6p5AK",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "building the switch gauge (revised path to 100 \u00a75.1, critical path)",
-        "since": "2026-11-27T17:55Z"
+        "doing": "user docs: no start wait, safe restart on by default; guide 3.8 restored (notice pointer); #1146 merged",
+        "since": "2026-11-27T20:20:07Z"
       },
       {
         "slot": 3,
