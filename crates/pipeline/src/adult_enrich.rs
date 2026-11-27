@@ -14,6 +14,9 @@
 //!   or quarantine verdict now, a hide), a `private_source` key, an
 //!   unverified item, or anything while the plugin's egress kill switch is
 //!   tripped (SRC-5).
+//!   Each of the plugin's requests asks the same gate again, for the same
+//!   item and query, just before it goes ([`crate::presend`]): a change
+//!   while it waited for the host's pacing sends nothing.
 //! - **What is sent** is a [`Query`]: the display name, or the release
 //!   parser's site, date and title, whichever the plugin asks for. The info
 //!   hash, files and trackers stay here: a [`Query`] has no field for them.
@@ -587,6 +590,9 @@ pub struct EnrichStats {
     pub failed: AtomicU64,
     /// Items the gate refused.
     pub ineligible: AtomicU64,
+    /// Lookups whose request the gate refused just before it went
+    /// ([`crate::presend`]): nothing was sent, and the answer is dropped.
+    pub withheld: AtomicU64,
     /// Items passed over because a fresh hit or miss is cached.
     pub cached: AtomicU64,
     /// Items the runtime finished with, whatever the outcome.
@@ -848,44 +854,55 @@ impl AdultEnrichSource {
         .is_ok_and(|r| r.unwrap_or(false))
     }
 
-    /// One item: the cache, the gate, the budget, then the plugin.
+    /// The gate for this runtime's plugin, as a call that owns what it
+    /// reads: [`check_with`] for torrent `id` at `now`, read then.
+    fn gate(
+        &self,
+        source: SourceId,
+    ) -> impl Fn(i64, i64) -> BoxFuture<'static, Gated> + Send + Sync + 'static {
+        let store = self.store.clone();
+        let filter = self.filter.clone();
+        let plugin = self.plugin.clone();
+        let switches = self.switches.clone();
+        let (form, adult) = (self.plugin.query_form(), self.adult);
+        move |id, now| {
+            let (store, plugin, switches) = (store.clone(), plugin.clone(), switches.clone());
+            // The filter as it is now: a rule changed since the last check
+            // can't be outrun.
+            let engine = filter.current();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
+                    let ctx = GateCtx {
+                        manifest: plugin.manifest(),
+                        source,
+                        form,
+                        adult,
+                        switches: &*switches,
+                    };
+                    let credentials = plugin.policy().credentials;
+                    check_with(&mut store, &engine, ctx, credentials, id, now)
+                })
+                .await
+            })
+        }
+    }
+
+    /// One item: the cache, the gate, the budget, then the plugin, whose
+    /// every request asks the gate again just before it goes
+    /// ([`crate::presend`]).
     async fn one(&self, ctx: &mut SourceCtx, kit: &Kit, state: &dyn PluginState, id: i64) -> Step {
         let now = crate::unix_now();
         if Cache::fresh(state, id, now).await {
             bump(&self.stats.cached);
             return Step::Skipped;
         }
-        let candidate = {
-            let store = self.store.clone();
-            let engine = self.filter.current();
-            let manifest = self.plugin.manifest().clone();
-            let credentials = self.plugin.policy().credentials;
-            let switches = self.switches.clone();
-            let gate = (ctx.source, self.plugin.query_form(), self.adult);
-            tokio::task::spawn_blocking(move || {
-                let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
-                let ctx = GateCtx {
-                    manifest: &manifest,
-                    source: gate.0,
-                    form: gate.1,
-                    adult: gate.2,
-                    switches: &*switches,
-                };
-                check_with(&mut store, &engine, ctx, credentials, id, now)
-            })
-            .await
-        };
-        let candidate = match candidate {
+        let gate = Arc::new(self.gate(ctx.source));
+        let candidate = match gate(id, now).await {
             Ok(Ok(Ok(c))) => c,
             Ok(Ok(Err(why))) => {
                 bump(&self.stats.ineligible);
-                return match why {
-                    Ineligible::AdultHidden
-                    | Ineligible::KillSwitch
-                    | Ineligible::SourceOff
-                    | Ineligible::NoConsent => Step::Wait,
-                    _ => Step::Skipped,
-                };
+                return step_for(why);
             }
             // The store couldn't say: never asked, and tried again later.
             _ => {
@@ -893,6 +910,31 @@ impl AdultEnrichSource {
                 return Step::Wait;
             }
         };
+        // Asked again before each request, for the same item and the same
+        // query: anything else (a refusal, an error, a changed query) sends
+        // nothing, and the reason decides what the runtime does next.
+        let why: Arc<Mutex<Option<Ineligible>>> = Arc::default();
+        let admit: crate::presend::Admit = {
+            let (gate, why, expected) = (gate.clone(), why.clone(), candidate.clone());
+            Arc::new(move || {
+                let (gate, why, expected) = (gate.clone(), why.clone(), expected.clone());
+                Box::pin(async move {
+                    let verdict = match gate(expected.id, crate::unix_now()).await {
+                        Ok(Ok(Ok(c))) if c == expected => return true,
+                        Ok(Ok(Ok(_))) => Ineligible::NoQuery,
+                        Ok(Ok(Err(why))) => why,
+                        // Fail closed; as a plugin-wide reason, so the
+                        // runtime waits before trying again.
+                        _ => Ineligible::KillSwitch,
+                    };
+                    why.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get_or_insert(verdict);
+                    false
+                })
+            })
+        };
+        let (kit, refused) = crate::presend::kit(kit, admit);
         // One cap for both (plan Q15): an opened item jumps the queue, but
         // within the same day's budget (ENR-1c).
         if !Budget::take(state, now, self.config.per_day).await {
@@ -902,8 +944,15 @@ impl AdultEnrichSource {
         let lookup = tokio::select! {
             biased;
             _ = ctx.shutdown.requested() => return Step::Shutdown,
-            r = self.plugin.lookup(kit, &candidate.query) => r,
+            r = self.plugin.lookup(&kit, &candidate.query) => r,
         };
+        // A request the gate refused: whatever the plugin made of it, the
+        // answer is dropped and nothing is cached.
+        if refused.load(Ordering::Acquire) {
+            bump(&self.stats.withheld);
+            let why = why.lock().unwrap_or_else(|e| e.into_inner()).take();
+            return why.map_or(Step::Wait, step_for);
+        }
         match lookup {
             Ok(Lookup::Match(section)) => {
                 let mut claims = Claims {
@@ -941,6 +990,21 @@ impl AdultEnrichSource {
         Step::Asked
     }
 }
+
+/// What the runtime does after the gate refused for `why`.
+fn step_for(why: Ineligible) -> Step {
+    match why {
+        Ineligible::AdultHidden
+        | Ineligible::KillSwitch
+        | Ineligible::SourceOff
+        | Ineligible::NoConsent => Step::Wait,
+        _ => Step::Skipped,
+    }
+}
+
+/// [`check_with`]'s answer, as the gate's call hands it back.
+type Gated =
+    Result<Result<Result<Candidate, Ineligible>, lodestar_store::Error>, tokio::task::JoinError>;
 
 enum Next {
     Item(i64),

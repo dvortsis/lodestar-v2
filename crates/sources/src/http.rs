@@ -1092,6 +1092,14 @@ impl<F: Fetch> Client<F> {
         &self.limiter
     }
 
+    /// The [`Fetch`] behind the limiter. A runtime that wraps it (with a
+    /// check of its own just before each request goes) builds a new
+    /// client from it and this client's [`limiter`](Self::limiter), so
+    /// the pacing is shared.
+    pub fn fetcher(&self) -> &F {
+        &self.fetch
+    }
+
     /// One poll of `unit` (a feed URL, an indexer id): waits out the
     /// unit's own back-off and the poll gate ([`HostLimiter::try_poll`]),
     /// then sends as [`send`](Self::send) does, but records the answer
