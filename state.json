@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T10:30:03Z",
+  "updated_at": "2026-11-27T10:53:20Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T10:30:03Z",
+    "updated": "2026-11-27T10:53:20Z",
     "items": [
       {
         "slot": 1,
@@ -11147,12 +11147,12 @@
       },
       {
         "slot": 4,
-        "slice": "X-purge-index-shapes",
+        "slice": "X-claims-refile-rearm",
         "role": "build",
         "agent": "claude",
-        "session": "session_01MMjhnBm7cVQaDymwdGpp26",
-        "doing": "building: a purge takes served identification data out of the index",
-        "since": "2026-11-27T08:31Z"
+        "session": "session_01MMjhnC1MrsEPkrs2L4N2pZ",
+        "doing": "building: refile re-arms the writer; drop_one and terms changes bump class_gen and log",
+        "since": "2026-11-27T10:53:20Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
