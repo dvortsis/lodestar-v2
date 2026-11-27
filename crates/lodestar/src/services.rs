@@ -215,7 +215,17 @@ impl Services {
                     from = if from_snapshot { "snapshot" } else { "store" }
                 );
                 let hot = Arc::new(hot);
-                let user_data = Store::open(&db, store_config.clone())?;
+                let mut user_data = Store::open(&db, store_config.clone())?;
+                // Before the percolator compiles any saved search, once per
+                // database (X-saved-verified-rewrite).
+                if let Some(n) = user_data.rewrite_saved_verified(rewrite_saved_ast)? {
+                    lodestar_log::log_event!(
+                        lodestar_search::log_events::SAVED_VERIFIED_REWRITTEN,
+                        rewritten = n.rewritten,
+                        unparseable = n.unparseable,
+                        too_long = n.too_long
+                    );
+                }
                 let reader = Store::open_reader(&db, store_config.clone())?;
                 // The percolator records alerts through its own connection.
                 let percolation = search
@@ -904,6 +914,18 @@ impl Services {
 /// `Notifier` has no switch to race, and its last look at the settings must
 /// stay after the drain, so a switch to Off saved by a request still being
 /// served withdraws a waiting install (X-win-upd-stop-wait, owner §2.13).
+/// A stored saved search's AST with `verified:yes,no` rewritten, as the
+/// new canonical query text and AST JSON (X-saved-verified-rewrite).
+/// `Ok(None)` keeps it; `Err` is an AST this build can't read.
+pub(crate) fn rewrite_saved_ast(ast: &str) -> Result<Option<(String, String)>, ()> {
+    let mut node: lodestar_search::Node = serde_json::from_str(ast).map_err(|_| ())?;
+    if !lodestar_search::saved_rewrite::rewrite_verified_yes_no(&mut node) {
+        return Ok(None);
+    }
+    let json = serde_json::to_string(&node).map_err(|_| ())?;
+    Ok(Some((node.to_query(), json)))
+}
+
 fn early_updates_stop(updates: Option<&watch::Sender<bool>>) -> Option<watch::Sender<bool>> {
     if cfg!(windows) {
         return None;

@@ -29,6 +29,7 @@ pub mod recovery;
 pub mod regex;
 pub mod regex_verify;
 mod retry_dir;
+pub mod saved_rewrite;
 pub mod schema;
 mod seek_guard;
 mod sorted;

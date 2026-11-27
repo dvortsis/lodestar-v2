@@ -166,6 +166,19 @@ fn check(s: &SavedSearchInput<'_>) -> Result<()> {
     Ok(())
 }
 
+/// The `settings` key that marks [`Store::rewrite_saved_verified`] done.
+const SAVED_VERIFIED_REWRITE: &str = "saved_verified_rewrite_v1";
+
+/// What one [`Store::rewrite_saved_verified`] run did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SavedRewrite {
+    pub rewritten: u64,
+    /// Kept as they are: the rewrite couldn't read the stored AST.
+    pub unparseable: u64,
+    /// Kept as they are: rewritten, the query or AST would pass its limit.
+    pub too_long: u64,
+}
+
 /// A JSON check the database refused is the caller's mistake.
 fn invalid_ast(e: rusqlite::Error) -> Error {
     match e.sqlite_error_code() {
@@ -487,6 +500,69 @@ impl Store {
             alert_row,
         )?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// X-saved-verified-rewrite: rewrites every saved search's query once,
+    /// in one transaction that also writes a done marker to `settings`
+    /// (`saved_verified_rewrite_v1`): a crash before the commit runs it
+    /// again whole, and once the marker is there it never runs again
+    /// (`None`). `rewrite` maps a stored AST to the new query text and AST,
+    /// `Ok(None)` to keep it, or `Err(())` when it can't read it (kept and
+    /// counted); parsing belongs to the search crate.
+    ///
+    /// Only `query` and `ast` change: the watermark, so a rewritten search
+    /// never alerts on old hits, and `updated_at`, `paused`, the channels
+    /// and the rest stay as they are. A rewrite past the size limits
+    /// [`Store::create_saved_search`] checks is kept as it was and counted.
+    /// A failed write rolls everything back, marker included.
+    pub fn rewrite_saved_verified<F>(&mut self, rewrite: F) -> Result<Option<SavedRewrite>>
+    where
+        F: FnMut(&str) -> std::result::Result<Option<(String, String)>, ()>,
+    {
+        self.rewrite_saved_queries(SAVED_VERIFIED_REWRITE, rewrite)
+    }
+
+    fn rewrite_saved_queries<F>(
+        &mut self,
+        marker: &str,
+        mut rewrite: F,
+    ) -> Result<Option<SavedRewrite>>
+    where
+        F: FnMut(&str) -> std::result::Result<Option<(String, String)>, ()>,
+    {
+        let tx = crate::begin_write(&mut self.conn)?;
+        let done = tx
+            .prepare_cached("SELECT 1 FROM settings WHERE key = ?1")?
+            .exists([marker])?;
+        if done {
+            return Ok(None);
+        }
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = tx.prepare("SELECT id, ast FROM saved_searches ORDER BY id")?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        let mut counts = SavedRewrite::default();
+        {
+            let mut update =
+                tx.prepare_cached("UPDATE saved_searches SET query = ?2, ast = ?3 WHERE id = ?1")?;
+            for (id, ast) in rows {
+                match rewrite(&ast) {
+                    Ok(None) => {}
+                    Err(()) => counts.unparseable += 1,
+                    Ok(Some((query, ast))) if query.len() > 2048 || ast.len() > 65_536 => {
+                        counts.too_long += 1;
+                    }
+                    Ok(Some((query, ast))) => {
+                        update.execute(params![id, query, ast])?;
+                        counts.rewritten += 1;
+                    }
+                }
+            }
+        }
+        tx.execute("INSERT INTO settings (key, value) VALUES (?1, 1)", [marker])?;
+        tx.commit()?;
+        Ok(Some(counts))
     }
 
     /// Saved searches in all, paused ones included.
@@ -1287,5 +1363,152 @@ mod tests {
         assert!(b > a);
         let again = s.record_percolation(5, &[hits(b, &[2])], 0).unwrap();
         assert!(again[0].id > created[1].id);
+    }
+
+    /// A stand-in for the search crate's rewrite: `OLD` becomes `NEW`,
+    /// `BAD` can't be read, and the rest is kept.
+    fn fake(ast: &str) -> std::result::Result<Option<(String, String)>, ()> {
+        match ast {
+            OLD => Ok(Some(("new text".into(), NEW.into()))),
+            BAD => Err(()),
+            _ => Ok(None),
+        }
+    }
+
+    const OLD: &str = r#"{"op":"verified","any":["yes","no"]}"#;
+    const NEW: &str = r#"{"op":"verified","any":["yes","imported","no"]}"#;
+    const BAD: &str = r#"{"op":"from_a_later_release"}"#;
+
+    fn with_ast<'a>(name: &'a str, ast: &'a str) -> SavedSearchInput<'a> {
+        SavedSearchInput {
+            ast,
+            channels: 5,
+            paused: name == "paused",
+            ..input(name)
+        }
+    }
+
+    fn marker(s: &Store) -> bool {
+        s.conn
+            .query_row(
+                "SELECT count(*) FROM settings WHERE key = ?1",
+                [SAVED_VERIFIED_REWRITE],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 1
+    }
+
+    #[test]
+    fn the_rewrite_changes_only_query_and_ast_and_runs_once() {
+        let mut s = test_store(10);
+        let old = s
+            .create_saved_search(&with_ast("old", OLD), 0, 100)
+            .unwrap();
+        let paused = s
+            .create_saved_search(&with_ast("paused", OLD), 3, 100)
+            .unwrap();
+        let kept = s
+            .create_saved_search(&with_ast("kept", AST), 7, 100)
+            .unwrap();
+        let bad = s
+            .create_saved_search(&with_ast("bad", BAD), 7, 100)
+            .unwrap();
+        s.record_percolation(7, &[hits(old, &[2, 5])], 50).unwrap();
+        let before: Vec<SavedSearch> = [old, paused, kept, bad]
+            .iter()
+            .map(|&id| s.saved_search(id).unwrap().unwrap())
+            .collect();
+
+        let counts = s.rewrite_saved_verified(fake).unwrap().unwrap();
+        assert_eq!(
+            counts,
+            SavedRewrite {
+                rewritten: 2,
+                unparseable: 1,
+                too_long: 0
+            }
+        );
+        assert!(marker(&s));
+        for b in &before {
+            let a = s.saved_search(b.id).unwrap().unwrap();
+            if b.ast == OLD {
+                assert_eq!((a.query.as_str(), a.ast.as_str()), ("new text", NEW));
+                // Everything else as it was: watermark, paused, channels, times.
+                let restored = SavedSearch {
+                    query: b.query.clone(),
+                    ast: b.ast.clone(),
+                    ..a
+                };
+                assert_eq!(&restored, b);
+            } else {
+                assert_eq!(&a, b, "{} is kept as it is", b.name);
+            }
+        }
+        assert_eq!(s.alerts(old, None, 10).unwrap().len(), 2);
+
+        // A second start does nothing, even with something to rewrite.
+        s.create_saved_search(&with_ast("later", OLD), 0, 0)
+            .unwrap();
+        let mut called = false;
+        let again = s.rewrite_saved_verified(|_| {
+            called = true;
+            Ok(None)
+        });
+        assert_eq!(again.unwrap(), None);
+        assert!(!called);
+    }
+
+    #[test]
+    fn a_failure_midway_rolls_everything_back_with_no_marker() {
+        let mut s = test_store(0);
+        let first = s
+            .create_saved_search(&with_ast("first", OLD), 0, 0)
+            .unwrap();
+        let second = s
+            .create_saved_search(&with_ast("second", AST), 0, 0)
+            .unwrap();
+        // The second row's write fails the database's JSON check.
+        let failed = s.rewrite_saved_verified(|ast| {
+            Ok(Some((
+                "x".into(),
+                if ast == OLD {
+                    NEW.into()
+                } else {
+                    "not json".into()
+                },
+            )))
+        });
+        assert!(failed.is_err());
+        assert!(!marker(&s));
+        assert_eq!(s.saved_search(first).unwrap().unwrap().ast, OLD);
+        assert_eq!(s.saved_search(second).unwrap().unwrap().ast, AST);
+        // The next start runs it whole.
+        let counts = s.rewrite_saved_verified(fake).unwrap().unwrap();
+        assert_eq!(counts.rewritten, 1);
+        assert_eq!(s.saved_search(first).unwrap().unwrap().ast, NEW);
+        assert!(marker(&s));
+    }
+
+    #[test]
+    fn a_rewrite_past_the_limits_is_kept_and_counted() {
+        let mut s = test_store(0);
+        let a = s.create_saved_search(&with_ast("a", OLD), 0, 0).unwrap();
+        let b = s.create_saved_search(&with_ast("b", AST), 0, 0).unwrap();
+        let long_ast = format!(r#"{{"op":"term","word":"{}"}}"#, "x".repeat(65_536));
+        let counts = s
+            .rewrite_saved_verified(|ast| {
+                Ok(Some(if ast == OLD {
+                    ("y".repeat(2049), NEW.into())
+                } else {
+                    ("z".into(), long_ast.clone())
+                }))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!((counts.rewritten, counts.too_long), (0, 2));
+        assert_eq!(s.saved_search(a).unwrap().unwrap().ast, OLD);
+        assert_eq!(s.saved_search(b).unwrap().unwrap().ast, AST);
+        assert!(marker(&s));
     }
 }

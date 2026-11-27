@@ -1228,6 +1228,141 @@ mod tests {
         assert_eq!(s.store.saved_search(bad).unwrap().unwrap().watermark, 0);
     }
 
+    /// An import as another indexer's database gives it: no info dict,
+    /// so the index says `verified:imported` (X-import-verified-no).
+    fn add_import(store: &mut Store, name: &str) -> i64 {
+        let raw = info(name);
+        let parsed = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let mut p = store.preparer().prepare(&parsed, None).unwrap();
+        p.info_size = 0;
+        let rows = [PreparedTorrent {
+            torrent: &p,
+            discovered_at: NOW,
+            metadata_at: NOW,
+            extra_flags: flags::IMPORTED,
+            source: SourceId::new(0).unwrap(),
+            verified: true,
+        }];
+        store
+            .write(&lodestar_store::WriteBatch {
+                prepared: &rows,
+                ..Default::default()
+            })
+            .unwrap();
+        store.find(&p.info_hash).unwrap().unwrap()
+    }
+
+    /// X-saved-verified-rewrite: saved searches made with Show unverified
+    /// before imports had their own value keep finding imports, from
+    /// their watermark on, and the rewrite runs once.
+    #[test]
+    fn a_rewritten_show_unverified_alert_finds_imports_without_refiring() {
+        let mut s = setup(10);
+        let top = save(&mut s.store, "top", "Even verified:yes,no", 0);
+        let reversed = save(&mut s.store, "reversed", "Even verified:no,yes", 0);
+        let nested = save(&mut s.store, "nested", "Even (verified:yes,no | zzz)", 0);
+        let yes = save(&mut s.store, "yes", "Even verified:yes", 0);
+        let has_imported = save(&mut s.store, "has", "Even verified:yes,imported", 0);
+        let negated = save(&mut s.store, "negated", "Even -verified:yes,no", 0);
+        let bad = s
+            .store
+            .create_saved_search(
+                &SavedSearchInput {
+                    name: "bad",
+                    query: "x",
+                    ast: r#"{"op":"no such op"}"#,
+                    sort: None,
+                    alert: true,
+                    rss: false,
+                    channels: 0,
+                    paused: false,
+                },
+                0,
+                0,
+            )
+            .unwrap();
+        let run = |s: &mut Setup, through| {
+            run_once(
+                &s.index,
+                &mut s.store,
+                None,
+                through,
+                &quick(),
+                NOW,
+                &mut Seen::default(),
+            )
+            .unwrap()
+        };
+        run(&mut s, 10);
+        let old = evens(1, 10);
+        assert_eq!(alert_ids(&s.store, top), old);
+        let ids = [top, reversed, nested, yes, has_imported, negated, bad];
+        let before: Vec<_> = ids
+            .iter()
+            .map(|&id| s.store.saved_search(id).unwrap().unwrap())
+            .collect();
+
+        // The start after the upgrade.
+        let n = s
+            .store
+            .rewrite_saved_verified(crate::services::rewrite_saved_ast)
+            .unwrap()
+            .unwrap();
+        assert_eq!((n.rewritten, n.unparseable, n.too_long), (3, 1, 0));
+        for b in &before {
+            let a = s.store.saved_search(b.id).unwrap().unwrap();
+            let all = "verified:yes,imported,no";
+            if [top, reversed, nested].contains(&b.id) {
+                assert!(a.query.contains(all), "{}", a.query);
+                let node: Node = serde_json::from_str(&a.ast).unwrap();
+                assert_eq!(node, parse(&a.query).unwrap(), "{}", a.query);
+                assert_eq!(
+                    (a.watermark, a.updated_at, a.paused),
+                    (b.watermark, b.updated_at, b.paused)
+                );
+            } else {
+                assert_eq!(&a, b, "{} is untouched", b.name);
+            }
+        }
+        // A second start does nothing.
+        assert_eq!(
+            s.store
+                .rewrite_saved_verified(crate::services::rewrite_saved_ast)
+                .unwrap(),
+            None
+        );
+
+        // An import and a crawled torrent arrive.
+        let import = add_import(&mut s.store, "Show.Import.Even");
+        let crawled = add(&mut s.store, &["Show.Crawled.Even".into()])[0];
+        index_all(&s.index, &mut s.store);
+        let created = run(&mut s, crawled.max(import)).alerts;
+        let new = {
+            let mut v = vec![import, crawled];
+            v.sort_unstable();
+            v
+        };
+        let with = |old: &[i64], new: &[i64]| {
+            let mut v = [old, new].concat();
+            v.sort_unstable();
+            v
+        };
+        for id in [top, reversed, nested, has_imported] {
+            assert_eq!(alert_ids(&s.store, id), with(&old, &new), "search {id}");
+        }
+        // `verified:yes` alone now means hashed here.
+        assert_eq!(alert_ids(&s.store, yes), with(&old, &[crawled]));
+        // Matched nothing before #1139 and is left as typed: imports only.
+        assert_eq!(alert_ids(&s.store, negated), vec![import]);
+        // No old hit fired again: two new alerts each for four searches,
+        // one each for the other two.
+        assert_eq!(created, 4 * 2 + 2);
+        assert_eq!(
+            s.store.saved_search(bad).unwrap().unwrap().ast,
+            before[6].ast
+        );
+    }
+
     /// A rebuild swaps a new index in partway through a capped catch-up:
     /// every match is recorded once.
     #[test]
