@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T04:34Z",
+  "updated_at": "2026-11-27T04:39Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11207,6 +11207,13 @@
       "owner_words": "The unraid machine is no longer throttled at 45w.",
       "runner_reading": "the box is back at full power, which lifts \u00a72.82's experiment-host hold; host changed (power limit) since cr-ab-comp-1, so the comparator runs again first (build-plan \u00a70.5 run rules, runner's call)",
       "next": "cr-ab-comp-2 (owner-run, prompt from the path-to-100 session, runner corrections sent), then >=12 h, then CR-AB-ADM, CR-AB-4 back to back, Checkpoint 1, CR-AB-LC"
+    },
+    "cr_ab_comp_2": {
+      "planned_start": "2026-11-27T17:00Z",
+      "planned_end": "2026-11-28T18:00Z",
+      "earliest_cr_ab_adm": "2026-11-29T06:00Z (ended + 12 h)",
+      "runner_calls": "paths on the appdata pool agreed; power fixed comparator->CR-COMB; qBittorrent off through stage 1; thermal script paused",
+      "recorded": "2026-11-27T04:39Z"
     }
   },
   "owner_answers": [
