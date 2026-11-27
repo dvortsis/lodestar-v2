@@ -1,6 +1,6 @@
 # X-torznab-id-caps: Torznab caps advertise ID parameters only when they can be answered
 
-**Runner brief, 2026-11-27T07:40Z.** Core, Opus (an API contract the *arr apps act on). Target < 600 changed lines. `/security-review` before you report ready.
+**Runner brief, 2026-11-27T05:25Z.** Core, Opus (an API contract the *arr apps act on). Target < 600 changed lines. `/security-review` before you report ready.
 - **Branch:** `slice/X-torznab-id-caps` from fresh `origin/main` (with #1130, runner records r18, merged as 68799e1b).
 - **PR title:** `X-torznab-id-caps: Torznab caps advertise ID parameters only when they can be answered`.
 - Follow `.claude/skills/steward/SKILL.md`. The runner merges; you never do. A fresh Opus review gates the merge.

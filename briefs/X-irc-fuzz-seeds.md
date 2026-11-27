@@ -1,6 +1,6 @@
 # X-irc-fuzz-seeds: Seeds for the irc_announce fuzz target, with coverage recorded
 
-**Runner brief, 2026-11-27T07:40Z.** Core, Opus (an untrusted-input fuzz corpus). Target < 300 changed lines, most of it seed files.
+**Runner brief, 2026-11-27T05:25Z.** Core, Opus (an untrusted-input fuzz corpus). Target < 300 changed lines, most of it seed files.
 - **Branch:** `slice/X-irc-fuzz-seeds` from fresh `origin/main` (with #1130 merged as 68799e1b).
 - **PR title:** `X-irc-fuzz-seeds: Seeds for the irc_announce fuzz target, with coverage recorded`.
 - Follow `.claude/skills/steward/SKILL.md`. The runner merges; you never do. A fresh Opus review gates the merge.

@@ -11116,17 +11116,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T05:10Z",
+    "updated": "2026-11-27T05:29Z",
     "items": [
       {
         "slot": 1,
-        "slice": "",
+        "slice": "X-torznab-id-caps",
         "role": "build",
-        "model": "sonnet",
-        "agent": "",
-        "doing": "",
-        "since": "2026-11-27T04:34Z",
-        "status": "idle"
+        "agent": "claude",
+        "session": "session_01MMjhnCqPNLBRRadoHZLfQ2",
+        "doing": "building: caps advertise ID params only when answerable",
+        "since": "2026-11-27T05:28Z"
       },
       {
         "slot": 2,
@@ -11150,13 +11149,12 @@
       },
       {
         "slot": 4,
-        "slice": "",
+        "slice": "X-irc-fuzz-seeds",
         "role": "build",
-        "model": "opus",
-        "agent": "",
-        "doing": "",
-        "since": "2026-11-27T04:56Z",
-        "status": "idle"
+        "agent": "claude",
+        "session": "session_01MMjhn9rtKAcengeBXAT5JJ",
+        "doing": "building: irc_announce seed corpus and coverage",
+        "since": "2026-11-27T05:28Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
