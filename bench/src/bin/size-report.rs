@@ -20,6 +20,16 @@
 //! field the 1.0 index defines is populated. `--json PATH` writes every
 //! figure against its budget (`bench/README.md`). Without `--dataset` the
 //! run is the CI gate's, unchanged.
+//!
+//! **Identification answers** (ENR-11, X-enr11-size-measure): before the
+//! index is built, `--identified P` of the torrents a plugin can identify
+//! (by stored kind, ENR-10) get a served answer (`synth::answer`): a
+//! version 3 claims row with a match confidence, from a source whose terms
+//! let it be served. [`synth::DEFAULT_IDENTIFIED_PERCENT`] is the
+//! realistic share; the default, 0, is the report as it was before, line
+//! for line, until the runner decides the budgets at that share. A list
+//! (`0,60,100`) builds one corpus per share and ends with a table of every
+//! budget line by share.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -27,7 +37,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use lodestar_bench::dataset::{self, Row, Status, Totals, load, scrape_all};
-use lodestar_bench::synth::Generator;
+use lodestar_bench::synth::{self, Generator, Work};
+use lodestar_store::identify_sweep::TERMS_KEY;
 use lodestar_store::{Store, StoreConfig};
 
 /// Budgets in bytes per torrent (owner-set, §3; the runner tunes them under
@@ -46,7 +57,8 @@ const STORE_AND_INDEX_BUDGET: f64 = 1536.0;
 const ALL_IN_TARGET: f64 = 2.3 * 1024.0;
 
 const USAGE: &str = "usage: size-report [--torrents N] [--seed S] [--train N] \
-[--dict-size BYTES] [--level L] [--db PATH] [--gate] [--summary PATH]
+[--dict-size BYTES] [--level L] [--db PATH] [--identified P[,P...]] [--gate] \
+[--summary PATH]
 
   --torrents N      torrents to generate (default 100000)
   --seed S          generator seed (default 1)
@@ -55,6 +67,10 @@ const USAGE: &str = "usage: size-report [--torrents N] [--seed S] [--train N] \
   --dict-size B     zstd dictionary size (default 114688)
   --level L         zstd level (default: the store default)
   --db PATH         keep the database at PATH instead of a temp dir
+  --identified P    percent of identifiable torrents holding a served
+                    identification answer (default 0, the report before
+                    identification; 60 is the realistic share); a list
+                    (0,60,100) builds one corpus per share and compares them
   --gate            exit 1 if a budget is exceeded or a value can't be measured
   --summary PATH    append the budget table (Markdown) to PATH
 
@@ -64,6 +80,7 @@ const USAGE: &str = "usage: size-report [--torrents N] [--seed S] [--train N] \
   --low-resource    the low-resource figures (plan RQ8)
   --json PATH       write every figure against its §3 budget";
 
+#[derive(Clone)]
 struct Args {
     torrents: usize,
     seed: u64,
@@ -76,6 +93,10 @@ struct Args {
     dataset: Option<PathBuf>,
     low_resource: bool,
     json: Option<PathBuf>,
+    /// The shares to measure, in percent of identifiable torrents.
+    identified: Vec<u32>,
+    /// The share this run measures (one of `identified`).
+    share: u32,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -91,7 +112,12 @@ fn parse_args() -> Result<Args, String> {
         dataset: None,
         low_resource: false,
         json: None,
+        // The CI gate's run stays at 0 % until the runner decides the
+        // budgets (docs/decisions/2026-11-27-X-enr11-size-measure.md).
+        identified: vec![0],
+        share: 0,
     };
+    let mut identified_given = false;
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or(format!("{flag} needs a value"));
@@ -112,6 +138,10 @@ fn parse_args() -> Result<Args, String> {
             "--dataset" => args.dataset = Some(value()?.into()),
             "--low-resource" => args.low_resource = true,
             "--json" => args.json = Some(value()?.into()),
+            "--identified" => {
+                args.identified = shares(&value()?)?;
+                identified_given = true;
+            }
             "-h" | "--help" => return Err(USAGE.to_owned()),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
@@ -128,7 +158,36 @@ fn parse_args() -> Result<Args, String> {
     if args.low_resource && args.dataset.is_none() {
         return Err("--low-resource needs --dataset".to_owned());
     }
+    if args.dataset.is_some() {
+        // A persisted dataset holds no answers (bench/README.md).
+        if identified_given && args.identified != [0] {
+            return Err(
+                "--dataset holds no identification answers: --identified 0 only".to_owned(),
+            );
+        }
+        args.identified = vec![0];
+    }
+    if args.identified.len() > 1 && (args.db.is_some() || args.json.is_some()) {
+        return Err("--db and --json take one --identified share".to_owned());
+    }
     Ok(args)
+}
+
+/// `--identified`'s list: percents 0–100, no repeats.
+fn shares(v: &str) -> Result<Vec<u32>, String> {
+    let mut out = Vec::new();
+    for p in v.split(',') {
+        let p: u32 = p
+            .trim()
+            .trim_end_matches('%')
+            .parse()
+            .map_err(|e| format!("--identified {v}: {e}"))?;
+        if p > 100 || out.contains(&p) {
+            return Err(format!("--identified {v}: percents 0-100, each once"));
+        }
+        out.push(p);
+    }
+    Ok(out)
 }
 
 /// One budget line: what was measured, its value and its budget, in bytes
@@ -163,6 +222,8 @@ impl Check {
 /// itself is invalid. It passes only when both are clean.
 struct Report {
     torrents: usize,
+    /// The identified share measured, percent of identifiable torrents.
+    share: u32,
     checks: Vec<Check>,
     invalid: Vec<String>,
     /// 10M mode's rows beyond the gate's checks (reported figures, fields
@@ -218,10 +279,18 @@ impl Report {
 
     fn markdown(&self) -> String {
         let mut md = format!(
-            "### Size budget (§3): {}\n\n{} synthetic torrents, bytes per torrent.\n\n\
+            "### Size budget (§3): {}\n\n{} synthetic torrents{}, bytes per torrent.\n\n\
              | Part | Measured | Budget | Result |\n|---|---:|---:|---|\n",
             if self.passed() { "pass" } else { "FAIL" },
-            group(self.torrents as u64)
+            group(self.torrents as u64),
+            if self.share > 0 {
+                format!(
+                    ", {} % of identifiable torrents identified (ENR-11)",
+                    self.share
+                )
+            } else {
+                String::new()
+            }
         );
         for c in &self.checks {
             let result = match c.verdict() {
@@ -259,6 +328,10 @@ struct Timings {
     train: std::time::Duration,
     recompressed: u64,
     enrich: std::time::Duration,
+    identify: std::time::Duration,
+    /// Torrents of a kind a plugin can identify, and those given an answer.
+    identifiable: u64,
+    identified: u64,
     scrape: std::time::Duration,
     index: std::time::Duration,
 }
@@ -333,6 +406,11 @@ fn build(
         after = last;
     }
     let enrich_time = t3.elapsed();
+    // Identification answers (ENR-11), as ENR-10's runtime stores them on
+    // classified torrents; the index reads them below.
+    let t5 = Instant::now();
+    let (identifiable, identified) = identify(&mut store, args.seed, args.share)?;
+    let identify_time = t5.elapsed();
     // Swarm health (§7): every torrent scraped once, as the scheduler
     // leaves the store after its first pass.
     let t4 = Instant::now();
@@ -356,10 +434,108 @@ fn build(
             train: train_time,
             recompressed,
             enrich: enrich_time,
+            identify: identify_time,
+            identifiable,
+            identified,
             scrape: scrape_time,
             index: index_time,
         },
     ))
+}
+
+/// A terms record (`lodestar_sources::terms::Terms::record`) that lets
+/// answers be passed on: version 1, the redistribute flag, 180 days'
+/// retention.
+const TERMS_REDISTRIBUTE: [u8; 10] = {
+    let r = (180u64 * 86_400).to_be_bytes();
+    [1, 0b10, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]]
+};
+
+/// What a plugin looks up for a stored content type
+/// (`lodestar_classify::ContentType::code`: Movie 0, Tv 1, Music 2,
+/// Audiobook 3, Ebook 4, Comic 5, Software 6, Game 7). ENR-10 never sends
+/// Images, Video, Other or Adult (8–11), nor an unclassified torrent.
+fn work_of(content_type: Option<i64>, name: &str) -> Option<Work> {
+    Some(match content_type? {
+        0 => Work::Film,
+        1 if name.starts_with('[') => Work::Anime,
+        1 => Work::Show,
+        2 => Work::Music,
+        3..=5 => Work::Book,
+        6 => Work::Software,
+        7 => Work::Game,
+        _ => return None,
+    })
+}
+
+/// Stores a served answer on `percent` of the identifiable torrents, from
+/// one enrichment source whose terms allow passing answers on, the way
+/// `lodestar_pipeline::identify` writes them (`put_claims_at`). Returns
+/// the identifiable torrents and those answered. Nothing at all is
+/// written at 0 %, so that report is the one before ENR-11. Private
+/// torrents (`flags::PRIVACY`) are never looked up (ENR-10), so they
+/// aren't identifiable.
+fn identify(
+    store: &mut Store,
+    seed: u64,
+    percent: u32,
+) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+    if percent == 0 {
+        return Ok((0, 0));
+    }
+    // Source 0 found every torrent (`dataset::load`); it's the DHT, which
+    // the server registers first. A finder can't enrich what it found.
+    let finder = store.register_source("dht", "1", synth::EPOCH)?;
+    let source = store.register_source("wikidata", "1", synth::EPOCH)?;
+    if finder.get() != 0 || source == finder {
+        return Err("the identification source must not be the finder".into());
+    }
+    store.set_plugin_state(source, TERMS_KEY, Some(&TERMS_REDISTRIBUTE))?;
+    let rows: Vec<(i64, String, Option<i64>)> = store
+        .connection()
+        .prepare("SELECT id, name, content_type FROM torrents WHERE flags & ?1 = 0 ORDER BY id")?
+        .query_map([lodestar_store::flags::PRIVACY], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    let (mut identifiable, mut identified) = (0, 0);
+    for (id, name, content_type) in rows {
+        let Some(work) = work_of(content_type, &name) else {
+            continue;
+        };
+        identifiable += 1;
+        if !synth::identified(seed, id as u64, percent) {
+            continue;
+        }
+        let claims = synth::answer(seed, id as u64, work, &synth::work_title(&name));
+        if store.put_claims_at(id, source, &claims, false, synth::EPOCH)? {
+            identified += 1;
+        }
+    }
+    Ok((identifiable, identified))
+}
+
+/// Torrents holding an answer search may serve, and the ids and titles
+/// those answers carry. Read back through `served_identifications`, the
+/// index's own rule, so an answer the index wouldn't read can't count.
+fn served(store: &Store) -> Result<(u64, u64, u64), Box<dyn std::error::Error>> {
+    let ids: Vec<i64> = store
+        .connection()
+        .prepare("SELECT DISTINCT torrent_id FROM torrent_claims ORDER BY torrent_id")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let (mut torrents, mut terms, mut titles) = (0, 0, 0);
+    for id in ids {
+        let answers = store.served_identifications(id)?;
+        if !answers.is_empty() {
+            torrents += 1;
+        }
+        for a in &answers {
+            terms += a.ids.len() as u64;
+            titles += a.alt_titles.len() as u64 + u64::from(a.canonical_title.is_some());
+        }
+    }
+    Ok((torrents, terms, titles))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -392,6 +568,31 @@ fn measure(
         group(args.torrents as u64),
         args.seed
     );
+    let mut invalid = Vec::new();
+    if let Some(t) = timings.as_ref().filter(|_| args.share > 0) {
+        let (answered, terms, titles) = served(store)?;
+        let claims_bytes: f64 =
+            conn.query_row("SELECT total(length(data)) FROM torrent_claims", [], |r| {
+                r.get(0)
+            })?;
+        println!(
+            "  identified          {} ({:.1}% of the corpus; {}% of {} identifiable); \
+             {:.1} ids and {:.1} titles each, {:.0} B claims blob mean",
+            group(answered),
+            100.0 * answered as f64 / n,
+            args.share,
+            group(t.identifiable),
+            terms as f64 / answered.max(1) as f64,
+            titles as f64 / answered.max(1) as f64,
+            claims_bytes / answered.max(1) as f64
+        );
+        if answered != t.identified || answered == 0 {
+            invalid.push(format!(
+                "{answered} torrents hold a served answer for {} answered",
+                t.identified
+            ));
+        }
+    }
     println!(
         "  files               {} ({:.1} per torrent)",
         group(totals.files),
@@ -537,6 +738,13 @@ fn measure(
             n / t.index.as_secs_f64(),
             n / t.scrape.as_secs_f64()
         );
+        if args.share > 0 {
+            println!(
+                "                      identifying {:.0}/s ({:.1} s)",
+                t.identified as f64 / t.identify.as_secs_f64(),
+                t.identify.as_secs_f64()
+            );
+        }
     }
 
     let check = |what, got, budget| Check { what, got, budget };
@@ -568,16 +776,18 @@ fn measure(
         // RQ8: no file index in low-resource mode, so its budget doesn't apply.
         checks.retain(|c| c.what != "file index (smart)");
     }
+    invalid.extend(coverage(
+        args.torrents as u64,
+        index.num_docs(),
+        totals.files,
+        index.num_files(),
+    ));
     let report = Report {
         torrents: args.torrents,
+        share: args.share,
         checks,
         extra,
-        invalid: coverage(
-            args.torrents as u64,
-            index.num_docs(),
-            totals.files,
-            index.num_files(),
-        ),
+        invalid,
     };
     if full {
         println!(
@@ -731,14 +941,37 @@ fn main() -> ExitCode {
         }
         None => None,
     };
-    let result = run(&args, ds.as_ref());
-    let text = match &result {
-        Ok(report) => report.markdown(),
-        Err(e) => {
-            eprintln!("error: {e}");
-            format!("### Size budget (§3): FAIL\n\n**FAIL: size-report could not measure.** {e}")
+    let mut results = Vec::new();
+    for (i, &share) in args.identified.iter().enumerate() {
+        if i > 0 {
+            println!();
         }
-    };
+        let mut one = args.clone();
+        one.share = share;
+        results.push(run(&one, ds.as_ref()));
+    }
+    let mut text = results
+        .iter()
+        .map(|result| match result {
+            Ok(report) => report.markdown(),
+            Err(e) => {
+                eprintln!("error: {e}");
+                format!(
+                    "### Size budget (§3): FAIL\n\n**FAIL: size-report could not measure.** {e}"
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let measured: Vec<&Report> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+    if measured.len() > 1 {
+        let (plain, md) = compare(&measured);
+        println!("\n{plain}");
+        text.push('\n');
+        text.push_str(&md);
+    }
+    // `--json` and `--dataset` take one share (`parse_args`).
+    let result = results.swap_remove(0);
     let written = write_summary(args.summary.as_deref(), &text);
     if let Err(e) = &written {
         eprintln!("error: writing the summary: {e}");
@@ -777,11 +1010,51 @@ fn main() -> ExitCode {
         (Ok(report), Some(_)) => !args.gate || dataset::verdict(&report.rows()) == "pass",
         _ => true,
     };
-    if json_ok && full_ok && succeeds(args.gate, &result, written.is_ok()) {
+    let others_ok = results
+        .iter()
+        .all(|r| succeeds(args.gate, r, written.is_ok()));
+    if json_ok && full_ok && others_ok && succeeds(args.gate, &result, written.is_ok()) {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// Every budget line by identified share, as plain text and Markdown:
+/// bytes per torrent, and the change from the first share listed.
+fn compare(reports: &[&Report]) -> (String, String) {
+    let first = reports[0];
+    let mut plain =
+        String::from("  identification (ENR-11), bytes per torrent by identified share\n");
+    let _ = write!(plain, "    {:<22}", "part");
+    let mut md =
+        String::from("### Identification answers (ENR-11): bytes per torrent by share\n\n| Part |");
+    for r in reports {
+        let _ = write!(plain, " {:>16}", format!("{} %", r.share));
+        let _ = write!(md, " {} % |", r.share);
+    }
+    let _ = writeln!(plain, " {:>7}", "budget");
+    md.push_str(" Budget |\n|---|");
+    md.push_str(&"---:|".repeat(reports.len() + 1));
+    md.push('\n');
+    for (i, c) in first.checks.iter().enumerate() {
+        let _ = write!(plain, "    {:<22}", c.what);
+        let _ = write!(md, "| {} |", c.what);
+        for r in reports {
+            let got = r.checks.get(i).map_or(f64::NAN, |c| c.got);
+            let cell = if std::ptr::eq(*r, first) {
+                format!("{got:.1}")
+            } else {
+                format!("{got:.1} ({:+.1})", got - c.got)
+            };
+            let over = if got > c.budget { " **over**" } else { "" };
+            let _ = write!(plain, " {cell:>16}");
+            let _ = write!(md, " {cell}{over} |");
+        }
+        let _ = writeln!(plain, " {:>7.0}", c.budget);
+        let _ = writeln!(md, " {:.0} |", c.budget);
+    }
+    (plain, md)
 }
 
 /// Whether the run exits 0. It fails closed: an error, a value that wasn't
@@ -804,6 +1077,7 @@ mod tests {
     fn report(got: f64, invalid: Vec<String>) -> Report {
         Report {
             torrents: 50_000,
+            share: 0,
             checks: vec![Check {
                 what: "torrent index",
                 got,
@@ -881,5 +1155,62 @@ mod tests {
         write_summary(Some(&path), "two").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo\n");
         write_summary(None, "ignored").unwrap();
+    }
+
+    #[test]
+    fn identified_shares_parse() {
+        assert_eq!(shares("60").unwrap(), [60]);
+        assert_eq!(shares("0, 60%,100").unwrap(), [0, 60, 100]);
+        for bad in ["", "101", "60,60", "-1", "x"] {
+            assert!(shares(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_terms_record_lets_answers_be_served() {
+        assert!(lodestar_store::identify_sweep::record_redistributes(
+            &TERMS_REDISTRIBUTE
+        ));
+    }
+
+    #[test]
+    fn only_the_kinds_enr10_sends_are_identifiable() {
+        assert_eq!(work_of(Some(0), "A.2001.1080p"), Some(Work::Film));
+        assert_eq!(work_of(Some(1), "[Grp] A - 01"), Some(Work::Anime));
+        assert_eq!(work_of(Some(1), "A.S01E01"), Some(Work::Show));
+        assert_eq!(work_of(Some(3), "A"), Some(Work::Book));
+        assert_eq!(work_of(Some(7), "A"), Some(Work::Game));
+        for code in [None, Some(8), Some(9), Some(10), Some(11), Some(12)] {
+            assert_eq!(work_of(code, "A"), None, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn the_summary_names_the_share_only_when_there_is_one() {
+        let zero = report(391.0, vec![]).markdown();
+        assert!(
+            zero.contains("50,000 synthetic torrents, bytes per torrent."),
+            "{zero}"
+        );
+        let mut r = report(391.0, vec![]);
+        r.share = 60;
+        let md = r.markdown();
+        assert!(
+            md.contains("50,000 synthetic torrents, 60 % of identifiable torrents identified"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn the_comparison_shows_each_share_and_the_change() {
+        let a = report(391.0, vec![]);
+        let mut b = report(600.0, vec![]);
+        b.share = 100;
+        let (plain, md) = compare(&[&a, &b]);
+        assert!(plain.contains("0 %") && plain.contains("100 %"), "{plain}");
+        assert!(plain.contains("600.0 (+209.0)"), "{plain}");
+        let row =
+            format!("| torrent index | 391.0 | 600.0 (+209.0) **over** | {INDEX_BUDGET:.0} |");
+        assert!(md.contains(&row), "{md}");
     }
 }

@@ -1186,6 +1186,385 @@ const WORDS: &[&str] = &[
     "matrix",
 ];
 
+// ---- identification answers (ENR-11) -------------------------------------
+
+/// What [`answer`] imitates: the kind of work an identification plugin
+/// looked up. ENR-10 sends only these kinds (Movie, TV, Music, Audiobook,
+/// Ebook, Comic, Software and Game); Images, Video, Other and Adult are
+/// never looked up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Work {
+    Film,
+    Show,
+    /// A show whose name starts with a `[Group]` tag: AniDB and AniList
+    /// ids as well as the TV ones.
+    Anime,
+    Music,
+    Book,
+    Software,
+    Game,
+}
+
+/// The default share of identifiable torrents that hold a served answer,
+/// in percent (`docs/decisions/2026-11-27-X-enr11-size-measure.md`).
+pub const DEFAULT_IDENTIFIED_PERCENT: u32 = 60;
+
+/// The `unit` stream that picks identified torrents; the answer itself
+/// draws from its own generator, so neither shifts the torrent stream or
+/// the swarm values.
+const IDENTIFIED_STREAM: u64 = 16;
+const ANSWER_STREAM: u64 = 17;
+
+/// Whether torrent `id` holds an answer when `percent` of identifiable
+/// torrents do, deterministic in `(seed, id)`. Nested: a torrent
+/// identified at one share is identified at every higher one.
+pub fn identified(seed: u64, id: u64, percent: u32) -> bool {
+    unit(seed, id, IDENTIFIED_STREAM) * 100.0 < f64::from(percent.min(100))
+}
+
+/// The title a plugin would be asked about: the name's words up to the
+/// first one holding a digit or a bracket (the year, `S01E02`, the
+/// resolution, a `[tag]`), after any leading `[Group]` tags. A name with
+/// none is cut to its first 40 characters.
+pub fn work_title(name: &str) -> String {
+    let mut rest = name.trim();
+    while let Some(tail) = rest.strip_prefix('[').and_then(|r| r.split_once(']')) {
+        rest = tail.1.trim_start();
+    }
+    let mut words = Vec::new();
+    for tok in rest.split(['.', ' ', '_']) {
+        if tok.is_empty() || tok == "-" {
+            continue;
+        }
+        if tok.chars().any(|c| c.is_ascii_digit() || "[(".contains(c)) {
+            break;
+        }
+        words.push(tok);
+        if words.len() == 8 {
+            break;
+        }
+    }
+    if words.is_empty() {
+        let cut: String = rest.chars().take(40).collect();
+        let cut = cut.trim();
+        return if cut.is_empty() {
+            "Untitled".to_owned()
+        } else {
+            cut.to_owned()
+        };
+    }
+    words.join(" ")
+}
+
+/// An identification answer for torrent `id`, as an ENR-10 plugin's
+/// `Identification::into_claims` stores it: one to three ids of the
+/// schemes `work` has, a canonical title, alternative titles in several
+/// scripts and lengths, genres, a year and a match confidence. Everything
+/// but the confidence depends only on `(seed, work, title)`, so the
+/// releases of one work share their answer, as they do in a real
+/// catalogue. Always in stored form (`claims::encode` accepts it).
+pub fn answer(seed: u64, id: u64, work: Work, title: &str) -> lodestar_store::claims::Claims {
+    use lodestar_store::claims::{AltTitle, Claims, Details, ExternalId};
+
+    let key = title
+        .bytes()
+        .chain([work as u8])
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        });
+    let mut rng = ChaCha8Rng::seed_from_u64(mix(seed, key, ANSWER_STREAM));
+
+    let schemes: &[&str] = match work {
+        Work::Film => &["imdb", "tmdb", "wikidata"],
+        Work::Show => &["tvdb", "imdb", "tmdb", "wikidata"],
+        Work::Anime => &["anidb", "anilist", "tvdb", "wikidata"],
+        Work::Music => &["mbid", "discogs", "wikidata"],
+        Work::Book => &["olid", "wikidata"],
+        Work::Software => &["wikidata", "igdb"],
+        Work::Game => &["igdb", "steam", "wikidata"],
+    };
+    let n = (*pick(&mut rng, &[(1usize, 30), (2, 40), (3, 30)])).min(schemes.len());
+    let mut chosen: Vec<&str> = schemes.sample(&mut rng, n).copied().collect();
+    chosen.sort_unstable();
+    let ids = chosen
+        .into_iter()
+        .map(|scheme| ExternalId {
+            scheme: scheme.to_owned(),
+            value: id_value(&mut rng, scheme),
+        })
+        .collect();
+
+    // Most catalogues hold the title the release names; some add a
+    // subtitle or an article.
+    let canonical = match rng.random_range(0..100) {
+        0..65 => title.to_owned(),
+        65..85 => format!("{title}: {}", latin_words(&mut rng, 1..4, false)),
+        _ => format!("The {title}"),
+    };
+    let count = match *pick(&mut rng, &[(0u8, 15), (1, 30), (2, 30), (3, 18), (4, 7)]) {
+        0 => 0,
+        1 => rng.random_range(1..=3),
+        2 => rng.random_range(4..=8),
+        3 => rng.random_range(9..=16),
+        _ => rng.random_range(17..=32),
+    };
+    let words = title.split(' ').count();
+    let mut alt_titles: Vec<AltTitle> = Vec::with_capacity(count);
+    for _ in 0..count {
+        let alt = if rng.random_range(0..100) < 25 {
+            // A Latin-script variant of the original title.
+            let (language, t) = match rng.random_range(0..4) {
+                0 => (
+                    "en",
+                    format!(
+                        "{title} ({})",
+                        ["US", "UK", "AU", "CA"].choose(&mut rng).unwrap()
+                    ),
+                ),
+                1 => ("en-gb", title.to_uppercase()),
+                2 => (
+                    "und",
+                    format!("{title} {}", latin_words(&mut rng, 1..3, false)),
+                ),
+                _ => ("en", latin_words(&mut rng, 1..5, false)),
+            };
+            AltTitle {
+                language: language.to_owned(),
+                title: t,
+            }
+        } else {
+            let (language, script) = *pick(&mut rng, LANGUAGES);
+            let len = (words + rng.random_range(0..3))
+                .saturating_sub(1)
+                .clamp(1, 8);
+            AltTitle {
+                language: language.to_owned(),
+                title: script_words(&mut rng, script, len),
+            }
+        };
+        if !alt_titles.contains(&alt) {
+            alt_titles.push(alt);
+        }
+    }
+    let genre_pool: &[&str] = match work {
+        Work::Film | Work::Show | Work::Anime => &[
+            "drama",
+            "comedy",
+            "action",
+            "thriller",
+            "science fiction",
+            "horror",
+            "romance",
+            "documentary",
+            "animation",
+            "crime",
+            "fantasy",
+            "adventure",
+        ],
+        Work::Music => &[
+            "rock",
+            "electronic",
+            "jazz",
+            "hip hop",
+            "classical",
+            "pop",
+            "metal",
+            "folk",
+        ],
+        Work::Book => &[
+            "fiction",
+            "history",
+            "science",
+            "biography",
+            "fantasy",
+            "mystery",
+        ],
+        Work::Software | Work::Game => &[
+            "strategy",
+            "action",
+            "role-playing",
+            "simulation",
+            "utility",
+            "puzzle",
+        ],
+    };
+    let g = rng.random_range(1..=3);
+    let genres = genre_pool
+        .sample(&mut rng, g)
+        .map(|g| (*g).to_owned())
+        .collect();
+    let year = rng.random_range(1950..=2025);
+    let confidence = 60 + (unit(seed, id, ANSWER_STREAM) * 41.0) as u8;
+    Claims {
+        ids,
+        details: Some(Box::new(Details {
+            canonical_title: Some(canonical),
+            alt_titles,
+            genres,
+            year: Some(year),
+            match_confidence: Some(confidence.min(100)),
+            ..Details::default()
+        })),
+        ..Claims::default()
+    }
+}
+
+/// A value in `scheme`'s one stored spelling (`claims::id_ok`).
+fn id_value(rng: &mut ChaCha8Rng, scheme: &str) -> String {
+    let n = |rng: &mut ChaCha8Rng, hi: u64| rng.random_range(1..hi).to_string();
+    match scheme {
+        "imdb" => {
+            let v = rng.random_range(1..40_000_000u64);
+            if v < 10_000_000 {
+                format!("tt{v:07}")
+            } else {
+                format!("tt{v}")
+            }
+        }
+        "tmdb" => n(rng, 1_400_000),
+        "tvdb" => n(rng, 460_000),
+        "anidb" => n(rng, 20_000),
+        "anilist" => n(rng, 190_000),
+        "igdb" => n(rng, 320_000),
+        "steam" => n(rng, 3_400_000),
+        "wikidata" => format!("Q{}", n(rng, 130_000_000)),
+        "olid" => format!("OL{}W", n(rng, 40_000_000)),
+        "discogs" => format!("{}{}", ["r", "m"].choose(rng).unwrap(), n(rng, 33_000_000)),
+        "mbid" => {
+            let h: String = (0..32)
+                .map(|_| char::from(b"0123456789abcdef"[rng.random_range(0..16)]))
+                .collect();
+            format!(
+                "{}-{}-{}-{}-{}",
+                &h[..8],
+                &h[8..12],
+                &h[12..16],
+                &h[16..20],
+                &h[20..]
+            )
+        }
+        other => unreachable!("not an enrichment scheme: {other}"),
+    }
+}
+
+/// A script's alphabet, as Unicode ranges, and how long its words run.
+#[derive(Debug, Clone, Copy)]
+enum Script {
+    /// Accented Latin: the European translations.
+    Latin,
+    Cyrillic,
+    Greek,
+    Arabic,
+    Hebrew,
+    Devanagari,
+    Thai,
+    /// Han characters from the generator's own set, 1–3 to a word.
+    Han,
+    /// Kana with some Han.
+    Japanese,
+    Hangul,
+}
+
+/// Translation languages, by how often catalogues hold them (tenths of a
+/// percent of translated titles).
+const LANGUAGES: &[((&str, Script), u32)] = &[
+    (("de", Script::Latin), 80),
+    (("fr", Script::Latin), 80),
+    (("es", Script::Latin), 80),
+    (("it", Script::Latin), 60),
+    (("pt-br", Script::Latin), 60),
+    (("pl", Script::Latin), 40),
+    (("nl", Script::Latin), 30),
+    (("sv", Script::Latin), 25),
+    (("tr", Script::Latin), 25),
+    (("cs", Script::Latin), 20),
+    (("hu", Script::Latin), 20),
+    (("ru", Script::Cyrillic), 80),
+    (("uk", Script::Cyrillic), 30),
+    (("bg", Script::Cyrillic), 15),
+    (("el", Script::Greek), 20),
+    (("ar", Script::Arabic), 30),
+    (("fa", Script::Arabic), 15),
+    (("he", Script::Hebrew), 20),
+    (("hi", Script::Devanagari), 20),
+    (("th", Script::Thai), 15),
+    (("zh", Script::Han), 50),
+    (("zh-hant", Script::Han), 30),
+    (("ja", Script::Japanese), 60),
+    (("ko", Script::Hangul), 40),
+    (("und", Script::Latin), 30),
+];
+
+/// `n` words of `script` from its fixed vocabulary, space-separated (Han
+/// and Japanese without spaces).
+fn script_words(rng: &mut ChaCha8Rng, script: Script, n: usize) -> String {
+    if let Script::Latin = script {
+        return latin_words(rng, n..n + 1, true);
+    }
+    let vocab = &vocabularies()[script as usize];
+    let words: Vec<&str> = (0..n)
+        .map(|_| vocab.choose(rng).unwrap().as_str())
+        .collect();
+    match script {
+        Script::Han | Script::Japanese => words.concat(),
+        _ => words.join(" "),
+    }
+}
+
+/// Capitalised words from the shared word list; with `accents`, some
+/// from the accented Latin vocabulary instead.
+fn latin_words(rng: &mut ChaCha8Rng, n: std::ops::Range<usize>, accents: bool) -> String {
+    let n = rng.random_range(n);
+    (0..n)
+        .map(|_| {
+            if accents && rng.random_range(0..2) == 0 {
+                capitalize(vocabularies()[Script::Latin as usize].choose(rng).unwrap())
+            } else {
+                capitalize(WORDS.choose(rng).unwrap())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Each script's vocabulary: 600 words drawn once from a fixed seed, so
+/// translated titles share words across the corpus as real ones do.
+fn vocabularies() -> &'static [Vec<String>] {
+    static V: std::sync::OnceLock<Vec<Vec<String>>> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        let mut rng = ChaCha8Rng::seed_from_u64(0x001d_3e11);
+        let latin: Vec<char> = "abcdefghijklmnoprstuvzéèàüöäñçøłšžő".chars().collect();
+        let range = |a: u32, b: u32| (a..=b).filter_map(char::from_u32).collect::<Vec<_>>();
+        let han: Vec<char> = CJK.iter().flat_map(|s| s.chars()).collect();
+        let mut japanese = range(0x3041, 0x3093);
+        japanese.extend(range(0x30a1, 0x30f3));
+        japanese.extend(&han);
+        let alphabets: [(Vec<char>, std::ops::RangeInclusive<usize>); 10] = [
+            (latin, 3..=9),
+            (range(0x0430, 0x044f), 3..=9),
+            (range(0x03b1, 0x03c9), 3..=9),
+            (range(0x0627, 0x064a), 2..=7),
+            (range(0x05d0, 0x05ea), 2..=6),
+            (range(0x0915, 0x0939), 2..=6),
+            (range(0x0e01, 0x0e2e), 2..=6),
+            (han, 1..=3),
+            (japanese, 2..=5),
+            (range(0xac00, 0xd7a3), 1..=4),
+        ];
+        alphabets
+            .into_iter()
+            .map(|(chars, len)| {
+                (0..600)
+                    .map(|_| {
+                        let n = rng.random_range(len.clone());
+                        (0..n).map(|_| *chars.choose(&mut rng).unwrap()).collect()
+                    })
+                    .collect()
+            })
+            .collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1292,5 +1671,93 @@ mod tests {
             legacy > 100 && legacy_ok * 100 >= legacy * 95,
             "{legacy_ok}/{legacy}"
         );
+    }
+
+    #[test]
+    fn work_titles_stop_at_the_release_tail() {
+        assert_eq!(work_title("Night.King.2019.1080p.WEB-DL-GRP"), "Night King");
+        assert_eq!(work_title("Dark.Sea.S02E05.720p.HDTV"), "Dark Sea");
+        assert_eq!(
+            work_title("[SubsPlease] Iron Moon - 05 (1080p)"),
+            "Iron Moon"
+        );
+        assert_eq!(work_title("abcdef0123"), "abcdef0123");
+        assert_eq!(work_title(""), "Untitled");
+        assert_eq!(work_title("国语中字 天地"), "国语中字 天地");
+    }
+
+    #[test]
+    fn identified_shares_are_nested_and_near_their_percent() {
+        let n = 50_000u64;
+        let count = |p| (1..=n).filter(|&id| identified(5, id, p)).count() as f64 / n as f64;
+        assert_eq!(count(0), 0.0);
+        assert_eq!(count(100), 1.0);
+        let at = count(DEFAULT_IDENTIFIED_PERCENT);
+        assert!((at - 0.6).abs() < 0.01, "{at}");
+        for id in 1..=n {
+            if identified(5, id, 30) {
+                assert!(identified(5, id, 31), "{id}");
+            }
+        }
+    }
+
+    #[test]
+    fn answers_are_stored_form_and_realistic() {
+        use lodestar_store::claims::{self, ENRICHMENT_SCHEMES, id_ok};
+        let works = [
+            Work::Film,
+            Work::Show,
+            Work::Anime,
+            Work::Music,
+            Work::Book,
+            Work::Software,
+            Work::Game,
+        ];
+        let (mut answers, mut ids, mut alts, mut scripts) =
+            (0, 0, 0, std::collections::HashSet::new());
+        let mut longest = 0;
+        for id in 0..3_000u64 {
+            let work = works[(id % 7) as usize];
+            let title = format!("Night King {}", id % 400);
+            let c = answer(11, id, work, &title);
+            // Stored form: encoding validates every limit and spelling.
+            let blob = claims::encode(&c, 3).unwrap_or_else(|e| panic!("{work:?} {id}: {e}"));
+            assert_eq!(claims::decode(&blob).unwrap(), c);
+            assert!((1..=3).contains(&c.ids.len()), "{:?}", c.ids);
+            assert!(
+                c.ids
+                    .iter()
+                    .all(|i| ENRICHMENT_SCHEMES.contains(&i.scheme.as_str())
+                        && id_ok(&i.scheme, &i.value))
+            );
+            let d = c.details.as_ref().unwrap();
+            assert!(d.match_confidence.is_some_and(|m| (60..=100).contains(&m)));
+            assert!(d.alt_titles.len() <= claims::MAX_ALT_TITLES);
+            assert!(d.canonical_title.is_some());
+            for a in &d.alt_titles {
+                scripts.insert(
+                    a.title
+                        .chars()
+                        .find(|c| !c.is_ascii())
+                        .map(|c| c as u32 >> 8),
+                );
+                longest = longest.max(a.title.chars().count());
+            }
+            answers += 1;
+            ids += c.ids.len();
+            alts += d.alt_titles.len();
+            // The same work gets the same answer but its own confidence.
+            let again = answer(11, id + 7_000, work, &title);
+            assert_eq!(again.ids, c.ids);
+            assert_eq!(again.details.as_ref().unwrap().alt_titles, d.alt_titles);
+        }
+        let (ids, alts) = (ids as f64 / answers as f64, alts as f64 / answers as f64);
+        assert!((1.6..2.4).contains(&ids), "ids per answer {ids}");
+        assert!(
+            (4.0..9.0).contains(&alts),
+            "alternative titles per answer {alts}"
+        );
+        assert!(scripts.len() >= 8, "scripts {scripts:?}");
+        assert!(longest >= 20, "longest {longest}");
     }
 }
