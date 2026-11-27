@@ -11320,6 +11320,12 @@
       "at": "2026-11-27T01:40Z",
       "ask": "Confirm deleting runner-state HANDOVER.md now the runner has resumed (docs/handoff.md \u00a75 step 5)",
       "sent": "2026-11-27 runner chat"
+    },
+    {
+      "id": "license-cdla-permissive-2",
+      "at": "2026-11-27T02:42Z",
+      "ask": "Allow CDLA-Permissive-2.0 in web/licenses/allow.json (owner \u00a72.12)? It's the licence of webpki-root-certs/webpki-roots (Mozilla's root list). With it, routed plugin connections can use a bundled root set as well as the OS store; without it, a Windows server whose root Windows hasn't fetched yet is refused on routed connections (fails safe). Runner recommends allowing it (permissive data licence; better UX).",
+      "sent": "2026-11-27 runner chat"
     }
   ],
   "review_queue": [
@@ -12224,7 +12230,9 @@
       "crates/sources/**",
       "crates/sources-irc/**",
       "crates/integrations/**",
-      "Cargo.lock (dep edges)"
+      "Cargo.lock (dep edges)",
+      "fuzz/Cargo.lock (edges)",
+      "web/licenses/rust.json (generated)"
     ],
     "X-sec-S8-26": [
       "crates/pipeline/**"
