@@ -1,20 +1,23 @@
 //! CR-0d's restart files (`crates/dht/src/restart.rs`): untrusted bytes on
 //! disk. The fuzzer can't forge the container's SHA-256, so the target
 //! seals the input itself: the first byte picks the file kind. For a
-//! snapshot the next byte picks the form (bit 0: version 2, the spill
-//! snapshot of X-split-resume-gate; bit 1, with bit 0: the spill section
-//! is expanded from a sparse list), the next 8 bytes give the wall clock
-//! for validation, and the rest is the body.
+//! snapshot the next byte picks the form (bit 0: a spill snapshot, version
+//! 2 of X-split-resume-gate or, with bit 2, version 3 of X-sec-S8-27, one
+//! section per set of keys; bit 1, with bit 0: the spill sections are
+//! expanded from a sparse list), the next 8 bytes give the wall clock for
+//! validation, and the rest is the body.
 //!
 //! An expanded body is `cut` (2 bytes LE) ‖ `n` (2 bytes LE) ‖ `n` bytes
 //! of sparse list ‖ a template. The template is cut at `cut % (len + 1)`
-//! and the section goes between, as a bencode string. The list's records
-//! are a block (3 bytes LE, modulo `SPILL_BLOCKS`), a count byte and up
-//! to 4 × count bytes of words, all verbatim; a later record for a block
-//! replaces an earlier one, and every other block is a 0 count. A section
-//! is at least 128 KiB, past what libFuzzer would grow by itself, so this
-//! is how version 2 is reached. `crates/dht/src/restart/tests.rs` builds
-//! the seeds in `seeds/dht_restart/` with the same layout.
+//! and the sections go between, end to end, as one bencode string: one for
+//! version 2, two for version 3. The list's records are a block (3 bytes
+//! LE: the low 17 bits the block, bit 23 the section for version 3), a
+//! count byte and up to 4 × count bytes of words, all verbatim; a later
+//! record for a block replaces an earlier one, and every other block is a
+//! 0 count. A section is at least 128 KiB, past what libFuzzer would grow
+//! by itself, so this is how versions 2 and 3 are reached.
+//! `crates/dht/src/restart/tests.rs` builds the seeds in
+//! `seeds/dht_restart/` with the same layout.
 //!
 //! Nothing may panic, whatever decodes is canonical (re-encodes to the
 //! same bytes) and has the version it was sealed at (a body never decodes
@@ -78,12 +81,17 @@ fuzz_target!(|data: &[u8]| {
                 return;
             };
             let clock = u64::from_le_bytes(*clock);
+            let (version, sections) = if form & 4 == 0 {
+                (restart::SNAPSHOT_SPILL_VERSION, 1)
+            } else {
+                (restart::SNAPSHOT_GENS_VERSION, 2)
+            };
             match form % 4 {
                 0 | 2 => snapshot(body, restart::VERSION, clock),
-                1 => snapshot(body, restart::SNAPSHOT_SPILL_VERSION, clock),
+                1 => snapshot(body, version, clock),
                 _ => {
-                    if let Some(body) = expand(body) {
-                        snapshot(&body, restart::SNAPSHOT_SPILL_VERSION, clock);
+                    if let Some(body) = expand(body, sections) {
+                        snapshot(&body, version, clock);
                     }
                 }
             }
@@ -92,7 +100,7 @@ fuzz_target!(|data: &[u8]| {
 });
 
 /// The body an expanded input stands for (the layout is in the header).
-fn expand(input: &[u8]) -> Option<Vec<u8>> {
+fn expand(input: &[u8], sections: usize) -> Option<Vec<u8>> {
     let (cut, input) = input.split_first_chunk::<2>()?;
     let (n, input) = input.split_first_chunk::<2>()?;
     let n = usize::from(u16::from_le_bytes(*n)).min(input.len());
@@ -102,20 +110,24 @@ fn expand(input: &[u8]) -> Option<Vec<u8>> {
         let Some((&count, rest)) = rest.split_first() else {
             break;
         };
-        let block = (u32::from_le_bytes([b[0], b[1], b[2], 0]) as usize) % SPILL_BLOCKS;
+        let value = u32::from_le_bytes([b[0], b[1], b[2], 0]) as usize;
+        let at = ((value >> 23) % sections, value % SPILL_BLOCKS);
         let (words, rest) = rest.split_at((4 * usize::from(count)).min(rest.len()));
-        blocks.insert(block, (count, words));
+        blocks.insert(at, (count, words));
         sparse = rest;
     }
-    let mut raw =
-        Vec::with_capacity(SPILL_BLOCKS + blocks.values().map(|w| w.1.len()).sum::<usize>());
-    for b in 0..SPILL_BLOCKS {
-        match blocks.get(&b) {
-            Some((count, words)) => {
-                raw.push(*count);
-                raw.extend_from_slice(words);
+    let mut raw = Vec::with_capacity(
+        sections * SPILL_BLOCKS + blocks.values().map(|w| w.1.len()).sum::<usize>(),
+    );
+    for section in 0..sections {
+        for b in 0..SPILL_BLOCKS {
+            match blocks.get(&(section, b)) {
+                Some((count, words)) => {
+                    raw.push(*count);
+                    raw.extend_from_slice(words);
+                }
+                None => raw.push(0),
             }
-            None => raw.push(0),
         }
     }
     let cut = usize::from(u16::from_le_bytes(*cut)) % (template.len() + 1);
@@ -134,19 +146,32 @@ fn snapshot(body: &[u8], version: u32, clock: u64) {
         return;
     };
     assert_eq!(s.encode(), bytes);
-    // Each version has its own dictionary keys, so no body decodes at both.
-    let other = if version == restart::VERSION {
-        restart::SNAPSHOT_SPILL_VERSION
-    } else {
-        restart::VERSION
-    };
-    assert!(Snapshot::decode(&seal_at(b"LDSRSNAP", other, body)).is_err());
+    // Each version has its own dictionary keys, so no body decodes at two.
+    for other in [
+        restart::VERSION,
+        restart::SNAPSHOT_SPILL_VERSION,
+        restart::SNAPSHOT_GENS_VERSION,
+    ] {
+        if other != version {
+            assert!(Snapshot::decode(&seal_at(b"LDSRSNAP", other, body)).is_err());
+        }
+    }
     match &s.spill {
         None => assert_eq!(version, restart::VERSION),
         Some(sp) => {
-            assert_eq!(version, restart::SNAPSHOT_SPILL_VERSION);
-            // Never empty: a snapshot with nothing spilled is version 1.
+            // Version 3 only for more than one set of keys, and at most
+            // the cap.
+            let want = if sp.older.is_empty() {
+                restart::SNAPSHOT_SPILL_VERSION
+            } else {
+                restart::SNAPSHOT_GENS_VERSION
+            };
+            assert_eq!(version, want);
+            assert!(sp.older.len() < restart::MAX_SPILL_GENS);
+            // Never empty: a snapshot with nothing spilled is version 1,
+            // and every section holds a slot.
             assert!(!words(&sp.raw).is_empty());
+            assert!(sp.older.iter().all(|(_, raw)| !words(raw).is_empty()));
             // Without its section it's written as version 1, and the rest
             // is unchanged.
             let v1 = Snapshot {
@@ -215,8 +240,17 @@ fn snapshot(body: &[u8], version: u32, clock: u64) {
             let now = restart::floor_ms(wall0);
             let h_ms = u64::from(s.horizon_s) * 1000;
             let mask = (1u32 << SPILL_MINUTE_BITS) - 1;
-            let live: Vec<_> = words(&file.raw)
-                .into_iter()
+            // Oldest section first, each with its own keys.
+            assert_eq!(sp.sections(), file.older.len() + 1);
+            assert_eq!(sp.key(), file.key);
+            for (i, (key, _)) in file.older.iter().enumerate() {
+                assert_eq!(sp.section_key(i), *key);
+            }
+            let live: Vec<_> = file
+                .older
+                .iter()
+                .flat_map(|(_, raw)| words(raw))
+                .chain(words(&file.raw))
                 .map(|(b, w)| (b, w, s.at_ms + u64::from(w & mask) * 60_000))
                 .filter(|&(_, _, recorded)| recorded > now)
                 .collect();

@@ -1074,6 +1074,13 @@ fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u32>, key: K) {
 /// - **Hostile input.** Keys are hashed with a per-process random key
 ///   (SipHash), so remote nodes can't aim at one block, and only nodes this
 ///   node sampled are ever inserted, at the sample rate.
+/// - **Fresh keys every run (X-sec-S8-27).** A filter rebuilt from a
+///   restart snapshot keeps each of the snapshot's sections read-only
+///   under the keys it was made with (`Frozen`), so every restored
+///   cooldown is still found and still counts, and draws new random keys
+///   for everything inserted from then on. Keys read from a snapshot never
+///   place a new insert. A read-only section is dropped once its last
+///   cooldown ends, within the restart horizon.
 ///
 /// Minutes are kept modulo 4096 (68 h). A live end is at most
 /// [`HORIZON_MIN`] (48 h and a minute) ahead, so an ended slot that isn't
@@ -1098,7 +1105,9 @@ pub(crate) mod spill {
     use tokio::time::Instant;
 
     use super::super::limits::{Network, allocation, network};
-    use crate::restart::{SPILL_BLOCK, SPILL_BLOCKS, SPILL_MINUTE_BITS, SeededSpill, Spilled};
+    use crate::restart::{
+        MAX_SPILL_GENS, SPILL_BLOCK, SPILL_BLOCKS, SPILL_MINUTE_BITS, SeededSpill, Spilled,
+    };
 
     const MINUTE_NANOS: u128 = 60_000_000_000;
     const MINUTE_BITS: u32 = SPILL_MINUTE_BITS;
@@ -1136,10 +1145,16 @@ pub(crate) mod spill {
     /// counts (16 KiB), nothing else.
     #[cfg(test)]
     pub const BYTES: usize = SLOTS * 4 + MINUTES * 4;
+    /// The most heap bytes with read-only sections kept as well
+    /// (X-sec-S8-27): per section its block index and end counts, and at
+    /// most one filter's slots across all of them.
+    #[cfg(test)]
+    pub const MAX_BYTES: usize = BYTES + MAX_SPILL_GENS * 4 * (BLOCKS + 1 + MINUTES) + SLOTS * 4;
 
     pub struct Spill {
-        /// SipHash-2-4 keys: per process, or restored with the filter, so
-        /// a restarted run finds the fingerprints a snapshot kept.
+        /// SipHash-2-4 keys for `slots`: drawn at random when the filter is
+        /// made (a rebuilt one included) and whenever it drains, never
+        /// read from a snapshot.
         keys: [u64; 2],
         /// Minute `m` ends at `base + m` minutes.
         base: Instant,
@@ -1156,6 +1171,50 @@ pub(crate) mod spill {
         /// last sweep still counts until the next one.
         live: usize,
         cursor: usize,
+        /// The sections a restart snapshot held, oldest first, each under
+        /// its own keys: read only, so nothing new goes in, and dropped by
+        /// [`Spill::sweep`] once its last cooldown has ended.
+        frozen: Vec<Frozen>,
+    }
+
+    /// A read-only section restored from a restart snapshot: its words
+    /// (tag and minute, as in `slots`) block by block, packed.
+    struct Frozen {
+        keys: [u64; 2],
+        /// Block `b`'s words are `words[at[b]..at[b + 1]]`.
+        at: Box<[u32]>,
+        words: Box<[u32]>,
+        /// Words by stored minute, as [`Spill`]'s `ends`.
+        ends: Box<[u32]>,
+        /// The latest stored minute: once it has ended, nothing here is
+        /// live.
+        last: u64,
+        /// Live words as of the last sweep (all of them when restored).
+        live: usize,
+    }
+
+    impl Frozen {
+        fn block(&self, b: usize) -> &[u32] {
+            &self.words[self.at[b] as usize..self.at[b + 1] as usize]
+        }
+
+        fn done(&self, first: u64) -> bool {
+            self.last < first
+        }
+
+        /// Whether a word's minute is still ahead of `first`. Its minutes
+        /// are below `HORIZON_MIN` and it's dropped once they've all
+        /// passed, so they never wrap: an ended word never reads as live
+        /// again.
+        fn live(word: u32, first: u64) -> bool {
+            word != 0 && u64::from(word & MINUTE_MASK) >= first
+        }
+
+        /// Live words from `first`.
+        fn count_live(&self, first: u64) -> usize {
+            let from = usize::try_from(first).unwrap_or(usize::MAX).min(MINUTES);
+            self.ends[from..].iter().map(|n| *n as usize).sum()
+        }
     }
 
     impl std::fmt::Debug for Spill {
@@ -1166,12 +1225,15 @@ pub(crate) mod spill {
                 .field("used", &self.used)
                 .field("live", &self.live)
                 .field("cursor", &self.cursor)
+                .field("frozen", &self.frozen.len())
                 .finish_non_exhaustive()
         }
     }
 
-    /// Fresh keys: random, or fixed under `testing` so the simulator's runs
-    /// repeat (as the seen filter's are).
+    /// Fresh keys: random, or under `testing` a fixed sequence per
+    /// thread, so the simulator's runs repeat (as the seen filter's keys
+    /// do) and a rebuilt filter's keys still differ from the ones it
+    /// restored. No release build enables `testing`.
     fn fresh_keys() -> [u64; 2] {
         #[cfg(not(feature = "testing"))]
         {
@@ -1179,8 +1241,79 @@ pub(crate) mod spill {
         }
         #[cfg(feature = "testing")]
         {
-            [0x5370_696c_6c4b_6579, 0x6c6f_6465_7374_6172]
+            thread_local! {
+                static DRAWN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+            }
+            let n = DRAWN.with(|d| d.replace(d.get() + 1));
+            [0x5370_696c_6c4b_6579 ^ n, 0x6c6f_6465_7374_6172 ^ n << 32]
         }
+    }
+
+    fn key_bytes(keys: [u64; 2]) -> [u8; 16] {
+        let mut key = [0; 16];
+        key[..8].copy_from_slice(&keys[0].to_le_bytes());
+        key[8..].copy_from_slice(&keys[1].to_le_bytes());
+        key
+    }
+
+    /// Where `addr`'s slots live under `keys`, and its tag (above the
+    /// minute).
+    fn place(keys: [u64; 2], addr: &SocketAddr) -> Place {
+        let hash = |bytes: &[u8]| siphash(keys, bytes);
+        let ip = addr.ip().to_canonical();
+        let net = network(ip);
+        let widest = allocation(ip).unwrap_or(net);
+        // One keyed hash per level, each in its own domain.
+        let hk = hash(&net_bytes(0, widest));
+        let (b, n) = ip_bytes(1, ip, None);
+        let hi = hash(&b[..n]);
+        let (b, n) = ip_bytes(3, ip, Some(addr.port()));
+        let ha = hash(&b[..n]);
+        let v4 = matches!(ip, IpAddr::V4(_));
+        let mid = if v4 {
+            (hi & 0xFF) as u32
+        } else {
+            let hn = hash(&net_bytes(2, net));
+            ((hn & 0xF) << 4 | (hi & 0xF)) as u32
+        };
+        // The key's byte is never 0, so a used slot is never 0.
+        let key = ((hk >> 56) as u32).max(1);
+        Place {
+            blocks: [(hk as usize) % BLOCKS, ((hk >> 17) as usize) % BLOCKS],
+            tag: key << 24 | mid << 16 | ((ha & 0xF) as u32) << MINUTE_BITS,
+        }
+    }
+
+    /// Live slots in `place`'s two blocks whose tag matches its own under
+    /// each of `masks`.
+    fn count<'a, const M: usize>(
+        block: impl Fn(usize) -> &'a [u32],
+        live: impl Fn(u32) -> bool,
+        place: &Place,
+        masks: [u32; M],
+    ) -> [u32; M] {
+        let mut out = [0; M];
+        for b in place.blocks {
+            for s in block(b).iter().filter(|s| live(**s)) {
+                for (n, mask) in out.iter_mut().zip(masks) {
+                    *n += u32::from(*s & mask == place.tag & mask);
+                }
+            }
+        }
+        out
+    }
+
+    /// Used slots whose minute is live from `first`: the minutes
+    /// `first .. first + HORIZON_MIN`, read the way [`Spill::live`] reads
+    /// one slot.
+    fn count_live(ends: &[u32], first: u64) -> usize {
+        if ends.is_empty() {
+            return 0;
+        }
+        let from = first as usize & MINUTE_MASK as usize;
+        (0..HORIZON_MIN as usize)
+            .map(|k| ends[(from + k) & (MINUTES - 1)] as usize)
+            .sum()
     }
 
     /// SipHash-2-4 over `bytes`. std's `SipHasher` is deprecated only in
@@ -1230,7 +1363,6 @@ pub(crate) mod spill {
     struct Place {
         blocks: [usize; 2],
         tag: u32,
-        v4: bool,
     }
 
     impl Spill {
@@ -1243,6 +1375,7 @@ pub(crate) mod spill {
                 used: 0,
                 live: 0,
                 cursor: 0,
+                frozen: Vec::new(),
             }
         }
 
@@ -1253,10 +1386,6 @@ pub(crate) mod spill {
                 keys,
                 ..Spill::new(base)
             }
-        }
-
-        fn hash(&self, bytes: &[u8]) -> u64 {
-            siphash(self.keys, bytes)
         }
 
         fn since_base(&self, t: Instant) -> u128 {
@@ -1277,29 +1406,7 @@ pub(crate) mod spill {
         }
 
         fn place(&self, addr: &SocketAddr) -> Place {
-            let ip = addr.ip().to_canonical();
-            let net = network(ip);
-            let widest = allocation(ip).unwrap_or(net);
-            // One keyed hash per level, each in its own domain.
-            let hk = self.hash(&net_bytes(0, widest));
-            let (b, n) = ip_bytes(1, ip, None);
-            let hi = self.hash(&b[..n]);
-            let (b, n) = ip_bytes(3, ip, Some(addr.port()));
-            let ha = self.hash(&b[..n]);
-            let v4 = matches!(ip, IpAddr::V4(_));
-            let mid = if v4 {
-                (hi & 0xFF) as u32
-            } else {
-                let hn = self.hash(&net_bytes(2, net));
-                ((hn & 0xF) << 4 | (hi & 0xF)) as u32
-            };
-            // The key's byte is never 0, so a used slot is never 0.
-            let key = ((hk >> 56) as u32).max(1);
-            Place {
-                blocks: [(hk as usize) % BLOCKS, ((hk >> 17) as usize) % BLOCKS],
-                tag: key << 24 | mid << 16 | ((ha & 0xF) as u32) << MINUTE_BITS,
-                v4,
-            }
+            place(self.keys, addr)
         }
 
         fn block(&self, b: usize) -> &[u32] {
@@ -1329,27 +1436,18 @@ pub(crate) mod spill {
             self.live += 1;
         }
 
-        /// Used slots whose minute is live from `first`: the minutes
-        /// `first .. first + HORIZON_MIN`, read the way [`Spill::live`]
-        /// reads one slot.
-        fn count_live(&self, first: u64) -> usize {
-            if self.ends.is_empty() {
-                return 0;
-            }
-            let from = first as usize & MINUTE_MASK as usize;
-            (0..HORIZON_MIN as usize)
-                .map(|k| self.ends[(from + k) & (MINUTES - 1)] as usize)
-                .sum()
-        }
-
         /// Remembers that `addr` cools until `until`, in a slot of its own.
         /// False, changing nothing, when both its blocks are full of live
-        /// cooldowns or `until` is past the horizon; true without storing
+        /// cooldowns, `until` is past the horizon or every read-only section
+        /// place is taken ([`Spill::has_room`]); true without storing
         /// anything when the cooldown has already ended.
         pub fn insert(&mut self, addr: &SocketAddr, until: Instant, now: Instant) -> bool {
             debug_assert!(now >= self.base, "the filter's clock starts at its base");
             if until <= now {
                 return true;
+            }
+            if self.frozen.len() >= MAX_SPILL_GENS {
+                return false;
             }
             let first = self.first_live(now);
             let end =
@@ -1386,45 +1484,45 @@ pub(crate) mod spill {
             true
         }
 
-        /// Live slots in `addr`'s blocks whose tag matches its own under
-        /// `mask`.
-        fn count(&self, place: &Place, mask: u32, first: u64) -> u32 {
-            let want = place.tag & mask;
-            let mut n = 0;
-            for b in place.blocks {
-                n += self
-                    .block(b)
-                    .iter()
-                    .filter(|s| *s & mask == want && Spill::live(**s, first))
-                    .count() as u32;
+        /// Live slots matching `addr`'s tag under each of `masks`, in its
+        /// blocks under the filter's keys and under each read-only
+        /// section's own.
+        fn tally<const M: usize>(
+            &self,
+            addr: &SocketAddr,
+            masks: [u32; M],
+            now: Instant,
+        ) -> [u32; M] {
+            let first = self.first_live(now);
+            let mut out = [0; M];
+            let mut add = |n: [u32; M]| out.iter_mut().zip(n).for_each(|(o, n)| *o += n);
+            if self.used != 0 {
+                let live = |s| Spill::live(s, first);
+                add(count(|b| self.block(b), live, &self.place(addr), masks));
             }
-            n
+            for f in self.frozen.iter().filter(|f| !f.done(first)) {
+                let live = |s| Frozen::live(s, first);
+                add(count(|b| f.block(b), live, &place(f.keys, addr), masks));
+            }
+            out
         }
 
         /// Whether `addr` may still be cooling at `now`: never false while
         /// a cooldown stored for it hasn't ended.
         pub fn contains(&self, addr: &SocketAddr, now: Instant) -> bool {
-            self.used != 0 && self.count(&self.place(addr), TAG_MASK, self.first_live(now)) > 0
+            self.tally(addr, [TAG_MASK], now)[0] > 0
         }
 
         /// Live moved cooldowns that count against `addr`'s IP, its block
         /// (IPv4 /24 or IPv6 /64) and its IPv6 /48 (0 on IPv4): never fewer
         /// than truly held, sometimes more.
         pub fn shares(&self, addr: &SocketAddr, now: Instant) -> (u32, u32, u32) {
-            if self.used == 0 {
-                return (0, 0, 0);
-            }
-            let first = self.first_live(now);
-            let place = self.place(addr);
-            let ip = self.count(&place, IP_MASK, first);
-            if place.v4 {
-                (ip, self.count(&place, KEY_MASK, first), 0)
+            if addr.ip().to_canonical().is_ipv4() {
+                let [ip, net] = self.tally(addr, [IP_MASK, KEY_MASK], now);
+                (ip, net, 0)
             } else {
-                (
-                    ip,
-                    self.count(&place, NET_MASK, first),
-                    self.count(&place, KEY_MASK, first),
-                )
+                let [ip, net, wide] = self.tally(addr, [IP_MASK, NET_MASK, KEY_MASK], now);
+                (ip, net, wide)
             }
         }
 
@@ -1435,11 +1533,16 @@ pub(crate) mod spill {
         /// address within a pass (about 17 minutes). Only ended slots are
         /// cleared: nothing live ever leaves early.
         pub fn sweep(&mut self, now: Instant) {
+            let first = self.first_live(now);
+            // A read-only section goes once its last cooldown has ended.
+            self.frozen.retain(|f| !f.done(first));
+            for f in &mut self.frozen {
+                f.live = f.count_live(first);
+            }
             if self.used == 0 {
                 self.live = 0;
                 return;
             }
-            let first = self.first_live(now);
             for _ in 0..SWEEP {
                 let slot = self.slots[self.cursor];
                 if slot != 0 && !Spill::live(slot, first) {
@@ -1449,11 +1552,9 @@ pub(crate) mod spill {
                 }
                 self.cursor = (self.cursor + 1) % SLOTS;
             }
-            self.live = self.count_live(first);
+            self.live = count_live(&self.ends, first);
             // Drained: nothing placed with the old keys is left, so new
-            // ones are drawn. With the split on in steady state the filter
-            // rarely drains, so keys restored from a snapshot can last
-            // many restarts.
+            // ones are drawn.
             if self.used == 0 {
                 self.keys = fresh_keys();
             }
@@ -1462,21 +1563,64 @@ pub(crate) mod spill {
         /// The filter for the restart snapshot (X-split-resume-gate): every
         /// slot live at `mono`, in its block, with the whole minutes left
         /// until its end, rounded up and capped at `horizon` as the listed
-        /// entries are (WK-10e). `None` when no slot is live.
+        /// entries are (WK-10e). One section per set of keys that still
+        /// holds a live slot (X-sec-S8-27): each read-only one, oldest
+        /// first, then the filter's own, each with its keys, so a later
+        /// run restores every one of them read-only. `None` when no slot is
+        /// live.
         pub fn export(&self, mono: Instant, horizon: Duration) -> Option<Spilled> {
-            if self.used == 0 {
-                return None;
-            }
             let first = self.first_live(mono);
             let cap = mono + horizon;
-            let mut raw = Vec::with_capacity(BLOCKS + 4 * self.used);
+            let mut sections: Vec<([u8; 16], Vec<u8>)> = self
+                .frozen
+                .iter()
+                .filter_map(|f| {
+                    let live = |s| Frozen::live(s, first);
+                    let raw =
+                        self.section(|b| f.block(b), live, f.words.len(), first, mono, cap)?;
+                    Some((key_bytes(f.keys), raw))
+                })
+                .collect();
+            if self.used != 0
+                && let Some(raw) = self.section(
+                    |b| self.block(b),
+                    |s| Spill::live(s, first),
+                    self.used,
+                    first,
+                    mono,
+                    cap,
+                )
+            {
+                sections.push((key_bytes(self.keys), raw));
+            }
+            let (key, raw) = sections.pop()?;
+            Some(Spilled {
+                key,
+                raw,
+                older: sections,
+            })
+        }
+
+        /// One snapshot section: for each block, a count byte and its live
+        /// words with their minutes left after `mono`. `None` when none is
+        /// live.
+        fn section<'a>(
+            &self,
+            block: impl Fn(usize) -> &'a [u32],
+            live: impl Fn(u32) -> bool,
+            words: usize,
+            first: u64,
+            mono: Instant,
+            cap: Instant,
+        ) -> Option<Vec<u8>> {
+            let mut raw = Vec::with_capacity(BLOCKS + 4 * words);
             let mut any = false;
             for b in 0..BLOCKS {
                 let count_at = raw.len();
                 raw.push(0u8);
                 let mut n = 0u8;
-                for slot in self.block(b) {
-                    if !Spill::live(*slot, first) {
+                for slot in block(b) {
+                    if !live(*slot) {
                         continue;
                     }
                     // The slot's minute, unwrapped: live means it's within
@@ -1496,56 +1640,65 @@ pub(crate) mod spill {
                 raw[count_at] = n;
                 any |= n > 0;
             }
-            let mut key = [0; 16];
-            key[..8].copy_from_slice(&self.keys[0].to_le_bytes());
-            key[8..].copy_from_slice(&self.keys[1].to_le_bytes());
-            any.then_some(Spilled { key, raw })
+            any.then_some(raw)
         }
 
         /// A filter rebuilt from a restart snapshot's (X-split-resume-gate),
-        /// with its keys, its clock starting at `now`. Each slot keeps its
+        /// its clock starting at `now`. Each section stays read-only under
+        /// its own keys ([`Frozen`]), and the filter draws fresh keys for
+        /// what it takes in from now on (X-sec-S8-27). Each slot keeps its
         /// block and tag and ends at the first whole minute at or after its
         /// seeded end, so it's never shorter. `None` changes nothing: a
         /// block held more than it can, which a checked snapshot can't.
         pub fn restore(seeded: &SeededSpill, now: Instant) -> Option<Spill> {
-            let key = seeded.key();
-            let keys = [
-                u64::from_le_bytes(key[..8].try_into().expect("8 bytes")),
-                u64::from_le_bytes(key[8..].try_into().expect("8 bytes")),
-            ];
-            let mut spill = Spill {
-                keys,
-                base: now,
-                slots: Box::default(),
-                ends: Box::default(),
-                used: 0,
-                live: 0,
-                cursor: 0,
-            };
-            // Slots come block by block, and every block starts empty.
-            let mut block = usize::MAX;
-            let mut fill = 0;
-            for (b, tag, until) in seeded.slots() {
-                if until <= now {
+            let mut spill = Spill::new(now);
+            for i in 0..seeded.sections() {
+                let key = seeded.section_key(i);
+                let keys = [
+                    u64::from_le_bytes(key[..8].try_into().expect("8 bytes")),
+                    u64::from_le_bytes(key[8..].try_into().expect("8 bytes")),
+                ];
+                let mut at: Vec<u32> = Vec::with_capacity(BLOCKS + 1);
+                let mut words: Vec<u32> = Vec::new();
+                let mut ends = vec![0u32; MINUTES].into_boxed_slice();
+                let mut last = 0;
+                for (b, tag, until) in seeded.section_slots(i) {
+                    if until <= now {
+                        continue;
+                    }
+                    let end = u64::try_from(spill.since_base(until).div_ceil(MINUTE_NANOS))
+                        .unwrap_or(u64::MAX);
+                    // Seeded ends are within the restart horizon (hours),
+                    // far inside the filter's 48 h.
+                    if end >= u64::from(HORIZON_MIN) || tag & MINUTE_MASK != 0 || tag == 0 {
+                        return None;
+                    }
+                    // Blocks come in order, each at most `BLOCK` words.
+                    if b >= BLOCKS || b + 1 < at.len() {
+                        return None;
+                    }
+                    while at.len() <= b {
+                        at.push(words.len() as u32);
+                    }
+                    if words.len() - at[b] as usize >= BLOCK {
+                        return None;
+                    }
+                    words.push(tag | end as u32);
+                    ends[end as usize] += 1;
+                    last = last.max(end);
+                }
+                if words.is_empty() {
                     continue;
                 }
-                let end = u64::try_from(spill.since_base(until).div_ceil(MINUTE_NANOS))
-                    .unwrap_or(u64::MAX);
-                // Seeded ends are within the restart horizon (hours), far
-                // inside the filter's 48 h.
-                if end >= u64::from(HORIZON_MIN) || tag & MINUTE_MASK != 0 || tag == 0 {
-                    return None;
-                }
-                spill.allocate();
-                if b != block {
-                    block = b;
-                    fill = 0;
-                }
-                if fill == BLOCK {
-                    return None;
-                }
-                spill.store(b * BLOCK + fill, tag | end as u32);
-                fill += 1;
+                at.resize(BLOCKS + 1, words.len() as u32);
+                spill.frozen.push(Frozen {
+                    keys,
+                    at: at.into_boxed_slice(),
+                    live: words.len(),
+                    words: words.into_boxed_slice(),
+                    ends,
+                    last,
+                });
             }
             Some(spill)
         }
@@ -1554,25 +1707,46 @@ pub(crate) mod spill {
         /// cooldowns. Ended ones don't count, swept or not: an insert takes
         /// an ended slot as readily as a free one. An insert can still
         /// refuse (both its blocks full of live cooldowns).
+        ///
+        /// With [`MAX_SPILL_GENS`] read-only sections kept (that many
+        /// restarts that each spilled, within the horizon), the filter takes
+        /// nothing new until the oldest is dropped, so the next snapshot
+        /// can hold every section: cooldowns stay in the table meanwhile,
+        /// as with the switch off.
         pub fn has_room(&self) -> bool {
-            self.live < FALLBACK
+            self.frozen.len() < MAX_SPILL_GENS && self.live_count() < FALLBACK
         }
 
-        /// Slots in use, ended or not (until swept).
+        /// Slots in use, ended or not (until swept), and the words of the
+        /// read-only sections not yet dropped.
         pub fn used(&self) -> usize {
-            self.used
+            self.used + self.frozen.iter().map(|f| f.words.len()).sum::<usize>()
         }
 
-        /// Live cooldowns, as of the last sweep and every insert since:
-        /// never fewer than truly live.
+        /// Live cooldowns, read-only sections included, as of the last
+        /// sweep and every insert since: never fewer than truly live.
         pub fn live_count(&self) -> usize {
-            self.live
+            self.live + self.frozen.iter().map(|f| f.live).sum::<usize>()
         }
 
         /// Slots in use, ended or not, and heap bytes held.
         #[cfg(test)]
         pub fn counts(&self) -> (usize, usize) {
-            (self.used, (self.slots.len() + self.ends.len()) * 4)
+            let frozen: usize = self
+                .frozen
+                .iter()
+                .map(|f| f.at.len() + f.words.len() + f.ends.len())
+                .sum();
+            (
+                self.used(),
+                (self.slots.len() + self.ends.len() + frozen) * 4,
+            )
+        }
+
+        /// Read-only sections still kept, and the filter's own keys.
+        #[cfg(test)]
+        pub fn generations(&self) -> (usize, [u64; 2]) {
+            (self.frozen.len(), self.keys)
         }
 
         /// Live slots counted one by one, for the tests that check
@@ -1584,6 +1758,12 @@ pub(crate) mod spill {
                 .iter()
                 .filter(|s| Spill::live(**s, first))
                 .count()
+                + self
+                    .frozen
+                    .iter()
+                    .flat_map(|f| f.words.iter())
+                    .filter(|w| Frozen::live(**w, first))
+                    .count()
         }
     }
 }

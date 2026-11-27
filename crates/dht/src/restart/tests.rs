@@ -83,7 +83,11 @@ fn spilled(words: &[(usize, u32)]) -> Spilled {
             raw.extend_from_slice(&w.to_be_bytes());
         }
     }
-    Spilled { key: [7; 16], raw }
+    Spilled {
+        key: [7; 16],
+        raw,
+        older: Vec::new(),
+    }
 }
 
 /// A tag (above the minute bits) and minutes left.
@@ -247,7 +251,11 @@ fn spill_rules() {
     let ok = |s: &Snapshot| Snapshot::decode(&s.encode()).map(|_| ());
     assert_eq!(ok(&spill_snapshot()), Ok(()));
     let with = |raw: Vec<u8>| Snapshot {
-        spill: Some(Spilled { key: [7; 16], raw }),
+        spill: Some(Spilled {
+            key: [7; 16],
+            raw,
+            older: Vec::new(),
+        }),
         ..snapshot()
     };
     let base = spill_snapshot().spill.unwrap().raw;
@@ -354,15 +362,20 @@ fn the_largest_spill_section_decodes() {
             raw.extend_from_slice(&word(0x8_0000, 1).to_be_bytes());
         }
     }
-    assert_eq!(raw.len(), MAX_SPILL_RAW);
+    let full = SPILL_BLOCKS + 4 * SPILL_BLOCKS * SPILL_BLOCK;
+    assert_eq!(raw.len(), full);
     let s = Snapshot {
-        spill: Some(Spilled { key: [7; 16], raw }),
+        spill: Some(Spilled {
+            key: [7; 16],
+            raw,
+            older: Vec::new(),
+        }),
         ..snapshot()
     };
     let bytes = s.encode();
     assert!(bytes.len() <= HEADER + MAX_SNAPSHOT_BODY + TRAILER);
     let (back, _) = Snapshot::decode(&bytes).unwrap();
-    assert_eq!(back.spill.map(|s| s.raw.len()), Some(MAX_SPILL_RAW));
+    assert_eq!(back.spill.map(|s| s.raw.len()), Some(full));
 }
 
 /// The `dht_restart` fuzz target's snapshot seeds (X-restart-fuzz-v2),
@@ -373,8 +386,9 @@ fn the_largest_spill_section_decodes() {
 #[test]
 fn the_fuzz_seeds_are_current() {
     // The target's expansion, mirrored: `cut` ‖ `n` ‖ `n` bytes of records
-    // (a block, 3 bytes LE; a count; its words) ‖ the template.
-    fn expand(input: &[u8]) -> Vec<u8> {
+    // (a block, 3 bytes LE, bit 23 the section; a count; its words) ‖ the
+    // template.
+    fn expand(input: &[u8], sections: usize) -> Vec<u8> {
         let cut = usize::from(u16::from_le_bytes([input[0], input[1]]));
         let n = usize::from(u16::from_le_bytes([input[2], input[3]]));
         let (mut sparse, template) = input[4..].split_at(n);
@@ -382,11 +396,15 @@ fn the_fuzz_seeds_are_current() {
         while !sparse.is_empty() {
             let b = u32::from_le_bytes([sparse[0], sparse[1], sparse[2], 0]) as usize;
             let len = 4 * usize::from(sparse[3]);
-            blocks.insert(b % SPILL_BLOCKS, &sparse[3..4 + len]);
+            blocks.insert(
+                ((b >> 23) % sections, b % SPILL_BLOCKS),
+                &sparse[3..4 + len],
+            );
             sparse = &sparse[4 + len..];
         }
-        let raw: Vec<u8> = (0..SPILL_BLOCKS)
-            .flat_map(|b| blocks.get(&b).copied().unwrap_or(&[0]).to_vec())
+        let raw: Vec<u8> = (0..sections)
+            .flat_map(|i| (0..SPILL_BLOCKS).map(move |b| (i, b)))
+            .flat_map(|at| blocks.get(&at).copied().unwrap_or(&[0]).to_vec())
             .collect();
         let cut = cut % (template.len() + 1);
         [
@@ -407,27 +425,36 @@ fn the_fuzz_seeds_are_current() {
             return out;
         };
         let mut sparse = Vec::new();
-        let mut at = 0;
-        for b in 0..SPILL_BLOCKS {
-            let len = 1 + 4 * usize::from(sp.raw[at]);
-            if sp.raw[at] != 0 {
-                sparse.extend_from_slice(&(b as u32).to_le_bytes()[..3]);
-                sparse.extend_from_slice(&sp.raw[at..at + len]);
+        let mut joined = Vec::new();
+        for (i, (_, raw)) in sp.sections().enumerate() {
+            let mut at = 0;
+            for b in 0..SPILL_BLOCKS {
+                let len = 1 + 4 * usize::from(raw[at]);
+                if raw[at] != 0 {
+                    sparse.extend_from_slice(&((b | i << 23) as u32).to_le_bytes()[..3]);
+                    sparse.extend_from_slice(&raw[at..at + len]);
+                }
+                at += len;
             }
-            at += len;
+            joined.extend_from_slice(raw);
         }
-        let key = format!("5:spill{}:", sp.raw.len());
+        let key = format!("5:spill{}:", joined.len());
         let pos = body
             .windows(key.len())
             .position(|w| w == key.as_bytes())
             .expect("the section");
         let cut = pos + "5:spill".len();
-        let template = [&body[..cut], &body[cut + key.len() - 7 + sp.raw.len()..]].concat();
+        let template = [&body[..cut], &body[cut + key.len() - 7 + joined.len()..]].concat();
         let mut expanded = u16::try_from(cut).unwrap().to_le_bytes().to_vec();
         expanded.extend_from_slice(&u16::try_from(sparse.len()).unwrap().to_le_bytes());
         expanded.extend_from_slice(&sparse);
         expanded.extend_from_slice(&template);
-        assert_eq!(expand(&expanded), body, "the target rebuilds the body");
+        let sections = sp.older.len() + 1;
+        assert_eq!(
+            expand(&expanded, sections),
+            body,
+            "the target rebuilds the body"
+        );
         out.extend_from_slice(&expanded);
         out
     };
@@ -473,14 +500,29 @@ fn the_fuzz_seeds_are_current() {
         ..snapshot()
     };
     let caps_clock = (u64::from(h) * 1000 - 60_000) * 1_000_000;
+    // Version 3: two sets of keys, a few slots in each, one block in both.
+    let older = spilled(&[(0, word(0x0_1000, 2)), (9, word(0x8_0001, 30))]);
+    let two_keys = Snapshot {
+        spill: Some(Spilled {
+            key: [9; 16],
+            older: vec![(older.key, older.raw)],
+            ..spilled(&[(9, word(0xF_FFFF, spill_max_minutes(H)))])
+        }),
+        ..snapshot()
+    };
     let seeds = [
         ("v1.bin", input(0, 30_000_000_000, &snapshot())),
         ("v2_minimal.bin", input(3, 0, &minimal)),
         ("v2_caps.bin", input(3, caps_clock, &caps)),
+        ("v3_two_keys.bin", input(7, 0, &two_keys)),
     ];
     // Each decodes to what it was built from, and seeding keeps the slots
     // its clock hasn't ended.
-    for (s, clock_ms, live) in [(&minimal, 0, 1), (&caps, caps_clock / 1_000_000, 2 * 56)] {
+    for (s, clock_ms, live) in [
+        (&minimal, 0, 1),
+        (&caps, caps_clock / 1_000_000, 2 * 56),
+        (&two_keys, 0, 3),
+    ] {
         let (back, _) = Snapshot::decode(&s.encode()).unwrap();
         assert_eq!(&back, s);
         let here = Here {
@@ -601,11 +643,13 @@ fn every_bit_flip_and_truncation_is_rejected() {
 fn magic_and_version() {
     let mut b = snapshot().encode();
     assert_eq!(Marker::decode(&b), Err(Fault::Corrupt("magic")));
-    b[8] = 3;
-    assert_eq!(Snapshot::decode(&b), Err(Fault::Version(3)));
-    // Version 2 is a snapshot's alone, and the checksum covers it.
-    b[8] = 2;
-    assert_eq!(Snapshot::decode(&b), Err(Fault::Corrupt("checksum")));
+    b[8] = 4;
+    assert_eq!(Snapshot::decode(&b), Err(Fault::Version(4)));
+    // Versions 2 and 3 are a snapshot's alone, and the checksum covers it.
+    for v in [2, 3] {
+        b[8] = v;
+        assert_eq!(Snapshot::decode(&b), Err(Fault::Corrupt("checksum")));
+    }
     let mut m = marker(MarkerState::Dirty).encode();
     m[8] = 2;
     assert_eq!(Marker::decode(&m), Err(Fault::Version(2)));
@@ -2102,9 +2146,146 @@ fn seeding_checks_a_section_built_in_code() {
     let (_, here) = resumable();
     for raw in [vec![], vec![1, 0, 0], vec![0; SPILL_BLOCKS]] {
         let s = Snapshot {
-            spill: Some(Spilled { key: [7; 16], raw }),
+            spill: Some(Spilled {
+                key: [7; 16],
+                raw,
+                older: Vec::new(),
+            }),
             ..snapshot()
         };
         assert_eq!(seed(&s, s.at_ms, &here).unwrap_err(), Reason::Corrupt);
     }
+}
+
+/// Version 3 (X-sec-S8-27): one section per set of keys, oldest first,
+/// each checked as version 2's one is; written only for more than one, and
+/// seeded section by section with its own keys.
+#[test]
+fn key_generations_roundtrip_and_are_checked() {
+    let a = spilled(&[(0, word(0x8_0001, 1))]);
+    let b = Spilled {
+        key: [9; 16],
+        ..spilled(&[(3, word(0x4_0000, 60)), (3, word(0x4_0001, 2))])
+    };
+    let s = Snapshot {
+        spill: Some(Spilled {
+            older: vec![(a.key, a.raw.clone())],
+            ..b.clone()
+        }),
+        ..snapshot()
+    };
+    let bytes = s.encode();
+    assert_eq!(bytes[8..12], SNAPSHOT_GENS_VERSION.to_le_bytes());
+    let (back, _) = Snapshot::decode(&bytes).unwrap();
+    assert_eq!(back, s);
+    let seeded = seed(&back, s.at_ms, &here_for(&back))
+        .unwrap()
+        .spill
+        .unwrap();
+    assert_eq!(seeded.sections(), 2);
+    assert_eq!((seeded.section_key(0), seeded.key()), ([7; 16], [9; 16]));
+    assert_eq!(seeded.section_slots(0).count(), 1);
+    assert_eq!(seeded.section_slots(1).count(), 2);
+    // One set of keys is version 2, as before.
+    let one = Snapshot {
+        spill: Some(b.clone()),
+        ..snapshot()
+    };
+    assert_eq!(one.encode()[8..12], SNAPSHOT_SPILL_VERSION.to_le_bytes());
+
+    let v3 = |raw: &[u8], keys: &[u8]| {
+        let mut body = Vec::new();
+        Encoder::new(&mut body).dict(|d| {
+            fields(0, i64::from(H), &[], &[])(d);
+            d.entry(b"spill").bytes(raw);
+            d.entry(b"spill_keys").bytes(keys);
+        });
+        Snapshot::decode(&seal_at(MAGIC_SNAPSHOT, SNAPSHOT_GENS_VERSION, &body)).map(|_| ())
+    };
+    let both = [a.raw.clone(), b.raw.clone()].concat();
+    assert_eq!(v3(&both, &[[7; 16], [9; 16]].concat()), Ok(()));
+    let bad = |want: &'static str, raw: &[u8], keys: &[u8]| {
+        assert_eq!(v3(raw, keys), Err(Fault::Corrupt(want)), "{want}");
+    };
+    bad("spill_keys", &a.raw, &[7; 16]);
+    bad("spill_keys", &both, &[7; 33]);
+    let many = vec![a.raw.clone(); MAX_SPILL_GENS + 1].concat();
+    bad("spill_keys", &many, &[7; 16 * (MAX_SPILL_GENS + 1)]);
+    let all = vec![a.raw.clone(); MAX_SPILL_GENS].concat();
+    assert_eq!(v3(&all, &[7; 16 * MAX_SPILL_GENS]), Ok(()));
+    bad("spill length", &[both.as_slice(), &[0]].concat(), &[7; 32]);
+    bad("spill length", &a.raw, &[7; 32]);
+    let empty = spilled(&[]).raw;
+    bad(
+        "spill empty",
+        &[a.raw.as_slice(), &empty].concat(),
+        &[7; 32],
+    );
+    let late = spilled(&[(1, word(0x8_0000, spill_max_minutes(H) + 1))]).raw;
+    bad(
+        "spill remaining",
+        &[a.raw.as_slice(), &late].concat(),
+        &[7; 32],
+    );
+    // Version 3 has `spill_keys`, never version 2's `spill_key`.
+    let mut body = Vec::new();
+    Encoder::new(&mut body).dict(|d| {
+        fields(0, i64::from(H), &[], &[])(d);
+        d.entry(b"spill").bytes(&both);
+        d.entry(b"spill_key").bytes(&[7; 16]);
+    });
+    assert_eq!(
+        Snapshot::decode(&seal_at(MAGIC_SNAPSHOT, SNAPSHOT_GENS_VERSION, &body)),
+        Err(Fault::Corrupt("keys"))
+    );
+    // Capture refuses what decode would.
+    let empty_older = Spilled {
+        older: vec![([7; 16], empty)],
+        ..b
+    };
+    assert_eq!(
+        capture_with_spill(
+            run(),
+            [],
+            None,
+            Some(empty_older),
+            Instant::now(),
+            Duration::ZERO,
+            H
+        ),
+        Err(CaptureError::Spill)
+    );
+}
+
+/// A run's view of `s` with no time between the runs.
+fn here_for(s: &Snapshot) -> Here {
+    Here {
+        path: String::new(),
+        dir_path: [0; 32],
+        ids: s.run.ids,
+        horizon_s: s.horizon_s,
+        wall0: Duration::from_millis(s.at_ms),
+        mono0: Instant::now(),
+    }
+}
+
+/// The files commit writes are its owner's alone on Unix (X-sec-S8-27),
+/// a temp file left by a crash included, and so is a marker made in place.
+#[cfg(unix)]
+#[test]
+fn restart_files_are_written_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new("private");
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let snap = dir.path().join(SNAPSHOT_FILE);
+    let stale = tmp_path(&snap);
+    fs::write(&stale, b"left by a crash").unwrap();
+    fs::set_permissions(&stale, fs::Permissions::from_mode(0o644)).unwrap();
+    write_atomic(&snap, b"snapshot").unwrap();
+    assert_eq!(mode(&snap), 0o600);
+    assert_eq!(fs::read(&snap).unwrap(), b"snapshot");
+    assert!(!stale.exists());
+    let marker = dir.path().join(MARKER_FILE);
+    overwrite_in_place(&marker, b"marker").unwrap();
+    assert_eq!(mode(&marker), 0o600);
 }

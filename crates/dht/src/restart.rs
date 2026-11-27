@@ -31,6 +31,12 @@ pub const VERSION: u32 = 1;
 /// (X-split-resume-gate). Written only when the filter holds a live one,
 /// so a run with the split off, or nothing spilled, writes version 1.
 pub const SNAPSHOT_SPILL_VERSION: u32 = 2;
+/// A snapshot whose spill filter holds cooldowns under more than one set
+/// of keys (X-sec-S8-27): the run's own and those it restored read-only
+/// from earlier snapshots. Written only then; a single set is version 2.
+pub const SNAPSHOT_GENS_VERSION: u32 = 3;
+/// The most key sets a snapshot's spill filter may hold.
+pub const MAX_SPILL_GENS: usize = 8;
 pub const LOCK_FILE: &str = "dht-restart.lock";
 pub const MARKER_FILE: &str = "dht-restart.mark";
 pub const SNAPSHOT_FILE: &str = "dht-restart.bin";
@@ -64,8 +70,10 @@ pub const SPILL_BLOCK: usize = 64;
 pub const SPILL_BLOCKS: usize = 1 << 17;
 pub const SPILL_MINUTE_BITS: u32 = 12;
 const SPILL_MINUTE_MASK: u32 = (1 << SPILL_MINUTE_BITS) - 1;
-/// A count byte per block and every slot's word.
-const MAX_SPILL_RAW: usize = SPILL_BLOCKS + 4 * SPILL_BLOCKS * SPILL_BLOCK;
+/// The most slots a spill filter's sections hold together: one filter's.
+const MAX_SPILL_SLOTS: usize = SPILL_BLOCKS * SPILL_BLOCK;
+/// A count byte per block in each section, every slot's word, and the keys.
+const MAX_SPILL_RAW: usize = MAX_SPILL_GENS * (SPILL_BLOCKS + 16) + 4 * MAX_SPILL_SLOTS;
 
 pub type Digest32 = [u8; 32];
 pub type Id16 = [u8; 16];
@@ -343,6 +351,19 @@ const SNAPSHOT_SPILL_KEYS: &[&[u8]] = &[
     b"spill",
     b"spill_key",
 ];
+const SNAPSHOT_GENS_KEYS: &[&[u8]] = &[
+    b"at",
+    b"dir_id",
+    b"gate",
+    b"gen",
+    b"horizon",
+    b"ids",
+    b"r4",
+    b"r6",
+    b"run_id",
+    b"spill",
+    b"spill_keys",
+];
 
 /// The spill filter's cooldowns as the snapshot keeps them
 /// (X-split-resume-gate). The filter holds fingerprints, not addresses, so
@@ -354,11 +375,19 @@ const SNAPSHOT_SPILL_KEYS: &[&[u8]] = &[
 /// `n` (at most [`SPILL_BLOCK`]) and then `n` big-endian words: a slot's
 /// 20-bit tag above the whole minutes its cooldown has left after the
 /// snapshot's `at`, rounded up (1 to the horizon in minutes, rounded up).
+///
+/// A filter that holds cooldowns under several sets of keys (X-sec-S8-27)
+/// keeps one such section per set: `older`, oldest first, then `key` and
+/// `raw`. Version 3 writes them in that order, `spill` the sections end to
+/// end and `spill_keys` the keys likewise. Every section holds a slot, and
+/// all of them together at most one filter's slots.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Spilled {
-    /// The filter's SipHash keys.
+    /// The newest section's SipHash keys.
     pub key: [u8; 16],
     pub raw: Vec<u8>,
+    /// Older sections with their own keys (version 3), oldest first.
+    pub older: Vec<([u8; 16], Vec<u8>)>,
 }
 
 impl fmt::Debug for Spilled {
@@ -366,6 +395,7 @@ impl fmt::Debug for Spilled {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Spilled")
             .field("bytes", &self.raw.len())
+            .field("older", &self.older.len())
             .finish_non_exhaustive()
     }
 }
@@ -377,40 +407,27 @@ pub fn spill_max_minutes(horizon_s: u32) -> u32 {
 }
 
 impl Spilled {
-    /// Checks `raw`'s layout and every word, and counts the slots. A
-    /// section with no slot is refused: that snapshot is version 1.
+    /// Every section with its keys, oldest first.
+    pub(crate) fn sections(&self) -> impl Iterator<Item = (&[u8; 16], &[u8])> {
+        self.older
+            .iter()
+            .map(|(k, r)| (k, r.as_slice()))
+            .chain(std::iter::once((&self.key, self.raw.as_slice())))
+    }
+
+    /// Checks every section's layout and word, and counts the slots. A
+    /// section with no slot is refused: a snapshot with nothing spilled is
+    /// version 1, and an empty section is left out.
     fn check(&self, horizon_s: u32) -> Result<usize, Fault> {
-        let max = spill_max_minutes(horizon_s);
-        let mut at = 0;
+        if self.older.len() >= MAX_SPILL_GENS {
+            return Err(Fault::Corrupt("spill keys"));
+        }
         let mut slots = 0;
-        for _ in 0..SPILL_BLOCKS {
-            let n = usize::from(*self.raw.get(at).ok_or(Fault::Corrupt("spill length"))?);
-            if n > SPILL_BLOCK {
-                return Err(Fault::Corrupt("spill block"));
-            }
-            let words = self
-                .raw
-                .get(at + 1..at + 1 + 4 * n)
-                .ok_or(Fault::Corrupt("spill length"))?;
-            for w in words.chunks_exact(4) {
-                let w = u32::from_be_bytes(w.try_into().expect("4 bytes"));
-                // A tag's top byte is never 0 (the filter's own rule).
-                if w >> 24 == 0 {
-                    return Err(Fault::Corrupt("spill tag"));
-                }
-                let minutes = w & SPILL_MINUTE_MASK;
-                if minutes == 0 || minutes > max {
-                    return Err(Fault::Corrupt("spill remaining"));
-                }
-            }
-            at += 1 + 4 * n;
-            slots += n;
+        for (_, raw) in self.sections() {
+            slots += check_section(raw, horizon_s)?;
         }
-        if at != self.raw.len() {
-            return Err(Fault::Corrupt("spill length"));
-        }
-        if slots == 0 {
-            return Err(Fault::Corrupt("spill empty"));
+        if slots > MAX_SPILL_SLOTS {
+            return Err(Fault::Corrupt("spill slots"));
         }
         Ok(slots)
     }
@@ -428,6 +445,52 @@ impl Spilled {
                 .map(move |w| (b, u32::from_be_bytes(w.try_into().expect("4 bytes"))))
         })
     }
+}
+
+/// Checks one section's layout and every word; its slot count.
+fn check_section(raw: &[u8], horizon_s: u32) -> Result<usize, Fault> {
+    let max = spill_max_minutes(horizon_s);
+    let mut at = 0;
+    let mut slots = 0;
+    for _ in 0..SPILL_BLOCKS {
+        let n = usize::from(*raw.get(at).ok_or(Fault::Corrupt("spill length"))?);
+        if n > SPILL_BLOCK {
+            return Err(Fault::Corrupt("spill block"));
+        }
+        let words = raw
+            .get(at + 1..at + 1 + 4 * n)
+            .ok_or(Fault::Corrupt("spill length"))?;
+        for w in words.chunks_exact(4) {
+            let w = u32::from_be_bytes(w.try_into().expect("4 bytes"));
+            // A tag's top byte is never 0 (the filter's own rule).
+            if w >> 24 == 0 {
+                return Err(Fault::Corrupt("spill tag"));
+            }
+            let minutes = w & SPILL_MINUTE_MASK;
+            if minutes == 0 || minutes > max {
+                return Err(Fault::Corrupt("spill remaining"));
+            }
+        }
+        at += 1 + 4 * n;
+        slots += n;
+    }
+    if at != raw.len() {
+        return Err(Fault::Corrupt("spill length"));
+    }
+    if slots == 0 {
+        return Err(Fault::Corrupt("spill empty"));
+    }
+    Ok(slots)
+}
+
+/// The length of the section `raw` starts with, read from its count
+/// bytes; `None` when it runs past the end. [`check_section`] checks it.
+fn section_len(raw: &[u8]) -> Option<usize> {
+    let mut at = 0;
+    for _ in 0..SPILL_BLOCKS {
+        at += 1 + 4 * usize::from(*raw.get(at)?);
+    }
+    (at <= raw.len()).then_some(at)
 }
 
 /// The sort key: the address bytes as written, so byte order is numeric.
@@ -450,6 +513,20 @@ impl Snapshot {
             out.extend_from_slice(&key);
             out.extend_from_slice(&e.remaining_s.to_be_bytes());
         }
+        // Version 3 writes every section end to end, oldest first.
+        let joined = self
+            .spill
+            .as_ref()
+            .filter(|s| !s.older.is_empty())
+            .map(|s| {
+                let mut raw = Vec::with_capacity(s.sections().map(|(_, r)| r.len()).sum());
+                let mut keys = Vec::with_capacity(16 * (s.older.len() + 1));
+                for (k, r) in s.sections() {
+                    raw.extend_from_slice(r);
+                    keys.extend_from_slice(k);
+                }
+                (raw, keys)
+            });
         let spill = self.spill.as_ref().map_or(0, |s| s.raw.len());
         let mut body = Vec::with_capacity(r4.len() + r6.len() + spill + 256);
         Encoder::new(&mut body).dict(|d| {
@@ -462,14 +539,22 @@ impl Snapshot {
             d.entry(b"r4").bytes(&r4);
             d.entry(b"r6").bytes(&r6);
             d.entry(b"run_id").bytes(&self.run.run_id);
-            if let Some(s) = &self.spill {
-                d.entry(b"spill").bytes(&s.raw);
-                d.entry(b"spill_key").bytes(&s.key);
+            match (&self.spill, &joined) {
+                (_, Some((raw, keys))) => {
+                    d.entry(b"spill").bytes(raw);
+                    d.entry(b"spill_keys").bytes(keys);
+                }
+                (Some(s), None) => {
+                    d.entry(b"spill").bytes(&s.raw);
+                    d.entry(b"spill_key").bytes(&s.key);
+                }
+                (None, None) => {}
             }
         });
-        match self.spill {
-            Some(_) => seal_at(MAGIC_SNAPSHOT, SNAPSHOT_SPILL_VERSION, &body),
-            None => seal(MAGIC_SNAPSHOT, &body),
+        match (&self.spill, &joined) {
+            (_, Some(_)) => seal_at(MAGIC_SNAPSHOT, SNAPSHOT_GENS_VERSION, &body),
+            (Some(_), None) => seal_at(MAGIC_SNAPSHOT, SNAPSHOT_SPILL_VERSION, &body),
+            (None, None) => seal(MAGIC_SNAPSHOT, &body),
         }
     }
 
@@ -478,17 +563,16 @@ impl Snapshot {
     pub fn decode(bytes: &[u8]) -> Result<(Snapshot, Digest32), Fault> {
         let (body, sum, version) = open_any(
             MAGIC_SNAPSHOT,
-            &[VERSION, SNAPSHOT_SPILL_VERSION],
+            &[VERSION, SNAPSHOT_SPILL_VERSION, SNAPSHOT_GENS_VERSION],
             MAX_SNAPSHOT_BODY,
             bytes,
         )?;
-        let spilled = version == SNAPSHOT_SPILL_VERSION;
         let b = Body::parse(
             body,
-            if spilled {
-                SNAPSHOT_SPILL_KEYS
-            } else {
-                SNAPSHOT_KEYS
+            match version {
+                SNAPSHOT_SPILL_VERSION => SNAPSHOT_SPILL_KEYS,
+                SNAPSHOT_GENS_VERSION => SNAPSHOT_GENS_KEYS,
+                _ => SNAPSHOT_KEYS,
             },
         )?;
         let horizon_s = b.int("horizon", u64::from(MAX_HORIZON_S))? as u32;
@@ -506,16 +590,20 @@ impl Snapshot {
         let mut entries = Vec::with_capacity(r4.len() / R4 + r6.len() / R6);
         decode_entries(r4, 4, horizon_s, &mut entries)?;
         decode_entries(r6, 16, horizon_s, &mut entries)?;
-        let spill = if spilled {
-            let s = Spilled {
+        let spill = match version {
+            SNAPSHOT_SPILL_VERSION => Some(Spilled {
                 key: b.fixed("spill_key")?,
                 raw: b.bytes("spill")?.to_vec(),
-            };
-            s.check(horizon_s)?;
-            Some(s)
-        } else {
-            None
+                older: Vec::new(),
+            }),
+            SNAPSHOT_GENS_VERSION => {
+                Some(split_sections(b.bytes("spill")?, b.bytes("spill_keys")?)?)
+            }
+            _ => None,
         };
+        if let Some(s) = &spill {
+            s.check(horizon_s)?;
+        }
         let snapshot = Snapshot {
             run: RunHeader {
                 generation: b.int("gen", MAX_GEN)?,
@@ -531,6 +619,32 @@ impl Snapshot {
         };
         Ok((snapshot, sum))
     }
+}
+
+/// Version 3's sections, cut where each one's count bytes say: two to
+/// [`MAX_SPILL_GENS`] of them, one per 16 bytes of keys, filling `raw`
+/// exactly. [`Spilled::check`] then checks each.
+fn split_sections(mut raw: &[u8], keys: &[u8]) -> Result<Spilled, Fault> {
+    let n = keys.len() / 16;
+    if !keys.len().is_multiple_of(16) || !(2..=MAX_SPILL_GENS).contains(&n) {
+        return Err(Fault::Corrupt("spill_keys"));
+    }
+    let mut sections: Vec<([u8; 16], Vec<u8>)> = Vec::with_capacity(n);
+    for key in keys.chunks_exact(16) {
+        let len = section_len(raw).ok_or(Fault::Corrupt("spill length"))?;
+        let (section, rest) = raw.split_at(len);
+        sections.push((key.try_into().expect("16 bytes"), section.to_vec()));
+        raw = rest;
+    }
+    if !raw.is_empty() {
+        return Err(Fault::Corrupt("spill length"));
+    }
+    let (key, raw) = sections.pop().expect("at least two");
+    Ok(Spilled {
+        key,
+        raw,
+        older: sections,
+    })
 }
 
 fn decode_entries(
@@ -791,7 +905,7 @@ pub fn capture_with_spill(
         None => 0,
     };
     let spill = match spill {
-        Some(s) if s.raw.iter().all(|b| *b == 0) => None,
+        Some(s) if s.older.is_empty() && s.raw.iter().all(|b| *b == 0) => None,
         Some(s) => {
             s.check(horizon_s).map_err(|_| CaptureError::Spill)?;
             Some(s)
@@ -960,12 +1074,12 @@ pub struct Seeded {
     pub spill: Option<SeededSpill>,
 }
 
-/// A snapshot's spill section, checked, with what it takes to put each
+/// A snapshot's spill sections, checked, with what it takes to put each
 /// slot's end on this run's clock exactly as [`seed`] does an entry's.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SeededSpill {
-    key: [u8; 16],
-    raw: Vec<u8>,
+    /// Each section's keys and words, oldest first.
+    sections: Vec<([u8; 16], Vec<u8>)>,
     at_ms: u64,
     now_ms: u64,
     h_ms: u64,
@@ -975,23 +1089,39 @@ pub struct SeededSpill {
 impl fmt::Debug for SeededSpill {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SeededSpill")
-            .field("bytes", &self.raw.len())
+            .field("sections", &self.sections.len())
             .finish_non_exhaustive()
     }
 }
 
 impl SeededSpill {
-    /// The filter's SipHash keys.
+    /// The newest section's SipHash keys.
     pub fn key(&self) -> [u8; 16] {
-        self.key
+        self.sections.last().expect("never empty").0
     }
 
-    /// Every slot still cooling at `wall0`, as (block, tag, end on this
-    /// run's clock). Each end is at or after the true one: the minutes were
-    /// rounded up at capture and count from `at`, which was read after the
-    /// capture's monotonic reading, and `mono0` was read after `wall0`.
+    /// How many sections, each with its own keys.
+    pub fn sections(&self) -> usize {
+        self.sections.len()
+    }
+
+    /// Section `i`'s keys (0 is the oldest).
+    pub fn section_key(&self, i: usize) -> [u8; 16] {
+        self.sections[i].0
+    }
+
+    /// Every slot of every section, as [`section_slots`](Self::section_slots).
     pub fn slots(&self) -> impl Iterator<Item = (usize, u32, Instant)> + '_ {
-        Spilled::words(&self.raw).filter_map(|(block, word)| {
+        (0..self.sections.len()).flat_map(|i| self.section_slots(i))
+    }
+
+    /// Every slot of section `i` still cooling at `wall0`, as (block, tag,
+    /// end on this run's clock), blocks in order. Each end is at or after
+    /// the true one: the minutes were rounded up at capture and count from
+    /// `at`, which was read after the capture's monotonic reading, and
+    /// `mono0` was read after `wall0`.
+    pub fn section_slots(&self, i: usize) -> impl Iterator<Item = (usize, u32, Instant)> + '_ {
+        Spilled::words(&self.sections[i].1).filter_map(|(block, word)| {
             let minutes = u64::from(word & SPILL_MINUTE_MASK);
             // No overflow: `seed` checked the largest deadline.
             let deadline = self.at_ms + minutes * 60_000;
@@ -1189,9 +1319,10 @@ fn seed_owned(s: Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason> {
             here.mono0
                 .checked_add(Duration::from_millis(h_ms))
                 .ok_or(Reason::Corrupt)?;
+            let mut sections = sp.older;
+            sections.push((sp.key, sp.raw));
             Some(SeededSpill {
-                key: sp.key,
-                raw: sp.raw,
+                sections,
                 at_ms: s.at_ms,
                 now_ms: now,
                 h_ms,
@@ -1308,17 +1439,28 @@ pub(crate) fn tmp_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Commit writes: the snapshot and the clean marker. Temp, fsync, rename,
-/// directory fsync. Losing the rename leaves the older file, which at
-/// commit time is the dirty marker (§1.6).
+/// Options that create a file readable and writable by its owner alone
+/// (mode 0600) on Unix (X-sec-S8-27). Elsewhere a new file takes its
+/// folder's permissions.
+fn private(options: &mut OpenOptions) -> &mut OpenOptions {
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(options, 0o600);
+    options
+}
+
+/// Commit writes: the snapshot, the state file and the clean marker. Temp,
+/// fsync, rename, directory fsync. Losing the rename leaves the older file,
+/// which at commit time is the dirty marker (§1.6). The temp file is made
+/// afresh with [`private`]'s mode, so the renamed file has it too.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let tmp = tmp_path(path);
+    // One left by a crash keeps its own mode if reused: start over.
+    match fs::remove_file(&tmp) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
     {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp)?;
+        let mut f = private(OpenOptions::new().write(true).create_new(true)).open(&tmp)?;
         f.write_all(bytes)?;
         fail::hit(Point::AfterWrite)?;
         f.sync_all()?;
@@ -1345,7 +1487,7 @@ pub fn overwrite_in_place(path: &Path, bytes: &[u8]) -> io::Result<()> {
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             {
-                let mut f = OpenOptions::new().write(true).create_new(true).open(path)?;
+                let mut f = private(OpenOptions::new().write(true).create_new(true)).open(path)?;
                 f.write_all(bytes)?;
                 fail::hit(Point::AfterWrite)?;
                 f.sync_all()?;
