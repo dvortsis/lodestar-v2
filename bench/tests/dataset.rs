@@ -299,6 +299,33 @@ fn an_index_rebuild_cut_short_resumes() {
     assert_eq!(docs, N);
 }
 
+/// A run as root never builds: no dataset, or an unfinished one, is an
+/// error naming the fix, and nothing is written.
+#[test]
+fn open_built_refuses_to_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("10m");
+    let err = dataset::open_built(&missing, Key::new(7, N)).unwrap_err();
+    assert!(
+        err.to_string().contains("build it first without root"),
+        "{err}"
+    );
+    assert!(!missing.exists());
+    dataset::build_until(dir.path(), Key::new(7, N), &mut |_| {}, Some("stored")).unwrap();
+    let before = dataset::digest(&dir.path().join(dataset::DB)).unwrap();
+    let err = dataset::open_built(dir.path(), Key::new(7, N)).unwrap_err();
+    assert!(err.to_string().contains("isn't finished"), "{err}");
+    let err = dataset::open_built(dir.path(), Key::new(8, N)).unwrap_err();
+    assert!(
+        err.to_string().contains("build it first without root"),
+        "{err}"
+    );
+    assert_eq!(
+        dataset::digest(&dir.path().join(dataset::DB)).unwrap(),
+        before
+    );
+}
+
 #[test]
 fn another_store_schema_is_refused_naming_both() {
     let dir = tempfile::tempdir().unwrap();
@@ -552,6 +579,175 @@ fn size_report_gives_every_size_figure_and_leaves_the_dataset_as_built() {
     );
 }
 
+fn search_bench(dir: &Path, json: &Path, extra: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_search-bench"))
+        .args([
+            "--dataset",
+            dir.to_str().unwrap(),
+            "--torrents",
+            &N.to_string(),
+        ])
+        .args(["--seed", "7", "--queries", "5", "--steady-secs", "1"])
+        .args(["--nrt-rounds", "2", "--ingest-rate", "20"])
+        .args(["--json", json.to_str().unwrap()])
+        .args(extra)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn search_bench_reports_every_row_and_leaves_the_dataset_as_built() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let ds = build(dir.path(), Key::new(7, N));
+    let digest = dataset::digest(&ds.db()).unwrap();
+    // What a `--drop-caches` run opens: the finished dataset.
+    assert!(
+        !dataset::open_built(dir.path(), Key::new(7, N))
+            .unwrap()
+            .built_now
+    );
+
+    // Flags that only mean something on a dataset are refused without
+    // one, so the CI gate's command can't change by accident; and a
+    // dataset run can't leave rows out.
+    let d = dir.path().to_str().unwrap();
+    for flag in [
+        &["--ingest-rate", "5"][..],
+        &["--low-resource"],
+        &["--nrt-rounds", "50"],
+        &["--steady-secs", "60"],
+        &["--drop-caches"],
+        &["--dataset", d, "--no-hot"],
+        &["--dataset", d, "--only", "regex"],
+        &["--dataset", d, "--dir", d],
+        &["--dataset", d, "--nrt-rounds", "0"],
+    ] {
+        let refused = Command::new(env!("CARGO_BIN_EXE_search-bench"))
+            .args(flag)
+            .output()
+            .unwrap();
+        assert_eq!(refused.status.code(), Some(2), "{flag:?}");
+    }
+
+    let json = out.path().join("search.json");
+    let run = search_bench(dir.path(), &json, &[]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let r = report(&json);
+    assert_eq!(r["report_format"], dataset::REPORT_FORMAT);
+    assert_eq!(r["tool"], "search-bench");
+    assert_eq!(r["mode"], "default");
+    assert_eq!(r["dataset"], Key::new(7, N).to_json());
+    assert!(r["machine"]["cores"].as_u64().unwrap() >= 1);
+    assert!(r["git"].get("rev").is_some());
+    // Every §3 row has a line.
+    for prefix in [
+        "search.1-common-word.p95",
+        "search.browse-cached.p95",
+        "search.regex.p95",
+        "search.api.",
+        "search.recovery.",
+        "search.broad-file-cold.p95",
+        "search.broad-file-warm.p95",
+        "facets.",
+        "suggest.",
+        "insights.overview.",
+        "insights.stages.",
+        "cold_start.page-cache-as-found.first_query",
+        "nrt.idle.max",
+        "nrt.ingest.max",
+        "nrt.ingest.p95",
+        "rss.steady.max",
+    ] {
+        assert!(ids_starting(&r, prefix) > 0, "no {prefix} row in {r}");
+    }
+    assert_eq!(ids_starting(&r, "insights."), 8);
+    assert_eq!(row(&r, "search.regex.p95")["budget"], 500.0);
+    assert_eq!(row(&r, "nrt.ingest.max")["budget"], 5.0);
+    assert!(row(&r, "nrt.ingest.rate")["value"].as_f64().unwrap() > 0.0);
+    for id in ["insights.overview.all.p95", "facets.broad-word.p95"] {
+        assert!(row(&r, id)["value"].as_f64().unwrap() > 0.0, "{id}");
+    }
+    // Decimal: "< 1 GB" is a byte under 10⁹, in MB.
+    let budget = row(&r, "rss.steady.max")["budget"].as_f64().unwrap();
+    assert!((999.9..1000.0).contains(&budget), "{budget}");
+    // Not built by the bench's process, so measured (pass or fail).
+    let rss = row(&r, "rss.steady.max")["status"].as_str().unwrap();
+    assert!(["pass", "fail", "unavailable"].contains(&rss), "{rss}");
+    if rss != "unavailable" {
+        // Mapped index pages are reported beside the gated figure.
+        assert_eq!(row(&r, "rss.steady.anon")["status"], "reported");
+    }
+    // The trickle is measured, or named as starved; never a silent pass.
+    let ingest = row(&r, "nrt.ingest.max")["status"].as_str().unwrap();
+    assert!(["pass", "fail", "unmeasured"].contains(&ingest), "{ingest}");
+    assert!(
+        !dataset::scratch_dir(dir.path()).exists(),
+        "scratch left behind"
+    );
+    assert_eq!(
+        dataset::digest(&ds.db()).unwrap(),
+        digest,
+        "a run wrote to the dataset"
+    );
+
+    // Low-resource: file and regex rows are off, the missing switches
+    // say so, and the RSS budget is RQ8's. `--gate` on a dataset fails
+    // unless the verdict is `pass`, and the report is still written.
+    let low = out.path().join("low.json");
+    let run = search_bench(dir.path(), &low, &["--low-resource", "--gate"]);
+    assert_eq!(
+        run.status.code(),
+        Some(1),
+        "--gate let a non-pass through: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let r = report(&low);
+    assert_eq!(r["mode"], "low-resource");
+    assert_eq!(row(&r, "search.broad-file-cold.p95")["status"], "off");
+    assert_eq!(row(&r, "search.regex.p95")["status"], "off");
+    assert_eq!(row(&r, "search.word-file-clause.p95")["status"], "off");
+    // None goes missing: `/search`'s and recovery's rows are off too.
+    assert_eq!(row(&r, "search.api.regex.p95")["status"], "off");
+    assert_eq!(row(&r, "search.api.word-file-clause.p95")["status"], "off");
+    assert_eq!(
+        row(&r, "search.recovery.word-file-clause.p95")["status"],
+        "off"
+    );
+    assert_eq!(
+        row(&r, "low_resource.switch.file_index_off")["status"],
+        "unavailable"
+    );
+    let budget = row(&r, "rss.steady.max")["budget"].as_f64().unwrap();
+    assert!((511.9..512.0).contains(&budget), "{budget}");
+    assert_ne!(r["verdict"], "pass");
+    assert_eq!(dataset::digest(&ds.db()).unwrap(), digest);
+}
+
+/// A dataset this process built is still in the page cache and its
+/// build's memory: cold start and steady-state RSS say so, never a figure.
+#[test]
+fn a_run_that_builds_the_dataset_leaves_cold_start_and_rss_unmeasured() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let json = out.path().join("built.json");
+    let run = search_bench(dir.path(), &json, &["--queries", "2"]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let r = report(&json);
+    for id in ["cold_start.first_query", "rss.steady.max"] {
+        assert_eq!(row(&r, id)["status"], "unmeasured", "{id}");
+    }
+    assert_ne!(r["verdict"], "pass");
+}
+
 #[test]
 fn a_scratch_copy_is_the_dataset_and_goes_away() {
     let dir = tempfile::tempdir().unwrap();
@@ -677,4 +873,18 @@ fn a_file_tree_that_wont_decode_fails_the_digest() {
     let e = dataset::digest(&broken).unwrap_err().to_string();
     assert!(e.contains("torrent 5's file tree won't decode"), "{e}");
     assert!(dataset::digest(&ds.db()).is_ok());
+}
+
+/// A dataset that can't be opened still gets its report, naming why.
+#[test]
+fn a_dataset_that_cannot_be_opened_still_writes_the_report() {
+    let out = tempfile::tempdir().unwrap();
+    let not_a_dir = out.path().join("not-a-dir");
+    std::fs::write(&not_a_dir, b"x").unwrap();
+    let json = out.path().join("err.json");
+    let run = search_bench(&not_a_dir, &json, &[]);
+    assert_eq!(run.status.code(), Some(1));
+    let r = report(&json);
+    assert_eq!(row(&r, "run")["status"], "unmeasured");
+    assert_ne!(r["verdict"], "pass");
 }
