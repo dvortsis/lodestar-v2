@@ -49,6 +49,10 @@ class FakeHost:
         self.free, self.used = 10 << 40, 0
         self.health = {}  # arm port -> fn(t) -> status
         self.counter = lambda port, t: (t - T0).total_seconds()
+        self.dead = set()  # PIDs that have exited
+
+    def alive(self, pid, needle):
+        return pid is not None and pid not in self.dead
 
     def now(self):
         return self.t
@@ -226,6 +230,17 @@ class StartGateTests(CoordinatorBase):
 
 
 class RehearsalAndIdentityTests(CoordinatorBase):
+    def test_the_rehearsal_never_runs_beside_the_comparator(self):
+        comp = json.loads((self.round / "comparator.json").read_text())
+        comp["timeline"]["window_end_utc"] = iso(T0 + timedelta(hours=1))
+        (self.round / "comparator.json").write_text(json.dumps(comp))
+        day = self.round / "rehearsal"
+        argv = ["--day-dir", str(day), "--attempt", "r1-a1", "--day", "1", "--rehearsal"]
+        for arm in mk.LAYOUTS["L3"][1]:
+            co.main(["leak", str(self.cfg_path), *argv, "--arm", arm, "--phase", "before", "--log", str(self.leak_log())],
+                    host=self.host)
+        self.assertEqual(co.main(["check-start", str(self.cfg_path), "--day-dir", str(day)], host=self.host), 1)
+
     def test_the_rehearsal_runs_inside_the_12h_and_never_reaches_the_manifest(self):
         self.host.t = T0 - timedelta(hours=5)  # inside the comparator's 12 h
         day = self.round / "rehearsal"
@@ -254,23 +269,55 @@ class RehearsalAndIdentityTests(CoordinatorBase):
 
 
 class LeakTests(CoordinatorBase):
-    def test_a_failed_leak_test_stops_crawling_on_that_arm_only_until_a_passing_retest(self):
+    def test_a_failed_leak_test_before_the_start_stops_that_arm_only_until_a_passing_retest(self):
         """§5.2's fixture: a failed leak test stops crawling on the affected arm."""
         self.pass_leaks()
-        self.go("bring-up")
-        self.go("collect")
-        rc, out = self.go("leak", "--arm", "A", "--phase", "after", "--log", str(self.leak_log(ok=False)))
+        rc, out = self.go("leak", "--arm", "A", "--phase", "before", "--log", str(self.leak_log(ok=False)))
         self.assertIn("ok crawling_stopped arm=A", out)
         stops = [c for c in self.host.commands() if c.startswith("docker stop")]
         self.assertEqual(stops, ["docker stop -t 60 lodestar-a"])
         s = self.state()
         self.assertTrue(s["arms"]["A"]["blocked"])
         self.assertFalse(s["arms"]["B"]["blocked"] or s["arms"]["C"]["blocked"])
-        self.assertEqual(s["events"][-1]["class"], "infrastructure")
-        self.assertEqual(s["events"][-1]["arms"], ["A"])
+        self.assertEqual(s["events"], [])  # nothing measured yet: noted, and the day can still run
+        self.assertIn("before the start", s["notes"][-1])
         self.assertIn("stopped after a failed leak test", self.go("check-start")[1][-1])
+        self.go("bring-up")
+        self.assertIn("stopped after a failed leak test", self.go("collect")[1][-1])
+        self.assertFalse(self.host.spawned)
         self.go("leak", "--arm", "A", "--phase", "retest", "--log", str(self.leak_log()))
         self.assertFalse(self.state()["arms"]["A"]["blocked"])
+        self.assertEqual(self.go("check-start")[0], 0)
+
+    def test_a_failure_after_the_day_is_an_infrastructure_event(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("collect")
+        for arm in ("A", "B", "C"):  # the collectors have closed
+            (self.day_dir() / arm).mkdir(exist_ok=True)
+            (self.day_dir() / arm / "result.json").write_text("{}")
+        self.go("leak", "--arm", "A", "--phase", "after", "--log", str(self.leak_log(ok=False)))
+        ev = self.state()["events"][-1]
+        self.assertEqual((ev["class"], ev["cause"], ev["arms"]), ("infrastructure", "leak_test_failed", ["A"]))
+
+    def test_no_leak_test_while_a_window_may_be_open(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("collect")
+        rc, out = self.go("leak", "--arm", "B", "--phase", "before", "--log", str(self.leak_log(ok=False)))
+        self.assertEqual(rc, 1)
+        self.assertIn("still measuring", out[-1])
+        self.assertFalse([c for c in self.host.commands() if c.startswith("docker stop")])
+
+    def test_a_refusal_before_testing_is_not_a_verdict(self):
+        log = self.tmp / "refused.log"
+        log.write_text("fail block_running\nfail leak_test\n")
+        rc, out = self.go("leak", "--arm", "B", "--phase", "before", "--log", str(log))
+        self.assertIn("skip leak_test", out[-1])
+        self.assertEqual(self.state()["arms"]["B"]["leak_tests"], [])
+        self.assertFalse(self.host.commands())
+        self.assertEqual(co.leak_verdict("fail tool_missing_tcpdump\nfail leak_test\n"), "not_run")
+        self.assertEqual(co.leak_verdict("fail block_running\nfail no_egress_captured_down\nfail leak_test\n"), "fail")
 
     def test_a_host_level_failure_stops_every_arm(self):
         self.pass_leaks()
@@ -278,7 +325,7 @@ class LeakTests(CoordinatorBase):
         stops = sorted(c for c in self.host.commands() if c.startswith("docker stop"))
         self.assertEqual(stops, ["docker stop -t 60 lodestar-a", "docker stop -t 60 lodestar-b",
                                  "docker stop -t 60 lodestar-c"])
-        self.assertEqual(self.state()["events"][-1]["arms"], [])  # all arms
+        self.assertTrue(all(a["blocked"] for a in self.state()["arms"].values()))
         self.assertEqual(co.leak_verdict("ok a\nok leak_test\n"), "pass")
         self.assertEqual(co.leak_verdict("ok leak_test\nfail guards_released\n"), "fail")
         self.assertEqual(co.leak_verdict(""), "fail")
@@ -295,6 +342,20 @@ class BringUpTests(CoordinatorBase):
         text = (self.day_dir() / "state.json").read_text()
         for ip in list(EXIT_IP.values()) + [UPLINK]:
             self.assertNotIn(ip, text)
+
+    def test_a_repair_before_the_start_rechecks_the_exits_and_keeps_both(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        first = self.state()["exits"]["Y"]
+        self.host.ip_of_pid[102] = "203.0.113.99"  # A's server replaced during a repair
+        rc, out = self.go("bring-up")
+        self.assertEqual(rc, 0, out)
+        s = self.state()
+        self.assertEqual([c["exits"]["Y"] for c in s["exit_checks"]], [first, s["exits"]["Y"]])
+        self.assertIn("Y changed", s["notes"][-1])
+        self.go("collect")
+        self.host.ip_of_pid[102] = EXIT_IP["Y"]
+        self.assertIn("after its start", self.go("bring-up")[1][-1])
 
     def test_two_arms_on_one_exit_or_an_untunnelled_arm_are_refused(self):
         self.pass_leaks()
@@ -378,6 +439,28 @@ class WatchTests(CoordinatorBase):
         archive = json.loads((self.day_dir() / "archive.json").read_text())
         self.assertEqual(archive["events"][0]["class"], "unclassified")  # gate-round: unknown_event, fails closed
 
+    def test_a_collector_that_died_without_a_result_closes_the_day_failed_closed(self):
+        (self.day_dir() / "C" / "result.json").unlink()
+        self.host.dead.add(self.state()["arms"]["C"]["collector_pid"])
+        rc, out = self.go("watch")
+        self.assertEqual(rc, 0, out)
+        archive = json.loads((self.day_dir() / "archive.json").read_text())
+        self.assertEqual(archive["arms"]["C"]["collector"]["reason"], "collector_died")
+        self.assertEqual(archive["events"], [{"class": "unclassified", "arms": ["C"], "cause": "collector_died"}])
+
+    def test_watch_runs_once_and_stop_ends_a_day_early(self):
+        self.go("watch")
+        rc, out = self.go("watch")
+        self.assertIn("already shut down", out[-1])
+
+    def test_stop_ends_the_day_now(self):
+        (self.day_dir() / "C" / "result.json").unlink()
+        rc, out = self.go("stop")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len([c for c in self.host.commands() if c.endswith(" stop")]), 3)
+        self.assertIn("stopped by `stop`", self.state()["notes"][-1])
+        self.assertTrue((self.day_dir() / "archive.json").exists())
+
     def test_watch_waits_while_any_collector_is_still_measuring(self):
         (self.day_dir() / "C" / "result.json").unlink()
         args = co.build_parser().parse_args(["watch", str(self.cfg_path), "--day-dir", str(self.day_dir())])
@@ -387,18 +470,31 @@ class WatchTests(CoordinatorBase):
         self.assertFalse([c for c in self.host.commands() if c.endswith(" stop")])
 
 
+class LaunchPathTests(unittest.TestCase):
+    def test_the_commands_it_launches_exist_in_this_checkout(self):
+        self.assertTrue((co.TOOLS / "collect.py").is_file())
+        self.assertTrue((co.TOOLS / "host_samples.py").is_file())
+
+
 class ActivityTests(unittest.TestCase):
     def rows(self, spec):
         return [{"utc": iso(T0 + timedelta(seconds=s)), "health": h, "queries_out": q} for s, h, q in spec]
 
-    def test_the_span_needs_health_and_rising_counters_and_never_restarts(self):
-        rows = self.rows([(0, 200, 1), (60, 200, 5), (120, 200, 9), (180, 200, 9), (240, 200, 12)])
-        start, end = co.active_span(rows)
-        self.assertEqual((start, end), (T0 + timedelta(seconds=60), T0 + timedelta(seconds=120)))
+    def test_the_span_needs_health_and_rising_counters(self):
+        rows = self.rows([(0, 200, 1), (60, 200, 5), (120, 200, 9), (180, 200, 9), (240, 0, None), (300, 200, 12)])
+        start, end = co.active_span(rows)  # one flat and one failed scrape in between don't end it
+        self.assertEqual((start, end), (T0 + timedelta(seconds=60), T0 + timedelta(seconds=300)))
 
-    def test_a_gap_over_180s_ends_it(self):
-        start, end = co.active_span(self.rows([(0, 200, 1), (60, 200, 2), (300, 200, 3), (360, 200, 4)]))
-        self.assertEqual(end, T0 + timedelta(seconds=60))
+    def test_over_180s_without_working_ends_it_for_good(self):
+        rows = self.rows([(0, 200, 1), (60, 200, 2), (120, 200, 2), (180, 200, 2), (300, 200, 3), (360, 200, 4)])
+        self.assertEqual(co.active_span(rows)[1], T0 + timedelta(seconds=60))
+
+    def test_the_collectors_own_scrapes_bridge_a_coordinator_gap(self):
+        """A watch restarted after a few minutes: the collector's rows carry the span."""
+        rows = self.rows([(0, 200, 1), (60, 200, 2), (600, 200, 3), (660, 200, 4)])
+        col = [{"utc": iso(T0 + timedelta(seconds=s)), "health": 200, "lookups_completed": s} for s in range(0, 700, 60)]
+        self.assertEqual(co.active_span(rows, collector_rows=col)[1], T0 + timedelta(seconds=660))
+        self.assertEqual(co.active_span(rows)[1], T0 + timedelta(seconds=60))
 
     def test_an_unhealthy_first_scrape_starts_it_later(self):
         start, end = co.active_span(self.rows([(0, 0, None), (60, 200, 2), (120, 200, 3)]))
@@ -411,7 +507,7 @@ class ManifestTests(CoordinatorBase):
         d.mkdir(parents=True, exist_ok=True)
         arms = mk.LAYOUTS[self.layout][day]
         (d / "state.json").write_text(json.dumps({"attempt": "r1-a1", "day": day, "repeat": repeat,
-                                                  "arms": {a: {} for a in arms}}))
+                                                  "arms": {a: {"run_id": "x"} for a in arms}}))
         for arm in arms:
             rid = (run_ids or {}).get(arm, f"r1-a1-d{day}-{arm}" + (f"-rep{repeat}" if repeat else ""))
             (d / f"{arm}.report.json").write_text(json.dumps({"identity": {"image_digest": mk.DIGEST},
@@ -487,7 +583,7 @@ class HostSamplerTests(unittest.TestCase):
         row = s.sample(T0 + timedelta(seconds=10))
         self.assertEqual((row["cpu"], row["steal"]), (0.4, 0.05))
         self.assertEqual((row["disk_write_ms"], row["disk_inflight"]), (5.0, 2))
-        self.assertEqual(row["uplink_drops_total"], 3)
+        self.assertEqual((row["uplink_drops_total"], row["uplink_rx_dropped"], row["uplink_tx_dropped"]), (3, 3, 0))
         self.assertEqual(row["tunnels"]["B"], {"rtt_ms": 30.5, "lost": False})
         self.pings["103"] = (1, "")  # no reply
         self.write(150, 5, 1045, 14, 70, 0, 3)
@@ -499,6 +595,14 @@ class HostSamplerTests(unittest.TestCase):
         row = s.sample(T0 + timedelta(seconds=30))
         self.assertNotIn("C", row["tunnels"])
         self.assertIsNone(row["uplink_drops_total"])
+
+    def test_drop_deltas_are_per_hour_and_per_series(self):
+        rows = [{"utc": iso(T0 + timedelta(minutes=m)), "uplink_rx_dropped": rx, "uplink_tx_dropped": 0,
+                 "uplink_rx_missed_errors": 0} for m, rx in ((0, 5), (30, 5), (59, 9), (60, 9), (90, 9))]
+        self.assertEqual(hs.drop_deltas(rows), [
+            {"hour_utc": iso(T0), "uplink_rx_dropped": 4, "uplink_rx_missed_errors": 0, "uplink_tx_dropped": 0},
+            {"hour_utc": iso(T0 + timedelta(hours=1)), "uplink_rx_dropped": 0, "uplink_rx_missed_errors": 0,
+             "uplink_tx_dropped": 0}])
 
     def test_assemble_dedups_computes_medians_and_hourly_coverage(self):
         rows = [{"utc": iso(T0 + timedelta(seconds=10 * k)), "cpu": 0.4, "steal": 0.0, "disk_write_ms": 3.0,

@@ -5,13 +5,15 @@
   host_samples.py run --out FILE --device NAME --uplink IFACE [--tunnel ARM=CONTAINER:TARGET ...]
   host_samples.py assemble --samples FILE --out FILE --device NAME [--rehearsal FILE]
   host_samples.py median --samples FILE
+  host_samples.py drops --samples FILE    (each uplink drop series' rise per hour)
 
 `run` writes one JSON line per 10 s slot of UTC time, stamped with the slot's start:
   - `cpu` and `steal`: shares of every vCPU's time since the previous slot, from /proc/stat;
   - `disk_write_ms` and `disk_inflight`: the average time per write completed on the /data
     device since the previous slot (null when none completed), and the writes in flight now,
     from /proc/diskstats;
-  - `uplink_drops_total`: the uplink interface's rx_dropped + tx_dropped, cumulative;
+  - `uplink_drops_total`: the uplink interface's rx_dropped + tx_dropped, cumulative (each
+    also on its own, `uplink_rx_dropped` and `uplink_tx_dropped`);
   - `tunnels`: per arm, one ICMP probe to its WireGuard gateway from inside the arm's gluetun
     network namespace (`nsenter`, so root), as {rtt_ms, lost}.
 A value it can't read is null and a slot it misses (a stall, a restart) has no line, so a gap
@@ -89,11 +91,38 @@ def disk_times(text, device):
 
 
 def uplink_drops(sys_root, iface):
+    """(rx_dropped, tx_dropped), each None if unreadable. Linux counts frames of protocols the
+    host doesn't handle (LLDP, unknown ethertypes) in rx_dropped too, so the two are kept apart
+    for the rehearsal's check that the series stays flat on a quiet uplink."""
     base = Path(sys_root) / "class" / "net" / iface / "statistics"
+    out = []
+    for name in ("rx_dropped", "tx_dropped"):
+        out.append(read_int(base / name))
+    return tuple(out)
+
+
+def read_int(path):
     try:
-        return int(read(base / "rx_dropped").strip()) + int(read(base / "tx_dropped").strip())
+        return int(read(path).strip())
     except (AttributeError, ValueError):
         return None
+
+
+RX_BREAKDOWN = ("rx_missed_errors", "rx_fifo_errors")  # the NIC's own counts, where it exposes them
+
+
+def drop_deltas(rows):
+    """Each drop series' rise per UTC hour (the rehearsal's flatness check)."""
+    names = ("uplink_rx_dropped", "uplink_tx_dropped") + tuple("uplink_" + n for n in RX_BREAKDOWN)
+    hours = {}
+    for row in sorted(rows, key=lambda r: r["utc"]):
+        h = hours.setdefault(row["utc"][:13] + ":00:00Z", {})
+        for n in names:
+            v = row.get(n)
+            if isinstance(v, int):
+                first, _ = h.get(n, (v, v))
+                h[n] = (first, v)
+    return [{"hour_utc": k, **{n: last - first for n, (first, last) in sorted(v.items())}} for k, v in sorted(hours.items())]
 
 
 class Sampler:
@@ -157,7 +186,13 @@ class Sampler:
         else:
             row["disk_write_ms"] = row["disk_inflight"] = None
         self.prev_disk = disk
-        row["uplink_drops_total"] = uplink_drops(self.sys_root, self.uplink)
+        rx, tx = uplink_drops(self.sys_root, self.uplink)
+        row["uplink_rx_dropped"], row["uplink_tx_dropped"] = rx, tx
+        for name in RX_BREAKDOWN:
+            v = read_int(self.sys_root / "class" / "net" / self.uplink / "statistics" / name)
+            if v is not None:
+                row["uplink_" + name] = v
+        row["uplink_drops_total"] = rx + tx if rx is not None and tx is not None else None
         results = {}
         threads = [threading.Thread(target=lambda a=a, c=c, t=t: results.__setitem__(a, self.probe(c, t, now)))
                    for a, (c, t) in sorted(self.tunnels.items())]
@@ -273,6 +308,8 @@ def main(argv=None):
     a.add_argument("--rehearsal", help="The rehearsal's samples, for each arm's median RTT")
     m = sub.add_parser("median")
     m.add_argument("--samples", required=True)
+    d = sub.add_parser("drops")
+    d.add_argument("--samples", required=True)
     args = p.parse_args(argv)
     if args.command == "run":
         if not DEVICE.fullmatch(args.device) or not IFACE.fullmatch(args.uplink):
@@ -284,6 +321,10 @@ def main(argv=None):
             signal.signal(sig, lambda *_: stop.set())
         until = parse_utc(args.until) if args.until else None
         run_loop(Sampler(args.device, args.uplink, dict(args.tunnel)), args.out, stop, until=until)
+        return 0
+    if args.command == "drops":
+        for line in drop_deltas(load_lines(args.samples)):
+            print(json.dumps(line, sort_keys=True))
         return 0
     if args.command == "median":
         print(json.dumps(rehearsal_medians(load_lines(args.samples)), sort_keys=True))

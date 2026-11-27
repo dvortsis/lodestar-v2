@@ -5,7 +5,8 @@ leak-test.sh with LODESTAR_ARM=b runs against test_steps' stubs, rewritten for a
 names: gluetun-b, the lodestar-b project and bridge, the -b probe containers and rule tags,
 and the endpoint block scoped to the arm's bridge. The host also holds another arm's (c's)
 recreate guard, host guard and ICMP rule, and its egress counter, which rises on every read
-because its tunnel is carrying traffic. Any command that touched them would be one the stubs
+because its tunnel is carrying traffic (the stub simulates that traffic; what the fixture
+proves is that nothing removed or reset the counter rule). Any command that touched them would be one the stubs
 don't know, which fails the run (badargs). The fixture: during the test and its failure
 cleanup, c's guards stay, its counter keeps rising, and nothing names gluetun-c, so its
 egress identity and tunnel are untouched. Docker and iptables are stubs: the box's
@@ -67,6 +68,7 @@ def with_other_arm(iptables):
 
 def arm_compose(docker):
     """b's stack recreates under its own project and suffix only."""
+    docker = docker.replace("      *Running*lodestar)", '      *Running*lodestar-b) [ -n "$LODESTAR_B" ] && echo true || echo false ;;\n      *Running*lodestar)', 1)
     anchor = "  compose)\n"
     check = ('  compose)\n    case "$*" in "compose -p lodestar-b -f "*) ;; *) bad "not arm b\'s project: $*" ;; esac\n'
              '    [ "$LODESTAR_ARM_SUFFIX" = -b ] || bad "suffix: $LODESTAR_ARM_SUFFIX"\n'
@@ -159,6 +161,9 @@ class OneArm(unittest.TestCase):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.stdout.splitlines()[-2:], ["fail args_valid", "fail leak_test"])
         self.assertNotIn("iptables", self.log())
+        rc, lines, _ = self.run_script("leak-test.sh", LODESTAR_B=1)  # its own Lodestar is running
+        self.assertEqual((rc, lines[-2:]), (1, ["fail block_running", "fail leak_test"]))
+        self.assertNotIn("iptables", self.log())
 
     def test_the_cloud_lanes_single_stack_is_unchanged(self):
         """No LODESTAR_ARM: the stack's defaults are today's names and port."""
@@ -175,6 +180,26 @@ class OneArm(unittest.TestCase):
         for s in svc.values():  # each arm's names and port follow its suffix and port, nothing else
             for v in [s.get("container_name", "")] + s.get("ports", []):
                 self.assertEqual(set(re.findall(r"\$\{([A-Z_]+)", v)) - {"LODESTAR_ARM_SUFFIX", "LODESTAR_UI_PORT"}, set())
+
+
+class DeclaredSettingsReachTheContainer(unittest.TestCase):
+    """The coordinator's `up` sets each arm's declared settings in Compose's environment; only
+    names the lodestar service passes through reach the container (the self-review's find:
+    LODESTAR_INTENSITY didn't, so A would have run Balanced)."""
+
+    def test_every_variable_up_sets_is_passed_through(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("round1_coordinator", VM / "round1-coordinator.py")
+        co = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(co)
+        env = yaml.safe_load((VM / "compose.yaml").read_text())["services"]["lodestar"]["environment"]
+        bare = {e for e in env if "=" not in e}
+        all_on = {s: s != "route_backoff" for s in co.collect.SWITCH_ENV if s != "safe_restart"}
+        for preset in ("balanced", "aggressive"):
+            sets = co.arm_switch_env({"switches": all_on, "preset": preset})
+            self.assertEqual(set(sets) - bare, set(), preset)
+        self.assertEqual(co.arm_switch_env({"switches": all_on, "preset": "aggressive"})["LODESTAR_INTENSITY"],
+                         "aggressive")
 
 
 if __name__ == "__main__":

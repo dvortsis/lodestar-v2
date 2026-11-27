@@ -138,7 +138,11 @@ $C leak <round>/coordinator.json --day-dir <day dir> --attempt <attempt> --day <
 ```
 
 - `--phase before` before the day's starts; `--phase after` after the coordinator has stopped the day; `--phase retest` after a repair.
-- **On a fail,** the coordinator stops that arm's Lodestar at once and records an infrastructure fault. If the cause is on the host (the VM's network, the firewall, Docker), add `--host-level` and it stops every arm. Tell the runner. Nothing restarts that arm until a `--phase retest` passes, and the whole day is repeated from fresh stores (§6.3).
+- **The coordinator refuses a leak test while any arm is still measuring.** Leak tests never run inside a window.
+- **If the test refused before testing anything** (its failures are only `args_valid`, `block_running`, `wg_conf_present`, `endpoint_valid` or a missing tool), the coordinator prints `skip leak_test` and records nothing. Fix what the log names and run it again.
+- **On a fail,** the coordinator stops that arm's Lodestar and blocks it. If the cause is on the host (the VM's network, the firewall, Docker), add `--host-level` and it blocks every arm. Tell the runner. Nothing starts that arm again until a `--phase retest` passes.
+  - **Before the day's collectors have started,** nothing was measured: after the repair and the passing re-test, carry on with the same day folder. If the repair changed a VPN server, run `bring-up` again: the archive keeps both exit checks.
+  - **After they started** (an `after` test), it's an infrastructure fault: the whole day is repeated from fresh stores in a new `day<n>-repeat<k>` folder (§6.3).
 - The log stays in the day folder; it holds no address (the test prints fixed names only).
 
 ## 5. The rehearsal (inside the 12 h after the comparator; never a measurement)
@@ -169,27 +173,38 @@ The rehearsal checks the setup and the timing. Its stores are deleted afterwards
    ```
 
    No replies: stop, and tell the runner before anything else. Without them the contention check can't be judged.
-5. Start the collectors and sampler, then **claim each fresh instance** (step 7 of §6), then start the watch in `tmux`:
+5. Start the collectors and sampler, start the watch in `tmux` straight away, then **claim each fresh instance** (step 8 of §6):
 
    ```bash
    $C collect $D
-   tmux new -s round1-rehearsal "$C watch $D"
+   tmux new -d -s round1-rehearsal "$C watch $D"
    ```
 
-6. **It ends** when every arm has had 60 active minutes in the rehearsal's last hour (the runner reads it), or at 4 h. The collectors close after 2 h windows and the coordinator stops everything at the last one + 2 min. At 4 h, if it's still running, stop the watch and every stack (`docker compose -p lodestar-<arm> --project-directory <stacks>/<arm> stop`) and tell the runner.
+6. **It ends** when every arm has had 60 active minutes in the rehearsal's last hour (the runner reads it), or at 4 h. The collectors close after 2 h windows and the coordinator stops everything at the last one + 2 min. At 4 h, if it's still running, stop the watch's `tmux` session, then stop every arm with the coordinator, and tell the runner:
+
+   ```bash
+   tmux kill-session -t round1-rehearsal; $C stop $D
+   ```
 7. **Leak tests after**, for every arm, recorded with `--phase after`.
-8. **Assemble the rehearsal's samples** (the base for the network threshold) and keep them:
+8. **Read the rehearsal's tunnel medians** (the base for the network threshold), and keep its samples file:
 
    ```bash
    python3 docs/soak/tools/linux/host_samples.py median --samples <round>/rehearsal/host-samples.jsonl
    ```
 
-   Send the runner the medians line. **The runner selects the layout** (the drop-C rule) from the rehearsal and tells you.
+   Send the runner the medians line.
+8a. **Check the uplink's drop counters stayed flat** over the rehearsal (any rise breaches the "no uplink drops" rule every hour):
+
+   ```bash
+   python3 docs/soak/tools/linux/host_samples.py drops --samples <round>/rehearsal/host-samples.jsonl
+   ```
+
+   It prints one line per hour with each series' rise (`uplink_rx_dropped`, `uplink_tx_dropped`, and the card's own `rx_missed_errors` and `rx_fifo_errors` where it has them). Send the runner the lines. If any is above 0, tell the runner before day 1: some network cards count harmless frames as drops, and the series may need changing. **The runner selects the layout** (the drop-C rule) from the rehearsal and tells you.
 9. Delete each arm's rehearsal `data` and `witness` folders. Keep `<round>/rehearsal` itself.
 
 ## 6. A day, step by step
 
-Day folder: `<round>/<attempt>/day<1|2>` (a repeated day: `day<n>-repeat<k>`). Pause the backup and parity schedules as the stage-1 sheet's 4.1 says, and write the restore time down.
+Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<n>-repeat<k>` (k = 1, then 2), and its **first** command (the first `leak`) carries `--repeat <k>`; later commands read it from the folder. Pause the backup and parity schedules as the stage-1 sheet's 4.1 says, and write the restore time down.
 
 1. **Fresh folders.** Each arm's `data` and `witness` folders are empty (day 2: only after §7 is done).
 2. **Leak tests before**, every arm on today's exit (§4), each recorded:
@@ -197,6 +212,7 @@ Day folder: `<round>/<attempt>/day<1|2>` (a repeated day: `day<n>-repeat<k>`). P
    ```bash
    D="<round>/coordinator.json --day-dir <round>/<attempt>/day<n>"
    $C leak $D --attempt <attempt> --day <n> --arm B --phase before --log <day dir>/leak-B-before.log
+   # a repeated day: add --repeat <k> to this first command
    ```
 
 3. **Exits.** The coordinator reads each arm's address inside its own tunnel and keeps only the hash, by exit label. It refuses two arms on one exit, or an arm whose traffic leaves outside its tunnel:
@@ -217,24 +233,24 @@ Day folder: `<round>/<attempt>/day<1|2>` (a repeated day: `day<n>-repeat<k>`). P
    $C up $D
    ```
 
-6. **Start the collectors and the sampler at once** (they must see the start-up):
+6. **Start the collectors and the sampler at once** (they must see the start-up). `collect` waits up to a minute for each collector to start; if one exits, it says so and names its log:
 
    ```bash
    $C collect $D
    ```
 
-7. **Claim each fresh instance,** within the first minutes, for every arm (through `ssh -L <port>:127.0.0.1:<port>` to the VM):
+7. **Start the watch straight away** in `tmux`, and leave it running until it ends by itself (about 25 h):
+
+   ```bash
+   tmux new -d -s round1-day<n> "$C watch $D"
+   ```
+
+   It scrapes each arm every minute, waits for every collector to close its own window, keeps every healthy arm crawling until the latest final boundary + 2 min, then stops every stack and the sampler and writes `archive.json`. A collector that dies without finishing counts as closed, so the day still ends (and fails closed).
+8. **Claim each fresh instance,** within the first minutes, for every arm (through `ssh -L <port>:127.0.0.1:<port>` to the VM):
    1. Read that arm's newest setup token: `docker logs lodestar-<arm> 2>&1 | grep 'setup token' | tail -1`. It stays private.
    2. In the browser, accept the Legal Notice and set the admin password to **that arm's password file's contents**.
    3. Save no other settings.
    4. Write the claim time (UTC) in the run record.
-8. **Start the watch** in `tmux`, and leave it running until it ends by itself (about 25 h):
-
-   ```bash
-   tmux new -s round1-day<n> "$C watch $D"
-   ```
-
-   It scrapes each arm every minute, waits for every collector to close its own window, keeps every healthy arm crawling until the latest final boundary + 2 min, then stops every stack and the sampler and writes `archive.json`.
 9. **During the day:** touch nothing. Write a host-activity note for any event, in each running arm's evidence folder (`python3 docs/soak/tools/linux/collect.py note --root <day dir>/<arm> --category <category>`). Don't read rates.
 10. **After the watch ends:** leak tests after, every arm, `--phase after`. Then rewrite the archive with them in it:
 
@@ -250,16 +266,16 @@ Day folder: `<round>/<attempt>/day<1|2>` (a repeated day: `day<n>-repeat<k>`). P
 |---|---|
 | A leak test failed | §4: the coordinator stopped the arm. Tell the runner. The day is repeated from fresh stores after a repair and a passing re-test |
 | An arm's collector stopped early (its `result.json` names a reason other than `baseline_window_complete`) | Leave the others running: the watch carries on and records the event. Tell the runner, who diagnoses it with a fresh reviewer |
-| The watch died, or your session dropped | Start the watch again with the same command: it carries on from what's recorded. If an arm's window has closed and the overhang has passed, it stops everything at once |
+| The watch died, or your session dropped | Start the watch again at once with the same command. Inside a window, the collectors' own scrapes cover the gap. In the overhang, a gap of over 3 min ends the arms' recorded activity, so later candidates may not be judged: tell the runner the times. If every window has closed and the overhang has passed, it stops everything at once |
 | The host rebooted or lost power | The day is invalid. Write a note when you can. Restore. Tell the runner |
 | A parity operation, sync, rebuild or mover run on the array | Write the note (`array_operation`). Data on `ssd_apps` isn't invalidated by mover or parity (§8 item 6); anything else, tell the runner |
 
 ## 7. After each day, before the exit swap
 
-1. **Each arm's segment report,** against the declaration:
+1. **Each arm's segment report,** against the declaration. List the layout's arms for today (L3: `B A C`; L2: `B A`; L2b: `B C`; S: the candidate):
 
    ```bash
-   for arm in B A C; do
+   for arm in <the layout's arms>; do
      python3 docs/soak/tools/analyze_cr.py segment <day dir>/$arm --declaration <round>/declaration.json \
        --output <day dir>/$arm.report.json
    done
@@ -272,7 +288,7 @@ Day folder: `<round>/<attempt>/day<1|2>` (a repeated day: `day<n>-repeat<k>`). P
      --device <backing device> --rehearsal <round>/rehearsal/host-samples.jsonl --out <day dir>/host-samples.json
    ```
 
-3. **Copy off** the whole `<round>` folder (never the salt, never a password file, never `<stacks>`) to the place the runner names, then **read it back**: run step 1's `segment` command on the copy and check its verdict lines match. Only then may the day's `data` folders be emptied.
+3. **Copy off** the whole `<round>` folder (never the salt, never a password file, never `<stacks>`) to the place the runner names, then **read it back**: on the copy, run step 1's `segment` command for each arm with `--output <a new path outside the copy>` (it never overwrites a file) and compare the verdict line with the original's. Only then may the day's `data` folders be emptied.
 4. **Then the exit swap:** put each arm's day-2 `wg0.conf` in place (the layout's day-2 column), and run `check-endpoints`.
 
 ## 8. After day 2: the verdict

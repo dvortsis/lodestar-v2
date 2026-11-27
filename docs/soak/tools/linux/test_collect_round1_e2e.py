@@ -120,7 +120,8 @@ class EndToEnd(unittest.TestCase):
             "schema": 1, "kind": "cr_round1_coordinator", "declaration": "declaration.json",
             "comparator_report": "comparator.json", "salt_file": str(salt), "data_volume": str(cls.tmp),
             "round_dir": str(cls.round), "image": "lodestar@" + r1.IMAGE, "commit": mk.COMMIT,
-            "uplink_interface": "eth0", "ip_echo_url": "https://api.ipify.org", "arms": arms}))
+            "uplink_interface": "eth0", "ip_echo_url": "https://api.ipify.org", "arms": arms,
+            "expected_growth_bytes": {"default": 20 << 30}}))
         cls.host = tc.FakeHost(DAY_START[1])
         rehearsal = host_rows(DAY_START[1] - timedelta(hours=6), DAY_START[1] - timedelta(hours=5), sorted(PORTS))
         (cls.round / "rehearsal-samples.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rehearsal))
@@ -218,6 +219,9 @@ class EndToEnd(unittest.TestCase):
             cand = self.verdict["candidates"][arm]
             self.assertEqual(cand["crawler"], "pass", (arm, [d["reasons"] for d in cand["days"]]))
         self.assertEqual(self.verdict["selection"]["ships"], "B")
+        for day in (1, 2):  # A ran Aggressive, as declared (its preset reached the container)
+            check = [c for c in self.reports[(day, "A")]["checks"] if c["check"] == "declared_preset"][0]
+            self.assertTrue(check["ok"])
         self.assertIn("C", self.verdict["diagnostics"])
 
     def test_the_verdict_reproduces(self):

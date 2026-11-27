@@ -1566,7 +1566,8 @@ def netns_ip_echo(ns_path, url, timeout=10):
         else:
             conn = http.client.HTTPConnection(address, port, timeout=timeout)
         try:
-            conn.request("GET", parts.path or "/", headers={"Host": parts.hostname})
+            target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+            conn.request("GET", target, headers={"Host": parts.hostname})
             response = conn.getresponse()
             body = response.read(128)
         finally:

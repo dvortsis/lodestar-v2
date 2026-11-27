@@ -21,6 +21,7 @@ operator's steps are docs/soak/runsheets/host-round1-runsheet.md.
   watch        scrape each arm's health and counters every minute; once every collector has
                closed, keep every healthy arm crawling until the latest final boundary + 2 min,
                then stop every stack and the sampler, and write the day archive
+  stop         stop every arm now (the rehearsal's 4 h limit), then the archive
   archive      (re)write the day archive from what's recorded
   end-attempt  record an attempt that ends short of its declared days (the manifest's attempt_ends)
   identity     the host's salted identity, the uplink's hash, the /data device and the uplink
@@ -48,7 +49,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-TOOLS = HERE.parents[2] / "docs" / "soak" / "tools" / "linux"
+TOOLS = HERE.parents[3] / "docs" / "soak" / "tools" / "linux"
 sys.path.insert(0, str(TOOLS))
 import collect  # noqa: E402  (the collector's hash, namespace lookup and switch table)
 
@@ -57,6 +58,7 @@ OVERHANG_SECONDS = 120  # §5.2 item 11: the latest final boundary scrape of the
 SPACING = timedelta(hours=12)  # rule 2.2: after the comparator's window end
 GAP_SECONDS = 180  # rule 6.6: two scrapes further apart than this are missing evidence
 DISK_MARGIN = 1.20
+COLLECTOR_START_SECONDS = 60  # each collector writes run.json within this, or the launch is reported
 ARM = re.compile(r"^[A-Z]$")
 EXIT_LABELS = ("X", "Y", "Z")
 STACK_ENV = {"LODESTAR_ARM_SUFFIX", "LODESTAR_UI_PORT"}
@@ -66,7 +68,10 @@ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 PRODUCT_REASONS = ("process_exited", "three_consecutive_health_failures", "process_memory_over_1GiB_for_five_samples",
                    "rss_over_1GiB_for_five_samples", "active_peer_requests_without_completion_for_five_minutes",
                    "three_consecutive_metrics_failures", "three_consecutive_capacity_violations")
-HOST_REASONS = ("disk_reserve", "disk_read_failures", "storage")
+HOST_REASONS = ("disk_reserve", "disk_monitor", "storage")
+# The leak test's own refusals before it tests anything: not a verdict on the tunnel.
+LEAK_PRECONDITIONS = {"args_valid", "block_running", "block_check", "wg_conf_present", "endpoint_valid",
+                      "compose_installed", "leak_test"}
 
 
 def utc_now():
@@ -126,6 +131,13 @@ class Host:
             proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                     start_new_session=True, env=dict(os.environ, **(env or {})))
         return proc.pid
+
+    def alive(self, pid, needle):
+        """The PID is running and its command line names `needle` (a reused PID never matches)."""
+        try:
+            return needle.encode() in Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+        except (OSError, ValueError, TypeError):
+            return False
 
     def signal(self, pid, sig=signal.SIGTERM):
         try:
@@ -191,7 +203,11 @@ def load_config(path):
         ports.add(a["port"])
         suffixes.add(a["suffix"])
     cfg.setdefault("ip_echo_url", collect.DEFAULT_IP_ECHO)
-    cfg.setdefault("expected_growth_bytes", {})
+    growth = cfg.get("expected_growth_bytes")
+    if not isinstance(growth, dict) or not all(isinstance(growth.get(a, growth.get("default")), int) for a in arms):
+        raise Fail("config: expected_growth_bytes {arm or default: bytes per 24 h} covers every arm")
+    if not isinstance(cfg.get("uplink_interface"), str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", cfg["uplink_interface"]):
+        raise Fail("config: uplink_interface (the `identity` command prints it)")
     cfg["decl"] = load(cfg["declaration"]) if Path(cfg["declaration"]).exists() else None
     return cfg
 
@@ -265,9 +281,18 @@ class Day:
 
 
 def leak_verdict(text):
-    """The leak test's verdict from its output: its last line is `ok leak_test` or not."""
+    """The leak test's verdict from its output: `pass` when its last line is `ok leak_test`;
+    `not_run` when every failure is one of its own refusals before testing (wrong arguments,
+    a running block or Lodestar, a missing file or tool), which say nothing about the
+    tunnel; otherwise `fail`."""
     lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
-    return "pass" if lines and lines[-1] == "ok leak_test" else "fail"
+    if lines and lines[-1] == "ok leak_test":
+        return "pass"
+    fails = {ln[5:] for ln in lines if ln.startswith("fail ")}
+    if lines and lines[-1] == "fail leak_test" and all(f in LEAK_PRECONDITIONS or f.startswith("tool_missing_")
+                                                      for f in fails):
+        return "not_run"
+    return "fail"
 
 
 def leak_summary(tests, window_start=None):
@@ -332,8 +357,10 @@ def cmd_check_start(cfg, day, host, args):
     end = parse_utc(((comp.get("timeline") or {}).get("window_end_utc")))
     if end is None:
         raise Fail("the comparator report has no timeline.window_end_utc")
-    if s.get("rehearsal"):  # §8 item 5: the rehearsal runs inside the 12 h, from stores deleted after
-        lines.append("skip spacing (rehearsal: not a measurement)")
+    if s.get("rehearsal"):  # §8 item 5: inside the 12 h, from stores deleted after; never beside the comparator
+        if host.now() < end or not (comp.get("binding") or {}).get("ended_utc"):
+            raise Fail(f"the comparator is still running (its window ends {iso(end)}): the rehearsal waits for it")
+        lines.append("ok rehearsal after the comparator (spacing doesn't apply: not a measurement)")
     elif host.now() < end + SPACING:
         raise Fail(f"too early: no arm may start before {iso(end + SPACING)} (the comparator's window end + 12 h)")
     else:
@@ -365,15 +392,30 @@ def stop_arm(cfg, host, arm):
     return rc == 0
 
 
+def measuring(day, host):
+    """The arms whose collector is still measuring: started, no result yet, still running."""
+    s = day.require()
+    return [arm for arm, st in sorted(s["arms"].items()) if st.get("collector_pid")
+            and not (day.dir / arm / "result.json").exists() and host.alive(st["collector_pid"], "collect.py")]
+
+
 def cmd_leak(cfg, day, host, args):
-    """Record a leak test (§5.2 item 3). A failure is an evidenced infrastructure fault (§6.3
-    class 1): the arm stops crawling (every arm with --host-level) until a passing re-test."""
+    """Record a leak test (§5.2 item 3). Leak tests run only while no window is open (§6.3).
+    A failure stops crawling on the arm (every arm with --host-level) until a passing re-test.
+    Before the day's collectors start nothing has been measured, so it blocks the arm and is
+    noted; once they have, it's an evidenced infrastructure fault (§6.3 class 1), an event."""
     s = day.init(args.attempt, args.day, args.repeat, args.rehearsal) if day.state is None else day.state
     if args.arm not in s["arms"]:
         raise Fail(f"arm {args.arm} isn't in this day")
+    busy = measuring(day, host)
+    if busy:
+        raise Fail(f"arm(s) {busy} are still measuring: leak tests run only while no window is open")
     text = Path(args.log).read_text(encoding="utf-8", errors="replace")
     result = leak_verdict(text)
     started = any(a.get("collector_pid") for a in s["arms"].values())
+    lines = []
+    if result == "not_run":
+        return [f"skip leak_test arm={args.arm}: the test refused before testing (see its log); nothing recorded"]
     s["arms"][args.arm]["leak_tests"].append({"utc": iso(host.now()), "phase": args.phase, "result": result,
                                               "after_start": started and args.phase != "after",
                                               "log_sha256": hashlib.sha256(text.encode()).hexdigest()})
@@ -383,9 +425,13 @@ def cmd_leak(cfg, day, host, args):
         for arm in hit:
             s["arms"][arm]["blocked"] = True
             stopped = stop_arm(cfg, host, arm)
+            s.setdefault("coordinator_stopped", []).append(arm)
             lines.append(f"{'ok' if stopped else 'fail'} crawling_stopped arm={arm}")
-        s["events"].append({"class": "infrastructure", "cause": "leak_test_failed", "arms": [] if args.host_level else hit,
-                            "utc": iso(host.now()), "diagnosis": None})
+        if started or args.phase == "after":
+            s["events"].append({"class": "infrastructure", "cause": "leak_test_failed",
+                                "arms": [] if args.host_level else hit, "utc": iso(host.now()), "diagnosis": None})
+        else:  # nothing measured yet: the arm waits for a repair and a passing re-test
+            s["notes"].append(f"{iso(host.now())} leak test failed before the start on arm(s) {hit}; blocked until a retest")
     elif args.phase == "retest" and s["arms"][args.arm]["blocked"]:
         s["arms"][args.arm]["blocked"] = False  # repaired and re-tested: it may crawl again
         lines.append(f"ok unblocked arm={args.arm}")
@@ -439,8 +485,15 @@ def cmd_bring_up(cfg, day, host, args):
     if uplink in hashes:
         raise Fail("an arm's egress is the uplink's own address: its traffic isn't in the tunnel")
     exits = {s["arms"][arm]["exit"]: readings[arm]["hash"] for arm in day.arms()}
+    started = any(a.get("collector_pid") for a in s["arms"].values())
     if s["exits"] and s["exits"] != exits:
-        raise Fail("the exits changed since this day's bring-up")
+        if started:
+            raise Fail("the exits changed since this day's bring-up, after its start")
+        # Before the start (runner, 2026-11-27): a repair that changed a server is checked
+        # again, and the archive keeps both checks.
+        s["notes"].append(f"{iso(host.now())} exits checked again before the start: "
+                          + ", ".join(sorted(k for k in exits if exits[k] != s["exits"].get(k))) + " changed")
+    s.setdefault("exit_checks", []).append({"utc": iso(host.now()), "exits": exits})
     s["exits"] = exits
     for arm in day.arms():
         s["arms"][arm]["egress"].append(readings[arm])
@@ -480,17 +533,36 @@ def cmd_collect(cfg, day, host, args):
     for key in ("commit",):
         if not cfg.get(key):
             raise Fail(f"config: {key}")
-    lines = []
+    lines, started = [], []
+    for arm in day.arms():
+        if s["arms"][arm]["blocked"]:
+            raise Fail(f"arm {arm} is stopped after a failed leak test")
     for arm in day.arms():
         st = s["arms"][arm]
-        if st["blocked"]:
-            raise Fail(f"arm {arm} is stopped after a failed leak test")
         if st.get("collector_pid"):
             continue
         run_id = run_id_for(day, arm)
         st["run_id"] = run_id
         st["collector_pid"] = host.spawn(collector_argv(cfg, day, arm, run_id), str(day.dir / f"collector-{arm}.log"))
+        day.save()  # every PID recorded as soon as it exists
+        started.append(arm)
         lines.append(f"ok collector arm={arm} run_id={run_id}")
+    # Each collector has launched once it writes run.json; one that exits first refused.
+    deadline = host.now() + timedelta(seconds=COLLECTOR_START_SECONDS)
+    waiting = list(started)
+    while waiting:
+        for arm in list(waiting):
+            if (day.dir / arm / "run.json").exists():
+                waiting.remove(arm)
+            elif not host.alive(s["arms"][arm]["collector_pid"], "collect.py"):
+                s["arms"][arm]["collector_pid"] = None
+                day.save()
+                raise Fail(f"arm {arm}'s collector exited at launch: read {day.dir / f'collector-{arm}.log'}, fix, rerun collect")
+        if waiting and host.now() >= deadline:
+            lines += [f"warn collector arm={arm} still preparing after {COLLECTOR_START_SECONDS} s" for arm in waiting]
+            break
+        if waiting:
+            host.sleep(1)
     if not s.get("sampler_pid"):
         argv = [sys.executable, "-I", str(TOOLS / "host_samples.py"), "run", "--out", str(day.dir / "host-samples.jsonl"),
                 "--device", cfg["decl"]["backing_device"], "--uplink", cfg["uplink_interface"]]
@@ -518,24 +590,33 @@ def scrape(cfg, host, arm):
             "queries_out": metric(text, "dht_queries_out_total"), "packets_in": metric(text, "dht_packets_in_total")}
 
 
-def active_span(rows, gap=GAP_SECONDS):
-    """§5.2 item 11's activity: from the first scrape that is healthy with counters rising over
-    the one before, through the last of the unbroken run that follows. A failed scrape, a
-    counter that stops rising, or a gap over 180 s ends it, and it never restarts."""
-    start = end = prev = None
-    for r in sorted(rows, key=lambda r: r["utc"]):
-        t = parse_utc(r["utc"])
-        rising = (prev is not None and r.get("queries_out") is not None and prev.get("queries_out") is not None
-                  and r["queries_out"] > prev["queries_out"])
-        ok = r.get("health") == 200 and rising and (t - parse_utc(prev["utc"])).total_seconds() <= gap
-        if start is None:
-            if ok:
-                start = end = t
-        elif ok:
-            end = t
-        else:
+def working(rows, counter):
+    """The times a source showed the process working: healthy, with its counter above the
+    source's last healthy reading. A failed scrape doesn't reset the comparison."""
+    out, prev = [], None
+    for r in sorted(rows, key=lambda r: parse_utc(r["utc"])):
+        v = r.get(counter)
+        if r.get("health") == 200 and isinstance(v, (int, float)):
+            if prev is not None and v > prev:
+                out.append(parse_utc(r["utc"]))
+            prev = v
+    return out
+
+
+def active_span(rows, gap=GAP_SECONDS, collector_rows=()):
+    """§5.2 item 11's activity, from two sources: the coordinator's minute scrapes
+    (`dht_queries_out_total`) and the collector's own (`dht_lookups_completed_total`, up to its
+    final boundary). Active from the first time either shows the process working, through the
+    last of the run in which such times are never more than 180 s apart (rule 6.6). An isolated
+    failed scrape doesn't end it; a process that stops working for longer does, for good."""
+    times = sorted(working(rows, "queries_out") + working(collector_rows, "lookups_completed"))
+    if not times:
+        return None, None
+    start = end = times[0]
+    for t in times[1:]:
+        if (t - end).total_seconds() > gap:
             break
-        prev = r
+        end = t
     return start, end
 
 
@@ -543,7 +624,7 @@ def collector_state(run_dir):
     """A collector's progress: whether it closed, why, and its final boundary scrape's time."""
     run_dir = Path(run_dir)
     out = {"closed": (run_dir / "result.json").exists(), "reason": None, "final_boundary_utc": None,
-           "window_hours": None, "egress": []}
+           "window_hours": None, "egress": [], "activity": []}
     try:
         run = load(run_dir / "run.json")
         out["window_hours"] = int(run["settings"]["baseline_hours"])
@@ -564,6 +645,9 @@ def collector_state(run_dir):
             row = json.loads(line)
         except ValueError:
             continue
+        if isinstance(row.get("time"), str) and "health" in row:
+            out["activity"].append({"utc": row["time"], "health": row["health"],
+                                    "lookups_completed": (row.get("values") or {}).get("dht_lookups_completed_total")})
         if isinstance(row.get("egress"), dict) and row["egress"].get("read") == "ok":
             out["egress"].append({"utc": row["time"], "hash": row["egress"]["hash"]})
         if out["window_hours"] is not None and out["window_hours"] in (row.get("boundary") or []):
@@ -591,12 +675,22 @@ def shutdown_at(states):
     return (max(finals) if finals else None) or "now"
 
 
-def classify_close(arm, st):
+def with_liveness(day, host, arm, st):
+    """A collector that died without writing result.json is closed, as `collector_died`."""
+    pid = day.require()["arms"][arm].get("collector_pid")
+    if not st["closed"] and pid and not host.alive(pid, "collect.py"):
+        return dict(st, closed=True, reason="collector_died")
+    return st
+
+
+def classify_close(arm, st, stopped=()):
     """An early close, as an event (§6.3). A product failure is `pending` until the runner's
     diagnosis; a host guard is infrastructure; anything else is `unclassified`, which
     gate-round reads as an unknown event, so the day fails closed until the runner classes it."""
     reason = st["reason"]
     if reason == "baseline_window_complete" or reason is None:
+        return None
+    if arm in stopped:  # the coordinator stopped it after a failed leak test: that event covers it
         return None
     if any(reason.startswith(p) for p in PRODUCT_REASONS):
         return {"class": "product", "arms": [arm], "cause": reason, "diagnosis": "pending"}
@@ -607,13 +701,15 @@ def classify_close(arm, st):
 
 def cmd_watch(cfg, day, host, args, max_loops=None):
     s = day.require()
+    if s.get("shutdown_utc"):
+        raise Fail(f"this day was already shut down at {s['shutdown_utc']}: run `archive` to rewrite its archive")
     log = day.dir / "activity.jsonl"
     loops, cache = 0, {}
     while True:
         with log.open("a", encoding="utf-8") as fh:
             for arm in day.arms():
                 fh.write(json.dumps(scrape(cfg, host, arm), separators=(",", ":")) + "\n")
-        states = {arm: cached_state(cache, day.dir / arm) for arm in day.arms()}
+        states = {arm: with_liveness(day, host, arm, cached_state(cache, day.dir / arm)) for arm in day.arms()}
         when = shutdown_at(states)
         if when is not None and (when == "now" or host.now() >= when + timedelta(seconds=OVERHANG_SECONDS)):
             break
@@ -629,16 +725,35 @@ def cmd_watch(cfg, day, host, args, max_loops=None):
             s["arms"][arm]["egress"].append(r)
         else:
             s["notes"].append(f"{iso(host.now())} arm {arm}: egress unreadable at shutdown")
+    for arm, st in states.items():
+        if st["reason"] == "collector_died":
+            s["arms"][arm]["collector_died"] = True
+    lines += stop_all(cfg, day, host)
+    lines += cmd_archive(cfg, day, host, args)
+    return lines
+
+
+def stop_all(cfg, day, host):
+    """Stop every arm's stack and the sampler, and record when."""
+    s, lines = day.require(), []
     s["shutdown_utc"] = iso(host.now())
     for arm in day.arms():
         rc, _ = host.run(compose(cfg, arm, "stop"), env=stack_env(cfg, arm), timeout=300)
         lines.append(f"{'ok' if rc == 0 else 'fail'} stack_stopped arm={arm}")
-    if s.get("sampler_pid"):
-        host.signal(s["sampler_pid"])
+    pid = s.get("sampler_pid")
+    if pid and host.alive(pid, "host_samples.py"):
+        host.signal(pid)
         lines.append("ok host_sampler_stopped")
     day.save()
-    lines += cmd_archive(cfg, day, host, args)
     return lines
+
+
+def cmd_stop(cfg, day, host, args):
+    """Stop every arm now (the rehearsal's 4 h limit, or the runner's call), then the archive."""
+    if day.require().get("shutdown_utc"):
+        raise Fail("this day was already shut down")
+    day.require()["notes"].append(f"{iso(host.now())} stopped by `stop`, not at the coordinated shutdown")
+    return stop_all(cfg, day, host) + cmd_archive(cfg, day, host, args)
 
 
 def cmd_archive(cfg, day, host, args):
@@ -658,7 +773,9 @@ def cmd_archive(cfg, day, host, args):
     for arm in day.arms():
         st = s["arms"][arm]
         col = collector_state(day.dir / arm)
-        start, end = active_span([r for r in rows if r.get("arm") == arm])
+        if st.get("collector_died") and not col["closed"]:
+            col = dict(col, closed=True, reason="collector_died")
+        start, end = active_span([r for r in rows if r.get("arm") == arm], collector_rows=col["activity"])
         egress = sorted(st["egress"] + col["egress"], key=lambda r: r["utc"])
         arms[arm] = {"exit": st["exit"], "run_id": st.get("run_id"), "egress": egress,
                      "active_from_utc": iso(start) if start else None, "active_through_utc": iso(end) if end else None,
@@ -666,11 +783,12 @@ def cmd_archive(cfg, day, host, args):
                      "collector": {"closed": col["closed"], "reason": col["reason"],
                                    "final_boundary_utc": col["final_boundary_utc"]},
                      "leak_test": leak_summary(st["leak_tests"]), "leak_tests": st["leak_tests"]}
-        ev = classify_close(arm, col)
+        ev = classify_close(arm, col, s.get("coordinator_stopped", ()))
         if ev is not None and not any(e.get("cause") == ev["cause"] and e.get("arms") == ev["arms"] for e in events):
             events.append(ev)
     archive = {"schema": 1, "round": s["round"], "attempt": s["attempt"], "day": s["day"], "repeat": s["repeat"],
-               "exits": dict(s["exits"]), "arms": arms, "events": events, "shutdown_utc": s.get("shutdown_utc"),
+               "exits": dict(s["exits"]), "exit_checks": s.get("exit_checks", []), "arms": arms, "events": events,
+               "shutdown_utc": s.get("shutdown_utc"),
                "notes": s["notes"]}
     save(day.dir / "archive.json", archive)
     return ["ok archive " + str(day.dir / "archive.json")]
@@ -698,6 +816,8 @@ def list_days(cfg):
         st = load(path)
         if st.get("rehearsal"):
             continue  # the rehearsal is never an input
+        if not any(a.get("collector_pid") or a.get("run_id") for a in st["arms"].values()):
+            continue  # never started (abandoned before its collectors ran): not a day of the attempt
         out.append({"attempt": st["attempt"], "day": st["day"], "repeat": st["repeat"], "dir": path.parent})
     return out
 
@@ -762,7 +882,7 @@ def block_device(path):
     dev = os.stat(path).st_dev
     link = Path(f"/sys/dev/block/{os.major(dev)}:{os.minor(dev)}")
     try:
-        return link.resolve().name
+        return link.resolve(strict=True).name
     except OSError:
         return None
 
@@ -783,7 +903,7 @@ def cmd_identity(cfg, day, host, args):
             f"backing_device {block_device(cfg['data_volume'])}", f"uplink_interface {m[1] if m else 'unknown'}"]
 
 
-COMMANDS = {"identity": cmd_identity, "check-endpoints": cmd_check_endpoints, "check-start": cmd_check_start, "leak": cmd_leak, "up": cmd_up, "bring-up": cmd_bring_up,
+COMMANDS = {"stop": cmd_stop, "identity": cmd_identity, "check-endpoints": cmd_check_endpoints, "check-start": cmd_check_start, "leak": cmd_leak, "up": cmd_up, "bring-up": cmd_bring_up,
             "collect": cmd_collect, "watch": cmd_watch, "archive": cmd_archive, "end-attempt": cmd_end_attempt,
             "manifest": cmd_manifest}
 
