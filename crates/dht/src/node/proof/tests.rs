@@ -413,13 +413,34 @@ async fn a_busy_lock_is_retried_and_nothing_is_touched_meanwhile() {
         before,
         "a locked-out run writes nothing"
     );
+    // It has been sampling: a node in flight, another cooling.
+    let now = Instant::now();
+    assert!(r.sampler.reserve(addr(1), 1, now));
+    r.sampled(addr(2), 2, Duration::from_secs(60));
     drop(other);
     // The retry backs off to at most a minute.
     advance(MAX_RETRY).await;
     r.tick();
     r.take_lock();
-    assert_eq!(r.proof.reason(), Reason::Resumed, "it may still resume");
+    // The proof would resume, but the run already sampled: it restores
+    // nothing (seeding is only ever into a sampler that hasn't sampled).
+    assert_eq!(r.proof.reason(), Reason::Locked, "landed past the hold");
+    assert_eq!(
+        r.stats.restart_obligations_restored.load(Ordering::Relaxed),
+        0
+    );
     assert!(r.proof.may_sample(Instant::now()));
+    // Its own records are untouched: the in-flight sample completes.
+    assert!(
+        r.sampler
+            .complete(addr(1), 1, Duration::from_secs(600), Instant::now())
+    );
+    // It invalidated, so it commits its own table.
+    r.commit(&d);
+    let next = Run::boot(&d, &c, true);
+    assert_eq!(next.proof.reason(), Reason::Resumed);
+    let mut next = next;
+    assert!(!next.sampler.reserve(addr(1), 3, Instant::now()), "carried");
 }
 
 #[tokio::test(start_paused = true)]
@@ -633,9 +654,9 @@ async fn overlapping_runs_never_both_resume() {
     assert!(!new.proof.may_sample(Instant::now()));
     advance(Duration::from_secs(5)).await;
     old.commit(&d);
-    advance(MAX_RETRY).await;
-    new.tick();
+    // Within START_HOLD: nothing sampled yet, so it resumes.
     new.take_lock();
+    assert!(Instant::now() < new.proof.epoch + START_HOLD);
     assert_eq!(new.proof.reason(), Reason::Resumed);
     assert!(
         !new.sampler.reserve(addr(6), 2, Instant::now()),

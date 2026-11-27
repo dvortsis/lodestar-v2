@@ -14,7 +14,8 @@
 //! (`docs/decisions/2026-11-27-CR-0w.md`). The one hold left is
 //! [`START_HOLD`]: an on-run holds samples for at most that long after its
 //! epoch while its start work is landing, so a resume's restrictions are in
-//! the table before its first sample.
+//! the table before its first sample. A resume that lands after the hold
+//! restores nothing: the sampler is only ever seeded before it samples.
 //!
 //! Modes:
 //! - **Legacy:** no data directory (`state_path: None`). No lock and no
@@ -51,7 +52,7 @@ use crate::restart::{
 const MAX_RETRY: Duration = Duration::from_secs(60);
 /// How long after its epoch an on-run holds samples while its lock and
 /// start work land (CR-0w). Past it the run samples whatever the proof
-/// says: restrictions a late resume restores are seeded when it lands.
+/// says, and a resume that lands later restores nothing (`locked`).
 pub(crate) const START_HOLD: Duration = Duration::from_secs(10);
 /// At shutdown, how long to wait for a start or retry job still running
 /// on the blocking pool, so a resume it earned isn't lost.
@@ -272,7 +273,7 @@ impl Proof {
             match rx.try_recv() {
                 Ok(started) => {
                     self.job = None;
-                    self.land(started, stats);
+                    self.land(started, now, stats);
                 }
                 // The job died (a panic on the pool): try again later (I6).
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -405,9 +406,21 @@ impl Proof {
         });
     }
 
-    fn land(&mut self, mut started: Started, stats: &Stats) {
+    fn land(&mut self, mut started: Started, now: Instant, stats: &Stats) {
         for (e, kind) in &started.errors {
             fail(stats, *e, *kind);
+        }
+        // A resume that lands after the run began sampling (past
+        // START_HOLD: a busy lock, a slow disk, a rerun job) restores
+        // nothing, as a failed proof doesn't (CR-0w). Seeding a sampler
+        // that already has samples in flight, or a spill filter in use,
+        // isn't a state the sampler takes; the cost is re-asks.
+        if self.may_sample(now)
+            && matches!(self.mode, Mode::On)
+            && matches!(started.decision, Decision::Resume(_))
+        {
+            started.decision = Decision::Suppress(Reason::Locked);
+            started.reason = Reason::Locked;
         }
         let (restored, dropped) = match &started.decision {
             Decision::Resume(s) => (s.entries.len(), s.dropped_expired),
@@ -541,7 +554,7 @@ impl Proof {
         if let Some(rx) = self.job.take()
             && let Ok(started) = rx.recv_timeout(DRAIN)
         {
-            self.land(started, stats);
+            self.land(started, Instant::now(), stats);
         }
         if let Some(rx) = self.retrying.take()
             && let Ok(r) = rx.recv_timeout(DRAIN)

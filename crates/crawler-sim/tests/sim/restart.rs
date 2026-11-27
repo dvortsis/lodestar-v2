@@ -474,10 +474,23 @@ pub async fn run(
         "restart_cost: stored in the first {span} min, fresh start={} leg 2={leg2_span}",
         one.stored
     );
-    // Every leg-2 start samples at once, resumed or not (CR-0w).
+    // Every leg-2 start samples at once, resumed or not (CR-0w): within a
+    // minute of the first node it may ask. That's the start for an
+    // unproven leg; a resumed one may find every node restored, and then
+    // it's the first restored end.
+    let free_from = if !r.safe_restart || earliest.len() < s.net.nodes {
+        start2
+    } else {
+        earliest
+            .values()
+            .map(|d| (*d).max(start2))
+            .min()
+            .unwrap_or(start2)
+    };
+    let bound = free_from.duration_since(start2) + Duration::from_secs(60);
     assert!(
-        first_sample.is_some_and(|d| d <= Duration::from_secs(60)),
-        "sampling didn't start at once: {first_sample:?}"
+        first_sample.is_some_and(|d| d <= bound),
+        "sampling didn't start at once: {first_sample:?}, bound {bound:?}"
     );
     assert_eq!(d2.sample_suppression_seconds, 0, "{text}");
 
@@ -496,10 +509,6 @@ pub async fn run(
             held as usize >= restricted,
             "restored {restored} (+{} spilled) < {restricted} known restricted at the restart",
             held - restored
-        );
-        assert!(
-            first_sample.is_some_and(|d| d <= Duration::from_secs(60)),
-            "sampling didn't resume at once: {first_sample:?}"
         );
         assert_eq!(
             expired_resampled, expired_at_restart,

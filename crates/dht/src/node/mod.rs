@@ -265,7 +265,7 @@ pub struct Config {
 pub struct RestartConfig {
     /// Where the generation witness lives: outside the data directory.
     /// `None`, or a directory that resolves inside it, means no witness,
-    /// so every start suppresses (`no_witness`).
+    /// so no start resumes (`no_witness`).
     pub witness_dir: Option<PathBuf>,
     /// Test seam: the wall clock. Its `mono` must be tokio's
     /// `Instant::now()`, the clock the sampler keeps; production uses

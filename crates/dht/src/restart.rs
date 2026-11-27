@@ -1528,7 +1528,7 @@ fn read_found<T>(
             Ok(v) => Found::Ok(v),
             Err(f) => Found::Bad(f),
         },
-        // An unreadable file is as good as corrupt: suppress.
+        // An unreadable file is as good as corrupt: restore nothing.
         Err(_) => Found::Bad(Fault::Corrupt("unreadable")),
     }
 }
@@ -1581,7 +1581,7 @@ pub fn read_witness(witness_dir: &Path, data_dir_canonical: &str, dir_id: &Id16)
     // The file itself may not be a link (into the data dir, say). This is
     // check-then-use: a link swapped in between makes the read below see
     // a witness that isn't ours, which fails validation (another path, id
-    // or generation) or decoding, so every outcome suppresses.
+    // or generation) or decoding, so no outcome resumes.
     if fs::symlink_metadata(&file).is_ok_and(|m| m.file_type().is_symlink()) {
         return WitnessFound::Unusable;
     }

@@ -171,6 +171,9 @@ impl Server {
             .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
             .env("LODESTAR_DHT_PORT", dht.unwrap_or(0).to_string())
             .env("LODESTAR_DHT_ENABLED", dht.is_some().to_string())
+            // Safe restart is on by default since CR-0w; off here, as the
+            // test was written, so no witness lands in the runner's home.
+            .env("LODESTAR_DHT_SAFE_RESTART", "false")
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
