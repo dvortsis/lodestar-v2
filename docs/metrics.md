@@ -874,6 +874,14 @@ Two switches, both off by default and read at start ([the decision](decisions/20
 
 The uTP share of fetches is `fetch_attempts_total{transport="utp"}` over the sum of both transports; uTP's success rate is `fetch_success_total{transport="utp"}` over `fetch_attempts_total{transport="utp"}`. A family with no DHT socket (an IPv4-only bind, for example) goes straight to TCP, so its peers add no uTP attempts.
 
+## Crawler switches (X-dht-switch-identity, 2026-11-27)
+
+One gauge says which crawler switches this process runs with ([the decision](decisions/2026-11-27-X-dht-switch-identity.md)). Each value is the switch's **effective** value: the compiled default, then `config.toml`'s `[dht]` key, then its `LODESTAR_DHT_*` variable, read from the same resolved config the DHT and the fetch pool are built from. It's set once at start and never changes while the process runs; none of these switches is in the Settings UI, so a change needs a restart. (Settings' `transport.utp` field is stored only, "not active yet": it doesn't drive `dht.utp`, and this gauge doesn't read it.) It's rendered by the serving process whether or not the DHT is enabled; with `dht.enabled = false` it still shows what the config resolved, but the DHT's switches then have nothing to act on. The intensity preset isn't in it: the settings can change it at runtime, so read it from the settings API.
+
+| Series | Type | Meaning |
+|---|---|---|
+| `dht_switch{switch}` | gauge | 1 if the switch is on, 0 if off. Always all 13 series. `switch` is a fixed set from code, the `[dht]` key's name: `coordinated_admission`, `responder_hints`, `streaming_peers`, `target_prefixes`, `utp`, `lookup_end`, `preset_slots`, `hint_first`, `sampler_cooldown_split`, `sample_backoff_escalate`, `soft_timeout`, `route_backoff` (the 12 crawler switches), and `safe_restart` (CR-0d's restart proof). No other label. |
+
 ## Crawler gate (CR-gate-metrics, 2026-10-30)
 
 The owner's gate (`docs/owner-decisions.md` §2.25) counts **unique infohashes whose info dictionary was fetched and hash-verified from the network in this run, then committed as stored and searchable**. See [the decision](decisions/2026-10-30-CR-gate-metrics.md). Everything is counted at a commit point (the writer's transaction, the prepare stage's and the pool's terminal loss of a key, the index's commit), never per fetch attempt.

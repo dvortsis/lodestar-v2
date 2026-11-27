@@ -646,6 +646,9 @@ impl Services {
             crawl: Some(paused_now.clone()),
             cluster: Some(cluster.handle()),
             uploads: Some(crate::upload::uploader(pipeline.uploads())),
+            // The same resolved `[dht]` the DHT and the pool were built
+            // from above (X-dht-switch-identity).
+            switches: Some(config.dht.switches()),
         };
         // The live stream (§9): new torrents from the serving index's
         // commits, crawler snapshots from the status page's counters, and

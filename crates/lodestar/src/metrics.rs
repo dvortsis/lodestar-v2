@@ -1701,6 +1701,22 @@ fn render_restart(o: &mut Out, d: &StatsSnapshot) {
     }
 }
 
+/// X-dht-switch-identity: each crawler switch's effective value, as
+/// resolved at start ([`crate::config::Dht::switches`]). It never changes
+/// while the process runs.
+pub fn render_switches(out: &mut String, switches: &crate::config::Switches) {
+    let mut o = Out(std::mem::take(out));
+    o.family(
+        "dht_switch",
+        "gauge",
+        "Each crawler switch's effective value at start (1 on, 0 off).",
+    );
+    for (name, on) in switches {
+        o.value("dht_switch", &format!("switch=\"{name}\""), u8::from(*on));
+    }
+    *out = o.0;
+}
+
 /// The storage sampler's last values (R-gauges); the scrape reads them
 /// and never the filesystem.
 pub fn render_storage(out: &mut String, g: &crate::storage::Gauges) {
@@ -2373,6 +2389,40 @@ mod tests {
                 "docs/metrics.md has no row for {family}"
             );
         }
+    }
+
+    #[test]
+    fn the_switch_gauge_renders_each_effective_value() {
+        // Defaults, with `utp` turned on by the environment.
+        let env = |k: &str| (k == "LODESTAR_DHT_UTP").then(|| "true".to_string());
+        let c = crate::config::Config::load(None, env).unwrap();
+        let mut body = String::new();
+        render_switches(&mut body, &c.dht.switches());
+        assert!(body.starts_with(
+            "# HELP lodestar_dht_switch Each crawler switch's effective value at start (1 on, 0 off).\n\
+             # TYPE lodestar_dht_switch gauge\n"
+        ));
+        for line in [
+            "lodestar_dht_switch{switch=\"utp\"} 1",
+            "lodestar_dht_switch{switch=\"safe_restart\"} 1",
+            "lodestar_dht_switch{switch=\"route_backoff\"} 0",
+            "lodestar_dht_switch{switch=\"coordinated_admission\"} 0",
+        ] {
+            assert!(
+                body.lines().any(|l| l == line),
+                "missing {line:?} in\n{body}"
+            );
+        }
+        let series = body
+            .lines()
+            .filter(|l| l.starts_with("lodestar_dht_switch{"));
+        assert_eq!(series.count(), 13);
+        // It appends to what's already rendered.
+        let mut body = String::from("x\n");
+        render_switches(&mut body, &c.dht.switches());
+        assert!(body.starts_with("x\n# HELP lodestar_dht_switch "));
+        let doc = include_str!("../../../docs/metrics.md");
+        assert!(doc.lines().any(|l| l.starts_with("| `dht_switch{switch}`")));
     }
 
     #[test]
