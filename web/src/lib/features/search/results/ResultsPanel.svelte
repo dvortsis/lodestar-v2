@@ -279,6 +279,8 @@
 		const next = rows;
 		untrack(() => {
 			const was = rowsWas[active];
+			// A new query's first rows start at row 1, as a fresh list does.
+			if (now === viewWas && rowsWas.length === 0 && next.length > 0) active = 0;
 			if (now !== viewWas && was && G) {
 				const find = (hash: string) =>
 					next.findIndex((r) => !G!.isGroupRow(r) && (r as SearchHit).hash === hash);

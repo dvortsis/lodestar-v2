@@ -48,6 +48,13 @@ vi.mock('$lib/features/detail/commands', () => ({ registerDetailCommands: async 
 
 const { default: ResultsPanel } = await import('./ResultsPanel.svelte');
 const { visit } = await import('../query/testing.svelte');
+const { results } = await import('./results.svelte');
+const query = (word: string) => ({
+	ast: { op: 'word', field: 'any', word } as const,
+	sort: 'relevance',
+	hidden: false,
+	exact: false
+});
 
 beforeAll(() => stubLayout(600, 1000));
 afterAll(async () => {
@@ -372,6 +379,48 @@ describe('ResultsPanel, grouped', () => {
 				expect(selection.has(hit(2).hash)).toBe(true);
 			} finally {
 				selection.toggle(hit(2).hash, false); // leave nothing selected for the next test
+			}
+		});
+	}
+
+	// A new query's rows start at row 1, whatever row the last results had made active.
+	for (const [name, url] of [
+		['List', '/search?q=lantern'],
+		['Table', '/search?q=lantern&view=table']
+	] as const) {
+		it(`starts the ${name} at row 1 for new results after an empty answer`, async () => {
+			const hits = [best, hit(2), hit(3)];
+			const answer = (h: typeof hits) =>
+				api.post.mockResolvedValue(
+					page([], { hits: h, total: h.length, collapsed: true, groups: h.length })
+				);
+			answer(hits);
+			const first = name === 'Table' ? 'table-row-1' : `result-${best.hash}`;
+			const third = name === 'Table' ? 'table-row-3' : `result-${hit(3).hash}`;
+			visit(url);
+			render(ResultsPanel, { focusBar: () => {} });
+			await screen.findByTestId(third, {}, WAIT);
+			const row = (n: number) =>
+				name === 'Table'
+					? screen.getByTestId(`table-row-${n}`)
+					: rowOf(`result-${hits[n - 1]!.hash}`);
+			await fireEvent.keyDown(row(1), { key: 'ArrowDown' });
+			await fireEvent.keyDown(row(2), { key: 'ArrowDown' }); // row 3 is active
+			answer([]);
+			await results.load(query('nothing'));
+			await waitFor(() => expect(screen.queryByTestId(first)).toBeNull(), WAIT);
+			answer(hits);
+			await results.load(query('again'));
+			await screen.findByTestId(third, {}, WAIT);
+			await waitFor(() => expect(commands.get('results.select')).toBeDefined(), WAIT);
+			const { selection } = await import('../bulk/selection.svelte');
+			try {
+				commands.get('results.select')!();
+				expect(selection.has(best.hash)).toBe(true);
+				expect(selection.has(hit(3).hash)).toBe(false);
+			} finally {
+				selection.toggle(best.hash, false);
+				selection.toggle(hit(3).hash, false);
 			}
 		});
 	}

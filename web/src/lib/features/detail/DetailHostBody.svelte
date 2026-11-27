@@ -19,7 +19,7 @@
 	import { coverBackground } from './fullscreen';
 	import { DetailModel } from './model.svelte';
 	import { closeDetail, markClosed, openDetail, returnFocusTarget } from './open';
-	import { revealSection, want, wanted } from './section.svelte';
+	import { want, wanted } from './section.svelte';
 	import type { SearchHit } from './cache';
 	import './detail.css';
 	import './host.css';
@@ -174,22 +174,19 @@
 
 	// Show all opens Related directly: once that torrent is on screen, its section scrolls into
 	// view (and, being near, loads). Asked once per open.
-	let stopReveal: (() => void) | undefined;
 	$effect(() => {
 		const asked = wanted();
 		if (!asked || asked.hash !== hash || model.detail?.hash !== hash) return;
 		want(asked.hash, null);
-		stopReveal?.();
 		void tick().then(() => {
-			if (container && !gone) stopReveal = revealSection(container, asked.section);
+			if (!container) return;
+			container
+				.querySelector(`[data-section="${asked.section}"]`)
+				?.scrollIntoView?.({ block: 'start' });
+			// Related takes focus when it mounts for this torrent, if the reader hasn't moved it.
+			container.dataset.ask = asked.hash;
 		});
 	});
-	// A different torrent (j/k) ends a reveal still waiting on the last one.
-	$effect(() => {
-		void hash;
-		return () => stopReveal?.();
-	});
-	onDestroy(() => stopReveal?.());
 
 	// A different torrent in an open drawer (j/k) swaps in place; its title is announced once. The
 	// first torrent of a session isn't: focus lands on its title, which the reader hears anyway.
