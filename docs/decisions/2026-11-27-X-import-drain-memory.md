@@ -1,4 +1,4 @@
-# X-import-drain-memory decisions
+# X-import-drain-memory decisions (#1153)
 
 The Magnetico import ladder on the test VM (2026-11-27, main 68799e1b) measured the server's resident memory while it drained an import: 1.005 GB at 1M and **4.45 GB at 10M**, against the §3 budget of under 1 GB of VmRSS. This slice finds what grows and bounds it. The runner's go (2026-11-27T19:58Z) covered proposals 1 and 2 below; `/healthz` and a side finding went to their own slices.
 
