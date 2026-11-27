@@ -304,10 +304,8 @@ fn follow(
             replayed,
             backfilled,
         } = indexer.catch_up_counted(store, config.batch)?;
+        titles.set_behind(backlog(added, replayed, config.batch));
         let replayed = replayed + backfilled;
-        // A full step means more is waiting (an import's drain): title
-        // builds wait until a step comes back short.
-        titles.set_behind(added + replayed >= config.batch);
         pending.added += added as u64;
         pending.adult += adult as u64;
         pending.indexed += (added + replayed) as u64;
@@ -336,6 +334,14 @@ fn follow(
         *reported = indexer.last_id();
     }
     Ok(())
+}
+
+/// Whether a catch-up step says more is waiting (an import's drain): a
+/// full step of new or changed torrents. Title builds wait until a step
+/// comes back short. A population backfill fills every step while its
+/// walk lasts, so it isn't counted and never holds titles back.
+fn backlog(added: usize, replayed: usize, batch: usize) -> bool {
+    added + replayed >= batch
 }
 
 /// What's been read since the last commit, for the counters and the hook.
@@ -589,6 +595,52 @@ mod tests {
                     && !n.ends_with(".lock")
             })
             .count() as u64
+    }
+
+    #[test]
+    fn a_full_step_is_a_backlog() {
+        assert!(backlog(50, 0, 50));
+        assert!(backlog(30, 20, 50));
+        assert!(!backlog(49, 0, 50));
+        assert!(!backlog(0, 0, 50));
+    }
+
+    /// X-import-drain-memory: a backlog read in full steps holds title
+    /// builds back, and catching up builds the set with every title.
+    #[test]
+    fn titles_build_once_a_backlog_is_caught_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, dir) = (tmp.path().join("s.db"), tmp.path().join("index"));
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        for i in 0..10 {
+            add(&mut writer, &format!("Backlog.Title.{i}.2001.1080p.mkv"));
+        }
+        add(&mut writer, "Last.Title.2002.1080p.mkv");
+        while lodestar_pipeline::enrich::enrich_stored(&mut writer, 0, 100)
+            .unwrap()
+            .is_some()
+        {}
+        let index = SearchIndex::open(&dir).unwrap();
+        index.titles().set_interval(Duration::from_millis(1));
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        let config = LiveConfig {
+            batch: 3,
+            ..quick()
+        };
+        let live = LiveIndexer::spawn(index.clone(), reader, config).unwrap();
+        let (stats, thread) = (live.stats(), live.thread.as_ref());
+        let shown = crate::suggest::Shown {
+            adult: false,
+            hidden: false,
+        };
+        eventually(&stats, thread, 0, "the set has the last title", || {
+            index
+                .titles()
+                .current()
+                .is_some_and(|s| !s.lookup("last", shown, 1).is_empty())
+        });
+        assert!(!index.titles().is_behind(), "caught up");
+        live.stop().unwrap();
     }
 
     /// X-mmap-cache-prune: the prune after each commit keeps only live

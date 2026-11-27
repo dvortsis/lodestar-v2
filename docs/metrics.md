@@ -899,7 +899,7 @@ Added for the v0.5.1 Linux soak, so a memory or disk ramp can be explained (owne
 | --- | --- | --- |
 | `store_db_bytes` | gauge | Size of `lodestar.db`. |
 | `store_wal_bytes` | gauge | Size of `lodestar.db-wal`; 0 when there is none. |
-| `search_index_bytes` | gauge | Regular files under `data/index`: every index version and any rebuild in progress. 0 with search off. Symlinks aren't followed; the walk stops after 100,000 entries (an error). |
+| `search_index_bytes` | gauge | Regular files under `data/index`: every index version and any rebuild in progress. 0 with search off. Symlinks aren't followed; the walk stops after 100,000 entries (an error). It includes each index's `titles/` folder: the title-suggestion set, about 87 B per title, and while a set builds, its sorted runs (about every spelling plus 56 B) and the new set beside the old one. |
 | `storage_sampled_seconds` | gauge | Unix time of the last sample that read all three sizes; 0 before the first. A stale value means samples are failing. |
 | `storage_sample_errors_total` | counter | Sizes that couldn't be read, one per size per sample. Each keeps its last value. |
 | `search_file_cache_entries`, `search_file_cache_bytes` | gauge | `file:(…)` id sets the serving index caches, and the bytes they retain as the 8 MiB budget charges them. |

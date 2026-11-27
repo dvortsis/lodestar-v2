@@ -592,11 +592,15 @@ impl RunReader {
     }
 
     fn next(&mut self) -> std::io::Result<Option<(Spelling, [u32; 4])>> {
+        // Only a clean end, between spellings, ends the run.
         let mut len = [0u8; 4];
-        match self.0.read_exact(&mut len) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-            Err(e) => return Err(e),
+        let mut got = 0;
+        while got < len.len() {
+            match self.0.read(&mut len[got..])? {
+                0 if got == 0 => return Ok(None),
+                0 => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+                n => got += n,
+            }
         }
         let mut key = vec![0u8; u32::from_le_bytes(len) as usize];
         self.0.read_exact(&mut key)?;
@@ -937,8 +941,12 @@ impl std::fmt::Debug for Titles {
 }
 
 impl Titles {
-    /// Title sets built in `dir` (the index's [`TITLES_DIR`]).
+    /// Title sets built in `dir` (the index's [`TITLES_DIR`]). What an
+    /// earlier run left there is swept first, before anything maps or
+    /// serves it: a set is never reused across starts, so a crashed run's
+    /// file (and the titles in it) never outlives the next start.
     pub fn at(dir: PathBuf) -> Titles {
+        sweep(&dir, None);
         Titles {
             dir: Some(dir),
             ..Titles::default()
@@ -973,7 +981,13 @@ impl Titles {
     }
 
     fn set(&self, set: TitleSet) {
-        *self.current.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(set));
+        let old = self
+            .current
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(Arc::new(set));
+        // Dropped outside the lock: the last holder removes its file.
+        drop(old);
     }
 
     /// The least time between background rebuilds ([`MIN_INTERVAL`] by
@@ -1022,6 +1036,12 @@ impl Titles {
         if caught_up {
             self.kick();
         }
+    }
+
+    /// Whether builds are waiting for the live indexer (tests).
+    #[cfg(test)]
+    pub(crate) fn is_behind(&self) -> bool {
+        self.lock().behind
     }
 
     fn kick(self: &Arc<Self>) {
@@ -1103,33 +1123,119 @@ fn builder(titles: Weak<Titles>) {
 mod tests {
     use super::*;
 
-    /// The precomputed rankings by brute force, as the spec reads: every
-    /// whole-char prefix of more than [`SCAN_CAP`] titles, with its best
-    /// [`TOP`] per visibility (most torrents, then first in key order).
-    fn brute_rankings(entries: &[Entry]) -> Rankings {
-        let mut under: std::collections::BTreeMap<&[u8], Vec<usize>> = Default::default();
-        for (i, (k, folded, _)) in entries.iter().enumerate() {
-            let f = std::str::from_utf8(&k[..*folded]).unwrap();
-            for (j, c) in f.char_indices() {
-                under.entry(&k[..j + c.len_utf8()]).or_default().push(i);
+    // ---- main's in-memory build (before X-import-drain-memory), the oracle ----
+
+    /// One entry per title from its spellings, sorted: the counts added up
+    /// and the most used spelling kept (the first in byte order on a tie).
+    /// Spellings of a title are adjacent, sharing the folded key.
+    fn merge_spellings(spellings: Vec<(Spelling, [u32; 4])>) -> Vec<(Spelling, usize, u64)> {
+        let folded_len = |k: &[u8]| k.iter().position(|b| *b == 0).unwrap_or(k.len());
+        let mut out: Vec<(Spelling, usize, u64)> = Vec::with_capacity(spellings.len());
+        let mut group: Option<(Spelling, u32, [u32; 4])> = None;
+        let finish = |g: (Spelling, u32, [u32; 4]), out: &mut Vec<(Spelling, usize, u64)>| {
+            let folded = folded_len(&g.0);
+            out.push((g.0, folded, pack(g.2)));
+        };
+        for (key, counts) in spellings {
+            let n: u32 = counts.iter().fold(0u32, |a, c| a.saturating_add(*c));
+            match &mut group {
+                Some((best, best_n, total))
+                    if best[..folded_len(best)] == key[..folded_len(&key)] =>
+                {
+                    for (t, c) in total.iter_mut().zip(counts) {
+                        *t = t.saturating_add(c);
+                    }
+                    if n > *best_n {
+                        *best = key;
+                        *best_n = n;
+                    }
+                }
+                _ => {
+                    if let Some(g) = group.take() {
+                        finish(g, &mut out);
+                    }
+                    group = Some((key, n, counts));
+                }
             }
         }
-        let (mut big, mut pinned) = (HashMap::new(), Vec::new());
-        for (p, ids) in under.into_iter().filter(|(_, ids)| ids.len() > SCAN_CAP) {
-            let lists = std::array::from_fn(|combo| {
-                let v = |i: usize| visible(entries[i].2, combo);
-                let mut best: Vec<usize> = ids.iter().copied().filter(|&i| v(i) > 0).collect();
-                best.sort_by(|&a, &b| v(b).cmp(&v(a)).then(a.cmp(&b)));
-                best.truncate(TOP);
-                best.into_iter()
-                    .map(|i| {
-                        let (k, folded, packed) = &entries[i];
-                        pinned.push((String::from_utf8_lossy(&k[folded + 1..]).into(), *packed));
-                        (pinned.len() - 1) as u32
-                    })
-                    .collect()
-            });
-            big.insert(String::from_utf8_lossy(p).into(), lists);
+        if let Some(g) = group {
+            finish(g, &mut out);
+        }
+        out
+    }
+
+    /// The byte just past the first char of `s` at or after `from`, if any.
+    fn next_char(s: &[u8], from: usize) -> Option<usize> {
+        let first = *s.get(from)?;
+        let len = match first {
+            b if b < 0x80 => 1,
+            b if b >= 0xF0 => 4,
+            b if b >= 0xE0 => 3,
+            _ => 2,
+        };
+        Some((from + len).min(s.len()))
+    }
+
+    type Big = (HashMap<Box<str>, [Box<[u32]>; 4]>, Vec<(Box<str>, u64)>);
+
+    /// The precomputed rankings: every folded prefix (whole chars) shared by
+    /// more than [`SCAN_CAP`] titles, with its best [`TOP`] per visibility.
+    /// `entries` are sorted, `(key, folded length, counts)`.
+    fn big_prefixes(entries: &[(Spelling, usize, u64)]) -> Big {
+        let mut big = HashMap::new();
+        let mut pinned: Vec<(Box<str>, u64)> = Vec::new();
+        let mut pin_of: HashMap<usize, u32> = HashMap::new();
+        // Ranges of `entries` sharing a prefix of `len` bytes, over the cap.
+        let mut todo: Vec<(usize, usize, usize)> = Vec::new();
+        if entries.len() > SCAN_CAP {
+            todo.push((0, entries.len(), 0));
+        }
+        while let Some((lo, hi, len)) = todo.pop() {
+            let mut j = lo;
+            while j < hi {
+                let (key, folded, _) = &entries[j];
+                let Some(next) = next_char(&key[..*folded], len) else {
+                    // Exactly the prefix: no longer prefix to group under.
+                    j += 1;
+                    continue;
+                };
+                let p = &key[..next];
+                let mut end = j + 1;
+                while end < hi && entries[end].0.starts_with(p) && entries[end].1 >= next {
+                    end += 1;
+                }
+                if end - j > SCAN_CAP {
+                    let prefix: Box<str> = String::from_utf8_lossy(p).into();
+                    let lists = std::array::from_fn(|combo| {
+                        let mut best: Vec<usize> = (j..end)
+                            .filter(|&e| visible(entries[e].2, combo) > 0)
+                            .collect();
+                        let rank = |a: &usize, b: &usize| {
+                            visible(entries[*b].2, combo)
+                                .cmp(&visible(entries[*a].2, combo))
+                                .then_with(|| entries[*a].0.cmp(&entries[*b].0))
+                        };
+                        if best.len() > TOP {
+                            best.select_nth_unstable_by(TOP, rank);
+                            best.truncate(TOP);
+                        }
+                        best.sort_unstable_by(rank);
+                        best.into_iter()
+                            .map(|e| {
+                                *pin_of.entry(e).or_insert_with(|| {
+                                    let (key, folded, packed) = &entries[e];
+                                    let display = String::from_utf8_lossy(&key[folded + 1..]);
+                                    pinned.push((display.into(), *packed));
+                                    (pinned.len() - 1) as u32
+                                })
+                            })
+                            .collect()
+                    });
+                    big.insert(prefix, lists);
+                    todo.push((j, end, next));
+                }
+                j = end;
+            }
         }
         (big, pinned)
     }
@@ -1153,7 +1259,7 @@ mod tests {
         for (k, _, v) in &entries {
             b.insert(k, *v).unwrap();
         }
-        let (big, pinned) = brute_rankings(&entries);
+        let (big, pinned) = big_prefixes(&entries);
         TitleSet {
             fst: open_fst(OwnedBytes::new(b.into_inner().unwrap())).unwrap(),
             big,
@@ -1250,8 +1356,16 @@ mod tests {
         ];
         all.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         let mut g = Grouper::default();
-        let mut entries: Vec<Entry> = all.into_iter().filter_map(|(k, c)| g.push(k, c)).collect();
+        let mut entries: Vec<Entry> = all
+            .iter()
+            .filter_map(|(k, c)| g.push(k.clone(), *c))
+            .collect();
         entries.extend(g.finish());
+        assert_eq!(
+            entries,
+            merge_spellings(all),
+            "as main's build grouped them"
+        );
         let got: Vec<(String, u64)> = entries
             .into_iter()
             .map(|(k, folded, packed)| {
@@ -1407,40 +1521,22 @@ mod tests {
         Some(k.into_boxed_slice())
     }
 
-    /// The set these occurrences give, by brute force: each title's
-    /// counts added up, under the spelling most occurrences use (the first
-    /// in byte order on a tie).
+    /// The set main's in-memory build makes from these occurrences.
     fn reference(occurrences: &[(String, usize)]) -> TitleSet {
-        use std::collections::BTreeMap;
-        let mut by_title: BTreeMap<Vec<u8>, BTreeMap<Spelling, [u32; 4]>> = BTreeMap::new();
+        let mut by_key: HashMap<Spelling, [u32; 4]> = HashMap::new();
         for (t, c) in occurrences {
             if let Some(k) = spelling(t) {
-                let folded = k[..folded_len(&k)].to_vec();
-                by_title.entry(folded).or_default().entry(k).or_default()[*c] += 1;
+                by_key.entry(k).or_default()[*c] += 1;
             }
         }
-        let entries: Vec<Entry> = by_title
-            .into_values()
-            .map(|spellings| {
-                let n = |c: &[u32; 4]| c.iter().sum::<u32>();
-                let mut total = [0u32; 4];
-                let mut best: Option<(&Spelling, u32)> = None;
-                for (k, c) in &spellings {
-                    total.iter_mut().zip(c).for_each(|(t, c)| *t += c);
-                    if best.is_none_or(|(_, b)| n(c) > b) {
-                        best = Some((k, n(c)));
-                    }
-                }
-                let k = best.unwrap().0.clone();
-                let folded = folded_len(&k);
-                (k, folded, pack(total))
-            })
-            .collect();
+        let mut spellings: Vec<_> = by_key.into_iter().collect();
+        spellings.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let entries = merge_spellings(spellings);
         let mut b = MapBuilder::memory();
         for (k, _, v) in &entries {
             b.insert(k, *v).unwrap();
         }
-        let (big, pinned) = brute_rankings(&entries);
+        let (big, pinned) = big_prefixes(&entries);
         TitleSet {
             fst: open_fst(OwnedBytes::new(b.into_inner().unwrap())).unwrap(),
             big,
@@ -1596,6 +1692,28 @@ mod tests {
         }
     }
 
+    /// Through the store, with real spills: a run every few spellings
+    /// against one run in memory.
+    #[test]
+    fn a_build_from_the_store_spills_and_merges_runs() {
+        let names: Vec<String> = (0..40)
+            .map(|i| {
+                format!(
+                    "{}.Title.{}.1080p.mkv",
+                    ["Alpha", "Bravo", "alpha"][i % 3],
+                    2000 + i
+                )
+            })
+            .collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let store = store_of(&refs);
+        let dir = tempfile::tempdir().unwrap();
+        let spilled = TitleSet::build_with_runs(&store, Some(dir.path()), 64).unwrap();
+        let one = TitleSet::build_with_runs(&store, None, usize::MAX).unwrap();
+        assert_same(&spilled, &one, &["alpha".into(), "bravo t".into()]);
+        assert_eq!(spilled.torrents(), 40);
+    }
+
     #[test]
     fn a_build_in_a_folder_maps_its_file_and_removes_its_runs() {
         let names = [
@@ -1709,6 +1827,45 @@ mod tests {
         assert!(!first_file.exists());
         assert!(second.file.as_ref().unwrap().0.exists());
         assert_eq!(second.lookup("alpha", PLAIN, 5).len(), 1);
+    }
+
+    /// A deleted torrent's title leaves the disk with the next build: no
+    /// set file under `titles/` holds it once the old set is dropped.
+    #[test]
+    fn a_deleted_title_leaves_every_set_file() {
+        let mut store = store_of(&["Purgeme.Unique.2001.1080p.mkv", "Keeper.2002.1080p.mkv"]);
+        let dir = tempfile::tempdir().unwrap();
+        let titles = Titles::at(dir.path().to_path_buf());
+        titles.rebuild_from(&store).unwrap();
+        // Every set file on disk, read as a set: does any key hold `title`?
+        let on_disk = |title: &str| {
+            std::fs::read_dir(dir.path()).unwrap().any(|e| {
+                let path = e.unwrap().path();
+                let set = open_set(&path).expect("only set files");
+                let mut keys = set.stream();
+                let mut found = false;
+                while let Some((k, _)) = keys.next() {
+                    found |= k.starts_with(title.as_bytes());
+                }
+                found
+            })
+        };
+        assert!(on_disk("purgeme unique"), "the probe finds a title");
+        let hash = store.torrent(1).unwrap().unwrap().info_hash.0;
+        store.delete_torrents(&[hash]).unwrap();
+        titles.rebuild_from(&store).unwrap();
+        assert!(!on_disk("purgeme unique"), "no set file holds it");
+        assert!(on_disk("keeper"));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        // A later start sweeps what this run left.
+        drop(titles);
+        std::fs::write(
+            dir.path().join(format!("{SET_PREFIX}crashed{SET_SUFFIX}")),
+            b"x",
+        )
+        .unwrap();
+        let _again = Titles::at(dir.path().to_path_buf());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     /// Waits for `ok`, failing after 10 s with `what`.

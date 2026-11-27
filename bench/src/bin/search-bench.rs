@@ -1644,8 +1644,11 @@ fn suggest_path(
         built.as_secs_f64(),
         set.memory_bytes() as f64 / 1e6
     );
-    // A swap: the old set serves while the new directory's set builds.
-    let (second, swap_peak) = peak_rss(|| suggest::TitleSet::build(store));
+    // A swap: the old set serves while the new directory's set builds,
+    // in its own folder as the server builds it (X-import-drain-memory).
+    let swap_dir = tempfile::tempdir()?;
+    let (second, swap_peak) =
+        peak_rss(|| suggest::TitleSet::build_in(store, Some(swap_dir.path())));
     let second = second?;
     let mb = |b: Option<u64>, from: Option<u64>| match (b, from) {
         (Some(b), Some(f)) => format!("{:+.0} MB", (b as f64 - f as f64) / 1e6),

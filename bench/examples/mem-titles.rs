@@ -18,7 +18,7 @@
 //! ```sh
 //! # as shipped (static musl, mimalloc):
 //! cargo zigbuild --release --target x86_64-unknown-linux-musl -p lodestar-bench --example mem-titles
-//! target/x86_64-unknown-linux-musl/release/examples/mem-titles 100000
+//! target/x86_64-unknown-linux-musl/release/examples/mem-titles 200000
 //! ```
 //!
 //! Linux only for the figures (0 elsewhere, so the check passes vacuously).
@@ -35,10 +35,11 @@ use lodestar_store::{NewTorrent, SourceId, Store, StoreConfig};
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-/// The runs this bench builds with: small, so N = 100k already spans
-/// dozens of them and the peak is the bounded build's, not one run's.
-/// Production uses 32 MiB (the bound is the same shape, 8× higher).
-const RUN_BYTES: usize = 4 << 20;
+/// The runs this bench builds with: small, so N = 200k (about 140k
+/// titles, some 14 MiB of spellings) already spans a dozen and the peak
+/// is the bounded build's, not one run's. Production uses 32 MiB: the
+/// same shape, 32 times higher.
+const RUN_BYTES: usize = 1 << 20;
 
 /// How much more the build may hold at 2N than at N. What may grow with
 /// the store is only the precomputed rankings (one per prefix shared by
@@ -46,9 +47,10 @@ const RUN_BYTES: usize = 4 << 20;
 /// 200k) and the merge's read buffers (8 KiB per run, about 1 MiB more
 /// at 2N). The rest is the allocator's granularity: mimalloc commits in
 /// 64 KiB slices of 32 MiB segments, so a run's worth of churn can land in
-/// one more segment. 8 MiB covers that. Measured (4 vCPU, glibc build):
-/// 12.4 MiB at 100k torrents (74k titles) and 10.6 MiB at 200k (142k);
-/// the in-memory build went from 46.4 to 58.6 MiB over the same step.
+/// one more segment. 8 MiB covers that. Measured (4 vCPU): the folder
+/// build peaked at 12.4 MiB at 200k torrents and 13.4 MiB at 400k, the
+/// in-memory build at 58.4 and 96.4 MiB, so a build that grows with the
+/// store fails by several times the margin.
 const MARGIN: u64 = 8 << 20;
 
 /// `Anonymous` from smaps_rollup, in bytes (0 off Linux).
@@ -122,8 +124,12 @@ fn add(store: &mut Store, generator: &mut Generator, n: u64) {
 /// memory, in a fresh process, so no earlier build's freed memory hides
 /// this one's. Prints `titles,peak_bytes,seconds`.
 fn child(db: &str, how: &str, dir: &str) {
-    let store =
-        Store::open_reader(std::path::Path::new(db), StoreConfig::default()).expect("store");
+    // As the server's builder reads it: no memory map.
+    let config = StoreConfig {
+        mmap_size: 0,
+        ..StoreConfig::default()
+    };
+    let store = Store::open_reader(std::path::Path::new(db), config).expect("store");
     let started = Instant::now();
     let (set, peak) = peak_of(|| match how {
         "folder" => TitleSet::build_with_runs(&store, Some(std::path::Path::new(dir)), RUN_BYTES),
@@ -166,7 +172,7 @@ fn main() {
     if args.first().map(String::as_str) == Some("child") {
         return child(&args[1], &args[2], &args[3]);
     }
-    let n: u64 = args.first().and_then(|a| a.parse().ok()).unwrap_or(100_000);
+    let n: u64 = args.first().and_then(|a| a.parse().ok()).unwrap_or(200_000);
     let dir = tempfile::tempdir().expect("tempdir");
     let db = dir.path().join("s.db");
     let mut store = Store::open(&db, StoreConfig::default()).expect("store");
