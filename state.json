@@ -12220,7 +12220,9 @@
     ],
     "X-sec-S8-25": [
       "crates/sources/**",
-      "crates/sources-irc/**"
+      "crates/sources-irc/**",
+      "crates/integrations/**",
+      "Cargo.lock (dep edges)"
     ],
     "X-sec-S8-26": [
       "crates/pipeline/**"
