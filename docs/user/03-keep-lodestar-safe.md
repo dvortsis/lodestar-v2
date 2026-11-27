@@ -600,9 +600,9 @@ Lodestar asks each DHT node for a list of torrents, and a node tells Lodestar ho
 What it does:
 
 - When Lodestar stops cleanly, it saves a [restart record](glossary.md#restart-record). At the next start it checks that nothing else changed its data in between. If the check passes, it restores the waiting times and carries on.
-- If the check fails, Lodestar restores nothing and **samples at once**. A failed check never delays sampling. A first install, a crash, a restored backup and an image update all start sampling.
+- If the check fails, Lodestar restores nothing and **samples at once**. A failed check never delays sampling. A first install, a crash, a restored backup and an image update all sample at once.
 - Sampling starts once Lodestar has found its first DHT nodes. It may hold for up to 10 seconds first, while it loads the restart record.
-- If Lodestar keeps crashing and restarting, it waits about a minute before asking the network again. That stops a restart loop from asking the same nodes over and over.
+- If Lodestar keeps crashing and restarting, it waits up to a minute after its last start before asking the network again. That stops a restart loop from asking the same nodes over and over.
 
 **Recommended:** leave it on. It is on by default, and there is nothing to set up. To turn it off, set `safe_restart = false` under `[dht]` in `config.toml`, or the variable `LODESTAR_DHT_SAFE_RESTART=false`. Off, Lodestar still samples at once after every start; it re-asks some nodes early.
 
@@ -618,6 +618,7 @@ Where the restart record is kept, in a folder **outside** the data folder:
 On Docker and Unraid the folder is part of the container, not a volume.
 
 An image update, or editing the template and selecting **Apply**, replaces the container, so the record is lost once. The next start then samples at once and loses only that run's restored waiting times. 
+
 **Don't map this folder to a volume or to appdata.** Unraid's appdata backup would then copy it together with `/data` and defeat the check.
 
 **Keep that folder out of backups taken with the data folder.** The check works because the record and the data folder must agree.

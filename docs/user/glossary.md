@@ -84,7 +84,7 @@ The user ID and group ID a container runs as. They decide who owns the files in 
 
 ## Restart record
 
-**(Newer than v0.5.1)** What Lodestar saves at a clean stop so safe restart can restore each node's waiting time. It lives in a folder outside the data folder and stays out of data-folder backups.
+**(Newer than v0.5.1)** What Lodestar saves at a clean stop so safe restart can restore each node's waiting time. Most of it is in the data folder. The part kept in a folder outside it stays out of data-folder backups.
 
 ## Safe restart
 

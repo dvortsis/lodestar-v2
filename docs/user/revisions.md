@@ -2,7 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
-| 3.8 | 2026-11-27T21:00:00Z | Sampling starts at once after every start and safe restart is on by default, both newer than v0.5.1 (v0.5.1 still waits six hours). New section 3.8 on safe restart: what it does, that a failed check just means sampling starts at once, the restart record folder (Linux, Windows, and Docker, where an image update loses one run's restored restrictions) and why to keep it out of data-folder backups. Check your understanding is now 3.9. Updated: sections 2.5, 3.3, 3.5, 4.5, 5.3 and 6.1, and Appendix B. |
+| 3.8 | 2026-11-27T21:00:00Z | Sampling starts at once after every start and safe restart is on by default, both newer than v0.5.1 (v0.5.1 still waits six hours). New section 3.8 on safe restart: what it does, that a failed check just means sampling starts at once, the restart record folder (Linux, Windows, and Docker, where an image update loses one run's restored restrictions) and why to keep it out of data-folder backups. Check your understanding is now 3.9. Updated: sections 2.5, 3.3, 3.5, 4.4, 4.5, 5.3 and 6.1, and Appendix B. |
 | 3.7 | 2026-11-27T14:00:00Z | Section 5.1: `verified:imported` finds torrents from another indexer's database, which are shown by default and left out of `verified:yes`, and how to include them in a saved search made with Show unverified before this version (newer than v0.5.1). |
 | 3.6 | 2026-11-27T13:00:00Z | Section 8.6: when every routed source says a certificate isn't trusted, the log line to look for (newer than v0.5.1). |
 | 3.5 | 2026-11-27T12:00:00Z | Section 8.6: how Lodestar checks server certificates when a source's or companion's route isn't direct, and what to do when it reports a certificate it doesn't trust (newer than v0.5.1). |
