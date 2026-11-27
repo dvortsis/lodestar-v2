@@ -21,9 +21,9 @@ lodestar-peer-wire.workspace = true
 lodestar-store.workspace = true
 # The plugin WebSocket client (NOS-2b): the same crates and pins as
 # crates/cluster and crates/sources-irc, all already in the lockfile.
+# Certificate verification comes from lodestar-integrations' `tls`.
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-rustls-platform-verifier = "=0.7.1"
 tokio-rustls = { version = "=0.26.6", default-features = false }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros", "net"] }

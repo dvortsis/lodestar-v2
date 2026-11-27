@@ -282,6 +282,44 @@ A companion's route (direct or through a VPN) is copied from the source that nee
 
 The screen says the same under **If this companion's route uses a SOCKS5 proxy**.
 
+**Certificates on a VPN or proxy route (newer than v0.5.1).** Such a route goes through a SOCKS5 proxy, a VPN address or a VPN interface. On such a route, Lodestar checks each server's certificate itself. A certificate is what proves a site is the one you meant to reach.
+
+- It trusts the certificate authorities (the companies that issue certificates) installed on your computer or in the container.
+- It doesn't check whether a certificate was revoked (cancelled early by its issuer). A direct route uses your operating system's own check, which can.
+- There is nothing to set.
+
+On Windows, a source on such a route can fail to verify a site whose root certificate isn't in Windows' store yet. It then reports **the server's certificate isn't trusted**.
+
+> [!WARNING]
+> Don't open the site in a browser on this computer outside the VPN to fix it. That visit leaves your normal network, which is what the route is there to prevent. Add the root certificate with the steps below instead.
+
+To add the root certificate without contacting the site:
+
+1. Select **Start**, type `cmd`, right-click **Command Prompt** and select **Run as administrator**. Windows asks whether to let it make changes to your device: select **Yes**.
+2. Go to your Downloads folder, so the files below land where you can find them. In that Command Prompt, paste:
+
+   ```bat
+   cd /d "%USERPROFILE%\Downloads"
+   ```
+3. Download Microsoft's list of root certificates. This contacts Windows Update, not the site. In the same Command Prompt, paste:
+
+   ```bat
+   certutil -generateSSTFromWU roots.sst
+   ```
+4. Open your Downloads folder and double-click `roots.sst`. Find the root certificate the site's operator names, right-click it, select **All Tasks** > **Export**, and save it in your Downloads folder as `root.cer`.
+5. Add only that certificate to **Trusted Root Certification Authorities**. In the same Command Prompt, paste:
+
+   ```bat
+   certutil -addstore Root root.cer
+   ```
+
+   **Result:** `certutil` reports that the certificate was added.
+6. Restart Lodestar. It reads the root certificates once, when it starts.
+
+   **Result:** after the restart, try the source again; it connects.
+
+To undo step 5, run `certutil -delstore Root "<name>"` with the certificate's name. On Docker, update the Lodestar image instead.
+
 **Passwords and keys.** A companion Lodestar installed has a generated password or key. To see it, select **Passwords and keys** on the row, then **Show**, enter **Your Lodestar password** and select **Show it**. Lodestar asks every time and never remembers it. The value stays until you select **Hide**.
 
 **Make a new one** replaces it at once, so anything using the old one needs the new one. Treat it like a password. A password you pasted yourself is never shown back.

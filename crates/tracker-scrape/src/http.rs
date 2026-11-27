@@ -63,7 +63,22 @@ impl Default for HttpConfig {
 ///
 /// With `deny`, host names resolve to their allowed addresses only, and a
 /// redirect to a blocklisted literal IP is refused.
+///
+/// Bound to `local`, it verifies certificates as every routed client does
+/// (`lodestar_integrations::tls`); unbound, with the OS verifier.
 pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwest::Client> {
+    builder(local, deny, None)?
+        .build()
+        .map_err(|e| Error::Http(e.to_string()))
+}
+
+/// [`client`]'s builder, with `roots` in place of the routed roots when
+/// bound (tests pass their own CA).
+fn builder(
+    local: Option<IpAddr>,
+    deny: Option<&crate::Deny>,
+    roots: Option<std::sync::Arc<rustls::RootCertStore>>,
+) -> Result<reqwest::ClientBuilder> {
     // Several clients may be built; only the first install wins, and any
     // provider installed by the host process is fine too.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -72,6 +87,9 @@ pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwe
         .local_address(local)
         .user_agent(concat!("Lodestar/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10));
+    if let Some(tls) = tls_for(local, roots)? {
+        builder = builder.tls_backend_preconfigured(tls);
+    }
     builder = match deny {
         None => builder.redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS)),
         Some(deny) => {
@@ -89,10 +107,30 @@ pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwe
             )
         }
     };
-    builder.build().map_err(|e| Error::Http(e.to_string()))
+    Ok(builder)
 }
 
 const MAX_REDIRECTS: usize = 2;
+
+/// The TLS configuration [`client`] is given: the bound route's when
+/// `local` is set (over `roots`, or the routed roots), and reqwest's own
+/// (`None`) when it isn't.
+fn tls_for(
+    local: Option<IpAddr>,
+    roots: Option<std::sync::Arc<rustls::RootCertStore>>,
+) -> Result<Option<rustls::ClientConfig>> {
+    use lodestar_integrations::{Route, tls};
+    let Some(ip) = local else {
+        return Ok(None);
+    };
+    let route = Route::BindAddress(ip);
+    match roots {
+        Some(roots) => tls::http_client_config_over(&route, roots),
+        None => tls::http_client_config(&route),
+    }
+    .map(Some)
+    .map_err(|e| Error::Http(e.to_string()))
+}
 
 /// The host of `url` when it's an IP address rather than a name: the
 /// resolver never sees those.
@@ -275,6 +313,109 @@ fn http_error(e: reqwest::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_bound_client_verifies_as_routed_clients_do() {
+        use lodestar_integrations::tls::verifies_self_contained;
+        assert!(super::tls_for(None, None).unwrap().is_none());
+        let bound = super::tls_for(Some("127.0.0.1".parse().unwrap()), None)
+            .unwrap()
+            .expect("a bound client gets the routed TLS configuration");
+        assert!(verifies_self_contained(&bound));
+        assert_eq!(bound.alpn_protocols, vec![b"http/1.1".to_vec()]);
+        assert!(super::client(Some("127.0.0.1".parse().unwrap()), None).is_ok());
+    }
+
+    fn fixture(name: &str) -> Vec<u8> {
+        let path = format!(
+            "{}/../integrations/tests/fixtures/email/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+    }
+
+    /// A TLS server on 127.0.0.1 with the fixtures' `mail.test`
+    /// certificate, answering each request with `200`.
+    async fn test_ca_server() -> SocketAddr {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(fixture("server.der"))],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(fixture("server.key.der"))),
+            )
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(tcp).await else {
+                        return;
+                    };
+                    let mut buf = [0u8; 4096];
+                    let _ = tls.read(&mut buf).await;
+                    let _ = tls
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn a_bound_client_trusts_its_roots_alone() {
+        let addr = test_ca_server().await;
+        let local = Some(IpAddr::from([127, 0, 0, 1]));
+        let get = |roots| async move {
+            let client = builder(local, None, roots)
+                .unwrap()
+                .resolve("mail.test", addr)
+                .build()
+                .unwrap();
+            client
+                .get(format!("https://mail.test:{}/", addr.port()))
+                .send()
+                .await
+        };
+        // Given the test CA, the bound client connects.
+        let mut ours = rustls::RootCertStore::empty();
+        ours.add(fixture("ca.der").into()).unwrap();
+        let resp = get(Some(std::sync::Arc::new(ours))).await.unwrap();
+        assert_eq!(resp.status(), 200);
+        // With the routed roots, which don't hold that CA, the certificate
+        // is refused.
+        let err = get(None).await.unwrap_err();
+        assert!(is_certificate_error(&err), "{err:?}");
+    }
+
+    fn is_certificate_error(e: &reqwest::Error) -> bool {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
+        while let Some(err) = source {
+            let tls = err.downcast_ref::<rustls::Error>().or_else(|| {
+                err.downcast_ref::<std::io::Error>()
+                    .and_then(|io| io.get_ref())
+                    .and_then(|i| i.downcast_ref::<std::io::Error>())
+                    .and_then(|io| io.get_ref())
+                    .and_then(|i| i.downcast_ref::<rustls::Error>())
+            });
+            if matches!(tls, Some(rustls::Error::InvalidCertificate(_))) {
+                return true;
+            }
+            source = err.source();
+        }
+        false
+    }
+
     use super::*;
 
     const A: InfoHash = InfoHash([0xaa; 20]);

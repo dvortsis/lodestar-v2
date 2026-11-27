@@ -1912,6 +1912,9 @@ dependencies = [
  "quick-xml",
  "reqwest",
  "rustls",
+ "rustls-native-certs",
+ "rustls-platform-verifier",
+ "schannel",
  "serde",
  "serde_json",
  "tempfile",
@@ -2034,7 +2037,6 @@ dependencies = [
  "lodestar-store",
  "proptest",
  "rustls",
- "rustls-platform-verifier",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
@@ -2084,7 +2086,6 @@ dependencies = [
  "proptest",
  "regex",
  "rustls",
- "rustls-platform-verifier",
  "tokio",
  "tokio-rustls",
  "zeroize",
@@ -2135,6 +2136,7 @@ name = "lodestar-tracker-scrape"
 version = "0.5.0"
 dependencies = [
  "lodestar-bencode",
+ "lodestar-integrations",
  "lodestar-metainfo",
  "lodestar-tracker-scrape",
  "proptest",
@@ -2142,6 +2144,7 @@ dependencies = [
  "reqwest",
  "rustls",
  "tokio",
+ "tokio-rustls",
  "url",
 ]
 

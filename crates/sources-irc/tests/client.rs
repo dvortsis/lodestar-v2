@@ -351,6 +351,40 @@ async fn a_certificate_for_another_name_stops_the_client() {
 }
 
 #[tokio::test]
+async fn a_routed_client_verifies_with_its_own_roots() {
+    // Over a bound address the default roots (`lodestar_integrations::
+    // tls`, self-contained there) don't hold the test CA: the handshake
+    // reaches the server over the route and the certificate is refused.
+    let mut srv = Server::start(true).await;
+    let mut c = config(srv.port, true);
+    c.roots = Roots::Platform;
+    let bound = Egress::new(
+        Arc::new(Loopback),
+        NetPolicy::download_client(),
+        Route::BindAddress(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        None,
+    );
+    let (h, _ev) = spawn(c, bound).unwrap();
+    state(&h, "Stopped", |s| *s == State::Stopped(Stop::Certificate)).await;
+    assert_eq!(srv.accepted(), 1);
+
+    // With the test CA named, the same route registers.
+    let (h, _ev) = spawn(
+        config(srv.port, true),
+        Egress::new(
+            Arc::new(Loopback),
+            NetPolicy::download_client(),
+            Route::BindAddress(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            None,
+        ),
+    )
+    .unwrap();
+    let mut conn = srv.accept().await;
+    conn.register().await;
+    state(&h, "Ready", |s| matches!(s, State::Ready { .. })).await;
+}
+
+#[tokio::test]
 async fn credentials_are_refused_on_plaintext() {
     let mut c = config(1, false);
     c.auth = Auth::NickServ {
