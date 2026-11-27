@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T04:56Z",
+    "updated": "2026-11-27T05:10Z",
     "items": [
       {
         "slot": 1,
@@ -11131,20 +11131,22 @@
       {
         "slot": 2,
         "slice": "X-sec-S8-27",
-        "role": "opus",
+        "role": "build",
         "model": "opus",
-        "agent": "session_01MMjhnAwa8TWKLvTTYshnWo",
+        "agent": "claude",
         "doing": "building (held fix; brief briefs/X-sec-S8-27.md)",
-        "since": "2026-11-27T04:32Z"
+        "since": "2026-11-27T04:32Z",
+        "session": "session_01MMjhnAwa8TWKLvTTYshnWo"
       },
       {
         "slot": 3,
         "slice": "X-sec-S8-25",
         "role": "build",
         "model": "opus",
-        "agent": "session_01MMjhnB535p3uDi7tqDaWvq",
+        "agent": "claude",
         "doing": "building: S8-25 fix (important; plugin TLS); /security-review",
-        "since": "2026-11-27T01:35Z"
+        "since": "2026-11-27T01:35Z",
+        "session": "session_01MMjhnB535p3uDi7tqDaWvq"
       },
       {
         "slot": 4,
@@ -11158,7 +11160,7 @@
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
-    "stand_in": "From 2026-11-24T06:19Z the owner's Claude Duet chat does the runner's work while the runner session is paused to save credit (owner: 'behave as the runner does'). One thread session per build slot claims and frees its own slot; a bookkeeping thread keeps state and the dashboard current. Slots stay at 4 (owner 06:26Z: 'You can leave it at 4 slots')."
+    "stand_in": "From 2026-11-24T06:19Z the owner's Claude Duet chat does the runner's work while the runner session is paused to save credit (owner: 'behave as the runner does'). One thread session per build slot claims and frees its own slot; a bookkeeping thread keeps state and the dashboard current. Slots stay at 4 (owner 06:26Z: 'You can leave it at 4 slots'). Ended 2026-11-27: the owner resumed the runner (owner-decisions \u00a72.84, PR #1130); the stand-in stays paused."
   },
   "soak_notes_r4": "h16.77 provisional fit 12.88 MiB/h [10.95,14.81] (h12-16.7, incomplete). Likely FAIL. Step up to 418-471 MiB band; collector CPU/h rising with corpus; mmap cache bounded. X-merge-policy prioritised; rc.4 path if fail.",
   "owner_actions": [
