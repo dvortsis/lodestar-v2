@@ -14,6 +14,9 @@ lodestar-bencode.workspace = true
 lodestar-metainfo.workspace = true
 lodestar-pipeline.workspace = true
 lodestar-search.workspace = true
+# `synth::answer` goes through `Identification::into_claims`, and the
+# terms record through `Terms::record`, as ENR-10's runtime writes them.
+lodestar-sources.workspace = true
 lodestar-store.workspace = true
 # The scrape soak runs against the in-process fake trackers.
 lodestar-tracker-scrape = { workspace = true, features = ["testing"] }
@@ -36,7 +39,6 @@ tower = { version = "0.5.3", features = ["util"] }
 # allocator `serve` uses, the system allocator, or dhat's heap profiler.
 dhat = "0.3"
 lodestar-peer-wire.workspace = true
-lodestar-sources.workspace = true
 # `tests/sources_overhead.rs` (SRC-G): every v0.6 plugin's recorded
 # fixture finds, replayed on a paused clock (`test-util`), mixed into the
 # real ingest path.

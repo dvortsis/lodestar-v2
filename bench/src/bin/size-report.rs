@@ -443,13 +443,16 @@ fn build(
     ))
 }
 
-/// A terms record (`lodestar_sources::terms::Terms::record`) that lets
-/// answers be passed on: version 1, the redistribute flag, 180 days'
-/// retention.
-const TERMS_REDISTRIBUTE: [u8; 10] = {
-    let r = (180u64 * 86_400).to_be_bytes();
-    [1, 0b10, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]]
-};
+/// The terms record of a plugin whose answers may be passed on
+/// (`Terms::record`, the runtime's own encoding): the strict default
+/// otherwise, so 180 days' retention.
+fn terms_redistribute() -> Vec<u8> {
+    lodestar_sources::terms::Terms {
+        redistribute: true,
+        ..lodestar_sources::terms::Terms::default()
+    }
+    .record()
+}
 
 /// What a plugin looks up for a stored content type
 /// (`lodestar_classify::ContentType::code`: Movie 0, Tv 1, Music 2,
@@ -490,7 +493,7 @@ fn identify(
     if finder.get() != 0 || source == finder {
         return Err("the identification source must not be the finder".into());
     }
-    store.set_plugin_state(source, TERMS_KEY, Some(&TERMS_REDISTRIBUTE))?;
+    store.set_plugin_state(source, TERMS_KEY, Some(&terms_redistribute()))?;
     let rows: Vec<(i64, String, Option<i64>)> = store
         .connection()
         .prepare("SELECT id, name, content_type FROM torrents WHERE flags & ?1 = 0 ORDER BY id")?
@@ -1175,7 +1178,7 @@ mod tests {
     #[test]
     fn the_terms_record_lets_answers_be_served() {
         assert!(lodestar_store::identify_sweep::record_redistributes(
-            &TERMS_REDISTRIBUTE
+            &terms_redistribute()
         ));
     }
 
