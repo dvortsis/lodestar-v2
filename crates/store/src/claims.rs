@@ -777,6 +777,14 @@ impl Claims {
         Some((d, d.match_confidence?))
     }
 
+    /// [`Claims::identification`], taking the claims: the details section,
+    /// its confidence and the external ids, read once.
+    pub fn into_identification(self) -> Option<(Details, u8, Vec<ExternalId>)> {
+        let d = *self.details?;
+        let confidence = d.match_confidence?;
+        Some((d, confidence, self.ids))
+    }
+
     /// Whether these claims can change a torrent's derived record or what
     /// its index entry serves: an adult-enrichment section that names a
     /// kind (the match ENR-6 pins), or an identification answer

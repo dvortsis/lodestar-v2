@@ -624,23 +624,64 @@ impl Store {
             )?;
             rows.collect::<rusqlite::Result<Vec<i64>>>()?
         };
+        let mut shaped = false;
         for id in &ids {
-            drop_one(&tx, *id, source)?;
+            shaped |= drop_one(&tx, *id, source)? == Some(true);
+        }
+        // A backfill batch that read an expired answer would write its
+        // title back over the mark (§20.9): it's refused instead.
+        if shaped {
+            crate::rules::bump_class_gen(&tx)?;
         }
         tx.commit()?;
         Ok(ids)
     }
 
-    /// Marks every torrent holding `source`'s claims for the backfill, in
-    /// one statement through the `(source_id, …)` index: the plugin's terms
-    /// stopped allowing its answers to rename the record (ENR-terms).
-    /// Returns how many were marked.
-    pub fn mark_claims_unenriched(&mut self, source: SourceId) -> Result<usize> {
-        Ok(self.conn.execute(
+    /// Records `source`'s new terms (`record`, under
+    /// [`TERMS_KEY`](crate::identify_sweep::TERMS_KEY)) and marks every
+    /// torrent holding its claims for the backfill: the plugin's terms
+    /// stopped allowing its answers to rename the record (ENR-terms). In
+    /// the same transaction, a torrent whose claims could have supplied a
+    /// served answer ([`shaped_or_unreadable`]) is logged for the index,
+    /// which drops the answer at its next pass, and the classification
+    /// generation moves when there was one, as a purge does. A backfill
+    /// batch then either read the old terms under the old generation, and
+    /// is refused (§20.9), or reads the new terms: none can write the
+    /// title back. Returns how many were marked: the caller
+    /// (`lodestar_pipeline::identify::record_terms`) re-arms the running
+    /// writer's backfill when it's more than none.
+    pub fn mark_claims_unenriched(&mut self, source: SourceId, record: &[u8]) -> Result<usize> {
+        let key = crate::identify_sweep::TERMS_KEY;
+        check_state(key, Some(record))?;
+        let tx = begin_write(&mut self.conn)?;
+        put_state(&tx, source, key, None, Some(record), false)?;
+        let marked = tx.execute(
             "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id IN
                  (SELECT torrent_id FROM torrent_claims WHERE source_id = ?1)",
             [source.get()],
-        )?)
+        )?;
+        let mut shaped = false;
+        {
+            // Through the `(source_id, …)` index, one row at a time: only
+            // the ids logged are kept.
+            let mut stmt = tx.prepare_cached(
+                "SELECT torrent_id, data FROM torrent_claims WHERE source_id = ?1",
+            )?;
+            let mut log = tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
+            let mut rows = stmt.query([source.get()])?;
+            while let Some(r) = rows.next()? {
+                let data: &[u8] = r.get_ref(1)?.as_blob().map_err(rusqlite::Error::from)?;
+                if shaped_or_unreadable(data) {
+                    log.execute([r.get::<_, i64>(0)?])?;
+                    shaped = true;
+                }
+            }
+        }
+        if shaped {
+            crate::rules::bump_class_gen(&tx)?;
+        }
+        tx.commit()?;
+        Ok(marked)
     }
 
     /// Deletes `source`'s claims on torrent `torrent_id`, marking it for
@@ -650,8 +691,13 @@ impl Store {
     pub fn drop_claims(&mut self, torrent_id: i64, source: SourceId) -> Result<bool> {
         let tx = begin_write(&mut self.conn)?;
         let dropped = drop_one(&tx, torrent_id, source)?;
+        // As [`Store::drop_claims_outside`]: a batch that read the answer
+        // is refused.
+        if dropped == Some(true) {
+            crate::rules::bump_class_gen(&tx)?;
+        }
         tx.commit()?;
-        Ok(dropped)
+        Ok(dropped.is_some())
     }
 
     /// A torrent's claims, by source. Claims that don't decode are left
@@ -1509,37 +1555,54 @@ impl Store {
     ) -> Result<bool> {
         check_state(key, new)?;
         let tx = begin_write(&mut self.conn)?;
-        let current: Option<Vec<u8>> = tx
-            .prepare_cached("SELECT value FROM source_state WHERE source_id = ?1 AND key = ?2")?
-            .query_row(params![source.get(), key], |r| r.get(0))
-            .optional()?;
-        if compare && current.as_deref() != expected {
+        if !put_state(&tx, source, key, expected, new, compare)? {
             return Ok(false);
-        }
-        match new {
-            Some(v) => {
-                if current.is_none() {
-                    let n: i64 = tx
-                        .prepare_cached("SELECT count(*) FROM source_state WHERE source_id = ?1")?
-                        .query_row([source.get()], |r| r.get(0))?;
-                    if n >= STATE_MAX_KEYS as i64 {
-                        return Err(Error::Invalid("plugin state is full"));
-                    }
-                }
-                tx.prepare_cached(
-                    "INSERT INTO source_state (source_id, key, value) VALUES (?1, ?2, ?3)
-                     ON CONFLICT DO UPDATE SET value = excluded.value",
-                )?
-                .execute(params![source.get(), key, v])?;
-            }
-            None => {
-                tx.prepare_cached("DELETE FROM source_state WHERE source_id = ?1 AND key = ?2")?
-                    .execute(params![source.get(), key])?;
-            }
         }
         tx.commit()?;
         Ok(true)
     }
+}
+
+/// [`Store::compare_and_set_plugin_state`]'s write, in the caller's
+/// transaction; `new` already checked ([`check_state`]). False when
+/// `compare` and the current value isn't `expected`.
+fn put_state(
+    tx: &Connection,
+    source: SourceId,
+    key: &str,
+    expected: Option<&[u8]>,
+    new: Option<&[u8]>,
+    compare: bool,
+) -> Result<bool> {
+    let current: Option<Vec<u8>> = tx
+        .prepare_cached("SELECT value FROM source_state WHERE source_id = ?1 AND key = ?2")?
+        .query_row(params![source.get(), key], |r| r.get(0))
+        .optional()?;
+    if compare && current.as_deref() != expected {
+        return Ok(false);
+    }
+    match new {
+        Some(v) => {
+            if current.is_none() {
+                let n: i64 = tx
+                    .prepare_cached("SELECT count(*) FROM source_state WHERE source_id = ?1")?
+                    .query_row([source.get()], |r| r.get(0))?;
+                if n >= STATE_MAX_KEYS as i64 {
+                    return Err(Error::Invalid("plugin state is full"));
+                }
+            }
+            tx.prepare_cached(
+                "INSERT INTO source_state (source_id, key, value) VALUES (?1, ?2, ?3)
+                     ON CONFLICT DO UPDATE SET value = excluded.value",
+            )?
+            .execute(params![source.get(), key, v])?;
+        }
+        None => {
+            tx.prepare_cached("DELETE FROM source_state WHERE source_id = ?1 AND key = ?2")?
+                .execute(params![source.get(), key])?;
+        }
+    }
+    Ok(true)
 }
 
 const ITEM_COLUMNS: &str = "id, network, key, source_id, sources, flags, claims, first_at, last_at";
@@ -1840,23 +1903,26 @@ fn shaped_or_unreadable(data: &[u8]) -> bool {
 
 /// Deletes one claims row and marks its torrent for the backfill, and
 /// logs it for the index when the row could have supplied a served answer
-/// ([`shaped_or_unreadable`], X-purge-index-shapes). False when there was
-/// none.
-fn drop_one(conn: &Connection, torrent_id: i64, source: SourceId) -> Result<bool> {
+/// ([`shaped_or_unreadable`], X-purge-index-shapes). `Some(shaped)` when
+/// there was one: the caller moves the classification generation once for
+/// its transaction when any shaped (X-claims-refile-rearm). `None` when
+/// there was none.
+fn drop_one(conn: &Connection, torrent_id: i64, source: SourceId) -> Result<Option<bool>> {
     let lost: Option<Vec<u8>> = conn
         .prepare_cached(
             "DELETE FROM torrent_claims WHERE torrent_id = ?1 AND source_id = ?2 RETURNING data",
         )?
         .query_row(params![torrent_id, source.get()], |r| r.get(0))
         .optional()?;
-    let Some(data) = lost else { return Ok(false) };
+    let Some(data) = lost else { return Ok(None) };
     conn.prepare_cached("UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1")?
         .execute([torrent_id])?;
-    if shaped_or_unreadable(&data) {
+    let shaped = shaped_or_unreadable(&data);
+    if shaped {
         conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
             .execute([torrent_id])?;
     }
-    Ok(true)
+    Ok(Some(shaped))
 }
 
 fn read_claims(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<StoredClaims>> {

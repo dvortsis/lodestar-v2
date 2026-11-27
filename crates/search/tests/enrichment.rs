@@ -629,3 +629,92 @@ proptest! {
         }
     }
 }
+
+/// X-claims-refile-rearm: a refile that holds back an answer takes its
+/// canonical title out of the record and the index without a restart.
+/// The refile reports `rederive`, the writer starts the backfill pass it
+/// asks for (`lodestar_pipeline::unverified` raises the flag, tested
+/// there), and the next index pass finds the title nowhere.
+#[test]
+fn a_refiled_answer_leaves_the_record_and_the_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::open(tmp.path().join("s.db"), StoreConfig::default()).unwrap();
+    let dht = store.register_source("dht", "1", 1).unwrap();
+    let open = store.register_source("wikidata", "1", 1).unwrap();
+    store
+        .set_plugin_state(open, TERMS_KEY, Some(&terms_record(true)))
+        .unwrap();
+    // An ambiguous name over one video file: the answer names the record.
+    let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
+    let dict = |e: Vec<(&str, OwnedValue)>| {
+        OwnedValue::Dict(
+            e.into_iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                .collect(),
+        )
+    };
+    let file = dict(vec![
+        ("length", OwnedValue::Int(900 << 20)),
+        ("path", OwnedValue::List(vec![b("New.Folder.mkv")])),
+    ]);
+    let raw = to_vec(&dict(vec![
+        ("files", OwnedValue::List(vec![file])),
+        ("name", b("New Folder")),
+        ("piece length", OwnedValue::Int(1 << 18)),
+        ("pieces", OwnedValue::Bytes(vec![0; 20 * 3600])),
+    ]));
+    let info = Info::parse(&raw).unwrap();
+    let id = store
+        .insert(&[NewTorrent {
+            info: &info,
+            raw_info: Some(&raw),
+            discovered_at: 1_700_000_000,
+            metadata_at: 1_700_000_001,
+            extra_flags: 0,
+            source: dht,
+        }])
+        .unwrap()[0]
+        .id();
+    let mut c = answer(Some(90), &[], "Zyzzyva Show");
+    c.details.as_mut().unwrap().alt_titles.clear();
+    assert!(store.put_claims(id, open, &c, false).unwrap());
+    lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100).unwrap();
+    let title = |store: &Store| {
+        let e = store.enrichment(id).unwrap().unwrap();
+        lodestar_classify::Record::decode(&e.data)
+            .unwrap()
+            .release("title")
+            .map(str::to_owned)
+    };
+    assert_eq!(title(&store).as_deref(), Some("Zyzzyva Show"));
+    let pass = |store: &mut Store| {
+        let index = SearchIndex::open(&index_dir(tmp.path())).unwrap();
+        let mut w = index.writer(HEAP).unwrap();
+        while w.catch_up(store, 1000).unwrap() > 0 {}
+        w.commit().unwrap();
+        w.finish().unwrap();
+        index
+    };
+    let index = pass(&mut store);
+    assert_eq!(found(&index, "title:zyzzyva"), [id as u64]);
+    drop(index);
+
+    let done = store
+        .refile_claims(
+            &[lodestar_store::unverified::RefiledClaims {
+                torrent_id: id,
+                source: open,
+                filtered: None,
+            }],
+            || true,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(done.rederive, "the writer is asked for a pass");
+    lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100).unwrap();
+    assert_ne!(title(&store).as_deref(), Some("Zyzzyva Show"));
+    let index = pass(&mut store);
+    assert_eq!(found(&index, "title:zyzzyva"), NONE);
+    // The torrent itself stays indexed.
+    assert_eq!(found(&index, "-title:zyzzyva"), [id as u64]);
+}

@@ -148,16 +148,13 @@ impl Store {
             };
             // The claims-shape rule's own test (`Claims::identification`):
             // a purge reindexes every torrent losing an answer served here.
-            let Some((_, confidence)) = c.identification() else {
+            let Some((d, confidence, ids)) = c.into_identification() else {
                 continue;
             };
-            // `identification` found the details section: it's there.
-            let Some(d) = c.details else { continue };
             if !self.redistributes(source)? {
                 continue;
             }
-            let ids = c
-                .ids
+            let ids = ids
                 .into_iter()
                 .filter(|i| {
                     claims::ENRICHMENT_SCHEMES.contains(&i.scheme.as_str())

@@ -1772,6 +1772,9 @@ impl Writer {
         let quarantine_secs = self.cfg.quarantine_secs;
         let held = self.held.clone();
         let adult = self.adult;
+        // A refile that takes a claim shaping a record starts a backfill
+        // pass (X-claims-refile-rearm).
+        let reenrich = self.reenrich.clone();
         #[cfg(test)]
         let (between, marked) = (self.between, self.marked);
         let (store, result) = tokio::task::spawn_blocking(move || {
@@ -1788,6 +1791,7 @@ impl Writer {
                 sealer: sealer.as_deref(),
                 quarantine_secs,
                 adult,
+                reenrich: Some(&reenrich),
                 ..Default::default()
             };
             let result = unverified::refile_step(
@@ -3410,6 +3414,62 @@ mod tests {
         .await;
         assert!(!current(&w), "marked for the backfill");
         assert!(w.reenrich.load(Ordering::Acquire));
+    }
+
+    /// X-claims-refile-rearm: a refile sweep step that holds back an answer
+    /// shaping a record starts the backfill pass at once, so its canonical
+    /// title doesn't stay in the record until the next start.
+    #[tokio::test]
+    async fn a_refile_that_holds_back_an_answer_starts_the_backfill() {
+        use lodestar_store::claims::{Claims, Details};
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        let src = store.register_source("wikidata", "1", 1).unwrap();
+        let mut w = writer(store, coordinator.clone(), gate);
+        let (retry, _retry_rx) = mpsc::channel(4);
+        w.commit(
+            vec![leased(&coordinator, results())],
+            vec![],
+            vec![],
+            vec![],
+            &retry,
+        )
+        .await;
+        let store = w.store.as_mut().unwrap();
+        let id = store.find(&results().key).unwrap().unwrap();
+        let answer = Claims {
+            details: Some(Box::new(Details {
+                canonical_title: Some("Badword Show".into()),
+                match_confidence: Some(90),
+                ..Details::default()
+            })),
+            ..Claims::default()
+        };
+        assert!(store.put_claims(id, src, &answer, false).unwrap());
+        w.filter.update_engine(|e| {
+            let notes = e.load_rules(&lodestar_store::RuleSet {
+                rules: vec![lodestar_store::RuleRow {
+                    id: 1,
+                    query: "badword".into(),
+                    action: Action::Drop.code(),
+                    enabled: true,
+                    shadow_until: None,
+                    unless_query: None,
+                }],
+                ..Default::default()
+            });
+            assert!(notes.is_empty(), "{notes:?}");
+        });
+        assert!(!w.reenrich.load(Ordering::Acquire));
+        w.sweep = unverified::Sweep::default();
+        while !w.sweep.done {
+            w.refile_unverified().await;
+        }
+        let store = w.store.as_ref().unwrap();
+        assert!(store.torrent_claims(id).unwrap().is_empty(), "held back");
+        assert!(w.reenrich.load(Ordering::Acquire), "the backfill starts");
     }
 
     /// The commit hook's store errors (ENR-1c): a failed claims read marks
