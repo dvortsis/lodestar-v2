@@ -140,6 +140,8 @@ fn seed(dir: &Path) -> [u8; 20] {
 
 struct Server {
     dir: tempfile::TempDir,
+    /// The restart proof's witness dir, outside the data dir (CR-0d §1.5).
+    _witness: tempfile::TempDir,
     port: u16,
     child: Child,
     stderr: Arc<Mutex<String>>,
@@ -157,6 +159,7 @@ impl Server {
     /// from nowhere: it only hears what a test sends it.
     fn start_with(dht: Option<u16>) -> Server {
         let dir = tempfile::tempdir().unwrap();
+        let witness = tempfile::tempdir().unwrap();
         let hash = seed(dir.path());
         if let Some(p) = dht {
             std::fs::write(
@@ -171,6 +174,9 @@ impl Server {
             .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
             .env("LODESTAR_DHT_PORT", dht.unwrap_or(0).to_string())
             .env("LODESTAR_DHT_ENABLED", dht.is_some().to_string())
+            // Safe restart stays on, the default since CR-0w, so the
+            // canary covers it; its witness goes to a temp dir, not $HOME.
+            .env("LODESTAR_DHT_WITNESS_DIR", witness.path())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -218,6 +224,7 @@ impl Server {
         };
         let mut s = Server {
             dir,
+            _witness: witness,
             port,
             child,
             stderr,

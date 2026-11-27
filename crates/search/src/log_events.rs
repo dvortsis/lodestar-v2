@@ -178,6 +178,19 @@ lodestar_log::catalogue! {
         message: "A torrent's enrichment is unreadable; indexed without it",
         fields: { torrent_id: Size },
     }
+    /// Saved searches and alerts stored with `verified:yes,no` (made with
+    /// "Show unverified" before imports had their own value) now take
+    /// `verified:yes,imported,no`, so they keep finding imports
+    /// (X-saved-verified-rewrite). Once per database, at start. A search
+    /// whose stored query can't be read, or would pass the size limit
+    /// rewritten, is kept as it is and counted.
+    SAVED_VERIFIED_REWRITTEN {
+        id: "search.saved_verified_rewritten",
+        component: Search,
+        level: Info,
+        message: "Saved searches made with Show unverified now include imports",
+        fields: { rewritten: Size, unparseable: Size, too_long: Size },
+    }
 }
 
 /// The search crate's error by its kind: Tantivy's text can carry query

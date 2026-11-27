@@ -36,8 +36,9 @@ journalctl -u lodestar | grep "setup token"
   `/var/lib/lodestar` or add its path to `ReadWritePaths=` and set
   `LODESTAR_DATA_DIR`. With `DynamicUser=`, a custom path must be writable by
   the dynamic user, so a drop-in with a fixed `User=` is simpler there.
-- **Restart record:** with `[dht] safe_restart` on, a clean restart can
-  resume sampling at once. Its record lives in `/var/lib/lodestar-witness`,
+- **Restart record:** newer than v0.5.1, `[dht] safe_restart` is on by
+  default, and a clean restart restores per-node restrictions. No start waits
+  to sample (v0.5.1 waits six hours). Its record lives in `/var/lib/lodestar-witness`,
   a second state directory beside the data directory. Back up
   `/var/lib/lodestar`, never the two together: restoring both would hide
   the restore. With `DynamicUser=` both really live under

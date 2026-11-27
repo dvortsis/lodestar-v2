@@ -168,9 +168,10 @@ pub struct Config {
     /// Where to keep `state.bin`; `None` disables persistence.
     pub state_path: Option<PathBuf>,
     pub query_timeout: Duration,
-    /// `None` suppresses samples for six hours plus `query_timeout` after
-    /// every start, protecting cooldowns lost on restart. Override only
-    /// for isolated fixtures or a caller guaranteeing no previous obligations.
+    /// Holds samples for this long after the actor starts; `None` (the
+    /// default) is no delay. A fixture's knob only: it no longer turns the
+    /// restart proof off, and no start waits in production (owner §2.77,
+    /// CR-0w).
     pub sample_start_delay: Option<Duration>,
     /// Maintenance cadence (timeouts, refresh, pings).
     pub tick: Duration,
@@ -186,9 +187,10 @@ pub struct Config {
     /// Start paused (the crawler's pause, which persists): see
     /// [`NodeHandle::set_paused`].
     pub paused: bool,
-    /// CR-0d's crash-safe restart proof (`dht.safe_restart`): `None` keeps
-    /// the full suppression after every start. It needs `state_path` and
-    /// no `sample_start_delay` override; without them it acts as off.
+    /// CR-0d's crash-safe restart proof (`dht.safe_restart`, on by
+    /// default): after a proven clean restart the last run's per-node
+    /// restrictions are honoured. `None`, or no `state_path`, restores
+    /// nothing. Either way sampling starts at once (CR-0w).
     pub restart: Option<RestartConfig>,
     /// CR-1a-H's responder hints (`dht.responder_hints`): a lookup first
     /// asks the BEP 51 responder that listed its hash. Off allocates no
@@ -263,7 +265,7 @@ pub struct Config {
 pub struct RestartConfig {
     /// Where the generation witness lives: outside the data directory.
     /// `None`, or a directory that resolves inside it, means no witness,
-    /// so every start suppresses (`no_witness`).
+    /// so no start resumes (`no_witness`).
     pub witness_dir: Option<PathBuf>,
     /// Test seam: the wall clock. Its `mono` must be tokio's
     /// `Instant::now()`, the clock the sampler keeps; production uses
@@ -436,9 +438,15 @@ pub struct Stats {
     #[cfg(feature = "testing")]
     pub residences: std::sync::Mutex<Vec<(tokio::time::Instant, u64)>>,
     pub sample_frontier: AtomicU64,
+    /// Gauge: seconds until sampling may start. 0 in production once the
+    /// restart proof's start work lands (at most 10 s, CR-0w), except in
+    /// a crash loop (at most 60 s); `u64::MAX` for a fixture's delay that
+    /// doesn't fit the clock.
     pub sample_suppression_seconds: AtomicU64,
-    /// Gauge: why this run is or isn't sampling yet, as an index into
-    /// [`crate::restart::Reason::ALL`].
+    /// Gauge: the restart proof's outcome (why the last run's restrictions
+    /// were or weren't restored), as an index into
+    /// [`crate::restart::Reason::ALL`]. Only `dirty` can hold sampling past
+    /// the start hold, for at most a minute in a crash loop (CR-0w).
     pub sample_suppression_reason: AtomicU64,
     /// Gauges: restrictions restored at start, and those still cooling.
     pub restart_obligations_restored: AtomicU64,

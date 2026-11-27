@@ -35,8 +35,10 @@ phases:
 - id: ph-crawler
   name: Discover faster
   badge: In progress
-  plain: The crawler finds about 12 torrents a minute. The v0.6 gate is 100 a minute. This work builds each idea
-    behind an off switch, then measures it live on a dedicated host.
+  plain: 'The crawler finds about 12 torrents a minute. The v0.6 gate is 100 a minute. Every idea is built behind
+    an off switch. After the bitmagnet comparator, round 1 runs them all on together on your experiment host, on two
+    days, each test arm on its own VPN exit; the winner becomes the default. Per-switch attribution moves to 1.1
+    (owner-decisions §2.86).'
   tag: v0.6 gate
 - id: ph-sources
   name: More places to find torrents
@@ -126,11 +128,11 @@ workstreams:
   ws-cr-live:
     phase: ph-crawler
     name: Measure live on the experiment host
-    plain: 'Runs on a machine you name: the comparator, then paired on/off runs, then a checkpoint.'
+    plain: 'Runs on your experiment host: the bitmagnet comparator, then round 1 (all-on Balanced, Aggressive as the fallback, an all-off control) over two days. The older paired on/off runs and Checkpoint 1 move to 1.1 (§2.86).'
   ws-cr-tune:
     phase: ph-crawler
     name: Tune, combine, accept
-    plain: Profile-driven tuning, then combine the winners and run the 24-hour acceptance.
+    plain: 'Round 1''s qualified settings become the defaults, unchanged otherwise, and its two days are the acceptance (§2.86). Profile-driven tuning (CR-5) moves to 1.1.'
   ws-src-core:
     phase: ph-sources
     name: Foundations
@@ -471,6 +473,7 @@ placement:
   - X-prowlarr-settings
   - X-restart-required-creds
   - X-event-log-notice
+  - X-legal-safe-restart
   - X-prowlarr-register
   - X-prowlarr-register-followups
   - X-event-log-followups
@@ -662,8 +665,13 @@ placement:
   - X-sampler-streak-metrics
   - X-capacity-rejection-source
   - CR-0w
+  - X-dht-switch-identity
+  - X-cr-round1-collect
+  - X-cr-round1-gate
+  - CR-SPEC-R1
 - ws: ws-cr-live
   match:
+  - CR-R1
   - CR-AB-*
   - CR-CP1
   - X-host-ab-runsheet
@@ -971,6 +979,8 @@ placement:
   - X-import-rate-1m
   - X-import-verified-no
   - X-import-drain-memory
+  - X-remote-verified
+  - X-saved-verified-rewrite
   - X-store-load-busy-map
   - X-store-busy-nits
   - X-routing-table-metric
@@ -995,6 +1005,12 @@ pinned:
 held:
 - X-rejudge-pending-gate  # held (owner-decisions §2.71)
 - PK-nightly-host  # approved (§2.69 item 10) but launches only once the nightly key exists and the Nightly channel is offered (§2.52)
+- CR-AB-ADM  # deferred to 1.1 (per-switch attribution) by owner O1, 2026-11-27 (§2.86): round 1 replaces it before the gate
+- CR-AB-4  # deferred to 1.1 by owner O1 (§2.86)
+- CR-CP1  # superseded by the round-1 report (§2.86, plan §3.4); kept for 1.1 attribution
+- CR-AB-LC  # deferred to 1.1 by owner O1 (§2.86)
+- CR-AB-1  # deferred to 1.1 by owner O1 (§2.86)
+- CR-5  # deferred to 1.1 by owner O1 (§2.86)
 expanded:
 - X-ui-checks
 - E-v06-sources
@@ -1103,12 +1119,12 @@ conditions:
     met: true
     who: you
     label: 'Standing permission, no per-run booking (§2.68). A crawler run never overlaps another run, a comparator day, an import pilot or a soak. It may pause only Appdata Backup and a scheduled parity check, with a restore step that always runs'
-    note: 'cr-ab-comp-1 (the bitmagnet comparator) ended 2026-11-08T14:01Z and you accepted it: 317.8 stored/min over 24 h. The box is down (you, 2026-11-23): runs there wait until you say it is back, and provisional cloud runs go first (§2.82)'
+    note: '`lodestar-host`, the VM on your new Unraid server, is the host of record (§2.85, D2), at 8 vCPU and 32 GiB (D10). Every test crawl runs inside WireGuard with its leak test passing (§2.85). cr-ab-comp-1 (the bitmagnet comparator on the old host) ended 2026-11-08T14:01Z: 317.8 stored/min over 24 h. cr-ab-comp-2 is running on the new host; its window ends about 2026-11-28T18:00Z, and round 1 (CR-R1) starts at least 12 h after it (§2.86)'
   owner-checkpoint-1:
     met: true
     who: you
     label: You re-decide at Checkpoint 1 if the crawler projection falls short
-    note: 'The first step is decided by the runner on your delegation, §2.69: Track C fixes and a new measurement first. If still short, you re-decide the number (§2.27)'
+    note: 'Superseded by §2.86 (2026-11-27): the round-1 report replaces Checkpoint 1 (plan §3.4), and no slice before the gate depends on it. If no round-1 candidate qualifies, round 2 runs only with your yes; the runner never loosens the gate (§2.27). Kept for the 1.1 attribution slices'
   import-host:
     met: false
     who: you
@@ -1375,41 +1391,64 @@ roadmap:
     - CR-SOFT-TIMEOUT
     - X-crawler-sim-calibrate
     - CR-COL-5
+    - CR-1c
   - id: crab
-    label: Live A/B on the experiment host
-    plain: Paired on/off runs plus a bitmagnet comparator. Needs your host, which is down; provisional cloud runs go first and never count as the gain (§2.82), and the host's run sheet is prepared meanwhile.
+    label: Comparator on the new host
+    plain: 'cr-ab-comp-2, the pinned bitmagnet comparator, runs on lodestar-host from 2026-11-27T17:00Z; its window ends about 2026-11-28T18:00Z. It calibrates the host and its VPN network for round 1.'
     col: 1
     row: 0
     members:
     - CR-AB-COMP
-    - CR-AB-ADM
-    - CR-AB-4
     - X-host-ab-runsheet
-  - id: cp1
-    label: Checkpoint 1
-    plain: Does the measured gain project to 100 torrents a minute? If not, you re-decide.
+  - id: crharness
+    label: Round-1 harness
+    plain: 'Three slices so the tools judge round 1 correctly: a gauge of each switch''s effective value (X-dht-switch-identity), one VPN per arm with its own leak test and a coordinated shutdown (X-cr-round1-collect), and the two-day gate-round verdict (X-cr-round1-gate). Round 1 isn''t booked until their fixtures pass (plan §5).'
     col: 2
     row: 0
     members:
-    - CR-CP1
-  - id: crtune
-    label: Tune and combine
-    plain: Remaining experiments, tuning, then the 24-hour acceptance run.
+    - X-dht-switch-identity
+    - X-cr-round1-collect
+    - X-cr-round1-gate
+  - id: crspec
+    label: Round-1 measurement rules
+    plain: 'CR-SPEC-R1, which you confirmed (O3, §2.86): every arm''s declared settings, the evidence each switch must show, the layouts, retries and the pinned image. Merged before the rehearsal.'
     col: 3
     row: 0
     members:
-    - CR-1c
-    - CR-AB-LC
-    - CR-AB-1
-    - CR-5
-    - CR-COMB
-  - id: g06c
-    label: Crawler gate (100/min)
-    plain: 24 h mean at least 100 a minute, no hour under 70.
+    - CR-SPEC-R1
+  - id: crr1
+    label: Round 1 (two days)
+    plain: 'After a rehearsal, day 1 starts at least 12 h after the comparator''s window ends (about 2026-11-29T06:00Z), then day 2 on swapped VPN exits; the verdict is due about 2026-12-01. All-on Balanced first, Aggressive as the fallback you authorized, an all-off control (plan §6).'
     col: 4
     row: 0
     members:
+    - CR-R1
+  - id: crtune
+    label: New defaults (CR-COMB)
+    plain: 'The qualified candidate''s settings become the defaults, with no other change, checked on a fresh start (plan §6.5). Round 1''s two days are the acceptance.'
+    col: 5
+    row: 0
+    members:
+    - CR-COMB
+  - id: g06c
+    label: Crawler gate (100/min)
+    plain: 24 h mean at least 100 a minute, no hour under 70, p95 discovery-to-searchable within 10 min.
+    col: 6
+    row: 0
+    members:
     - G-v06-crawler
+  - id: cr11
+    label: Per-switch attribution (1.1)
+    plain: 'The paired on/off runs, Checkpoint 1 and profile-driven tuning, deferred by your O1 (§2.86): they measure each switch''s share after 1.0.'
+    col: 7
+    row: 0
+    members:
+    - CR-AB-ADM
+    - CR-AB-4
+    - CR-CP1
+    - CR-AB-LC
+    - CR-AB-1
+    - CR-5
   - id: src-core
     label: 'Sources: foundations'
     plain: Plug-in contract, unverified-item storage, consent, network controls.
@@ -1825,11 +1864,17 @@ roadmap:
   - - cr4
     - crab
   - - crab
-    - cp1
-  - - cp1
+    - crharness
+  - - crharness
+    - crspec
+  - - crspec
+    - crr1
+  - - crr1
     - crtune
   - - crtune
     - g06c
+  - - g06c
+    - cr11
   - - g06c
     - v06
   - - src-core
@@ -1946,14 +1991,9 @@ owner_queue:
   unblocks: Nothing; this goes ahead unless you object
   when: Any time
 - n: 26
-  type: decision
-  action: 'Will you, or someone like the intended user, walk first run → first search → copy a magnet and say where they got stuck? Nobody from that audience has used it yet (UI review 04 §6a)'
+  type: action
+  action: 'Walk first run → first search → copy a magnet yourself, and say where you got stuck (you said yes, §2.85 D7; emulation is accepted for the screen-reader and phone checks, which closes item 27). Nobody from that audience has used it yet (UI review 04 §6a)'
   unblocks: Confidence that the first-run and search fixes in Track U are the right ones
-  when: Before the 1.0 design gate (M8-DR)
-- n: 27
-  type: decision
-  action: 'A screen-reader run and a pass on a real phone or tablet need your hardware. Will you run them, or accept emulation for 1.0? (UI review 03-c, 03-e, 02 §3f)'
-  unblocks: The accessibility and touch checks the review could not make
   when: Before the 1.0 design gate (M8-DR)
 - n: 28
   type: review
@@ -1965,11 +2005,6 @@ owner_queue:
   action: 'May docs/reviews/dht-survey-evidence/original-scheduler.rs.txt stay in the repository? It is 2,227 lines of outside code, the scheduler proposal that the 2026-11-16 crawler survey reviewed (#970). Its source is not recorded, and the repository is AGPL'
   unblocks: Keeping the survey's evidence reproducible, or removing the file and keeping only its hash
   when: Any time
-- n: 30
-  type: decision
-  action: 'May two crawler slices run at the same time when their owns overlap only on shared DHT files where each adds its own switch lines (node/mod.rs, node/actor.rs, lodestar/src/config.rs, crates/dht/tests)? Your rule says owns never overlap, so today X-sampler-cooldown-split, CR-LOOKUP-END, CR-1c and CR-HINT-FIRST run one at a time. The runner recommends yes for additive lines only, with the second to land bringing main in'
-  unblocks: Building the four crawler switches in parallel, a few days sooner on the path to 100
-  when: Any time; until then they run one at a time
 - n: 31
   type: decision
   action: 'Require the Purpose=X-test-vm tag on test-VM volumes in the test-VM IAM policy (infra/dev-vm/aws-claude-testvm.json, RunOnlyEncryptedBoundedVolumes)? Today it requires only Project=Lodestar on volumes, so a volume launched without Purpose would slip past the teardown check, which looks for Purpose. The runner recommends yes. X-testvm-teardown-by-id also checks each lane''s own volume by id'
@@ -1985,16 +2020,6 @@ owner_queue:
   action: 'Should a metadata fetch over uTP get one extra 4 s for its first window, only while pieces are still arriving (CR-UTP-FIRST-WINDOW option (b), on top of (d), which merged as #1054)? A slow uTP peer could then hold its first claim for 8 s instead of 4 s; a silent peer still has 4 s, and TCP is unchanged. After (d), at most 9.25% of first windows still miss at 20% packet loss and 2.5% at 15%; the extension would save those that need under 8 s (not measured with it in place). The runner recommends no, unless live data show uTP paths at 15% loss or worse are common (docs/decisions/2026-11-22-CR-UTP-FIRST-WINDOW.md)'
   unblocks: Fewer missed metadata fetches over lossy uTP paths, at a looser bound against slow peers
   when: Any time; until then the 4 s deadline holds for every transport
-- n: 35
-  type: decision
-  action: 'May a provisional cloud A/B stage keep one test instance for up to 44 h, as the fleet does (cloud-fleet-runbook.md), instead of at most 24 h? You approved Linux test instances on AWS with 24 h expiry tags. A stage runs two blocks of about 18 h each, so with 24 h each block gets a fresh instance and IP. That still gives a valid result, because each block is balanced within its own instance, but the spread between blocks is wider. The 48 h guard and the spend stop are unchanged either way. The runner recommends yes, for the cloud A/B stages only (runner records r15).'
-  unblocks: One instance and IP for a whole cloud stage, so stage results are a little tighter
-  when: Any time; until then each block gets its own instance
-- n: 36
-  type: decision
-  action: 'May the experiment-host operator move Unraid''s mover schedule for the length of a host A/B stage, then put it back? A mover run inside a block invalidates a segment (it counts as an array operation), §2.68 lets the operator pause parity checks and backups but not change the mover, and Unraid''s default mover runs daily while a block runs about 36 h, so every block would hit it. Today the run sheet stops before starting and asks you (docs/soak/runsheets/host-stage1-ab-runsheet.md step 4b). The runner recommends yes: move it outside the stage''s hours and restore it at the stage''s end, recorded in the stage''s records (runner records r16).'
-  unblocks: Host A/B blocks that start on time instead of waiting on a daily mover run
-  when: Before the experiment host's stage 1 starts; until then the run sheet asks you each time
 - n: 37
   type: action
   action: 'Optional: will you, or a person you choose, read TorBox''s current terms (and its abuse-system article) in a browser before v0.7 closes? Debrid cache status was skipped because no provider qualifies (docs/decisions/2026-11-23-ENR-debrid.md): TorBox appears to offer a cache check by hash (its changelog and third-party docs say so), but its docs and terms pages are script-rendered and couldn''t be read by a session. If the terms clearly allow a third-party app to check hashes with the user''s own key, the runner can relaunch ENR-debrid for TorBox within v0.7 under your Q4 answer. If they''re silent or ambiguous, that''s a grey case and comes back to you under §2.28'
@@ -2015,6 +2040,11 @@ owner_queue:
   action: 'May web/licenses/allow.json add CDLA-Permissive-2.0, the licence of webpki-root-certs (Mozilla''s root list)? X-sec-S8-25 (#1125) would bundle it. The runner first allowed it, then withdrew that: a licence change is a legal call and yours'
   unblocks: Bundling Mozilla's root list, or a recorded no
   when: Any time; X-sec-S8-25 lands without it
+- n: 41
+  type: review
+  action: 'Runner calls you may want to veto (§2.19; docs/decisions/2026-11-27-runner-records-r19.md): CR-0w (#1134) merged before round 1, its stage-1 timing hold being moot; round 1''s harness is built as three slices on disjoint files (X-dht-switch-identity, X-cr-round1-collect, X-cr-round1-gate) to meet the 12 h gap after the comparator; CR-AB-ADM, CR-AB-4 and CR-AB-LC no longer need cloud provisional runs, and the optional Aggressive cloud screen stays blocked while the test lanes'' SSM access is denied'
+  unblocks: Nothing; these go ahead unless you object
+  when: Any time
 
 gates:
 - id: G-v05
@@ -2194,6 +2224,10 @@ crawler:
   value: 17.0
   kind: measured
   note: 7 h 10 min run
+- label: bitmagnet, 24 h on the old host (cr-ab-comp-1)
+  value: 317.8
+  kind: measured
+  note: 'The comparator, 2026-11-07 to 11-08. cr-ab-comp-2 re-measures it on lodestar-host before round 1 (§2.86)'
 - label: Gate for the v0.6 tag
   value: 100
   kind: gate
@@ -2220,28 +2254,28 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-24'
+  updated: '2026-11-27'
   now:
-  - label: The sampler split pauses sampling after a restart
-    text: 'On the real network the sampler split (dht.sampler_cooldown_split) ends the full-table stall, but after a clean restart from a spilled state it held sampling for 5 h 25 min. That conflicts with your §2.77 (no sampling wait after any start, and no blanket gate carried across a restart) for anyone who turns the split on; the split is off by default. The cloud''s stage-3 split A/B therefore runs between paired instances instead of switching one instance (runner, r17). §2.77 requires X-split-resume-gate, which shortens or removes that hold, before the split can ship on by default, and in the runner''s reading before it''s offered as a setting at all. Flagged to you.'
+  - label: No start wait (§2.77)
+    text: 'CR-0w (#1134, merged 2026-11-27) removes the sampling wait after any start and the gate a restart carried, and turns safe restart on by default. X-split-resume-gate (#1118) had already shortened the sampler split''s hold after a restart. Round 1 observes a clean restart of each candidate after day 2 (plan §6.6). The Legal Notice''s safe-restart line is corrected, with a new notice version, by your 2026-11-27 answer (§2.87; X-legal-safe-restart).'
   - label: The runner decides the owner queue, except the filters (§2.69)
     text: 'On 2026-11-13 you gave the runner owner-queue items 4, 10, 14, 16 to 19, 21 and 22. Its answers are in docs/decisions/2026-11-13-runner-owner-queue.md, open to your veto. You chose FILTER-01 and FILTER-03 (§2.70). Crawler tests on the Unraid box need no booking now (§2.68). The API credit now funds the owner-run build lane, whose enrichment PRs are landing (seven combined in #971), and the operator is unfunded (§2.75).'
   - label: B1 and B2 first (§2.66)
     text: By your decision, the first-run wizard's raw labels and the missing Sign out went ahead of the larger queue (X-wizard-labels-signout, merged as #811). The Sources restructure is next, then the UI guards.
   - label: 'Review fixes: Tracks Q and U, held findings named by id only'
     text: The code review (Track Q) and the UI review (Track U) are sliced beside the ladder. Security and content-safety findings are named only by id, severity and surface until a release with the fix is out (§2.47); their fix slices are added by id later. Track Q's blocking and important findings must be closed, or held, for the 1.0 security gate.
-  - label: A cloud screen before experiment-host runs
-    text: Before each run on your Unraid box, a candidate first runs a short screen on the two cloud Linodes. The screen can only stop a candidate that clearly fails (a crash, a memory or disk bound, nothing stored). It never counts as evidence of a gain, is never combined with Unraid runs, and never delays a booking. You approved adding this stage; the runner set its rules (P-cloud-test-plan).
+  - label: Cloud testing is optional now
+    text: 'With lodestar-host as the host of record (§2.85, D2), runs of record are on your box and cloud runs are optional screens or replicates, never evidence of a gain (§2.82). The AWS stop is $295, as the AWS Budget "Lodestar Path to 100" measures it (§2.87). The optional Aggressive cloud screen waits while the test lanes'' SSM access is denied.'
   - label: v0.5.1 is published
     text: You published v0.5.1 on 2026-11-07 from 12cd25ca, after it passed the 24-hour memory test (0.91 MiB an hour, upper bound 1.35, bar 2.0), the VPN (gluetun) leg and the Windows MSI check. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
-    text: 'It finds about 12 torrents a minute and the v0.6 tag needs 100. The CR-0 run showed that each lookup costs too much, so the plan you approved on 2026-11-20 follows that (§2.79). Stage 1 tests admission and uTP; stage 2 tests the lookup-cost pair (CR-LOOKUP-END with CR-1c, which joins it by the runner''s call on your 2026-11-23 delegation) on top of their winners, as one treatment, as you chose (§2.80); stage 3 tests hint-first, then the sampler fix. Your Unraid box is down, so by your 2026-11-23 go-ahead stage 1 runs first on AWS, two treatments in parallel on their own instances, within the credit you named (§2.82). Cloud results are provisional: they pick the stacked control for the cloud''s stage 2 and can stop only a clear failure; every stage 1 treatment still gets its run on your box, which gives the gain of record. Every change is behind an off switch.'
+    text: 'It finds about 12 torrents a minute and the v0.6 tag needs 100. Performance comes first and politeness second, tuned after 1.0 (§2.85). By your O1 to O4 (2026-11-27, §2.86; docs/plan/2026-11-27-revised-path-to-100.md), round 1 replaces the serial stages and Checkpoint 1: after the bitmagnet comparator cr-ab-comp-2 (window ends about 2026-11-28T18:00Z) and a rehearsal, three arms run on lodestar-host for two days from about 2026-11-29T06:00Z, each on its own VPN exit: all switches on at Balanced (the first choice), at Aggressive (the fallback you authorized), and an all-off control. The verdict is due about 2026-12-01. A qualified candidate''s settings become the defaults (CR-COMB) and its two days are the acceptance. If none qualifies, the round-1 report comes to you and round 2 runs only with your yes. The paired on/off runs (CR-AB-ADM, CR-AB-4, CR-AB-LC, CR-AB-1), Checkpoint 1 and CR-5 move to 1.1. Cloud results stay provisional (§2.82).'
   - label: Sources are being laid down
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Four plus four sessions
-    text: 'By your instruction, from 2026-11-13T00:00Z at most four build sessions and four cloud-testing sessions run at once (owner-decisions §2.64, replacing §2.59 to §2.61), filled only when ready work fits the plan. Cloud testing comes first (§2.62). Sessions over the cap finish their open pull request and are then archived (§2.65). The runner approves best-practice UX and performance decisions itself, listing them in the daily summary (§2.33). The runner keeps the current list in its state file, shown on the slots view.'
+  - label: Four build sessions and two test sessions
+    text: 'By your yes to D6 (2026-11-26, §2.85), four build sessions and two test sessions run at once, filled only when ready work fits the plan (it replaces §2.81''s "as many testing sessions as needed"). The runner approves best-practice UX and performance decisions itself, flagged to you (§2.19, §2.26). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: New decisions from the reviews
     text: Owner queue item 20 (the draft security advisories); the runner gives you its detail directly. FILTER-01 and FILTER-03 are chosen (§2.70); the others are the runner's now (§2.69).

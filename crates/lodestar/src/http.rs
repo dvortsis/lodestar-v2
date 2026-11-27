@@ -44,6 +44,9 @@ pub struct AppState {
     /// The `.torrent` upload route's way into the pipeline (UP-0), on the
     /// `/api/v1` nest only.
     pub uploads: Option<lodestar_api::upload::Uploader>,
+    /// The crawler switches' effective values, resolved at start
+    /// (X-dht-switch-identity), for `lodestar_dht_switch`.
+    pub switches: Option<crate::config::Switches>,
 }
 
 #[derive(Clone)]
@@ -143,6 +146,9 @@ async fn prometheus(State(s): State<AppState>) -> Response {
     }
     if let Some(filter) = &s.filter {
         metrics::render_filter(&mut body, &filter.current().unreadable);
+    }
+    if let Some(switches) = &s.switches {
+        metrics::render_switches(&mut body, switches);
     }
     if let Some(cluster) = &s.cluster {
         cluster.render(&mut body);

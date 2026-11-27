@@ -8,7 +8,8 @@
 //!
 //! Every file here is untrusted input. Decoding never panics, rejects
 //! anything that isn't exactly what we write, and every failure means the
-//! caller suppresses: nothing here can make a restriction shorter.
+//! caller restores nothing (and, since CR-0w, samples at once): nothing
+//! here can make a restriction shorter.
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -326,7 +327,9 @@ pub struct Snapshot {
     pub run: RunHeader,
     pub at_ms: u64,
     pub horizon_s: u32,
-    /// No sample to anyone before `at + gate_s` (N1).
+    /// CR-0d's blanket gate (N1). Kept in the format; since CR-0w this
+    /// binary writes 0, and a gate an older snapshot holds is dropped at
+    /// resume.
     pub gate_s: u32,
     /// Sorted by family, then address bytes; no duplicates.
     pub entries: Vec<Entry>,
@@ -1061,12 +1064,14 @@ impl From<Fault> for Reason {
     }
 }
 
-/// What resuming restores: restrictions and the gate, on this run's
-/// monotonic clock.
+/// What resuming restores: restrictions (and an older snapshot's gate,
+/// which the proof drops), on this run's monotonic clock.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Seeded {
     pub entries: Vec<(SocketAddr, Instant)>,
-    /// No sample to anyone before this (N1).
+    /// The snapshot's gate on this run's clock (N1). Still decoded and
+    /// checked, so a corrupt one still fails the resume; the proof ignores
+    /// it since CR-0w (only per-node restrictions carry over).
     pub gate_until: Option<Instant>,
     pub dropped_expired: usize,
     /// The spill filter's cooldowns, for the sampler to rebuild its filter
@@ -1523,7 +1528,7 @@ fn read_found<T>(
             Ok(v) => Found::Ok(v),
             Err(f) => Found::Bad(f),
         },
-        // An unreadable file is as good as corrupt: suppress.
+        // An unreadable file is as good as corrupt: restore nothing.
         Err(_) => Found::Bad(Fault::Corrupt("unreadable")),
     }
 }
@@ -1576,7 +1581,7 @@ pub fn read_witness(witness_dir: &Path, data_dir_canonical: &str, dir_id: &Id16)
     // The file itself may not be a link (into the data dir, say). This is
     // check-then-use: a link swapped in between makes the read below see
     // a witness that isn't ours, which fails validation (another path, id
-    // or generation) or decoding, so every outcome suppresses.
+    // or generation) or decoding, so no outcome resumes.
     if fs::symlink_metadata(&file).is_ok_and(|m| m.file_type().is_symlink()) {
         return WitnessFound::Unusable;
     }

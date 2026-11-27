@@ -37,7 +37,7 @@ Regenerate only when the change is intended, and say why in the PR.
 | `healthy` | 2,000 nodes, 15% dead, 2% loss, 40–200 ms replies; the reference shape |
 | `high-latency` | H1: 35% dead, 6% loss, 0.35–1.75 s replies and 20% at 3.6 s (near the 4 s query timeout), so each owned lookup holds a slot longer |
 | `admission-pressure` | H2: 90% BEP 51 nodes on 60 s intervals over a 200,000-hash catalogue, 15% live, so keys far outrun the 32-request cap and churn through retries and eviction |
-| `restart-honoured` | CR-0d's restored restrictions end to end: `healthy` on 15 min ± 25% intervals, restarted cleanly with `dht.safe_restart` on (below) |
+| `restart-honoured` | CR-0d's restored restrictions end to end: `healthy` on 15 min ± 25% intervals, a first start that samples at once, then restarted cleanly with `dht.safe_restart` on (below) |
 | `live-lookup` | The live lookup as CR-0 measured it: slots full, lookups held to the 25 s deadline by stale contacts in the closest set. The calibrated scenario for lookup-cost changes (below) |
 
 `admission-pressure` also departs from the production pool defaults:
@@ -58,9 +58,10 @@ node, when it was sent, and when its reply reached the node with which
 1. **Leg 1** starts fresh with the restart proof on (`Config.restart`,
    `state_path` and the witness dir in a temp dir, `inline_io`, and a
    simulated wall clock: a fixed base plus elapsed virtual time). A first
-   start suppresses for 6 h plus the query timeout; leg 1 then samples for
-   `leg1_minutes` and shuts down cleanly, which commits the proof. Replies
-   still on their way are lost with the process.
+   start restores nothing and samples at once (owner §2.77, CR-0w: no
+   start wait); the run asserts its first sample comes within a minute.
+   Leg 1 samples for `leg1_minutes` and shuts down cleanly, which commits
+   the proof. Replies still on their way are lost with the process.
 2. **Leg 2** starts `gap_s` later from the same dirs, with the pool's queue
    restored, and runs the scenario's `minutes`. The per-minute rows and
    totals are leg 2's.
@@ -103,15 +104,18 @@ The run asserts, and the report's last sections show:
   restriction turned away, not obligations, so it isn't in the sum and
   can exceed `restored`. The proof's `sample_suppression_reason` is
   `resumed`.
-- **The restart cost:** metadata stored in the first hour after the safe
-  restart, against leg 1's first hour of a fresh 6 h suppression (zero:
-  the simulated network sends no queries, so there are no passive
-  harvests).
+- **The restart cost:** metadata stored in leg 2's first `leg1_minutes`
+  after the safe restart, against leg 1's fresh start over the same
+  length.
 
-The negative control (`restart_without_safe_restart_suppresses_in_full`)
+The unproven restart (`restart_without_safe_restart_samples_at_once`)
 turns `safe_restart` off for leg 2: the reason is `off`, nothing is
-restored, the suppression is the full 6 h window, and no node is sampled
-in it.
+restored, the gauge `sample_suppression_seconds` reads 0, the first
+sample comes within a minute, and some nodes leg 1 left cooling are asked
+again early (`sampled_before_expiry` above 0): the re-asks the owner
+accepted instead of a six-hour wait. A clean restart after an unproven
+run is the golden itself: leg 1 is a first start, and leg 2 resumes and
+samples at once with no gate.
 
 The report's `# scripted network` tallies cover both legs; the per-minute
 rows and the totals are leg 2's.

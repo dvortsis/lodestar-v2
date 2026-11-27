@@ -11417,7 +11417,7 @@
       },
       "AstVerified": {
         "type": "string",
-        "description": "A `verified:` value (§18.6): `yes`, the info dict was fetched and\nhashed to the key; `no`, an unverified item known only from claims;\n`imported`, a stored torrent from another indexer's database, not\nchecked against the hash.",
+        "description": "A `verified:` value (§18.6): `yes`, the info dict was fetched and\nhashed to the key; `no`, an unverified item known only from claims;\n`imported`, a stored torrent not checked against the hash here (from\nanother indexer's database, or a remote worker's find not yet\nre-verified).",
         "enum": [
           "yes",
           "no",
@@ -18712,8 +18712,8 @@
           }
         },
         "example": {
-          "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 5 · 2026-11-11**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
-          "version": 5
+          "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 6 · 2026-11-27**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+          "version": 6
         }
       },
       "LogCatalog": {
@@ -21099,7 +21099,7 @@
         "properties": {
           "imported": {
             "type": "boolean",
-            "description": "From another indexer's database; not checked against the hash.\nPresent, and true, only for such an import."
+            "description": "Not checked against the hash here: from another indexer's\ndatabase, or a remote worker's find not yet re-verified. Present,\nand true, only for such a torrent."
           },
           "network": {
             "type": "string",
@@ -21114,7 +21114,7 @@
           },
           "verified": {
             "type": "boolean",
-            "description": "The info dict was fetched and hashed to the key (§18.5). False for\nan import (`imported`)."
+            "description": "The info dict was fetched and hashed to the key here (§18.5).\nFalse for an `imported` torrent."
           },
           "withheld": {
             "type": "boolean",
@@ -22557,7 +22557,7 @@
           },
           "imported": {
             "type": "boolean",
-            "description": "From another indexer's database; not checked against the hash (the\n\"Imported\" badge, in place of \"Unverified\"). Shown by default, like\na verified torrent. On `/search` hits only, and only when true."
+            "description": "Not checked against the hash here: from another indexer's database,\nor a remote worker's find not yet re-verified (the \"Imported\"\nbadge, in place of \"Unverified\"). Shown by default, like a verified\ntorrent. On `/search` hits only, and only when true."
           },
           "junk_reasons": {
             "type": "array",

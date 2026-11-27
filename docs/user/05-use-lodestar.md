@@ -56,7 +56,7 @@ Select **Copy magnet** to copy the magnet URI to your clipboard, or **Open full 
 | State | What it means |
 |---|---|
 | **Crawling** | Lodestar is fetching torrent descriptions. |
-| **Starting** | Lodestar started less than 6 hours ago and nothing is flowing yet. Sampling waits up to 6 hours after every start. |
+| **Starting** | **v0.5.1:** Lodestar started less than 6 hours ago and nothing is flowing yet. Sampling waits up to 6 hours after every start. **(Newer than v0.5.1)** There is no six-hour wait. Sampling starts once Lodestar has found its first DHT nodes, so the pill shows **Starting** for only a few seconds (up to a minute after repeated crashes). |
 | **Idle** | The crawler has nothing to do right now. |
 | **Paused** | You paused the crawler. Search still works. |
 | **Rebuilding index** | Lodestar is rebuilding the search index and shows its progress. |
@@ -68,7 +68,9 @@ When the pill says **Stalled**, open **Insights**. A banner there says the crawl
 *Figure 5.5: The status pill in its normal and stalled states. (Screenshot pending; see [`images/SHOTLIST.md`](images/SHOTLIST.md).)*
 
 > [!NOTE]
-> After a start, sampling waits 6 hours, so the pill and the counts move slowly at first. Full speed starts after those 6 hours. The index grows over days.
+> **v0.5.1:** after a start, sampling waits 6 hours, so the pill and the counts move slowly at first. Full speed starts after those 6 hours. The index grows over days.
+>
+> **(Newer than v0.5.1)** There is no wait. Counts begin to move once Lodestar has found its first DHT nodes. The index still grows over days and weeks, so don't expect it to fill in the first hour.
 
 > [!TIP]
 > **Key takeaways**
