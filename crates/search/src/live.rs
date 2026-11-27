@@ -305,6 +305,9 @@ fn follow(
             backfilled,
         } = indexer.catch_up_counted(store, config.batch)?;
         let replayed = replayed + backfilled;
+        // A full step means more is waiting (an import's drain): title
+        // builds wait until a step comes back short.
+        titles.set_behind(added + replayed >= config.batch);
         pending.added += added as u64;
         pending.adult += adult as u64;
         pending.indexed += (added + replayed) as u64;
