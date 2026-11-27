@@ -35,3 +35,13 @@
 9. **Decisions file** `docs/decisions/2026-11-27-X-cr-round1-collect.md`: the report and archive schema (the interface table), and anything you decided.
 
 **Owns:** `docs/soak/tools/linux/collect.py`, `docs/soak/tools/linux/test_collect*.py`, `docs/soak/tools/linux/README.md`, new files under `docs/soak/tools/linux/`, `infra/fleet/steps/vm/compose.yaml`, `infra/fleet/steps/vm/leak-test.sh`, new files under `infra/fleet/steps/vm/` (the coordinator), `docs/soak/runsheets/host-round1-runsheet.md`, `docs/decisions/*-X-cr-round1-collect.md`, and this slice's `runner/` entries. Ask the runner before touching any other file, including other scripts in `infra/fleet/steps/vm/`.
+
+## Additions (runner, 2026-11-27T18:00Z)
+- **The switch gauge (X-dht-switch-identity):** `lodestar_dht_switch{switch="<name>"}`, a gauge with value 0 or 1, set once at start from the resolved config (default, then file, then environment). There are 13 series, always rendered: the 12 switches (names as in config.rs and plan §6.1) plus `safe_restart`, even with `dht.enabled=false`. The preset isn't in it; keep reading the preset from the settings API.
+- **From X-cr-round1-gate's step 0:** the bundle evidence needs these kept by the collector. Add them, with their label schemas, to `KEEP` / `LABELLED` in collect.py:
+  - `dht_hints_captured_total` (responder_hints);
+  - `fetch_stream_batches_total` (streaming_peers);
+  - `dht_target_prefix_queries_total{kind}` (target_prefixes);
+  - the gauge `dht_sample_cooling_reason{reason}` (sample_backoff_escalate);
+  - `lodestar_dht_switch{switch}`.
+- **The hard-coded `outstanding > 1024` bad bound** near collect.py:2016 would trip on Aggressive (max 4,096). For round-1 runs, take the bound from the arm's declared preset (256 / 1,024 / 4,096). Old runs keep today's behaviour.
