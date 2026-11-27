@@ -57,7 +57,7 @@ pub struct FacetsResponse {
     /// `verified`, and `adult` when there are adult subtypes to list.
     ///
     /// `verified` counts `no` even while the search hides unverified
-    /// items, since its default `verified:yes` is the facet's own
+    /// items, since its default `verified:yes,imported` is the facet's own
     /// selection; `source` lists plugin ids (names in `source_names`),
     /// and never a private source's to anyone but the admin session
     /// (§18.7).

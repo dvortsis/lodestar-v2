@@ -124,11 +124,31 @@ impl BaseQuery {
     }
 }
 
+/// Whether a stored torrent's metadata came from another indexer's
+/// database and was never hashed here, read as the index reads it
+/// ([`lodestar_search::stored_verified`]): its import record, for an
+/// imported row only.
+fn is_import(
+    store: &lodestar_store::Store,
+    row: &lodestar_store::TorrentRow,
+) -> lodestar_store::Result<bool> {
+    let record = if row.flags & lodestar_store::flags::IMPORTED != 0 {
+        store.import_quality(row.id)?.map(|q| q.verification)
+    } else {
+        None
+    };
+    Ok(
+        lodestar_search::stored_verified(row.flags, row.info_size, record)
+            == lodestar_search::query::Verified::Imported,
+    )
+}
+
 /// The query every count of the index runs (search, totals, exact
 /// counts, cursors and facets): `ast` without the torrents a filter rule
 /// hid unless `v.hidden` (or it asks about them itself), without
-/// unverified items unless it names `verified:` (§18.6; `verified:yes,no`
-/// shows both), and without Adult unless `v.adult`.
+/// unverified items unless it names `verified:` (§18.6: the default is
+/// `verified:yes,imported`, so imports stay shown; `verified:yes,imported,no`
+/// shows all three), and without Adult unless `v.adult`.
 ///
 /// The unverified default goes on the user's part, as the hidden one
 /// does: the Verified facet (SRC-17) strips it with the user's own
@@ -742,8 +762,12 @@ async fn run_search(
                 hit.others = others.get(i).copied();
                 enrich(&mut hit, enrichment);
                 if let Some((viewer, catalogue)) = &provenance {
-                    // `torrents` holds verified metadata only (§18.5).
-                    hit.verified = Some(true);
+                    // `torrents` holds verified metadata and imports from
+                    // another indexer's database, read as the index reads
+                    // them (`stored_verified`, X-import-verified-no).
+                    let imported = is_import(&store, &row).map_err(internal)?;
+                    hit.verified = Some(!imported);
+                    hit.imported = imported.then_some(true);
                     hit.source = catalogue.hit_source(&row, *viewer);
                 }
                 hits.push(hit);
@@ -1776,7 +1800,7 @@ mod tests {
     fn the_query_is_the_users_with_visibility_anded_on() {
         let ast = word("dark");
         let verified = || Node::Verified {
-            any: vec![lodestar_search::query::Verified::Yes],
+            any: lodestar_search::query::Verified::SHOWN.to_vec(),
         };
         // Unverified items are hidden on the user's part (§18.6).
         let users = Node::And {
@@ -1955,6 +1979,62 @@ mod tests {
             (Some(2_104.5), 24.0)
         );
         assert!(!got.cold_start && got.growing);
+    }
+
+    /// A hit's `verified` and `imported` follow the row and its import
+    /// record (X-import-verified-no): an import without an info dict
+    /// isn't verified, one with a hashed info dict is, and so is a crawled
+    /// row.
+    #[test]
+    fn an_import_from_another_indexers_database_is_not_verified() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        use lodestar_store::{PreparedTorrent, WriteBatch, flags};
+        let mut store =
+            lodestar_store::Store::open_in_memory(lodestar_store::StoreConfig::default()).unwrap();
+        let source = store.register_source("dht", "1", 1).unwrap();
+        let b = |s: &[u8]| OwnedValue::Bytes(s.to_vec());
+        let mut ids = Vec::new();
+        for (name, extra, info_size) in [
+            ("crawled", 0, None),
+            ("torrent-file", flags::IMPORTED, None),
+            ("database", flags::IMPORTED | flags::FILES_PARTIAL, Some(0)),
+        ] {
+            let info = to_vec(&OwnedValue::Dict(
+                [
+                    (b"length".to_vec(), OwnedValue::Int(5)),
+                    (b"name".to_vec(), b(name.as_bytes())),
+                    (b"piece length".to_vec(), OwnedValue::Int(16_384)),
+                    (b"pieces".to_vec(), b(&[0; 20])),
+                ]
+                .into_iter()
+                .collect(),
+            ));
+            let info = lodestar_metainfo::Info::parse(&info).unwrap();
+            let mut p = store.preparer().prepare(&info, None).unwrap();
+            if let Some(n) = info_size {
+                p.info_size = n;
+            }
+            let rows = [PreparedTorrent {
+                torrent: &p,
+                discovered_at: 1,
+                metadata_at: 2,
+                extra_flags: extra,
+                source,
+                verified: true,
+            }];
+            store
+                .write(&WriteBatch {
+                    prepared: &rows,
+                    ..WriteBatch::default()
+                })
+                .unwrap();
+            ids.push(store.find(&info.primary_hash()).unwrap().unwrap());
+        }
+        let got: Vec<bool> = ids
+            .iter()
+            .map(|id| is_import(&store, &store.torrent(*id).unwrap().unwrap()).unwrap())
+            .collect();
+        assert_eq!(got, [false, false, true]);
     }
 
     fn bare_hit(name: &str) -> SearchHit {

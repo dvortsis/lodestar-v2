@@ -276,12 +276,7 @@ fn leaf(f: Facet, v: &str) -> Node {
         },
         Source::Prov { field, .. } => match field {
             "verified" => Node::Verified {
-                any: vec![
-                    Verified::ALL
-                        .into_iter()
-                        .find(|x| x.as_str() == v)
-                        .unwrap(),
-                ],
+                any: vec![Verified::ALL.into_iter().find(|x| x.as_str() == v).unwrap()],
             },
             "network" => Node::Network {
                 any: vec![Network::from_name(v).unwrap()],
@@ -1121,7 +1116,11 @@ fn provenance_facets_count_the_default_as_the_rest() {
     for q in ["verified:yes", "verified:yes,no", "verified:imported"] {
         let (_, _, got) = run(&index, q, &all_values());
         let v = got.term(Facet::Verified).unwrap();
-        for (x, c) in [("yes", 200 - no - imported), ("imported", imported), ("no", no)] {
+        for (x, c) in [
+            ("yes", 200 - no - imported),
+            ("imported", imported),
+            ("no", no),
+        ] {
             assert_eq!(value(v, x).map_or(0, |y| y.count), c, "{q}: {x}");
         }
     }

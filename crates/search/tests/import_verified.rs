@@ -13,7 +13,7 @@ use lodestar_store::import::{
     BatchCommitted, Completeness, Decision, ImportBatch, ImportRecord, ImportTorrent, NewImportJob,
     Phase, Privacy, Verification,
 };
-use lodestar_store::{Prepared, PreparedTorrent, SourceId, Store, StoreConfig, WriteBatch, flags};
+use lodestar_store::{Prepared, PreparedTorrent, Store, StoreConfig, WriteBatch, flags};
 
 const HEAP: usize = 15 << 20;
 const NOW: i64 = 1_700_000_100;
@@ -157,7 +157,11 @@ fn library(root: &Path) -> (Store, SearchIndex) {
     write(&mut store, &p, flags::IMPORTED | flags::FILES_PARTIAL);
     // IMP-2 and IMP-3 jobs: unverified import records.
     let m = from_database(&store, "magnetico");
-    import(&mut store, "magnetico", &[(m, Completeness::ReportedComplete)]);
+    import(
+        &mut store,
+        "magnetico",
+        &[(m, Completeness::ReportedComplete)],
+    );
     let b = from_database(&store, "bitmagnet");
     import(&mut store, "bitmagnet", &[(b, Completeness::Partial)]);
     let index = SearchIndex::open(&index_dir(root)).unwrap();
@@ -194,7 +198,10 @@ fn imports_are_shown_by_default_and_with_unverified() {
     let (_store, index) = library(tmp.path());
     // The default clause hides only `verified:no`.
     assert_eq!(shown(&index, ""), ALL);
-    assert_eq!(parse("x").unwrap().without_unverified().to_query(), "x verified:yes,imported");
+    assert_eq!(
+        parse("x").unwrap().without_unverified().to_query(),
+        "x verified:yes,imported"
+    );
     // "Show unverified" shows all three.
     assert_eq!(shown(&index, "verified:yes,imported,no"), ALL);
     // Asking for one value is left as asked.

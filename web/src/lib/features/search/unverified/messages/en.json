@@ -5,5 +5,7 @@
 	"search_unverified_badge": "Unverified",
 	"search_unverified_badge_title": "A source reported this; Lodestar hasn't confirmed its metadata yet.",
 	"search_unverified_source": "Source",
-	"search_unverified_partial": "Source counts are partial while the index fills in."
+	"search_unverified_partial": "Source counts are partial while the index fills in.",
+	"search_imported_badge": "Imported",
+	"search_imported_badge_title": "From another indexer's database; the file list wasn't checked against the torrent's hash."
 }

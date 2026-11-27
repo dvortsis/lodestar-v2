@@ -628,6 +628,7 @@ pub(crate) fn hit(
         trackers_checked: swarm.trackers_checked,
         trackers_reporting: swarm.trackers_reporting,
         verified: None,
+        imported: None,
     }
 }
 
