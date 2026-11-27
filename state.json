@@ -11116,16 +11116,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T18:38:52Z",
+    "updated": "2026-11-27T19:46:12Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-cr-round1-gate",
-        "role": "slice",
-        "agent": "session_01MMjhn8S7mheqmCwSJH2QyZ",
+        "slice": "X-cr-round1-collect",
+        "role": "build",
+        "agent": "session_01MMjhn8M4fhd4HMMFyJ8q2e",
         "session": "session_01MMjhn8dWsf8cB7dBNZrTcU",
-        "doing": "round-1 gate-round, declarations, bundle evidence (revised path to 100 \u00a75.2, critical path)",
-        "since": "2026-11-27T17:57Z"
+        "doing": "round-1 collector, per-arm stacks, leak test, coordinator; gate #1147 merged",
+        "since": "2026-11-27T19:46:12Z"
       },
       {
         "slot": 2,
