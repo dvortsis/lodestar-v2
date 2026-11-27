@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T04:56Z",
+  "updated_at": "2026-11-27T05:07Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11214,7 +11214,9 @@
       "planned_end": "2026-11-28T18:00Z",
       "earliest_cr_ab_adm": "2026-11-29T06:00Z (ended + 12 h)",
       "runner_calls": "paths on the appdata pool agreed; power fixed comparator->CR-COMB; qBittorrent off through stage 1; thermal script paused",
-      "recorded": "2026-11-27T04:39Z"
+      "recorded": "2026-11-27T04:39Z",
+      "rehearsal": "passed 2026-11-27T04:41Z",
+      "cr_ab_adm_process_start": "comparator result.json ended + 5 h 30 min (owner-adopted rule 2.2 reading: the window, not the process, must be >= ended + 12 h; analyze_cr spacing() agrees; 30 min runner margin)"
     }
   },
   "owner_answers": [
@@ -11287,7 +11289,8 @@
     },
     "lifted": "2026-11-27T01:31Z",
     "lifted_by": "owner, 2026-11-27T00:51Z, in session_01MMjhnA3S5HWf4ocEbNeBvk (the #970 path-to-100 session; relayed to the runner, which checked the words against that session's events): picked \"Resume all runner work\"; then 01:26Z \"THe runner should prioritize the new plan.\" and 01:27Z \"But it can finish aany paused slices as needed\"",
-    "priority": "path to 100 first (r5/r5.1, build-plan \u00a70.5) for slots, the experiment host and review; paused slices may finish; then the audit fix slices (X-sec-S8-25/26/27 by id), CR-0w tracking, X-restart-fuzz-v2, X-gs-followups-2, the metrics.md runner docs PR"
+    "priority": "path to 100 first (r5/r5.1, build-plan \u00a70.5) for slots, the experiment host and review; paused slices may finish; then the audit fix slices (X-sec-S8-25/26/27 by id), CR-0w tracking, X-restart-fuzz-v2, X-gs-followups-2, the metrics.md runner docs PR",
+    "normal_running": "owner 2026-11-27 (relayed): resume normal build slices and cloud vm sessions"
   },
   "owner_queue_pending": [
     {
