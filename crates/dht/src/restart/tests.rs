@@ -149,7 +149,7 @@ fn resumable() -> (Loaded, Here) {
 }
 
 fn suppressed(loaded: &Loaded, here: &Here) -> Option<Reason> {
-    match plan(loaded, here).decision {
+    match plan(loaded.clone(), here).decision {
         Decision::Suppress(r) => Some(r),
         Decision::Resume(_) => None,
     }
@@ -232,7 +232,7 @@ fn version_1_is_unchanged_and_still_resumes_with_its_gate() {
         m.at_ms = s.at_ms;
     }
     loaded.state_bin = Some([5; 32]);
-    let Decision::Resume(seeded) = plan(&loaded, &here).decision else {
+    let Decision::Resume(seeded) = plan(loaded.clone(), &here).decision else {
         panic!("a version 1 snapshot resumes");
     };
     assert_eq!(seeded.spill, None);
@@ -431,14 +431,13 @@ fn the_fuzz_seeds_are_current() {
         out.extend_from_slice(&expanded);
         out
     };
-    let minute = |tag: u32, minutes: u32| tag << SPILL_MINUTE_BITS | minutes;
     // The smallest: one slot with the lowest tag, at a horizon that isn't
     // whole minutes, so its rounded-up end is clamped to the horizon.
     let minimal = Snapshot {
         horizon_s: 61,
         gate_s: 0,
         entries: vec![],
-        spill: Some(spilled(&[(0, minute(0x0_1000, 2))])),
+        spill: Some(spilled(&[(0, word(0x0_1000, 2))])),
         ..snapshot()
     };
     // At the caps: the longest horizon and gate, entries at the horizon,
@@ -453,7 +452,7 @@ fn the_fuzz_seeds_are_current() {
             (0..SPILL_BLOCK as u32).map(move |i| {
                 let tag = 0x0_1000 + i * ((0xF_FFFF - 0x0_1000) / 63);
                 let minutes = if i % 8 == 7 { 1 } else { spill_max_minutes(h) };
-                (b, minute(tag, minutes))
+                (b, word(tag, minutes))
             })
         })
         .collect();
@@ -1080,7 +1079,7 @@ proptest! {
 #[test]
 fn a_consistent_set_resumes_with_entries_and_gate() {
     let (loaded, here) = resumable();
-    let p = plan(&loaded, &here);
+    let p = plan(loaded.clone(), &here);
     assert_eq!(p.generation, 8);
     assert_eq!(p.dir_id, DirId::Keep([1; 16]));
     let Decision::Resume(seeded) = p.decision else {
@@ -1254,12 +1253,12 @@ fn dir_id_and_generation_rules() {
     if let WitnessFound::Ok(w) = &mut l.witness {
         w.generation = 40;
     }
-    assert_eq!(plan(&l, &h).generation, 41);
+    assert_eq!(plan(l.clone(), &h).generation, 41);
     // A witness for this id naming another path: a copy, so a new id.
     if let WitnessFound::Ok(w) = &mut l.witness {
         w.path = "/srv/lodestar-copy".into();
     }
-    let p = plan(&l, &h);
+    let p = plan(l.clone(), &h);
     assert_eq!(
         (p.dir_id, p.decision),
         (DirId::New, Decision::Suppress(Reason::DataDir))
@@ -1267,15 +1266,15 @@ fn dir_id_and_generation_rules() {
     // No usable marker: a new id; generation still counts past the witness.
     let (mut l, h) = resumable();
     l.marker = Found::Bad(Fault::Corrupt("x"));
-    let p = plan(&l, &h);
+    let p = plan(l.clone(), &h);
     assert_eq!((p.generation, p.dir_id), (8, DirId::New));
     l.marker = Found::Missing;
     l.witness = WitnessFound::Missing;
-    assert_eq!(plan(&l, &h).generation, 1);
+    assert_eq!(plan(l.clone(), &h).generation, 1);
     // A moved directory keeps its id while its witness agrees.
     let (l, mut h) = resumable();
     h.dir_path = [7; 32];
-    let p = plan(&l, &h);
+    let p = plan(l.clone(), &h);
     assert_eq!(
         (p.dir_id, p.decision),
         (DirId::Keep([1; 16]), Decision::Suppress(Reason::DataDir))
@@ -1909,7 +1908,7 @@ proptest! {
             wall0: Duration::from_millis(now),
             mono0: Instant::now(),
         };
-        match plan(&loaded, &here).decision {
+        match plan(loaded.clone(), &here).decision {
             Decision::Resume(seeded) => {
                 prop_assert!(now - s.at_ms <= u64::from(s.horizon_s) * 1000);
                 for (addr, until) in &seeded.entries {
@@ -1966,7 +1965,7 @@ proptest! {
             state_bin: Some([5; 32]),
         };
         let (_, here) = resumable();
-        prop_assert!(matches!(plan(&loaded, &here).decision, Decision::Suppress(_)));
+        prop_assert!(matches!(plan(loaded.clone(), &here).decision, Decision::Suppress(_)));
     }
 }
 
@@ -1998,7 +1997,7 @@ fn a_sub_millisecond_wall0_through_plan_never_seeds_early() {
             dir_path: [4; 32],
             ..here
         };
-        let Decision::Resume(seeded) = plan(&base, &here).decision else {
+        let Decision::Resume(seeded) = plan(base.clone(), &here).decision else {
             panic!("must resume at {deadline}");
         };
         let mut checked = 0;

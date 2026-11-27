@@ -1032,8 +1032,10 @@ pub struct Plan {
 }
 
 /// S2: validates what S1 read (first failure wins) and, only if every
-/// rule passes, converts the snapshot to this run's clock.
-pub fn plan(loaded: &Loaded, here: &Here) -> Plan {
+/// rule passes, converts the snapshot to this run's clock. Takes `loaded`
+/// by value so the spill section (up to about 32 MiB) moves into the
+/// seeded state rather than being copied.
+pub fn plan(loaded: Loaded, here: &Here) -> Plan {
     let marker = match &loaded.marker {
         Found::Ok(m) => Some(m),
         _ => None,
@@ -1063,7 +1065,17 @@ pub fn plan(loaded: &Loaded, here: &Here) -> Plan {
     }
 }
 
-fn validate(loaded: &Loaded, here: &Here) -> Result<Seeded, Reason> {
+fn validate(loaded: Loaded, here: &Here) -> Result<Seeded, Reason> {
+    let now = check(&loaded, here)?;
+    match loaded.snapshot {
+        Found::Ok((s, _)) => seed_owned(s, now, here),
+        // `check` passed only with a snapshot.
+        _ => Err(Reason::Corrupt),
+    }
+}
+
+/// Every rule of S2, in order; `floor_ms(wall0)` if all pass.
+fn check(loaded: &Loaded, here: &Here) -> Result<u64, Reason> {
     // 1–3: the marker.
     let m = match &loaded.marker {
         Found::Missing => return Err(Reason::FirstStart),
@@ -1121,13 +1133,20 @@ fn validate(loaded: &Loaded, here: &Here) -> Result<Seeded, Reason> {
     if now - m.at_ms > u64::from(here.horizon_s) * 1000 {
         return Err(Reason::Stale);
     }
-    seed(s, now, here)
+    Ok(now)
+}
+
+/// [`seed_owned`] on a copy, for tests that keep the snapshot.
+#[cfg(test)]
+pub(crate) fn seed(s: &Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason> {
+    seed_owned(s.clone(), now, here)
 }
 
 /// The restored deadlines on this run's clock. `now` is `floor_ms(wall0)`
 /// and `mono0` was read after `wall0`, so every `until` is at or after
-/// the true deadline (I4). Overflow anywhere is `corrupt` (I3).
-pub(crate) fn seed(s: &Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason> {
+/// the true deadline (I4). Overflow anywhere is `corrupt` (I3). The spill
+/// section moves into the result.
+fn seed_owned(s: Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason> {
     let h_ms = u64::from(here.horizon_s) * 1000;
     let until = |remaining_s: u32| -> Result<Option<Instant>, Reason> {
         let deadline = s
@@ -1158,7 +1177,7 @@ pub(crate) fn seed(s: &Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason
     } else {
         until(s.gate_s)?
     };
-    let spill = match &s.spill {
+    let spill = match s.spill {
         Some(sp) => {
             // Checked again: a `Snapshot` built in code skips `decode`, and
             // `SeededSpill::slots` reads the section without bounds checks.
@@ -1172,7 +1191,7 @@ pub(crate) fn seed(s: &Snapshot, now: u64, here: &Here) -> Result<Seeded, Reason
                 .ok_or(Reason::Corrupt)?;
             Some(SeededSpill {
                 key: sp.key,
-                raw: sp.raw.clone(),
+                raw: sp.raw,
                 at_ms: s.at_ms,
                 now_ms: now,
                 h_ms,

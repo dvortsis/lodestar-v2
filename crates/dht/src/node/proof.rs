@@ -846,7 +846,7 @@ impl StartJob {
             state_bin,
         };
         // S2.
-        let plan = restart::plan(&loaded, &here);
+        let plan = restart::plan(loaded, &here);
         let mut decision = plan.decision;
         // A data directory with no UTF-8 canonical path has no witness.
         if path.is_none() {

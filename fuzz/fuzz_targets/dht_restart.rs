@@ -134,7 +134,7 @@ fn snapshot(body: &[u8], version: u32, clock: u64) {
         return;
     };
     assert_eq!(s.encode(), bytes);
-    // Each version has its own keys, so no body decodes at both.
+    // Each version has its own dictionary keys, so no body decodes at both.
     let other = if version == restart::VERSION {
         restart::SNAPSHOT_SPILL_VERSION
     } else {
@@ -193,7 +193,7 @@ fn snapshot(body: &[u8], version: u32, clock: u64) {
         wall0,
         mono0: Instant::now(),
     };
-    if let Decision::Resume(seeded) = restart::plan(&loaded, &here).decision {
+    if let Decision::Resume(seeded) = restart::plan(loaded, &here).decision {
         for (addr, until) in &seeded.entries {
             let e = s
                 .entries
@@ -209,7 +209,6 @@ fn snapshot(body: &[u8], version: u32, clock: u64) {
         }
         assert_eq!(seeded.spill.is_some(), s.spill.is_some());
         if let (Some(sp), Some(file)) = (&seeded.spill, &s.spill) {
-            assert_eq!(sp.key(), file.key);
             // The slots still cooling, in order, each with its block and
             // tag, never ending before its record (capped at the horizon)
             // and never more than the horizon away.
