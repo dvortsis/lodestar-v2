@@ -90,7 +90,7 @@ pub enum Roots {
     /// The default trust, chosen by the egress route as the plugin HTTP
     /// client's is ([`lodestar_integrations::tls::verification_for`]):
     /// the operating system's verifier on a direct route, and on every
-    /// other route webpki in this process over the bundled and OS roots.
+    /// other route webpki in this process over the OS store's roots.
     #[default]
     Platform,
     /// Only these (a server with its own CA, and the tests).

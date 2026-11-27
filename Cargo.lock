@@ -1921,7 +1921,6 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
- "webpki-root-certs",
  "zeroize",
 ]
 

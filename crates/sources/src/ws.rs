@@ -274,7 +274,7 @@ pub enum Roots {
     /// The default trust, chosen by the route as the plugin HTTP client's
     /// is ([`lodestar_integrations::tls::verification_for`]): the
     /// operating system's verifier on a direct route, and on every other
-    /// route webpki in this process over the bundled and OS roots.
+    /// route webpki in this process over the OS store's roots.
     #[default]
     Platform,
     /// Only these (the tests' own CA).

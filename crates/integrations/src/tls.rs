@@ -4,8 +4,8 @@
 //!   (rustls-platform-verifier), with the OS's own trust decisions.
 //! - Every other route (a bound address, a bound interface, a SOCKS5
 //!   proxy) verifies with [`Verification::SelfContained`]: webpki in this
-//!   process, over the bundled Mozilla roots plus the roots in the OS
-//!   store, read once from local storage. Validation is a pure
+//!   process, over the roots in the OS store, read once from local
+//!   storage. Validation is a pure
 //!   computation on the certificates the server sent; it opens no
 //!   connection of its own. Revocation isn't checked on those routes.
 //!
@@ -89,10 +89,9 @@ pub fn self_contained_verifier(
         .map_err(|_| VerifierUnavailable)
 }
 
-/// The roots [`Verification::SelfContained`] trusts: the bundled Mozilla
-/// set and every root in the OS store that webpki can use, without
-/// duplicates. Read once per process; an unreadable OS store leaves the
-/// bundled set.
+/// The roots [`Verification::SelfContained`] trusts: every root in the
+/// OS store that webpki can use, without duplicates. Read once per
+/// process; with none, building a routed client fails.
 pub fn self_contained_roots() -> &'static [CertificateDer<'static>] {
     &roots().0
 }
@@ -106,11 +105,10 @@ type Roots = (Vec<CertificateDer<'static>>, Arc<RootCertStore>);
 fn roots() -> &'static Roots {
     static ROOTS: OnceLock<Roots> = OnceLock::new();
     ROOTS.get_or_init(|| {
-        let bundled = webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().cloned();
         // Reading the store is local: files on Linux, the system keychains
         // on macOS, the ROOT store on Windows.
         let native = rustls_native_certs::load_native_certs().certs;
-        usable(bundled.chain(native))
+        usable(native)
     })
 }
 
@@ -224,11 +222,14 @@ mod tests {
     }
 
     #[test]
-    fn the_roots_include_the_bundled_set_once_each() {
+    fn the_roots_are_the_os_stores_once_each() {
         let roots = self_contained_roots();
-        assert!(roots.len() >= webpki_root_certs::TLS_SERVER_ROOT_CERTS.len() / 2);
-        for b in webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().take(5) {
-            assert_eq!(roots.iter().filter(|r| r.as_ref() == b.as_ref()).count(), 1);
+        assert!(
+            !roots.is_empty(),
+            "the OS store has roots on every CI runner"
+        );
+        for (i, r) in roots.iter().enumerate() {
+            assert!(!roots[..i].iter().any(|k| k.as_ref() == r.as_ref()));
         }
         assert_eq!(self_contained_store().len(), roots.len());
     }
@@ -265,7 +266,7 @@ mod tests {
             verify(ours, "other.test"),
             Err(rustls::Error::InvalidCertificate(_))
         ));
-        // The bundled and OS roots don't trust the test CA.
+        // The OS roots don't trust the test CA.
         assert!(matches!(
             verify(self_contained_store(), "mail.test"),
             Err(rustls::Error::InvalidCertificate(_))
