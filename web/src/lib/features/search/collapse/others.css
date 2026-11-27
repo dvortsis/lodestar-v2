@@ -1,0 +1,28 @@
+/* The "+N other versions" disclosure on a grouped row (GS-5), loaded with the results panel. Token
+   variables only (utility names would land in the global sheet). */
+@reference "../../../../app.css";
+
+.cl-others {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: var(--spacing);
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--color-muted-text);
+	font: inherit;
+	cursor: pointer;
+	> svg {
+		width: var(--icon-size-row);
+		height: var(--icon-size-row);
+	}
+}
+.cl-others:hover {
+	color: var(--color-base-content);
+	text-decoration: underline;
+}
+/* Open: the caret points down. */
+.cl-others[aria-expanded='true'] > svg {
+	rotate: 90deg;
+}

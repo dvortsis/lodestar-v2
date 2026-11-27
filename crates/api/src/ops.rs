@@ -52,8 +52,8 @@ pub use crate::dto::ops::{
     CrawlerStatus, CredentialField, CredentialKind, CredentialsPatch, DhtStatus, EgressCounts,
     EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress, FetchStatus,
     NetworkCheck, PortMapping, ReachReason, RiskLevel, SamplingBlocked, SocksDns, Source,
-    SourceAgents, SourceEgress, SourceHealth, SourceKind, SourceList, SourceNeed, SourcePatch,
-    SourcePriority, SourceSchedule, SourceState, StatsResponse,
+    SourceAgents, SourceAttribution, SourceEgress, SourceHealth, SourceKind, SourceList,
+    SourceNeed, SourcePatch, SourcePriority, SourceSchedule, SourceState, StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;

@@ -31,6 +31,12 @@ describe('Card', () => {
 		expect(text('c-files')).toBe('5 files');
 		expect(text('c-seeders')).toBe('12');
 		expect(screen.getByRole('img', { name: /never/i })).toBeTruthy();
+		expect(screen.queryByTestId('c-others')).toBeNull();
+	});
+
+	it('names a grouped card’s other versions (GS-5)', () => {
+		render(Card, { hit: hit(7, { others: 4 }), testid: 'c', onopen: () => {} });
+		expect(text('c-others')).toBe('+4 other versions');
 	});
 	it('opens on click and Enter, but not from its own buttons', async () => {
 		const opened: string[] = [];

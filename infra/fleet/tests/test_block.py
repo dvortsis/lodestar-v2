@@ -1743,12 +1743,22 @@ class Scrubber(unittest.TestCase):
                 self.assertNotIn("treatment", scrub.scrub({**self.doc(), "treatment": t}))
         self.assertEqual(scrub.scrub({**self.doc(), "winners": ["adm", "utp"]})["winners"], ["adm", "utp"])
         self.assertEqual(scrub.scrub({**self.doc(), "winners": []})["winners"], [])
-        for w in (["adm", "turbo"], ["utp", "utp"], "adm", ["free text " + PRIVATE[0]], [1], [["adm"]],
-                  ["adm"] * 8):
+        for w in (["adm", "turbo"], ["utp", "utp"], "adm", ["free text " + PRIVATE[0]], [1], [["adm"]]):
             with self.subTest(winners=w):
                 out = scrub.scrub({**self.doc(), "winners": w})
                 self.assertNotIn("winners", out)
                 self.assertNotIn(PRIVATE[0], scrub.dumps(out).decode())
+
+    def test_winners_longer_than_the_key_table_go_whole(self):
+        """The length limit on its own (X-soft-absent-void). Distinct keys can never outnumber
+        the table, so a shortened table shows it: three distinct, known keys pass every other
+        rule and are dropped by the length alone."""
+        w = ["adm", "utp", "route"]
+        self.assertEqual(scrub.scrub({**self.doc(), "winners": w})["winners"], w)
+        with mock.patch.object(scrub, "TREATMENT_KEYS", ("adm", "utp")):
+            self.assertTrue(all(scrub.treatment_key(k) for k in w) and len(set(w)) == len(w))
+            self.assertNotIn("winners", scrub.scrub({**self.doc(), "winners": w}))
+            self.assertEqual(scrub.scrub({**self.doc(), "winners": w[:2]})["winners"], w[:2])
 
     def test_a_reports_winners_are_switch_names_exactly(self):
         for w in ([], ["coordinated_admission", "utp"], ["lookup_end", "preset_slots"]):

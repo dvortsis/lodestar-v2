@@ -12,7 +12,8 @@
 		onActiveChange,
 		onActivate,
 		onKey,
-		resetKey
+		resetKey,
+		withControl = false
 	}: {
 		items: Item[];
 		hasMore?: boolean;
@@ -22,6 +23,8 @@
 		onActivate?: (i: number, item: Item) => void;
 		onKey?: (e: KeyboardEvent, ctx: { index: number; item: Item; onRow: boolean }) => void;
 		resetKey?: unknown;
+		/** A button inside each row, like a card tile's. */
+		withControl?: boolean;
 	} = $props();
 	let activeIndex = $state(0);
 </script>
@@ -44,7 +47,9 @@
 	{resetKey}
 >
 	{#snippet row(item, index, state)}
-		<div data-active={state.active} data-row={index}>{item.name}</div>
+		<div data-active={state.active} data-row={index}>
+			{item.name}{#if withControl}<button type="button" tabindex="-1">open</button>{/if}
+		</div>
 	{/snippet}
 </VirtualList>
 <span data-testid="active">{activeIndex}</span>

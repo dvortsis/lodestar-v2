@@ -11392,7 +11392,18 @@
           "group",
           "has",
           "resolved",
-          "adult"
+          "adult",
+          "imdb",
+          "tmdb",
+          "tvdb",
+          "anidb",
+          "anilist",
+          "mbid",
+          "olid",
+          "igdb",
+          "discogs",
+          "steam",
+          "wikidata"
         ]
       },
       "AstTextField": {
@@ -17192,6 +17203,10 @@
             },
             "description": "Other titles the work is known by, at most 32."
           },
+          "attribution": {
+            "$ref": "#/components/schemas/SourceAttribution",
+            "description": "What the answering service asks to be credited with, from its\nplugin's own terms (ENR-terms): show it beside the answer.\n**Absent**, never null, when its terms ask for none, or the host\ndoesn't run its plugin."
+          },
           "canonical_title": {
             "type": [
               "string",
@@ -17272,6 +17287,10 @@
                   "title": "ショーシャンクの空に"
                 }
               ],
+              "attribution": {
+                "link": "https://www.wikidata.org",
+                "text": "Wikidata (CC0)"
+              },
               "canonical_title": "The Shawshank Redemption",
               "chosen": true,
               "confidence": 92,
@@ -21094,7 +21113,7 @@
           },
           "withheld": {
             "type": "boolean",
-            "description": "Sources or claims were left out because they're private and this\ncaller isn't the admin session."
+            "description": "Sources or claims were left out because this caller isn't the\nadmin session: they're private, or a claim's source's terms keep\nits data inside Lodestar (ENR-terms)."
           }
         },
         "example": {
@@ -24263,6 +24282,10 @@
             "type": "boolean",
             "description": "Everything it finds is Adult (§20.9, X-source-adult): its finds are\nstored and judged as Adult unless you say Not adult. The detail view\nreads it too, to keep a torrent such a source found out of the\n\"Identified as\" section."
           },
+          "attribution": {
+            "$ref": "#/components/schemas/SourceAttribution",
+            "description": "What its service asks to be credited with, from its plugin's own\nterms (ENR-terms): show it in the source's row. **Absent**, never\nnull, when its terms ask for none."
+          },
           "companion_need": {
             "oneOf": [
               {
@@ -24641,6 +24664,32 @@
           "version": {
             "type": "string"
           }
+        }
+      },
+      "SourceAttribution": {
+        "type": "object",
+        "description": "What a lookup service asks to be credited with (ENR-terms), in its own\nprescribed words: shown beside its answers in the detail drawer and in\nits Sources row. It comes from the plugin's own terms, compiled into\nthis build, never from anything the service sent.",
+        "required": [
+          "link",
+          "text"
+        ],
+        "properties": {
+          "link": {
+            "type": "string",
+            "description": "The `https` page the credit links to."
+          },
+          "logo": {
+            "type": "string",
+            "description": "The id of a bundled logo asset, when the service requires its\nlogo. **Absent**, never null, when it doesn't."
+          },
+          "text": {
+            "type": "string",
+            "description": "The credit, word for word as the service prescribes it."
+          }
+        },
+        "example": {
+          "link": "https://www.themoviedb.org",
+          "text": "Lodestar uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB."
         }
       },
       "SourceHealth": {

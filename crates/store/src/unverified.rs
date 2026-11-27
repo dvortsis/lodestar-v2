@@ -340,6 +340,9 @@ pub struct PurgeStep {
     pub state_deleted: usize,
     /// Persisted fetch-queue keys of this source dropped.
     pub queue_deleted: usize,
+    /// Kept torrents were marked to be derived again: the backfill should
+    /// start another pass.
+    pub rederive: bool,
 }
 
 /// What [`Store::purge_source`] would remove for a source if it ran now,
@@ -419,6 +422,9 @@ macro_rules! queue_of {
     };
 }
 
+/// Judges a write's consent on its own transaction ([`Store::put_claims_at_consented`]).
+type ConsentCheck<'a> = dyn FnMut(&Connection) -> Result<bool> + 'a;
+
 impl Store {
     /// Records keys sources found, in one transaction (see [`Put`]).
     /// Claims must be within the [`claims`] limits (`Error::Invalid`
@@ -486,7 +492,7 @@ impl Store {
         claims: &Claims,
         private_source: bool,
     ) -> Result<bool> {
-        self.put_one_claims(torrent_id, source, claims, private_source, None)
+        self.put_one_claims(torrent_id, source, claims, private_source, None, None)
     }
 
     /// [`put_claims`](Store::put_claims), stamped as written at `at` (Unix
@@ -499,7 +505,44 @@ impl Store {
         private_source: bool,
         at: i64,
     ) -> Result<bool> {
-        self.put_one_claims(torrent_id, source, claims, private_source, Some(at))
+        self.put_one_claims(torrent_id, source, claims, private_source, Some(at), None)
+    }
+
+    /// [`put_claims_at`](Store::put_claims_at) for an answer that needs
+    /// `plugin`'s consent (ENR-G): `consent` is given its consent record
+    /// and stored credential names, read inside the write's transaction,
+    /// and nothing is written unless it says the condition holds. A
+    /// withdrawal is a write too, so it can't land between the check and
+    /// the write. `None` when consent refused it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_claims_at_consented(
+        &mut self,
+        torrent_id: i64,
+        source: SourceId,
+        claims: &Claims,
+        private_source: bool,
+        at: i64,
+        plugin: &str,
+        consent: &dyn Fn(Option<&str>, &[String]) -> bool,
+    ) -> Result<Option<bool>> {
+        let mut refused = false;
+        let mut check = |conn: &Connection| -> Result<bool> {
+            let ok = consent(
+                crate::sources::consent_of(conn, plugin)?.as_deref(),
+                &crate::sources::secret_names_of(conn, plugin)?,
+            );
+            refused = !ok;
+            Ok(ok)
+        };
+        let put = self.put_one_claims(
+            torrent_id,
+            source,
+            claims,
+            private_source,
+            Some(at),
+            Some(&mut check),
+        )?;
+        Ok((!refused).then_some(put))
     }
 
     fn put_one_claims(
@@ -509,10 +552,16 @@ impl Store {
         claims: &Claims,
         private_source: bool,
         at: Option<i64>,
+        consent: Option<&mut ConsentCheck<'_>>,
     ) -> Result<bool> {
         let blob = encode(claims, self.config.compression_level)?;
         let tx = begin_write(&mut self.conn)?;
         check_running(&tx, source)?;
+        if let Some(consent) = consent
+            && !consent(&tx)?
+        {
+            return Ok(false);
+        }
         let Some(hashes) = torrent_hashes(&tx, torrent_id)? else {
             return Ok(false);
         };
@@ -1047,6 +1096,9 @@ impl Store {
     ///
     /// The source must be disabled or purged first (`Error::Invalid`
     /// otherwise), so nothing it finds meanwhile slips past the purge.
+    ///
+    /// When this connection's adult mark ([`Store::set_adult_mark`]) names
+    /// `source`, a kept torrent it alone made Adult is derived again.
     pub fn purge_source(
         &mut self,
         source: SourceId,
@@ -1114,13 +1166,46 @@ impl Store {
                 }
             }
             Stage::Claims => {
-                scanned = tx
+                // A torrent that loses a claim that shaped its record is
+                // derived again (ENR-G): a purged enrichment match or
+                // identification must not stay in its record or its index
+                // entry. RETURNING pairs the marks with exactly the rows
+                // deleted. Plain feed claims never shape the record, so
+                // their torrents aren't marked.
+                let lost: Vec<(i64, Vec<u8>)> = tx
                     .prepare_cached(concat!(
                         "DELETE FROM torrent_claims WHERE rowid IN (SELECT rowid FROM ",
                         claims_of!(),
-                        " LIMIT ?2)"
+                        " LIMIT ?2) RETURNING torrent_id, data"
                     ))?
-                    .execute(params![source.get(), limit as i64])?;
+                    .query_map(params![source.get(), limit as i64], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
+                let mut mark = tx.prepare_cached(
+                    "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
+                )?;
+                let mut marked = false;
+                for (id, data) in &lost {
+                    // One that doesn't decode is marked: deriving again is
+                    // the safe side. A torrent with no record yet has no
+                    // row to mark but still counts: the backfill picks it
+                    // up, and a batch may already have read the claim.
+                    if !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record()) {
+                        mark.execute(params![id])?;
+                        marked = true;
+                    }
+                }
+                // A backfill batch that read these claims before the purge
+                // would write the old match back over the mark, or into a
+                // first record: moving the generation makes it rejected and
+                // run again (§20.9). A purge of claims that shape nothing
+                // leaves the generation.
+                if marked {
+                    crate::rules::bump_class_gen(&tx)?;
+                    step.rederive = true;
+                }
+                scanned = lost.len();
                 step.claims_deleted = scanned;
             }
             Stage::Torrents => {
@@ -1137,6 +1222,26 @@ impl Store {
                     tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
                 let mut clear =
                     tx.prepare_cached("UPDATE torrents SET sources = sources & ~?2 WHERE id = ?1")?;
+                // An always-adult source made every torrent it found Adult
+                // (X-source-adult, [`Store::set_adult_mark`]). One it found
+                // that others keep, with no always-adult finder left, is
+                // derived again when it's stored Adult: the backfill applies
+                // detection, your correction and your rules as for any
+                // torrent. Holds and the core's flag marks are never
+                // touched (§20.5). Plain sources decide nothing in a
+                // derivation, so their torrents aren't marked
+                // (docs/decisions/2026-11-24-X-purge-rederive.md).
+                let adult = self.adult_mark;
+                let rederive = adult.sources & bit as u64 != 0;
+                let mut mark = tx.prepare_cached(
+                    "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1
+                     AND EXISTS (SELECT 1 FROM torrents WHERE id = ?1 AND content_type = ?2)",
+                )?;
+                // Any such torrent moves the generation, marked or not: a
+                // backfill batch (or the writer's adult step) that read its
+                // old sources would otherwise store it Adult, and one not
+                // enriched yet has nothing to mark.
+                let mut moved = false;
                 for (id, sources) in rows {
                     scanned += 1;
                     last = id;
@@ -1150,8 +1255,16 @@ impl Store {
                         Fate::Keep => {
                             clear.execute(params![id, bit])?;
                             step.torrents_kept += 1;
+                            if rederive && (sources & !bit) as u64 & adult.sources == 0 {
+                                mark.execute(params![id, adult.content_type])?;
+                                moved = true;
+                            }
                         }
                     }
+                }
+                if moved {
+                    crate::rules::bump_class_gen(&tx)?;
+                    step.rederive = true;
                 }
             }
             Stage::State => {

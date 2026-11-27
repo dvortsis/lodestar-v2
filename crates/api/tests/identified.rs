@@ -3,7 +3,9 @@
 //! first, with the one that names the title marked; absent when there's
 //! none, and for a hidden, held, private or Adult torrent; never from a
 //! source that found the torrent; every list and text within its cap;
-//! `resolved_via` only from the listed methods.
+//! `resolved_via` only from the listed methods. Each answer carries its
+//! service's attribution exactly when its terms ask for one, and no other
+//! app ever gets an answer (ENR-terms-api).
 
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +14,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use lodestar_api::ops::{
     BoxFuture, CrawlerRuntime, ExternalAddress, FetchStatus, NetworkCheck, OpsApi, OpsError,
-    PortMapping, ReachReason, Source, SourcePatch, StatsResponse,
+    PortMapping, ReachReason, Source, SourceAttribution, SourcePatch, StatsResponse,
 };
 use lodestar_api::{AdultVisibility, ApiState, Auth, openapi, router};
 use lodestar_bencode::{OwnedValue, to_vec};
@@ -70,6 +72,24 @@ fn source(id: u8, plugin: &str, name: &str, consent: &str, kind: &str, hosts: &[
     .unwrap()
 }
 
+/// Wikidata's courtesy credit, as its terms carry it.
+fn wikidata_credit() -> SourceAttribution {
+    SourceAttribution {
+        link: "https://www.wikidata.org".into(),
+        logo: None,
+        text: "Wikidata (CC0)".into(),
+    }
+}
+
+/// TMDB's prescribed credit, with a logo.
+fn tmdb_credit() -> SourceAttribution {
+    SourceAttribution {
+        link: "https://www.themoviedb.org".into(),
+        logo: Some("tmdb".into()),
+        text: "Uses TMDB".into(),
+    }
+}
+
 impl OpsApi for FakeOps {
     fn crawler(&self) -> CrawlerRuntime {
         CrawlerRuntime {
@@ -111,25 +131,31 @@ impl OpsApi for FakeOps {
             // Every find of `adultsite` is Adult, as its manifest says.
             let mut adult = source(5, "adultsite", "Adult Site", "external", "discovery", &[]);
             adult.always_adult = true;
+            // Each lookup plugin's credit, as the host lists it from its
+            // terms; none for the account enricher.
+            let mut wikidata = source(
+                1,
+                "wikidata",
+                "Wikidata",
+                "external",
+                "enrichment",
+                &["https://www.wikidata.org"],
+            );
+            wikidata.attribution = Some(wikidata_credit());
+            let mut tmdb = source(
+                2,
+                "tmdb",
+                "TMDB",
+                "external",
+                "enrichment",
+                &["https://api.themoviedb.org"],
+            );
+            tmdb.attribution = Some(tmdb_credit());
             Ok(vec![
                 adult,
                 source(0, "dht", "Mainline DHT", "none", "discovery", &[]),
-                source(
-                    1,
-                    "wikidata",
-                    "Wikidata",
-                    "external",
-                    "enrichment",
-                    &["https://www.wikidata.org"],
-                ),
-                source(
-                    2,
-                    "tmdb",
-                    "TMDB",
-                    "external",
-                    "enrichment",
-                    &["https://api.themoviedb.org"],
-                ),
+                wikidata,
+                tmdb,
                 source(3, "nyaa", "Nyaa", "external", "discovery", &[]),
                 source(
                     4,
@@ -611,6 +637,7 @@ async fn each_plugins_answer_is_an_alternative_surest_first() {
         alts[1],
         json!({
             "alt_titles": [{"language": "ja", "title": "某映画"}],
+            "attribution": {"link": "https://www.wikidata.org", "text": "Wikidata (CC0)"},
             "canonical_title": "The Film",
             "chosen": false,
             "confidence": 80,
@@ -734,6 +761,148 @@ async fn the_manifests_say_which_finders_are_always_adult() {
     }
 }
 
+/// Lodestar's own UI (the signed-in admin) gets every answer, the one
+/// whose terms keep it inside Lodestar too (TMDB: `redistribute: false`),
+/// each with its service's credit exactly when its terms carry one: never
+/// null, never invented.
+#[tokio::test]
+async fn the_ui_gets_every_answer_with_its_credit() {
+    let f = fixture();
+    let c = session(&f).await;
+    let body = ok(&f, &c, item::TWO).await;
+    let alts = body["identified_as"]["alternatives"].as_array().unwrap();
+    assert_eq!(alts[0]["source"]["plugin"], "tmdb");
+    assert_eq!(alts[0]["canonical_title"], "The Film (TMDB)");
+    assert_eq!(
+        alts[0]["attribution"],
+        json!({"link": "https://www.themoviedb.org", "logo": "tmdb", "text": "Uses TMDB"})
+    );
+    assert_eq!(alts[1]["source"]["plugin"], "wikidata");
+    assert_eq!(
+        alts[1]["attribution"],
+        json!({"link": "https://www.wikidata.org", "text": "Wikidata (CC0)"})
+    );
+    // Terms with no credit: the key is absent.
+    let body = ok(&f, &c, item::ACCOUNT).await;
+    let a = &body["identified_as"]["alternatives"][0];
+    assert_eq!(a["source"]["plugin"], "acctenr");
+    assert!(
+        a.as_object()
+            .is_some_and(|o| !o.contains_key("attribution")),
+        "{a}"
+    );
+}
+
+/// A new API key with every scope it can have, or a feed token.
+async fn make_key(f: &Fixture, cookie: &str, kind: &str) -> String {
+    let scopes = if kind == "api_key" {
+        json!(["search", "torznab", "feeds"])
+    } else {
+        json!([])
+    };
+    let body = json!({ "name": "other app", "kind": kind, "scopes": scopes, "password": PASSWORD });
+    let r = send(
+        f,
+        Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/keys")
+            .header("cookie", cookie)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let v: Value = serde_json::from_str(&r.text).unwrap();
+    v["secret"].as_str().unwrap().to_string()
+}
+
+/// Another app (an API key or a feed token, every way it can present
+/// itself) never gets an answer from the detail route, from any source:
+/// the route is the admin session's only. The section's own filter for a
+/// caller other than the admin (terms and class) is held by the unit
+/// tests beside it (`terms_keep_answers_and_claims_from_the_public`).
+#[tokio::test]
+async fn other_apps_never_get_an_answer() {
+    let f = fixture();
+    let c = session(&f).await;
+    let key = make_key(&f, &c, "api_key").await;
+    let token = make_key(&f, &c, "feed_token").await;
+    for i in [item::TWO, item::PLUGIN, item::ACCOUNT] {
+        let uri = format!("/api/v1/torrents/{}", f.hashes[i]);
+        let bearer = format!("Bearer {key}");
+        for req in [
+            Request::builder()
+                .uri(&uri)
+                .header(header::AUTHORIZATION, &bearer)
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .uri(format!("{uri}?apikey={key}"))
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .uri(format!("{uri}?token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        ] {
+            let r = send(&f, req).await;
+            assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{i}: {}", r.text);
+            for s in [
+                "Answer",
+                "The Film",
+                "TMDB",
+                "themoviedb",
+                "Wikidata",
+                "identified",
+            ] {
+                assert!(!r.text.contains(s), "{i}: {s} in {}", r.text);
+            }
+        }
+    }
+}
+
+/// The Sources listing carries each source's credit as the host gives it,
+/// absent (never null) for one whose terms carry none.
+#[tokio::test]
+async fn the_sources_listing_carries_the_credit() {
+    let f = fixture();
+    let c = session(&f).await;
+    let r = send(
+        &f,
+        Request::builder()
+            .uri("/api/v1/sources")
+            .header("cookie", &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let v: Value = serde_json::from_str(&r.text).unwrap();
+    let by = |plugin: &str| {
+        v["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["plugin"] == plugin)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        by("tmdb")["attribution"],
+        json!({"link": "https://www.themoviedb.org", "logo": "tmdb", "text": "Uses TMDB"})
+    );
+    assert_eq!(by("wikidata")["attribution"]["text"], "Wikidata (CC0)");
+    for p in ["dht", "acctenr"] {
+        assert!(
+            by(p)
+                .as_object()
+                .is_some_and(|o| !o.contains_key("attribution")),
+            "{p}"
+        );
+    }
+}
+
 /// The document says what the route serves: the key optional, never
 /// null, and the section's schema with its required fields.
 #[test]
@@ -772,10 +941,31 @@ fn the_openapi_document_describes_the_section() {
         ),
         ("IdentifiedTitle", &["language", "title"][..]),
         ("IdentifiedId", &["scheme", "value"][..]),
+        ("SourceAttribution", &["link", "text"][..]),
     ] {
         let req = schemas[name]["required"].to_string();
         for f in fields {
             assert!(req.contains(f), "{name}.{f} in {req}");
         }
+    }
+    // The credit is optional and never null, beside an answer, in a
+    // Sources row, and its logo inside it.
+    for (schema, field) in [
+        ("Identification", "attribution"),
+        ("Source", "attribution"),
+        ("SourceAttribution", "logo"),
+    ] {
+        let s = &schemas[schema];
+        let required = s["required"].as_array().unwrap();
+        assert!(!required.contains(&json!(field)), "{schema}.{field}");
+        // A plain reference or a plain string: no `oneOf` with null, no
+        // null type.
+        let prop = &s["properties"][field];
+        assert!(prop.get("oneOf").is_none(), "{schema}.{field}: {prop}");
+        assert!(
+            prop.get("type")
+                .is_none_or(|t| !t.to_string().contains("null")),
+            "{schema}.{field}: {prop}"
+        );
     }
 }

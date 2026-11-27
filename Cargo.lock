@@ -2026,13 +2026,18 @@ dependencies = [
 name = "lodestar-sources"
 version = "0.5.0"
 dependencies = [
+ "futures-util",
  "lodestar-integrations",
  "lodestar-metainfo",
  "lodestar-network-policy",
  "lodestar-peer-wire",
  "lodestar-store",
  "proptest",
+ "rustls",
+ "rustls-platform-verifier",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
  "url",
 ]
 
@@ -2077,6 +2082,7 @@ version = "0.5.0"
 dependencies = [
  "lodestar-integrations",
  "proptest",
+ "regex",
  "rustls",
  "rustls-platform-verifier",
  "tokio",

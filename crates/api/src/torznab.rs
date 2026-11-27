@@ -185,7 +185,7 @@ async fn api(
 }
 
 /// The caps document: what this server searches and its categories.
-/// `imdbid`, `tmdbid` and `tvdbid` join `supportedParams` with ENR-11.
+/// The ID parameters are ENR-11's.
 pub fn caps() -> String {
     let mut x = Xml::new();
     x.open("caps", &[]);
@@ -195,8 +195,8 @@ pub fn caps() -> String {
     x.open("searching", &[]);
     for (name, params) in [
         ("search", "q"),
-        ("tv-search", "q,season,ep"),
-        ("movie-search", "q"),
+        ("tv-search", "q,season,ep,tvdbid,imdbid,tmdbid"),
+        ("movie-search", "q,imdbid,tmdbid"),
         ("music-search", "q"),
         ("audio-search", "q"),
         ("book-search", "q"),

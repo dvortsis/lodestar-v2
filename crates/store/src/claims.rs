@@ -764,6 +764,20 @@ impl fmt::Debug for Claims {
 }
 
 impl Claims {
+    /// Whether these claims can change a torrent's derived record: an
+    /// adult-enrichment section that names a kind (the match ENR-6 pins),
+    /// or an identification with a title and its confidence (ENR-10). The
+    /// one test both the purge (which re-derives a torrent that lost such
+    /// a claim) and the pipeline's `enrich::mark_matched` apply; plain feed
+    /// claims never change the record, so neither marks for them.
+    pub fn shapes_the_record(&self) -> bool {
+        self.adult.as_ref().is_some_and(|a| a.kind.is_some())
+            || self
+                .details
+                .as_deref()
+                .is_some_and(|d| d.canonical_title.is_some() && d.match_confidence.is_some())
+    }
+
     /// Bytes the decoded claims take in memory, near enough: their text
     /// plus every entry's own struct. A page of claims is bounded by this,
     /// not by text alone: 10,000 empty file paths hold no text but still

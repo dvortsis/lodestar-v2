@@ -188,7 +188,7 @@ const filtersDoor = [/features\/filters\/flows-(?:door|root)\.ts$/];
 const DRAWER = 'src/lib/features/detail/DetailHost.svelte';
 // The key commands load after mount (with the key registry and the magnet code), so they are on demand too.
 const detailLazy = [
-	/features\/detail\/(Contents|ErrorState|TechnicalDetails|ActionsMenu|swarm\/Swarm|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment|identified\/Identified)\.svelte$/,
+	/features\/detail\/(Contents|ErrorState|TechnicalDetails|ActionsMenu|swarm\/Swarm|parsed\/Parsed|provenance\/Differences|adult\/AdultEnrichment|identified\/Identified|related\/Related)\.svelte$/,
 	// Clipboard failure is an interaction, not part of opening the detail view.
 	// Its UI and mount runtime remain included in the on-demand budget below.
 	/features\/detail\/manual-mount\.ts$/,
@@ -420,8 +420,11 @@ const settingsUpdatesModules = [/features\/settings\/updates\/(icon|about)\.ts$/
 const settingsCompanionsModules = [/features\/settings\/companions\/icon\.ts$/];
 // Companions' dialogs and panels load on the first press that needs them; gated on their own below.
 const settingsCompanionsParts = [
-	/features\/settings\/companions\/(InstallDialog|RemoveDialog|Credentials|Logs|Templates)\.svelte$/
+	/features\/settings\/companions\/(InstallDialog|RemoveDialog|Credentials|Logs|Templates|Route)\.svelte$/
 ];
+// The route editor (X-cmp-egress-ui) is one of those parts with its own entry (runner, §2.26): its
+// refusal and restart sentences would crowd the other parts' budget.
+const settingsCompanionsRoute = [/features\/settings\/companions\/Route\.svelte$/];
 // Outputs (OUT-2): the icon and purpose line load after the first view, like Companions'; its
 // 18+ dialog and Security's key flows (through `key-flows.ts`) load on the first press that needs them.
 const settingsOutputsModules = [/features\/settings\/outputs\/icon\.ts$/];
@@ -854,18 +857,31 @@ const settingsCompanionsModulesLazy = requireMeasuredJs(
 );
 const companionsFirstView =
 	settingsHandBuilt.find(({ name }) => name === 'CompanionsScreen')?.files ?? [];
-const settingsCompanionsPartsLazy = requireMeasuredJs('Settings companions parts (on demand)', [
+// Both stop at Security's password dialog (the route editor's save), measured in Security's parts.
+const companionsPartsOf = (keep) => [
 	...new Set(
 		Object.keys(manifest)
-			.filter((key) => settingsCompanionsParts.some((re) => re.test(key)))
+			.filter(keep)
 			.flatMap((key) =>
-				ownChunk(key, [...settingsOnDemand, ...settingsEdit], false, [
+				ownChunk(key, [...settingsOnDemand, ...settingsEdit, ...settingsSecurity], false, [
 					...settingsShellView,
 					...companionsFirstView
 				])
 			)
 	)
-]);
+];
+const settingsCompanionsPartsLazy = requireMeasuredJs(
+	'Settings companions parts (on demand)',
+	companionsPartsOf(
+		(key) =>
+			settingsCompanionsParts.some((re) => re.test(key)) &&
+			!settingsCompanionsRoute.some((re) => re.test(key))
+	)
+);
+const settingsCompanionsRouteLazy = requireMeasuredJs(
+	'Settings companions route editor (on demand)',
+	companionsPartsOf((key) => settingsCompanionsRoute.some((re) => re.test(key)))
+);
 const settingsOutputsModulesLazy = requireMeasuredJs(
 	'Settings outputs icon and purpose (on demand)',
 	[
@@ -1060,6 +1076,8 @@ const recoverOnDemand = [/search\/results\/Recover\.svelte$/];
 const indexStateOnDemand = [/search\/results\/IndexState\.svelte$/];
 // After a Block applies, the list keeps its place (X-web-polish-1101d): loaded on that press only.
 const settleOnDemand = [/search\/results\/settle\.ts$/];
+// GS-5: a group's rows and their logic load when a group is first opened ("+N other versions").
+const collapseOnDemand = [/search\/collapse\/rows\.ts$/];
 const resultsOnDemand = [
 	/features\/detail\//,
 	/features\/search\/(live|cards)\//,
@@ -1070,7 +1088,8 @@ const resultsOnDemand = [
 	...bulkOnDemand,
 	...recoverOnDemand,
 	...indexStateOnDemand,
-	...settleOnDemand
+	...settleOnDemand,
+	...collapseOnDemand
 ];
 // What the view has loaded by the time the panel does (runner, 2026-10-24): the first load and the
 // bar's lazy part, which a URL with a query engages at once. Not the shell's Chrome: on a pasted
@@ -1170,6 +1189,15 @@ const toolbarLazy = [
 
 // Table mode (S-search-5): the table with its row and header code; the column chooser loads on its
 // first open. The bulk bar loads with the first selected row. Both beyond the results panel.
+// GS-5: the rows under an open group, beyond the results panel that opens them.
+const collapseLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/collapse/rows.ts', [], false, [
+			...engagedSearch,
+			...resultsLoaded
+		])
+	)
+];
 const tableLazy = [
 	...new Set(
 		ownChunk(
@@ -1375,6 +1403,11 @@ const identifiedSection = ownChunk(
 	false,
 	[...drawerView, ...torrentView]
 );
+// GS-4: the Related section loads when it scrolls near (at once on /t); own entry, as above.
+const relatedSection = ownChunk('src/lib/features/detail/related/Related.svelte', [], false, [
+	...drawerView,
+	...torrentView
+]);
 const FLOWS = /^src\/lib\/features\/filters\/flows(?:\/|-(?:root|adult)\.ts$)/;
 const flowsCarried = [
 	['Settings FiltersScreen (first view)', filtersFirst],
@@ -1473,7 +1506,9 @@ export default [
 	// Raised by the runner (§2.26): +86 B from the chunk re-split when /logs was added (S-logs-1).
 	// X-alert-search-headroom: 45.40 KB (−0.57 KB, links no longer load the nav table); the limit is
 	// kept so the cut is the headroom. Keep the rules by `alertOnDemand`.
-	routeEntry('Alert route (own JS + CSS)', alertView, '35.03 KB'),
+	// X-web-followups-1124 (a raise for the runner's §2.26 call): 35.03 → 35.10 KB, measured 35,099 B (+69 B): VirtualList
+	// keeps a focused row active through a new resetKey (the list's side of #1115's table fix).
+	routeEntry('Alert route (own JS + CSS)', alertView, '35.10 KB'),
 	routeEntry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
@@ -1513,7 +1548,10 @@ export default [
 	entry('Settings updates parts (on demand)', settingsUpdatesPartsLazy, '3.2 KB'),
 	entry('Settings updates advanced (on demand)', settingsUpdatesAdvancedLazy, '4.65 KB'),
 	entry('Settings updates icon and purpose (on demand)', settingsUpdatesModulesLazy, '0.8 KB'),
-	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '29 KB'),
+	// X-cmp-egress-ui (runner, §2.26): the parts 29 → 29.5 KB (InstallDialog's "where it runs" from
+	// `runs`); the route editor on its own, measured 5.3 kB.
+	entry('Settings companions parts (on demand)', settingsCompanionsPartsLazy, '29.5 KB'),
+	entry('Settings companions route editor (on demand)', settingsCompanionsRouteLazy, '6 KB'),
 	entry('Settings companions icon and purpose (on demand)', settingsCompanionsModulesLazy, '1 KB'),
 	// OUT-2: Outputs' 18+ dialog and Security's key flows measured 26.32 kB, limit 27 KB (~2.6%
 	// headroom); its icon and purpose line 0.68 kB, limit 0.75 KB (measured + ~10%).
@@ -1630,7 +1668,8 @@ export default [
 	// first view above (the dialogs are unchanged). Limit = measured + ~1.2%.
 	entry('Sources dialogs (on demand)', sourcesDialogsLazy, '41.8 KB'),
 	entry('Sources config dialog (on demand)', sourcesConfigLazy, '6 KB'),
-	entry('Sources companion chip and setup (on demand)', sourcesCompanionLazy, '27 KB'),
+	// X-cmp-egress-ui (runner, §2.26): 27 → 27.5 KB for the install dialog's "where it runs".
+	entry('Sources companion chip and setup (on demand)', sourcesCompanionLazy, '27.5 KB'),
 	// S-filters-2c: the flows' one door, `flows-door.ts`: the root's preload list (~0.5 KB), fetched
 	// before the flows on the first change from Filters, a result's menu, the drawer or /t, as Save
 	// search's loader is. Measured 0.53 KB; limit = measured + 10%.
@@ -1735,7 +1774,17 @@ export default [
 	// X-pseudo-text-gaps (runner §2.26): 40.84 → 40.85 KB. 40,822 → 40,841 B: RelativeTime passes the
 	// catalogue's `common_just_now`, about 19 B in each chunk that uses it.
 	// +0.01 kB: hashed chunk-name compression noise (X-hit-resolution: a renamed table chunk costs Results 3 B; no code moved). Runner, r14.
-	entry('Search results (lazy)', resultsFirst, '40.86 KB'),
+	// GS-5 (runner §2.26): 40,832 B on main → 43.5 KB. Grouped results paint with "+N other versions"
+	// (Others and its styles), the account's Group versions choice the first request needs (grouping,
+	// the groups count and their messages), the tree grid's attributes and the live banner's match of
+	// a grouped answer; opening a group is its own on-demand entry below. Rounded up to 0.01 KB.
+	// X-gs-followups (runner §2.26): 43.51 → 43.70 KB, measured 43,696 B (+200 B): the active row
+	// carried across a view switch by hash and the clear-then-set re-announce of a group's load.
+	// X-web-followups-1124 (a raise for the runner's §2.26 call): 43.70 → 43.78 KB, measured 43,777 B (+77 B): VirtualList
+	// keeps a focused row active through a new resetKey, so j/k carry on from it after a re-sort.
+	// X-gs-followups-2 (runner §2.26): 43.78 → 43.76 KB, measured 43,752 B (−25 B): the Table keeps
+	// the row carried into it (no re-set on mount), less the reset to row 1 for a new query's rows.
+	entry('Search results (lazy)', resultsFirst, '43.76 KB'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1761,10 +1810,14 @@ export default [
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
 	// X-alert-search-headroom: 4.65 → 4.6 KB. Save search's preload list moved to save-dialog.ts
 	// (−0.31 KB); measured 4.29 KB. Import the dialog only through save-dialog.ts.
-	entry('Results toolbar (lazy)', toolbarLazy, '4.6 KB'),
+	// GS-5 (runner §2.26): 4.6 → 5.01 KB, the Group versions switch (twice: among the controls, and in
+	// More whenever the toolbar is too narrow for it, a container query), its note and the URL write
+	// with Back.
+	entry('Results toolbar (lazy)', toolbarLazy, '5.02 KB'),
 	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
 	// chunk); the limit falls to the measured size, rounded up at 0.01 kB, so the bytes aren't respent.
-	entry('Search live banner (lazy)', liveLazy, '2.58 KB'),
+	// GS-5 (runner §2.26): +1 B of shared-chunk noise (no live-banner code changed), rounded up to 0.01 KB.
+	entry('Search live banner (lazy)', liveLazy, '2.59 KB'),
 	// Raised by the runner (§2.26): +21 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, SRC-17: the Unverified badge on a card (8,300 B → 8,364 B; measured 5 B over).
 	// X-ui-guards (runner §2.26): 8,303 → 7,965 B with Bold icons, as the live banner; rounded up at 0.01 kB.
@@ -1772,8 +1825,15 @@ export default [
 	// X-facet-group-case (runner §2.18 port): main measures up to 8,012 B (build wobble;
 	// X-web-build-determinism).
 	// X-web-build-determinism (runner §2.26): 7,998 B with stable names (7,992 B with content hashes).
-	entry('Search cards (lazy)', cardsLazy, '8.01 KB'),
+	// GS-5 (runner §2.26): 8.01 → 8.15 KB, a grouped card's "+N other versions" fact.
+	entry('Search cards (lazy)', cardsLazy, '8.15 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
+	// GS-5: measured 3.01 KB (the rows, their logic, styles and messages), rounded up to 0.01 KB.
+	// X-gs-followups (runner §2.26): 3.02 → 3.05 KB, measured 3,044 B (+37 B): Show all's group
+	// total and its no-number wording.
+	// X-gs-followups-2 (runner §2.26): 3.05 → 3.08 KB, measured 3,078 B: the check that a siblings
+	// answer is about the torrent asked for.
+	entry('Search collapse rows (on demand)', collapseLazy, '3.08 KB'),
 	entry('Search column chooser (on demand)', chooserLazy, '3.4 KB'),
 	entry('Search bulk bar (on demand)', bulkLazy, '3.7 KB'),
 	entry('Search row checkboxes (on demand)', pickLazy, '1.7 KB'),
@@ -1805,7 +1865,10 @@ export default [
 	// X-safety-toggles (runner §2.26): 28.14 → 28.15 KB, measured 28,141 B: chunk-hash and gzip
 	// drift, with no change to the drawer's code.
 	// X-labels (runner §2.26): 28,141 → 28,304 B, "DHT" and the importers' names for Found by.
-	entry('Detail drawer (own JS + CSS)', drawerView, '28.31 KB'),
+	// X-gs-followups-2 (runner §2.26): 28.31 → 28.27 KB, measured 28,269 B (−35 B): Parsed hides
+	// quietly on a withheld answer, and Show all leaves a one-line ask on the drawer's host; the
+	// focus step itself is in Related, which loads on demand.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28.27 KB'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1821,7 +1884,11 @@ export default [
 	// X-auth-early-401 (runner §2.26): the same replay: 21,967 B measured locally, 21,971 B in CI
 	// (its build SHA moves the chunk names), rounded up to the next 0.01 KB.
 	// X-labels (runner §2.26): 21,979 → 22,129 B, as the drawer.
-	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15.48 KB'),
+	// GS-4 (runner §2.26): 15.48 → 15.69 KB, measured 15,682 B: the Related section's mount (its
+	// placeholder and the dynamic import); the section itself is on demand.
+	// X-gs-followups (runner §2.26): 15.69 → 15.71 KB, measured 15,705 B (+18 B, no /t code: the
+	// shared message barrel and chunk names moved; Settings and Welcome moved by +9 and −2 B too).
+	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15.71 KB'),
 	entry(
 		'Detail sections (on demand)',
 		[
@@ -1830,10 +1897,16 @@ export default [
 			(f) =>
 				!adultSection.includes(f) &&
 				!identifiedSection.includes(f) &&
+				!relatedSection.includes(f) &&
 				!menuOnly.includes(f) &&
 				!actionsMenu.includes(f)
 		),
-		'47.49 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		// X-web-followups-1124 (a raise for the runner's §2.26 call): 47.44 → 47.52 KB, measured 47,514 B (+81 B): VirtualList
+		// keeps a focused row active through a new resetKey.
+		// X-gs-followups: 47.87 → 47.44 KB, measured 47,433 B. Related no longer imports open.ts (the
+		// drawer hands it the open function), and the siblings loader Parsed and Related now share
+		// counts in Related's entry. Earlier, GS-4 (runner §2.26): 47.49 → 47.87 KB for that import.
+		'47.52 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.
@@ -1848,6 +1921,15 @@ export default [
 		'0.79 KB'
 	),
 	entry('Detail identified-as section (on demand)', identifiedSection, '2.84 KB'),
+	// GS-4: the Related section (its lists, Compare these and its CSS), on demand. Measured 5,370 B;
+	// limit = measured + at most 10%, rounded to 100 B.
+	// X-gs-followups (runner §2.26): 5.4 → 5.61 KB, measured 5,604 B (+252 B): the siblings loader
+	// it now shares with Parsed (one request, the kept answer, the abort) moved here from Detail
+	// sections (−431 B there), so the two together are 179 B smaller.
+	// X-gs-followups-2 (runner §2.26): 5.61 → 5.74 KB, measured 5,734 B (+130 B): Related takes
+	// focus on mount when Show all asked for it, hands it to the drawer's title when the answer is
+	// withheld, and the siblings loader's per-listener guard and read refresh of a kept answer.
+	entry('Detail Related section (on demand)', relatedSection, '5.74 KB'),
 	// The four stage pages (S-insights-2) are one route file and one lazy component, so one entry
 	// measures them all. uPlot loads with the first chart, after first paint, and has its own entry.
 	routeEntry(

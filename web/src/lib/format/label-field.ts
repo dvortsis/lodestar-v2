@@ -1,5 +1,6 @@
 // Query field labels (X-labels), for the Builder.
 import { m } from '$lib/paraglide/messages.js';
+import { ID_LABELS } from './label-id';
 import { word } from './label-shared';
 
 // The query fields (`crates/search/src/query.rs` FIELDS), by the name the Builder lists: the
@@ -32,6 +33,7 @@ const FIELD: Record<string, () => string> = {
 	has: m.search_filters_has,
 	resolved: m.search_filters_resolved,
 	adult: m.adult_kind,
+	...ID_LABELS,
 	ambiguous: m.search_filters_flag_ambiguous,
 	hidden: m.hidden_by_filters,
 	demoted: m.search_filters_flag_demoted,

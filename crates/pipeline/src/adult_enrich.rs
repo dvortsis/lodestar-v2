@@ -14,6 +14,9 @@
 //!   or quarantine verdict now, a hide), a `private_source` key, an
 //!   unverified item, or anything while the plugin's egress kill switch is
 //!   tripped (SRC-5).
+//!   Each of the plugin's requests asks the same gate again, for the same
+//!   item and query, after the client's waits and just before it's handed
+//!   to egress ([`crate::presend`]).
 //! - **What is sent** is a [`Query`]: the display name, or the release
 //!   parser's site, date and title, whichever the plugin asks for. The info
 //!   hash, files and trackers stay here: a [`Query`] has no field for them.
@@ -187,6 +190,97 @@ impl EnrichSources {
     }
 }
 
+/// Whether `manifest`'s consent condition holds now (Account: its required
+/// credentials stored, SRC-4), as the gate judges it before a lookup
+/// ([`check_with`]) and the writer again before it stores an answer
+/// ([`EnricherConsent`]). Blocking: reads the store.
+pub fn consent_met(
+    store: &Store,
+    manifest: &Manifest,
+    credentials: &[lodestar_sources::consent::CredentialSpec],
+) -> Result<bool, lodestar_store::Error> {
+    Ok(consent_holds(
+        manifest,
+        credentials,
+        store.source_consent(manifest.id)?.as_deref(),
+        &store.source_secret_names(manifest.id)?,
+    ))
+}
+
+/// [`consent_met`] from what the store holds for the plugin: its consent
+/// record and its stored credential names (`need_in_with`'s reads). The
+/// writer judges it inside the transaction that stores an answer
+/// (`Store::put_claims_at_consented`).
+pub fn consent_holds(
+    manifest: &Manifest,
+    credentials: &[lodestar_sources::consent::CredentialSpec],
+    record: Option<&str>,
+    names: &[String],
+) -> bool {
+    let ack = record.and_then(lodestar_sources::consent::Ack::decode);
+    lodestar_sources::consent::need_with(manifest, credentials, ack.as_ref(), names).is_none()
+}
+
+/// What the writer needs to judge each listed adult-enrichment source's
+/// consent again when it stores an answer (ENR-G): withdrawing consent
+/// between a lookup and its write must store nothing. A listed source it
+/// doesn't know fails closed.
+#[derive(Debug, Clone, Default)]
+pub struct EnricherConsent(
+    Arc<
+        [(
+            SourceId,
+            Manifest,
+            &'static [lodestar_sources::consent::CredentialSpec],
+        )],
+    >,
+);
+
+impl EnricherConsent {
+    /// The listed ones among registered `(id, manifest, credentials)`.
+    pub fn of<'a>(
+        registered: impl IntoIterator<
+            Item = (
+                SourceId,
+                &'a Manifest,
+                &'static [lodestar_sources::consent::CredentialSpec],
+            ),
+        >,
+        enrichers: EnrichSources,
+    ) -> EnricherConsent {
+        EnricherConsent(
+            registered
+                .into_iter()
+                .filter(|(id, ..)| enrichers.has(*id))
+                .map(|(id, m, c)| (id, m.clone(), c))
+                .collect(),
+        )
+    }
+
+    /// `source`'s consent condition holds now ([`consent_met`]); false for
+    /// a source it doesn't know.
+    pub fn met(&self, store: &Store, source: SourceId) -> Result<bool, lodestar_store::Error> {
+        match self.get(source) {
+            Some((m, c)) => consent_met(store, m, c),
+            None => Ok(false),
+        }
+    }
+
+    /// `source`'s manifest and declared credentials, if it's listed.
+    pub fn get(
+        &self,
+        source: SourceId,
+    ) -> Option<(
+        &Manifest,
+        &'static [lodestar_sources::consent::CredentialSpec],
+    )> {
+        self.0
+            .iter()
+            .find(|(id, ..)| *id == source)
+            .map(|(_, m, c)| (m, *c))
+    }
+}
+
 /// A manifest whose source may attach adult sections: an enrichment
 /// source that isn't always adult.
 pub(crate) fn admitted(m: &Manifest) -> bool {
@@ -357,8 +451,7 @@ pub fn check_with(
             .sources()?
             .iter()
             .any(|s| s.id == ctx.source && s.state == SourceState::Enabled);
-        g.consent_met =
-            lodestar_sources::consent::need_in_with(store, ctx.manifest, credentials)?.is_none();
+        g.consent_met = consent_met(store, ctx.manifest, credentials)?;
     }
     let item_wide = Gate {
         stored: true,
@@ -497,6 +590,9 @@ pub struct EnrichStats {
     pub failed: AtomicU64,
     /// Items the gate refused.
     pub ineligible: AtomicU64,
+    /// Lookups whose request the gate refused just before it went
+    /// ([`crate::presend`]): nothing was sent, and the answer is dropped.
+    pub withheld: AtomicU64,
     /// Items passed over because a fresh hit or miss is cached.
     pub cached: AtomicU64,
     /// Items the runtime finished with, whatever the outcome.
@@ -744,44 +840,69 @@ impl AdultEnrichSource {
         }
     }
 
-    /// One item: the cache, the gate, the budget, then the plugin.
+    /// The plugin's consent condition holds now; false when the store
+    /// can't say.
+    async fn consented(&self) -> bool {
+        let store = self.store.clone();
+        let manifest = self.plugin.manifest().clone();
+        let credentials = self.plugin.policy().credentials;
+        tokio::task::spawn_blocking(move || {
+            let store = store.lock().unwrap_or_else(|e| e.into_inner());
+            consent_met(&store, &manifest, credentials)
+        })
+        .await
+        .is_ok_and(|r| r.unwrap_or(false))
+    }
+
+    /// The gate for this runtime's plugin, as a call that owns what it
+    /// reads: [`check_with`] for torrent `id` at `now`, read then.
+    fn gate(
+        &self,
+        source: SourceId,
+    ) -> impl Fn(i64, i64) -> BoxFuture<'static, Gated> + Send + Sync + 'static {
+        let store = self.store.clone();
+        let filter = self.filter.clone();
+        let plugin = self.plugin.clone();
+        let switches = self.switches.clone();
+        let (form, adult) = (self.plugin.query_form(), self.adult);
+        move |id, now| {
+            let (store, plugin, switches) = (store.clone(), plugin.clone(), switches.clone());
+            // The filter as it is now: a rule changed since the last check
+            // can't be outrun.
+            let engine = filter.current();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
+                    let ctx = GateCtx {
+                        manifest: plugin.manifest(),
+                        source,
+                        form,
+                        adult,
+                        switches: &*switches,
+                    };
+                    let credentials = plugin.policy().credentials;
+                    check_with(&mut store, &engine, ctx, credentials, id, now)
+                })
+                .await
+            })
+        }
+    }
+
+    /// One item: the cache, the gate, the budget, then the plugin, whose
+    /// every request asks the gate again just before it goes
+    /// ([`crate::presend`]).
     async fn one(&self, ctx: &mut SourceCtx, kit: &Kit, state: &dyn PluginState, id: i64) -> Step {
         let now = crate::unix_now();
         if Cache::fresh(state, id, now).await {
             bump(&self.stats.cached);
             return Step::Skipped;
         }
-        let candidate = {
-            let store = self.store.clone();
-            let engine = self.filter.current();
-            let manifest = self.plugin.manifest().clone();
-            let credentials = self.plugin.policy().credentials;
-            let switches = self.switches.clone();
-            let gate = (ctx.source, self.plugin.query_form(), self.adult);
-            tokio::task::spawn_blocking(move || {
-                let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
-                let ctx = GateCtx {
-                    manifest: &manifest,
-                    source: gate.0,
-                    form: gate.1,
-                    adult: gate.2,
-                    switches: &*switches,
-                };
-                check_with(&mut store, &engine, ctx, credentials, id, now)
-            })
-            .await
-        };
-        let candidate = match candidate {
+        let gate: crate::presend::Gate<Candidate, Ineligible> = Arc::new(self.gate(ctx.source));
+        let candidate = match gate(id, now).await {
             Ok(Ok(Ok(c))) => c,
             Ok(Ok(Err(why))) => {
                 bump(&self.stats.ineligible);
-                return match why {
-                    Ineligible::AdultHidden
-                    | Ineligible::KillSwitch
-                    | Ineligible::SourceOff
-                    | Ineligible::NoConsent => Step::Wait,
-                    _ => Step::Skipped,
-                };
+                return step_for(why);
             }
             // The store couldn't say: never asked, and tried again later.
             _ => {
@@ -789,6 +910,20 @@ impl AdultEnrichSource {
                 return Step::Wait;
             }
         };
+        // Asked again before each request, for the same item and the same
+        // query: anything else (a refusal, an error, a changed query) sends
+        // nothing, and the reason decides what the runtime does next.
+        // Fail closed on a store error or a panic, as a plugin-wide
+        // reason, so the runtime waits before trying again.
+        let (kit, outcome) = crate::presend::for_item(
+            kit,
+            gate,
+            id,
+            candidate.clone(),
+            crate::unix_now,
+            Ineligible::NoQuery,
+            Ineligible::KillSwitch,
+        );
         // One cap for both (plan Q15): an opened item jumps the queue, but
         // within the same day's budget (ENR-1c).
         if !Budget::take(state, now, self.config.per_day).await {
@@ -798,8 +933,19 @@ impl AdultEnrichSource {
         let lookup = tokio::select! {
             biased;
             _ = ctx.shutdown.requested() => return Step::Shutdown,
-            r = self.plugin.lookup(kit, &candidate.query) => r,
+            r = self.plugin.lookup(&kit, &candidate.query) => r,
         };
+        // A request the gate refused: whatever the plugin made of it, the
+        // answer is dropped and nothing is cached.
+        if let Some((why, sent)) = outcome.refused() {
+            bump(&self.stats.withheld);
+            // A request of the lookup went before the refusal: the host was
+            // asked, so the next lookup waits the interval.
+            if sent {
+                return Step::Asked;
+            }
+            return why.map_or(Step::Wait, step_for);
+        }
         match lookup {
             Ok(Lookup::Match(section)) => {
                 let mut claims = Claims {
@@ -820,7 +966,13 @@ impl AdultEnrichSource {
                     sent = ctx.emitter.emit(found) => if sent.is_err() { return Step::Shutdown },
                 }
                 bump(&self.stats.matched);
-                Cache::remember(state, id, now.saturating_add(HIT_TTL_SECS), now).await;
+                // The writer refuses an answer whose consent was withdrawn
+                // meanwhile (ENR-G): one that's no longer consented to
+                // isn't cached either, so it's asked again once consent is
+                // back, not a hit's lifetime later.
+                if self.consented().await {
+                    Cache::remember(state, id, now.saturating_add(HIT_TTL_SECS), now).await;
+                }
             }
             Ok(Lookup::NoMatch) => {
                 bump(&self.stats.missed);
@@ -831,6 +983,21 @@ impl AdultEnrichSource {
         Step::Asked
     }
 }
+
+/// What the runtime does after the gate refused for `why`.
+fn step_for(why: Ineligible) -> Step {
+    match why {
+        Ineligible::AdultHidden
+        | Ineligible::KillSwitch
+        | Ineligible::SourceOff
+        | Ineligible::NoConsent => Step::Wait,
+        _ => Step::Skipped,
+    }
+}
+
+/// [`check_with`]'s answer, as the gate's call hands it back.
+type Gated =
+    Result<Result<Result<Candidate, Ineligible>, lodestar_store::Error>, tokio::task::JoinError>;
 
 enum Next {
     Item(i64),

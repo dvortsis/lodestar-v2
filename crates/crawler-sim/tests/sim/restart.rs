@@ -249,6 +249,7 @@ pub async fn run(
     });
     let suppression = COOLDOWN_CEILING + dht.query_timeout;
     let escalate = dht.sample_backoff_escalate.then_some(dht.query_timeout);
+    let split = dht.sampler_cooldown_split;
     let hour = Duration::from_secs(3600);
 
     // Leg 1: a first start (full suppression), then sampling.
@@ -348,6 +349,13 @@ pub async fn run(
         one.dht.sample_failures,
         one.dht.sample_stale
     );
+    // X-split-resume-gate: the cooldowns leg 1 moved out of a full table
+    // (a gauge: live ones as of the stop's last tick; since
+    // X-split-spill-horizon, ended ones don't count, swept or not).
+    let spilled1 = one.dht.sample_spill_slots;
+    if split {
+        let _ = writeln!(text, "spill_slots_at_stop={spilled1}");
+    }
     let _ = writeln!(
         text,
         "\n# leg 2: {}s later, dht.safe_restart {}",
@@ -474,9 +482,14 @@ pub async fn run(
             pending + honoured,
             "restored = pending + honoured"
         );
+        // With the split on, a node can be held by the spill filter
+        // instead (one live slot each; the gauge counts live slots only,
+        // so ended ones can't make up for a node the snapshot lost).
+        let held = restored + if split { spilled1 } else { 0 };
         assert!(
-            restored as usize >= restricted,
-            "restored {restored} < {restricted} known restricted at the restart"
+            held as usize >= restricted,
+            "restored {restored} (+{} spilled) < {restricted} known restricted at the restart",
+            held - restored
         );
         assert!(
             first_sample.is_some_and(|d| d <= Duration::from_secs(60)),
@@ -486,11 +499,26 @@ pub async fn run(
             expired_resampled, expired_at_restart,
             "nodes free at the restart were sampled again"
         );
-        assert_eq!(
-            delays.len(),
-            due.len(),
-            "every obligation expiring in leg 2 was followed by a sample"
-        );
+        let missed: Vec<String> = due
+            .iter()
+            .filter(|a| !first2.contains_key(*a))
+            .map(|a| format!("{a} due {:?} before the end", end2 - earliest[a]))
+            .collect();
+        if split {
+            // A spilled node left the table: once its cooldown ends it's
+            // sampled when a lookup offers it again, as within a run, so a
+            // few due near the end may not be offered in time.
+            assert!(
+                delays.len() * 100 >= due.len() * 99,
+                "too few obligations expiring in leg 2 were followed by a sample: {missed:?}"
+            );
+        } else {
+            assert_eq!(
+                delays.len(),
+                due.len(),
+                "every obligation expiring in leg 2 was followed by a sample: {missed:?}"
+            );
+        }
     } else {
         assert_eq!(d2.sample_suppression_reason, Reason::Off, "{text}");
         if end2 < start2 + suppression {

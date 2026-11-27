@@ -32,6 +32,7 @@ pub mod identify;
 pub mod local_torrent;
 pub mod log_events;
 pub mod marginal;
+mod presend;
 pub mod remote;
 pub mod requires;
 mod rollups;
@@ -430,6 +431,9 @@ pub struct Monitor {
     setup_done: Option<watch::Receiver<bool>>,
     /// [`PipelineConfig::companions`], for [`Monitor::companion_state`].
     companions: Option<requires::Companions>,
+    /// [`PipelineConfig::reenrich`], for [`Control`]: a purge that removed
+    /// claims starts another backfill pass (ENR-G).
+    reenrich: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Monitor {
@@ -714,6 +718,13 @@ impl Pipeline {
                 .zip(&plugins)
                 .map(|((id, ..), p)| (*id, p.manifest())),
             &config.adult_enrichers,
+        );
+        let enricher_consent = adult_enrich::EnricherConsent::of(
+            registered
+                .iter()
+                .zip(&plugins)
+                .map(|((id, ..), p)| (*id, p.manifest(), p.policy().credentials)),
+            enrichers,
         );
         lodestar_log::log_event!(
             log_events::STARTING,
@@ -1164,6 +1175,7 @@ impl Pipeline {
             adult,
             flood,
             enrichers,
+            enricher_consent,
             backfill_after: 0,
             backfill_done: false,
             backfill_backoff: Default::default(),
@@ -1233,6 +1245,7 @@ impl Pipeline {
                 gate,
                 setup_done: config.setup_done.clone(),
                 companions: config.companions.clone(),
+                reenrich: config.reenrich.clone(),
             },
             tasks,
             egress_tasks,

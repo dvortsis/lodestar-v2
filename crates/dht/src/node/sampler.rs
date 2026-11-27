@@ -12,7 +12,9 @@
 //! node's first failed sample in a row cools for [`FIRST_FAILURE_BACKOFF`]
 //! and starts a streak that lasts as long as the full cooldown it replaces,
 //! holding that cooldown's table place and shares; a second failure within
-//! it cools in full.
+//! it cools in full. A node that holds a table record waits for its sample
+//! apart from the frontier and goes first (X-escalate-full-table): its
+//! sample replaces its own record, so a full table doesn't hold it up.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -96,6 +98,14 @@ pub(crate) struct Sampler {
     states: Map<SocketAddr, State>,
     expiry: BTreeSet<(Instant, u64, SocketAddr)>,
     frontier: VecDeque<NodeInfo>,
+    /// Candidates that hold a table record, escalation on only
+    /// (X-escalate-full-table): a streak whose short cooldown ended, or a
+    /// cooldown not yet pruned. Each one's sample replaces its own record,
+    /// so it needs no free place: [`Sampler::next`] hands these out first,
+    /// a full table included. At most [`MAX_FRONTIER`], apart from the
+    /// frontier's own bound. Always empty with the switch off.
+    held: VecDeque<NodeInfo>,
+    /// Every queued address, in `frontier` or `held`.
     queued: Set<SocketAddr>,
     /// How many addresses each IP and each block holds, queued or in
     /// `states` (an address in both counts once).
@@ -145,11 +155,12 @@ impl Sampler {
             states: Map::default(),
             expiry: BTreeSet::new(),
             frontier: VecDeque::new(),
+            held: VecDeque::new(),
             queued: Set::default(),
             per_ip: Map::default(),
             per_network: Map::default(),
             per_allocation: Map::default(),
-            capacity: MAX_KNOWN,
+            capacity: initial_capacity(),
             next_proof: 0,
             restored_live: 0,
             restored_refused: 0,
@@ -233,6 +244,13 @@ impl Sampler {
             tries.sort_unstable();
             // The filter's clock starts at its first move.
             let spill = self.spill.get_or_insert_with(|| spill::Spill::new(now));
+            // The fallback's line is hard (X-split-spill-horizon): at
+            // [`spill::FALLBACK`] live cooldowns nothing more moves out, so
+            // one tick's budget can't carry the filter past it. The
+            // cooldown stays in the table, never shortened.
+            if !spill.has_room() {
+                return false;
+            }
             // The soonest that fits: a refusal (both its groups full) is
             // rare, so a few tries find room if there is any.
             let Some(&(end, token, addr)) = tries
@@ -358,8 +376,11 @@ impl Sampler {
     }
 
     /// Queues `node` on the frontier if it's eligible, not already queued,
-    /// and a new address fits its IP's and block's shares. True when it was
-    /// queued (CR-1b counts these as new).
+    /// and a new address fits its IP's and block's shares. With escalation
+    /// on, a node that holds a table record goes to the held queue instead,
+    /// under that queue's own bound (when it's full, the node is refused
+    /// even if the frontier has room). True when it was queued (CR-1b counts
+    /// these as new).
     pub fn offer(&mut self, mut node: NodeInfo, now: Instant) -> bool {
         node.addr = lodestar_network_policy::normalize(node.addr);
         if matches!(self.states.get(&node.addr), Some(State::Cooling { until, token, .. })
@@ -368,6 +389,21 @@ impl Sampler {
             self.restored_refused += 1;
         }
         let was = self.tracked(&node.addr);
+        // X-escalate-full-table: with escalation on, a node that holds a
+        // record waits apart, so neither a full frontier nor a full table
+        // holds it up. It's already tracked, so its shares don't change.
+        if self.escalate && self.states.contains_key(&node.addr) {
+            if self.held.len() < MAX_FRONTIER
+                && !self.queued.contains(&node.addr)
+                && self.table_eligible(&node.addr, now)
+                && !self.spilled(&node.addr, now)
+            {
+                self.queued.insert(node.addr);
+                self.held.push_back(node);
+                return true;
+            }
+            return false;
+        }
         if self.frontier.len() < MAX_FRONTIER
             && !self.queued.contains(&node.addr)
             && self.table_eligible(&node.addr, now)
@@ -383,6 +419,11 @@ impl Sampler {
     }
 
     pub fn next(&mut self, now: Instant) -> Option<NodeInfo> {
+        // A node that holds a record goes first, full table or not: its
+        // sample replaces that record (`reserve`), so it needs no place.
+        if let Some(n) = self.next_held(now) {
+            return Some(n);
+        }
         // Saturation leaves candidates queued. A later maintenance tick
         // reclaims capacity; callers never spin looking for a free slot.
         // With the split on, a full table first moves cooldowns out.
@@ -396,6 +437,27 @@ impl Sampler {
             if self.eligible(&n.addr, now) {
                 return Some(n);
             }
+        }
+        None
+    }
+
+    /// The first held candidate that still holds a record and may be
+    /// sampled (X-escalate-full-table). One whose record left while it
+    /// waited (its streak ended, or it moved to the spill filter) is a
+    /// newcomer again: it's offered as one, to the frontier. One that may
+    /// not be sampled is dropped, as the frontier drops one.
+    fn next_held(&mut self, now: Instant) -> Option<NodeInfo> {
+        while let Some(n) = self.held.pop_front() {
+            self.queued.remove(&n.addr);
+            if self.states.contains_key(&n.addr) {
+                // Still tracked by its record: its shares don't change.
+                if self.eligible(&n.addr, now) {
+                    return Some(n);
+                }
+                continue;
+            }
+            self.recount(&n.addr, true);
+            self.offer(n, now);
         }
         None
     }
@@ -636,6 +698,11 @@ impl Sampler {
     pub fn prune(&mut self, now: Instant) {
         if let Some(spill) = &mut self.spill {
             spill.sweep(now);
+            // With the switch off, only restored cooldowns were ever in it
+            // (X-split-resume-gate); once they've ended it's freed.
+            if !self.split && spill.used() == 0 {
+                self.spill = None;
+            }
         }
         for _ in 0..RECLAIM_PER_TICK {
             let Some(&(until, token, addr)) = self.expiry.first() else {
@@ -785,11 +852,37 @@ impl Sampler {
         })
     }
 
-    /// The latest end the spill filter may hold a live cooldown to, if any:
-    /// the snapshot can't list them, so the restart proof gates sampling
-    /// until then (switch on only).
-    pub fn spill_end(&self, now: Instant) -> Option<Instant> {
-        self.spill.as_ref().and_then(|s| s.last_end(now))
+    /// The spill filter for the restart snapshot (X-split-resume-gate):
+    /// every live cooldown in it, with the minutes left after `mono`,
+    /// capped at `horizon` as the listed ones are. `None` when nothing in
+    /// it is live (always with the switch off).
+    pub fn spill_export(
+        &self,
+        mono: Instant,
+        horizon: Duration,
+    ) -> Option<crate::restart::Spilled> {
+        self.spill.as_ref().and_then(|s| s.export(mono, horizon))
+    }
+
+    /// Rebuilds the spill filter from the restart snapshot's
+    /// (X-split-resume-gate), whatever the switch: with it off, the filter
+    /// only refuses its restored cooldowns and holds their shares until
+    /// they end, and nothing new moves in. Sampling waits for seeding, so
+    /// the filter is still empty; if it ever weren't, or the section
+    /// couldn't be rebuilt, the restored cooldowns can't be kept one by
+    /// one: this returns the latest of their ends, and no sample may go to
+    /// anyone before it (the hold the snapshot used to carry).
+    pub fn restore_spill(
+        &mut self,
+        seeded: &crate::restart::SeededSpill,
+        now: Instant,
+    ) -> Option<Instant> {
+        let empty = self.spill.as_ref().is_none_or(|s| s.used() == 0);
+        if let Some(filter) = empty.then(|| spill::Spill::restore(seeded, now)).flatten() {
+            self.spill = Some(filter);
+            return None;
+        }
+        seeded.slots().map(|(_, _, until)| until).max()
     }
 
     /// Restored records still cooling, candidates they turned away, and
@@ -802,8 +895,9 @@ impl Sampler {
         )
     }
 
+    /// Queued candidates: the frontier and the held ones.
     pub fn frontier_len(&self) -> usize {
-        self.frontier.len()
+        self.frontier.len() + self.held.len()
     }
     pub fn known(&self) -> usize {
         self.states.len()
@@ -841,11 +935,19 @@ impl Sampler {
     }
     /// Whether the sampler can't admit anyone: the table is full and,
     /// with the split on, no cooldown can move to the filter. With the
-    /// split on, "likely room" is judged by the filter's fill; if all
-    /// [`SPILL_TRIES`] inserts are refused below that fill (very rare),
-    /// `next` admits no one that tick without this saying so.
+    /// split on, "likely room" is judged by the filter's live cooldowns
+    /// (X-split-spill-horizon): past [`spill::FALLBACK`] it's full, and
+    /// the actor sends no sample until a table place frees or enough
+    /// spilled cooldowns end. Ended ones never count, swept or not. If all
+    /// [`SPILL_TRIES`] inserts are refused below that line (very rare),
+    /// `next` admits no one that tick without this saying so. A held
+    /// candidate (escalation on) needs no free place, so while any waits
+    /// the sampler isn't saturated. If every held one lost its record
+    /// meanwhile, `next` offers them again as newcomers, and on a full
+    /// table admits no one that call.
     pub fn saturated(&self) -> bool {
-        self.known() >= self.capacity
+        self.held.is_empty()
+            && self.known() >= self.capacity
             && !(self.split
                 && !(self.expiry.is_empty() && self.struck.is_empty())
                 && self.spill.as_ref().is_none_or(spill::Spill::has_room))
@@ -865,9 +967,14 @@ impl Sampler {
         self.full
     }
 
-    /// Spill filter slots in use (0 with the switch off), for the gauge.
+    /// Live cooldowns in the spill filter as of the last [`prune`]
+    /// (X-split-spill-horizon), for the gauge: ended ones don't count, swept
+    /// or not, so the gauge reads what the fallback judges. 0 with no
+    /// filter.
+    ///
+    /// [`prune`]: Self::prune
     pub fn spill_used(&self) -> usize {
-        self.spill.as_ref().map_or(0, spill::Spill::used)
+        self.spill.as_ref().map_or(0, spill::Spill::live_count)
     }
 
     /// Spill slots in use and the filter's heap bytes (0, 0 with the
@@ -875,6 +982,45 @@ impl Sampler {
     #[cfg(test)]
     pub fn spill_counts(&self) -> (usize, usize) {
         self.spill.as_ref().map_or((0, 0), spill::Spill::counts)
+    }
+}
+
+/// The table's bound for a new sampler: [`MAX_KNOWN`], or the simulator's
+/// override on this thread (feature `testing` only).
+fn initial_capacity() -> usize {
+    #[cfg(feature = "testing")]
+    if let Some(c) = TEST_CAPACITY.with(std::cell::Cell::get) {
+        return c;
+    }
+    MAX_KNOWN
+}
+
+#[cfg(feature = "testing")]
+thread_local! {
+    static TEST_CAPACITY: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The simulator's seam (feature `testing`, never in a production build):
+/// samplers made on this thread while the guard lives hold at most
+/// `capacity` records, so a run of a few thousand nodes can fill the
+/// table. The simulator runs the node on its own current-thread runtime,
+/// on the test's thread.
+#[cfg(feature = "testing")]
+#[derive(Debug)]
+#[must_use = "the capacity holds only while the guard lives"]
+pub struct TestCapacity(Option<usize>);
+
+#[cfg(feature = "testing")]
+impl TestCapacity {
+    pub fn set(capacity: usize) -> TestCapacity {
+        TestCapacity(TEST_CAPACITY.with(|c| c.replace(Some(capacity))))
+    }
+}
+
+#[cfg(feature = "testing")]
+impl Drop for TestCapacity {
+    fn drop(&mut self) {
+        TEST_CAPACITY.with(|c| c.set(self.0));
     }
 }
 
@@ -920,7 +1066,8 @@ fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u32>, key: K) {
 ///   per-source shares count them until they end. Every stored cooldown has
 ///   its own slot (none is merged into another), so a count is never low;
 ///   tag collisions only make it high, which only skips a node.
-/// - **Bounded.** [`SLOTS`] slots, 32 MiB, allocated on the first spill.
+/// - **Bounded.** [`SLOTS`] slots, 32 MiB, and a count of slots per end
+///   minute, 16 KiB, both allocated on the first spill.
 ///   When both blocks are full of live cooldowns, [`Spill::insert`]
 ///   refuses and the cooldown stays in the sampler's table: the sampler is
 ///   then no worse than with the switch off.
@@ -934,18 +1081,27 @@ fn decrement<K: Ord + std::hash::Hash>(map: &mut Map<K, u32>, key: K) {
 /// [`Spill::sweep`] clears ended slots in a pass every 17 minutes, long
 /// before that; and if one ever did read as live, it would only skip a
 /// node.
+///
+/// **Ageing (X-split-spill-horizon).** A cooldown stops counting towards
+/// the fallback ([`FALLBACK`], 15/16 of the slots) in the tick its minute
+/// ends, before its slot is swept, and an insert takes an ended slot as
+/// readily as a free one. Nothing live is ever evicted. So the filter holds
+/// at most the cooldowns moved out in the last cooldown length (6 h at
+/// WK-10e scale 1) plus those ended since a sweep last passed, and reaches
+/// the fallback in steady state only when that is more than 15/16 of the
+/// slots.
 pub(crate) mod spill {
-    use std::collections::hash_map::RandomState;
-    use std::hash::BuildHasher;
+    use std::hash::Hasher as _;
     use std::net::{IpAddr, SocketAddr};
     use std::time::Duration;
 
     use tokio::time::Instant;
 
-    use super::super::limits::{allocation, network};
+    use super::super::limits::{Network, allocation, network};
+    use crate::restart::{SPILL_BLOCK, SPILL_BLOCKS, SPILL_MINUTE_BITS, SeededSpill, Spilled};
 
     const MINUTE_NANOS: u128 = 60_000_000_000;
-    const MINUTE_BITS: u32 = 12;
+    const MINUTE_BITS: u32 = SPILL_MINUTE_BITS;
     const MINUTE_MASK: u32 = (1 << MINUTE_BITS) - 1;
     /// The tag, above the minute: 8 bits of the block's key, 4 of the
     /// IPv6 /64 (0 on IPv4), 4 (IPv6) or 8 (IPv4) of the IP, and 4 of the
@@ -957,9 +1113,10 @@ pub(crate) mod spill {
     /// The furthest a stored end may lie ahead of the current minute: the
     /// longest cooldown (`MAX_INTERVAL` × `MAX_SCALE`, 48 h) and a minute.
     pub const HORIZON_MIN: u32 = 48 * 60 + 1;
-    /// A block holds the widest share's cap (64) twice over.
-    const BLOCK: usize = 64;
-    const BLOCKS: usize = 1 << 17;
+    /// A block holds the widest share's cap (64) twice over. The restart
+    /// snapshot keeps the filter in this shape (`restart::Spilled`).
+    const BLOCK: usize = SPILL_BLOCK;
+    const BLOCKS: usize = SPILL_BLOCKS;
     /// 2^23 slots of 4 bytes: 32 MiB. Balanced (100 samples a second)
     /// keeps about 2.2 million cooldowns live at WK-10e scale 1 and about
     /// 5.2 million at scale 8 (a fifth answered, cooling 48 h); the usable
@@ -968,22 +1125,105 @@ pub(crate) mod spill {
     /// Slots cleared of ended cooldowns per [`Spill::sweep`] (8,192): a
     /// full pass every 1,024 sweeps, about 17 minutes at the 1 s tick.
     pub const SWEEP: usize = SLOTS / 1024;
-    /// The filter's heap bytes once allocated: the slots and nothing else.
+    /// End minutes, modulo 4,096: [`Spill::ends`] counts the used slots
+    /// that end in each.
+    const MINUTES: usize = 1 << MINUTE_BITS;
+    /// Past this many live cooldowns (15/16 of the slots, 7,864,320) the
+    /// filter reports no room ([`Spill::has_room`]), and the sampler falls
+    /// back to its table alone until enough of them end.
+    pub const FALLBACK: usize = SLOTS / 16 * 15;
+    /// The filter's heap bytes once allocated: the slots and the end-minute
+    /// counts (16 KiB), nothing else.
     #[cfg(test)]
-    pub const BYTES: usize = SLOTS * 4;
+    pub const BYTES: usize = SLOTS * 4 + MINUTES * 4;
 
-    #[derive(Debug)]
     pub struct Spill {
-        hasher: RandomState,
+        /// SipHash-2-4 keys: per process, or restored with the filter, so
+        /// a restarted run finds the fingerprints a snapshot kept.
+        keys: [u64; 2],
         /// Minute `m` ends at `base + m` minutes.
         base: Instant,
         /// Empty until the first insert.
         slots: Box<[u32]>,
+        /// Used slots by their stored minute (X-split-spill-horizon), so
+        /// the live ones can be counted without a scan. Empty until the
+        /// first insert, as `slots` is.
+        ends: Box<[u32]>,
         /// Slots holding a tag, ended or not.
         used: usize,
+        /// Live slots: counted from `ends` at each sweep, plus each insert
+        /// since. Never fewer than truly live; a slot that ended since the
+        /// last sweep still counts until the next one.
+        live: usize,
         cursor: usize,
-        /// The latest end ever stored: an upper bound on every live one.
-        last: Option<Instant>,
+    }
+
+    impl std::fmt::Debug for Spill {
+        // The keys stay out of logs: they decide where an address lands.
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("Spill")
+                .field("base", &self.base)
+                .field("used", &self.used)
+                .field("live", &self.live)
+                .field("cursor", &self.cursor)
+                .finish_non_exhaustive()
+        }
+    }
+
+    /// Fresh keys: random, or fixed under `testing` so the simulator's runs
+    /// repeat (as the seen filter's are).
+    fn fresh_keys() -> [u64; 2] {
+        #[cfg(not(feature = "testing"))]
+        {
+            [rand::random(), rand::random()]
+        }
+        #[cfg(feature = "testing")]
+        {
+            [0x5370_696c_6c4b_6579, 0x6c6f_6465_7374_6172]
+        }
+    }
+
+    /// SipHash-2-4 over `bytes`. std's `SipHasher` is deprecated only in
+    /// favour of `DefaultHasher`, whose algorithm may change between
+    /// releases; a restored filter needs the same hash in the next binary,
+    /// so this one is pinned (`siphash_is_the_reference_function`).
+    #[allow(deprecated)]
+    pub(super) fn siphash(keys: [u64; 2], bytes: &[u8]) -> u64 {
+        let mut h = std::hash::SipHasher::new_with_keys(keys[0], keys[1]);
+        h.write(bytes);
+        h.finish()
+    }
+
+    /// The bytes hashed for each level: a domain byte, then the value in a
+    /// fixed byte order, so the hash doesn't hang on std's `Hash` impls.
+    fn net_bytes(domain: u8, n: Network) -> [u8; 10] {
+        let mut out = [0; 10];
+        out[0] = domain;
+        out[1] = n.0;
+        out[2..].copy_from_slice(&n.1.to_be_bytes());
+        out
+    }
+
+    fn ip_bytes(domain: u8, ip: IpAddr, port: Option<u16>) -> ([u8; 20], usize) {
+        let mut out = [0; 20];
+        out[0] = domain;
+        let mut n = match ip {
+            IpAddr::V4(v4) => {
+                out[1] = 4;
+                out[2..6].copy_from_slice(&v4.octets());
+                6
+            }
+            IpAddr::V6(v6) => {
+                out[1] = 6;
+                out[2..18].copy_from_slice(&v6.octets());
+                18
+            }
+        };
+        if let Some(p) = port {
+            out[n..n + 2].copy_from_slice(&p.to_be_bytes());
+            n += 2;
+        }
+        (out, n)
     }
 
     /// Where an address's slots live, and its tag (above the minute).
@@ -996,13 +1236,27 @@ pub(crate) mod spill {
     impl Spill {
         pub fn new(base: Instant) -> Spill {
             Spill {
-                hasher: RandomState::new(),
+                keys: fresh_keys(),
                 base,
                 slots: Box::default(),
+                ends: Box::default(),
                 used: 0,
+                live: 0,
                 cursor: 0,
-                last: None,
             }
+        }
+
+        /// A filter with the given keys (tests pin placement with it).
+        #[cfg(test)]
+        pub fn with_keys(base: Instant, keys: [u64; 2]) -> Spill {
+            Spill {
+                keys,
+                ..Spill::new(base)
+            }
+        }
+
+        fn hash(&self, bytes: &[u8]) -> u64 {
+            siphash(self.keys, bytes)
         }
 
         fn since_base(&self, t: Instant) -> u128 {
@@ -1027,14 +1281,16 @@ pub(crate) mod spill {
             let net = network(ip);
             let widest = allocation(ip).unwrap_or(net);
             // One keyed hash per level, each in its own domain.
-            let hk = self.hasher.hash_one((0u8, widest));
-            let hi = self.hasher.hash_one((1u8, ip));
-            let ha = self.hasher.hash_one((3u8, addr));
+            let hk = self.hash(&net_bytes(0, widest));
+            let (b, n) = ip_bytes(1, ip, None);
+            let hi = self.hash(&b[..n]);
+            let (b, n) = ip_bytes(3, ip, Some(addr.port()));
+            let ha = self.hash(&b[..n]);
             let v4 = matches!(ip, IpAddr::V4(_));
             let mid = if v4 {
                 (hi & 0xFF) as u32
             } else {
-                let hn = self.hasher.hash_one((2u8, net));
+                let hn = self.hash(&net_bytes(2, net));
                 ((hn & 0xF) << 4 | (hi & 0xF)) as u32
             };
             // The key's byte is never 0, so a used slot is never 0.
@@ -1048,6 +1304,42 @@ pub(crate) mod spill {
 
         fn block(&self, b: usize) -> &[u32] {
             &self.slots[b * BLOCK..(b + 1) * BLOCK]
+        }
+
+        /// The slots and their end counts, made once, on the first store.
+        fn allocate(&mut self) {
+            if self.slots.is_empty() {
+                self.slots = vec![0; SLOTS].into_boxed_slice();
+                self.ends = vec![0; MINUTES].into_boxed_slice();
+            }
+        }
+
+        /// Puts `word` (a tag and its minute) in slot `i`, keeping `used`,
+        /// `ends` and `live` exact. The slot holds nothing live: it's free,
+        /// or its cooldown ended and isn't swept yet.
+        fn store(&mut self, i: usize, word: u32) {
+            let old = self.slots[i];
+            if old == 0 {
+                self.used += 1;
+            } else {
+                self.ends[(old & MINUTE_MASK) as usize] -= 1;
+            }
+            self.slots[i] = word;
+            self.ends[(word & MINUTE_MASK) as usize] += 1;
+            self.live += 1;
+        }
+
+        /// Used slots whose minute is live from `first`: the minutes
+        /// `first .. first + HORIZON_MIN`, read the way [`Spill::live`]
+        /// reads one slot.
+        fn count_live(&self, first: u64) -> usize {
+            if self.ends.is_empty() {
+                return 0;
+            }
+            let from = first as usize & MINUTE_MASK as usize;
+            (0..HORIZON_MIN as usize)
+                .map(|k| self.ends[(from + k) & (MINUTES - 1)] as usize)
+                .sum()
         }
 
         /// Remembers that `addr` cools until `until`, in a slot of its own.
@@ -1067,9 +1359,7 @@ pub(crate) mod spill {
             if ahead >= u64::from(HORIZON_MIN) {
                 return false;
             }
-            if self.slots.is_empty() {
-                self.slots = vec![0; SLOTS].into_boxed_slice();
-            }
+            self.allocate();
             let place = self.place(addr);
             // Per block: its first free slot and how many are free.
             let mut free = [(0, 0); 2];
@@ -1092,12 +1382,7 @@ pub(crate) mod spill {
             if n == 0 {
                 return false;
             }
-            if self.slots[i] == 0 {
-                self.used += 1;
-            }
-            self.slots[i] = place.tag | (end as u32 & MINUTE_MASK);
-            let end = self.base + Duration::from_secs(end.saturating_mul(60));
-            self.last = Some(self.last.map_or(end, |l| l.max(end)));
+            self.store(i, place.tag | (end as u32 & MINUTE_MASK));
             true
         }
 
@@ -1143,32 +1428,134 @@ pub(crate) mod spill {
             }
         }
 
-        /// Clears ended slots, [`SWEEP`] of them from where the last
-        /// sweep stopped.
+        /// Ages the filter (X-split-spill-horizon): recounts the live
+        /// slots, so a cooldown stops counting towards the fallback in the
+        /// tick its minute ends, and clears ended slots, [`SWEEP`] of them
+        /// from where the last sweep stopped, so each is free for any
+        /// address within a pass (about 17 minutes). Only ended slots are
+        /// cleared: nothing live ever leaves early.
         pub fn sweep(&mut self, now: Instant) {
             if self.used == 0 {
+                self.live = 0;
                 return;
             }
             let first = self.first_live(now);
             for _ in 0..SWEEP {
-                let slot = &mut self.slots[self.cursor];
-                if *slot != 0 && !Spill::live(*slot, first) {
-                    *slot = 0;
+                let slot = self.slots[self.cursor];
+                if slot != 0 && !Spill::live(slot, first) {
+                    self.slots[self.cursor] = 0;
+                    self.ends[(slot & MINUTE_MASK) as usize] -= 1;
                     self.used -= 1;
                 }
                 self.cursor = (self.cursor + 1) % SLOTS;
             }
+            self.live = self.count_live(first);
+            // Drained: nothing placed with the old keys is left, so new
+            // ones are drawn. With the split on in steady state the filter
+            // rarely drains, so keys restored from a snapshot can last
+            // many restarts.
+            if self.used == 0 {
+                self.keys = fresh_keys();
+            }
         }
 
-        /// The latest end stored, if it's still ahead of `now`.
-        pub fn last_end(&self, now: Instant) -> Option<Instant> {
-            self.last.filter(|l| *l > now)
+        /// The filter for the restart snapshot (X-split-resume-gate): every
+        /// slot live at `mono`, in its block, with the whole minutes left
+        /// until its end, rounded up and capped at `horizon` as the listed
+        /// entries are (WK-10e). `None` when no slot is live.
+        pub fn export(&self, mono: Instant, horizon: Duration) -> Option<Spilled> {
+            if self.used == 0 {
+                return None;
+            }
+            let first = self.first_live(mono);
+            let cap = mono + horizon;
+            let mut raw = Vec::with_capacity(BLOCKS + 4 * self.used);
+            let mut any = false;
+            for b in 0..BLOCKS {
+                let count_at = raw.len();
+                raw.push(0u8);
+                let mut n = 0u8;
+                for slot in self.block(b) {
+                    if !Spill::live(*slot, first) {
+                        continue;
+                    }
+                    // The slot's minute, unwrapped: live means it's within
+                    // `HORIZON_MIN` of `first`.
+                    let minute = first + u64::from(slot.wrapping_sub(first as u32) & MINUTE_MASK);
+                    let end = (self.base + Duration::from_secs(minute.saturating_mul(60))).min(cap);
+                    let left = end.saturating_duration_since(mono).as_nanos();
+                    // Live means its minute ends after `mono`; `cap` is
+                    // after it too, so at least one minute is written.
+                    let minutes = u32::try_from(left.div_ceil(MINUTE_NANOS))
+                        .unwrap_or(u32::MAX)
+                        .max(1);
+                    debug_assert!(minutes <= MINUTE_MASK);
+                    raw.extend_from_slice(&((slot & TAG_MASK) | minutes).to_be_bytes());
+                    n += 1;
+                }
+                raw[count_at] = n;
+                any |= n > 0;
+            }
+            let mut key = [0; 16];
+            key[..8].copy_from_slice(&self.keys[0].to_le_bytes());
+            key[8..].copy_from_slice(&self.keys[1].to_le_bytes());
+            any.then_some(Spilled { key, raw })
         }
 
-        /// Whether there's likely room: below 15/16 of the slots used. An
-        /// insert can still refuse (both its blocks full).
+        /// A filter rebuilt from a restart snapshot's (X-split-resume-gate),
+        /// with its keys, its clock starting at `now`. Each slot keeps its
+        /// block and tag and ends at the first whole minute at or after its
+        /// seeded end, so it's never shorter. `None` changes nothing: a
+        /// block held more than it can, which a checked snapshot can't.
+        pub fn restore(seeded: &SeededSpill, now: Instant) -> Option<Spill> {
+            let key = seeded.key();
+            let keys = [
+                u64::from_le_bytes(key[..8].try_into().expect("8 bytes")),
+                u64::from_le_bytes(key[8..].try_into().expect("8 bytes")),
+            ];
+            let mut spill = Spill {
+                keys,
+                base: now,
+                slots: Box::default(),
+                ends: Box::default(),
+                used: 0,
+                live: 0,
+                cursor: 0,
+            };
+            // Slots come block by block, and every block starts empty.
+            let mut block = usize::MAX;
+            let mut fill = 0;
+            for (b, tag, until) in seeded.slots() {
+                if until <= now {
+                    continue;
+                }
+                let end = u64::try_from(spill.since_base(until).div_ceil(MINUTE_NANOS))
+                    .unwrap_or(u64::MAX);
+                // Seeded ends are within the restart horizon (hours), far
+                // inside the filter's 48 h.
+                if end >= u64::from(HORIZON_MIN) || tag & MINUTE_MASK != 0 || tag == 0 {
+                    return None;
+                }
+                spill.allocate();
+                if b != block {
+                    block = b;
+                    fill = 0;
+                }
+                if fill == BLOCK {
+                    return None;
+                }
+                spill.store(b * BLOCK + fill, tag | end as u32);
+                fill += 1;
+            }
+            Some(spill)
+        }
+
+        /// Whether there's likely room: fewer than [`FALLBACK`] live
+        /// cooldowns. Ended ones don't count, swept or not: an insert takes
+        /// an ended slot as readily as a free one. An insert can still
+        /// refuse (both its blocks full of live cooldowns).
         pub fn has_room(&self) -> bool {
-            self.used < SLOTS / 16 * 15
+            self.live < FALLBACK
         }
 
         /// Slots in use, ended or not (until swept).
@@ -1176,16 +1563,35 @@ pub(crate) mod spill {
             self.used
         }
 
+        /// Live cooldowns, as of the last sweep and every insert since:
+        /// never fewer than truly live.
+        pub fn live_count(&self) -> usize {
+            self.live
+        }
+
         /// Slots in use, ended or not, and heap bytes held.
         #[cfg(test)]
         pub fn counts(&self) -> (usize, usize) {
-            (self.used, self.slots.len() * 4)
+            (self.used, (self.slots.len() + self.ends.len()) * 4)
+        }
+
+        /// Live slots counted one by one, for the tests that check
+        /// [`live_count`](Self::live_count).
+        #[cfg(test)]
+        pub fn scan_live(&self, now: Instant) -> usize {
+            let first = self.first_live(now);
+            self.slots
+                .iter()
+                .filter(|s| Spill::live(**s, first))
+                .count()
         }
     }
 }
 
 #[cfg(test)]
 mod escalate_tests;
+#[cfg(test)]
+mod horizon_tests;
 #[cfg(test)]
 mod split_tests;
 
@@ -1501,6 +1907,7 @@ mod tests {
         Offer(SocketAddr),
         Next,
         Complete(u8),
+        Fail(u8),
         Abort(u8),
         Restore(SocketAddr),
         Advance(u16),
@@ -1521,6 +1928,7 @@ mod tests {
             6 => arb_addr().prop_map(Op::Offer),
             3 => Just(Op::Next),
             1 => any::<u8>().prop_map(Op::Complete),
+            1 => any::<u8>().prop_map(Op::Fail),
             1 => any::<u8>().prop_map(Op::Abort),
             1 => arb_addr().prop_map(Op::Restore),
             1 => (0..400u16).prop_map(Op::Advance),
@@ -1532,10 +1940,22 @@ mod tests {
     proptest! {
         /// Whatever the sequence, the share counts match the frontier and
         /// table, and outside restored records no IP, block or IPv6
-        /// allocation holds more than its share.
+        /// allocation holds more than its share. With escalation on, the
+        /// held queue too (X-escalate-full-table), a full table included.
         #[test]
-        fn shares_hold_under_any_sequence(ops in proptest::collection::vec(arb_op(), 1..600)) {
-            let mut s = Sampler::default();
+        fn shares_hold_under_any_sequence(
+            escalate in any::<bool>(),
+            small in any::<bool>(),
+            split in any::<bool>(),
+            ops in proptest::collection::vec(arb_op(), 1..600),
+        ) {
+            let capacity = if small { 8 } else { MAX_KNOWN };
+            let mut s = if split {
+                Sampler::split_with_capacity(capacity)
+            } else {
+                Sampler::with_capacity(capacity)
+            }
+            .with_escalation(escalate);
             let mut now = Instant::now();
             let mut token = 0u64;
             let mut flying: Vec<(SocketAddr, u64)> = vec![];
@@ -1557,6 +1977,10 @@ mod tests {
                         let (a, t) = flying.remove(usize::from(i) % flying.len());
                         s.complete(a, t, MIN_INTERVAL, now);
                     }
+                    Op::Fail(i) if !flying.is_empty() => {
+                        let (a, t) = flying.remove(usize::from(i) % flying.len());
+                        s.fail(a, t, MAX_INTERVAL, now);
+                    }
                     Op::Abort(i) if !flying.is_empty() => {
                         let (a, t) = flying.remove(usize::from(i) % flying.len());
                         s.abort(a, t);
@@ -1570,6 +1994,17 @@ mod tests {
                         s.prune(now);
                     }
                     _ => {}
+                }
+                // Every queued address is in the frontier or held, once.
+                let queued: Set<SocketAddr> =
+                    s.frontier.iter().chain(&s.held).map(|n| n.addr).collect();
+                prop_assert_eq!(queued.len(), s.frontier.len() + s.held.len());
+                prop_assert_eq!(&queued, &s.queued);
+                if !escalate {
+                    prop_assert!(s.held.is_empty());
+                }
+                if !restored {
+                    prop_assert!(s.known() <= capacity);
                 }
                 let (ips, nets, allocs) = recounted(&s);
                 prop_assert_eq!(&s.per_ip, &ips);
