@@ -11116,16 +11116,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T20:57:42Z",
+    "updated": "2026-11-27T21:37:36Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-cr-round1-collect",
+        "slice": "X-cr-round1-collect-fixes",
         "role": "build",
         "agent": "session_01MMjhn8M4fhd4HMMFyJ8q2e",
         "session": "session_01MMjhn8dWsf8cB7dBNZrTcU",
-        "doing": "round-1 collector, per-arm stacks, leak test, coordinator; gate #1147 merged",
-        "since": "2026-11-27T19:46:12Z"
+        "doing": "hung leak-test cleanup, failed-arm stop, retry stamp, partial-hour coverage; #1150 merged",
+        "since": "2026-11-27T21:37:36Z"
       },
       {
         "slot": 2,
