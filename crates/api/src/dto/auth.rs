@@ -210,6 +210,24 @@ impl fmt::Debug for PasswordRequest {
 mod tests {
     use super::*;
 
+    /// The `LegalNotice` example (and so `openapi.json` and the e2e mock,
+    /// `web/e2e/support/notice.ts`) shows this build's notice version, in
+    /// the field and in the text's version line, so a raise can't leave the
+    /// web specs behind.
+    #[test]
+    fn the_notice_example_is_this_version() {
+        let schema = serde_json::to_value(<LegalNotice as utoipa::PartialSchema>::schema())
+            .expect("the schema serialises");
+        let example = &schema["example"];
+        let v = crate::legal::NOTICE_VERSION;
+        assert_eq!(example["version"], v, "dto/auth.rs LegalNotice example");
+        let text = example["text"].as_str().expect("an example text");
+        assert!(
+            text.contains(&format!("**Version {v} ·")),
+            "the example's version line: {text}"
+        );
+    }
+
     #[test]
     fn debug_never_shows_the_secrets() {
         let secret = "hunter2-correct-horse";
