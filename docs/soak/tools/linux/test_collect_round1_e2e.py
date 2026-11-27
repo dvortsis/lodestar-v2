@@ -6,7 +6,8 @@ against test_gate_round's Round1Sim as its Lodestar (test_collect_round1.round1_
 Starts are staggered as §6.3's rehearsal exercises them. The coordinator writes each day's
 exit assignment, activity through the overhang, leak tests and archive with FakeHost (no
 Docker, namespaces or VPN: those need the box, and its rehearsal runs them). The host
-samples are written in host_samples.py's line format and assembled by it. The manifest comes
+samples come from host_samples.py's real Sampler and run loop on a fake /proc and /sys, and
+its own `assemble`. The manifest comes
 from the coordinator and gate-round judges it.
 
 Layout L3 (B, A and C on two days) is run once and shared by the tests, as it takes a while.
@@ -76,14 +77,38 @@ def collector_run(root, arm, day, start, exit_ip, salt_file, password_file, run_
         lodestar.close()
 
 
-def host_rows(start, end, arms):
-    """host_samples.py's lines for [start, end]: a quiet host, every tunnel answering."""
-    rows, t = [], start
-    while t <= end:
-        rows.append({"utc": tc.iso(t), "cpu": 0.42, "steal": 0.01, "disk_write_ms": 3.5, "disk_inflight": 0,
-                     "uplink_drops_total": 7, "tunnels": {a: {"rtt_ms": 31.0, "lost": False} for a in arms}})
-        t += timedelta(seconds=10)
-    return rows
+def sample_host(root, out, arms, start, end):
+    """host_samples.py's real Sampler and run loop over [start, end], on a fake /proc and /sys
+    whose counters advance like a quiet 8 vCPU host's, with every tunnel answering its ping."""
+    proc, sysfs = root / "proc", root / "sys" / "class/net/eth0/statistics"
+    proc.mkdir(parents=True, exist_ok=True)
+    sysfs.mkdir(parents=True, exist_ok=True)
+    for name, value in (("rx_dropped", 7), ("tx_dropped", 0)):
+        (sysfs / name).write_text(f"{value}\n")
+    pids = {f"gluetun-{a.lower()}": str(100 + i) for i, a in enumerate(arms)}
+
+    def run(argv, timeout):
+        if argv[0] == "docker":
+            return 0, pids[argv[-1]] + "\n"
+        return 0, "1 packets transmitted, 1 received\nrtt min/avg/max/mdev = 31.0/31.0/31.0/0.0 ms\n"
+
+    class Driven(hs.Sampler):
+        n = 0
+
+        def sample(self, slot):
+            Driven.n += 1
+            k = Driven.n  # 10 s of 8 vCPUs is 8000 jiffies: 42 % busy, 1 % steal
+            (proc / "stat").write_text(f"cpu  {3280 * k} 0 0 {4560 * k} 0 0 0 {80 * k} 0 0\n")
+            (proc / "diskstats").write_text(f" 259 0 {mk.DEVICE} 1 0 8 1 {12 * k} 0 96 {42 * k} 0 9 9 0 0 0 0\n")
+            return super().sample(slot)
+    sampler = Driven(mk.DEVICE, "eth0", {a: (f"gluetun-{a.lower()}", "10.0.0.1") for a in arms},
+                     proc_root=proc, sys_root=root / "sys", run=run)
+    clock = [start]
+
+    def sleep(seconds):
+        clock[0] += timedelta(seconds=seconds)
+    import threading
+    hs.run_loop(sampler, out, threading.Event(), now=lambda: clock[0], sleep=sleep, until=end)
 
 
 class EndToEnd(unittest.TestCase):
@@ -115,16 +140,20 @@ class EndToEnd(unittest.TestCase):
         for arm, a_ in arms.items():
             (Path(a_["stack"]) / "secrets").mkdir(parents=True)
             (Path(a_["stack"]) / "secrets" / "wg0.conf").write_text(f"Endpoint = 192.0.2.{PORTS[arm] - 8000}:1337\n")
-        cls.cfg_path = cls.round / "coordinator.json"
+        cls.cfg_path = cls.tmp / "coordinator.json"  # outside the round's folder, as the run sheet keeps it
+        cls.data = cls.tmp / "data-volume"
+        cls.data.mkdir()
+        cls.secrets = [str(salt), str(pw), str(cls.data), str(cls.cfg_path)] + [a_["stack"] for a_ in arms.values()]
         cls.cfg_path.write_text(json.dumps({
             "schema": 1, "kind": "cr_round1_coordinator", "declaration": "declaration.json",
-            "comparator_report": "comparator.json", "salt_file": str(salt), "data_volume": str(cls.tmp),
+            "comparator_report": "comparator.json", "salt_file": str(salt), "data_volume": str(cls.data),
             "round_dir": str(cls.round), "image": "lodestar@" + r1.IMAGE, "commit": mk.COMMIT,
             "uplink_interface": "eth0", "ip_echo_url": "https://api.ipify.org", "arms": arms,
             "expected_growth_bytes": {"default": 20 << 30}}))
         cls.host = tc.FakeHost(DAY_START[1])
-        rehearsal = host_rows(DAY_START[1] - timedelta(hours=6), DAY_START[1] - timedelta(hours=5), sorted(PORTS))
-        (cls.round / "rehearsal-samples.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rehearsal))
+        (cls.round / "rehearsal").mkdir()
+        sample_host(cls.tmp / "fake-host", cls.round / "rehearsal" / "host-samples.jsonl", sorted(PORTS),
+                    DAY_START[1] - timedelta(hours=6), DAY_START[1] - timedelta(hours=5))
         cls.codes, cls.reports = {}, {}
         for day in (1, 2):
             cls.run_day(day, salt, pw)
@@ -155,10 +184,9 @@ class EndToEnd(unittest.TestCase):
         placed = LAYOUT[day]
         for arm, label in placed.items():
             host.ip_of_pid[host.pids["gluetun-" + arm.lower()]] = tc.EXIT_IP[label]
-        ok = cls.tmp / "leak-ok.log"
-        ok.write_text("ok leak_test\n")
+        host.leak_out = "ok tunnel_healthy\nok leak_test\n"  # what the stubbed leak-test.sh prints
         for arm in placed:
-            cls.call("leak", "--arm", arm, "--phase", "before", "--log", str(ok), day=day)
+            cls.call("leak", "--arm", arm, "--phase", "before", day=day)
         cls.call("bring-up", day=day)
         cls.call("check-start", day=day)
         cls.call("collect", day=day)
@@ -171,18 +199,21 @@ class EndToEnd(unittest.TestCase):
         host.t = DAY_START[day] - timedelta(minutes=1)
         cls.call("watch", day=day)
         for arm in placed:
-            cls.call("leak", "--arm", arm, "--phase", "after", "--log", str(ok), day=day)
+            cls.call("leak", "--arm", arm, "--phase", "after", day=day)
         cls.call("archive", day=day)
         decl = analyze_cr.check_declaration(json.loads((cls.round / "declaration.json").read_text()))
         for arm in placed:
             report = analyze_cr.analyze_segment(day_dir / arm, None, decl)
             cls.reports[(day, arm)] = report
             (day_dir / f"{arm}.report.json").write_text(json.dumps(report))
-        rows = hs.load_lines(cls.round / "rehearsal-samples.jsonl")
-        day_rows = host_rows(DAY_START[day] - timedelta(minutes=1), host.t, sorted(placed))
-        (day_dir / "host-samples.jsonl").write_text("".join(json.dumps(r) + "\n" for r in day_rows))
-        doc = hs.assemble(hs.load_lines(day_dir / "host-samples.jsonl"), mk.DEVICE, rows, vcpus=8)
-        (day_dir / "host-samples.json").write_text(json.dumps(doc))
+        # The real sampler, on a fake /proc and /sys, from the bring-up to the shutdown; then
+        # host_samples.py's own `assemble`, as the run sheet runs it.
+        shutdown = analyze_cr.parse_utc(json.loads((day_dir / "archive.json").read_text())["shutdown_utc"])
+        sample_host(cls.tmp / "fake-host", day_dir / "host-samples.jsonl", sorted(placed),
+                    DAY_START[day] - timedelta(minutes=1), shutdown)
+        assert hs.main(["assemble", "--samples", str(day_dir / "host-samples.jsonl"), "--device", mk.DEVICE,
+                        "--rehearsal", str(cls.round / "rehearsal" / "host-samples.jsonl"),
+                        "--archive", str(day_dir / "archive.json"), "--out", str(day_dir / "host-samples.json")]) == 0
 
     def test_every_collector_closed_its_own_window(self):
         self.assertEqual(set(self.codes.values()), {0})
@@ -205,7 +236,7 @@ class EndToEnd(unittest.TestCase):
     def test_the_archive_holds_no_address_salt_or_machine_id(self):
         """Runner, 2026-11-27: every file the round's archive keeps, the collectors' evidence
         included, is free of raw addresses, the salt and the machine ID."""
-        secrets = [PUBLIC_IP, r1.SALT.decode(), r1.MACHINE_ID, PASSWORD] + list(tc.EXIT_IP.values())
+        secrets = [PUBLIC_IP, r1.SALT.decode(), r1.MACHINE_ID, PASSWORD] + list(tc.EXIT_IP.values()) + self.secrets
         for path in self.round.rglob("*"):
             if path.is_file() and path.name != "collector.py":
                 text = path.read_text(errors="replace")

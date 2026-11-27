@@ -255,6 +255,38 @@ class PlacementAndIdentityTests(Round1Base):
         self.assertEqual(rows[first + 1]["egress"]["read"], "ok")
         self.assertNotIn("boundary", rows[first + 1])
 
+    def test_a_failed_read_at_the_final_boundary_is_retried_there(self):
+        """Runner's review of #1150: no later scrape retries the final boundary, so it retries
+        in place, inside rule 1.4's 90 s, each reading with its own time."""
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) == 4:  # bring-up, boundaries 0 and 1, then the final boundary (2 h)
+                raise OSError("echo service hiccup")
+            return EXIT_IP["B"]
+        c, rc = self.round1_run(egress=flaky)
+        self.assertEqual(rc, 0, self.result()["reason"])
+        final = [r for r in self.rows() if 2 in (r.get("boundary") or [])][0]
+        self.assertEqual(final["egress"], {"read": "failed"})
+        retry = final["egress_retries"][-1]
+        self.assertEqual(retry["read"], "ok")
+        late = (collect.datetime.fromisoformat(retry["utc"].replace("Z", "+00:00"))
+                - collect.datetime.fromisoformat(final["time"].replace("Z", "+00:00"))).total_seconds()
+        self.assertLessEqual(late, collect.BOUNDARY_SECONDS)
+
+    def test_boundaries_carry_the_gauge_even_when_the_api_fails(self):
+        api = FakeAPI()
+        real = api.__call__
+
+        def failing(method, url, body, cookie):
+            if "/insights/events" in url:
+                return 500, {}, b""
+            return real(method, url, body, cookie)
+        self.round1_run(api=failing)
+        marks = [r for r in self.rows() if r.get("boundary")]
+        self.assertTrue(all(r["api"].get("error") == "unavailable" and r["api"]["switches"] == ALL_ON for r in marks))
+
     def test_the_uplink_and_the_egress_hash_alike_when_the_tunnel_is_bypassed(self):
         """Both are kind `ip`: a crawler leaving by the uplink shows the uplink's hash."""
         self.round1_run(egress=lambda: PUBLIC_IP)
@@ -315,10 +347,14 @@ class StartAndBoundsTests(Round1Base):
         c, rc = self.round1_run(sim=sim, gauge=off)
         self.assertEqual(self.result()["reason"], "three_consecutive_capacity_violations")
 
-    def test_old_runs_keep_the_fixed_bounds(self):
+    def test_without_the_gauge_the_bounds_are_the_declared_presets(self):
         c = collect.Collector.__new__(collect.Collector)
         c.args = args_for(self.root, intensity="aggressive")
         self.assertEqual(c.round1_bounds(None), {"peer_requests": 256, "outstanding": 4096})
+
+    def test_the_presets_caps_are_the_analyzers(self):
+        self.assertEqual(collect.PRESET_OUTSTANDING, dict(analyze_cr.PRESET_OUTSTANDING))
+        self.assertEqual(collect.PRESET_SLOTS, analyze_cr.PRESET_SLOTS)
 
 
 class LaunchTests(Round1Base):
@@ -339,6 +375,18 @@ class LaunchTests(Round1Base):
         self.salt_file = lambda: (path.write_bytes(b"short"), path.chmod(0o600), path)[2]
         self.assertIn("at least", self.refused())
         self.salt_file = real
+
+    def test_round1_options_are_refused_on_other_run_kinds(self):
+        write_cgroup(self.cgroup)
+        instance = collect.DockerInstance(SpecDocker(), "lodestar", self.cgroup, clock=self.clock.clock,
+                                          sleep=self.clock.sleep)
+        args = args_for(self.root, "--url", self.lodestar.url, "--round", "1", "--attempt", "r1-a1", "--day", "1",
+                        "--arm", "B")
+        c = collect.Collector(args, instance, clock=self.clock.clock, sleep=self.clock.sleep, now=self.clock.now,
+                              volumes=fixed_volumes())
+        with self.assertRaises(SystemExit) as caught:
+            c.prepare()
+        self.assertIn("--run-kind comb", str(caught.exception))
 
     def test_round1_options_need_round(self):
         args = args_for(self.root, "--run-kind", "comb", "--arm", "B")

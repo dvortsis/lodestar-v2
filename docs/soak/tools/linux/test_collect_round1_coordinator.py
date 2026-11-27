@@ -50,6 +50,7 @@ class FakeHost:
         self.health = {}  # arm port -> fn(t) -> status
         self.counter = lambda port, t: (t - T0).total_seconds()
         self.dead = set()  # PIDs that have exited
+        self.leak_out, self.leak_runs = "", []  # what leak-test.sh prints, and each run
 
     def alive(self, pid, needle):
         return pid is not None and pid not in self.dead
@@ -62,6 +63,11 @@ class FakeHost:
 
     def run(self, argv, env=None, timeout=120):
         self.calls.append((list(argv), dict(env or {})))
+        if argv[0] == "bash":  # the leak test, from its private work folder
+            work = Path(argv[2])
+            self.leak_runs.append({"argv": list(argv), "env": dict(env or {}), "work": work,
+                                   "files": sorted(p.name for p in work.iterdir()), "mode": work.stat().st_mode & 0o777})
+            return (0 if self.leak_out.rstrip().endswith("ok leak_test") else 1), self.leak_out + "a stray stderr-like line\n"
         if argv[:2] == ["docker", "inspect"]:
             pid = self.pids.get(argv[-1])
             return (0, f"{pid}\n") if pid else (1, "")
@@ -125,7 +131,7 @@ class CoordinatorBase(unittest.TestCase):
             (stack / "secrets" / "wg0.conf").write_text(f"[Peer]\nEndpoint = 192.0.2.{port - 8000}:1337\n")
             arms[arm] = {"stack": str(stack), "suffix": "-" + arm.lower(), "port": port, "tunnel_target": "10.0.0.1",
                          "password_file": str(self.tmp / "pw")}
-        self.cfg_path = self.round / "coordinator.json"
+        self.cfg_path = self.tmp / "coordinator.json"  # outside the round's folder (it names host paths)
         self.cfg_path.write_text(json.dumps({
             "schema": 1, "kind": "cr_round1_coordinator", "declaration": "declaration.json",
             "comparator_report": "comparator.json", "salt_file": str(salt), "data_volume": str(self.tmp),
@@ -142,18 +148,28 @@ class CoordinatorBase(unittest.TestCase):
     def day_dir(self, day=1, repeat=0):
         return self.round / "r1-a1" / (f"day{day}" + (f"-repeat{repeat}" if repeat else ""))
 
-    def go(self, command, *extra, day=1, repeat=0):
+    def go(self, command, *extra, day=1, repeat=0, placement=True):
         argv = [command, str(self.cfg_path)]
         if command not in ("end-attempt", "manifest"):
-            argv += ["--day-dir", str(self.day_dir(day, repeat)), "--attempt", "r1-a1", "--day", str(day),
-                     "--repeat", str(repeat)]
+            argv += ["--day-dir", str(self.day_dir(day, repeat))]
+            if placement:
+                argv += ["--attempt", "r1-a1", "--day", str(day), "--repeat", str(repeat)]
         argv += list(extra)
         import io
         from contextlib import redirect_stdout
         out = io.StringIO()
         with redirect_stdout(out):
-            rc = co.main(argv, host=self.host)
+            rc = self.main(argv)
         return rc, out.getvalue().splitlines()
+
+    def main(self, argv):
+        """co.main, with a test's `--log FILE` turned into what the stub leak test prints."""
+        argv = list(argv)
+        if "--log" in argv:
+            i = argv.index("--log")
+            self.host.leak_out = Path(argv[i + 1]).read_text()
+            del argv[i:i + 2]
+        return co.main(argv, host=self.host)
 
     def leak_log(self, ok=True):
         p = self.tmp / ("leak-ok.log" if ok else "leak-fail.log")
@@ -172,6 +188,7 @@ class CoordinatorBase(unittest.TestCase):
 class StartGateTests(CoordinatorBase):
     def test_no_arm_starts_before_the_comparators_window_end_plus_12h(self):
         self.pass_leaks()
+        self.go("bring-up")
         self.host.t = T0 - timedelta(hours=1, minutes=1)
         rc, out = self.go("check-start")
         self.assertEqual(rc, 1)
@@ -194,6 +211,7 @@ class StartGateTests(CoordinatorBase):
 
     def test_the_disk_budget_is_one_host_check_with_a_20pct_margin(self):
         self.pass_leaks()
+        self.go("bring-up")
         self.host.used = 100 << 30
         self.host.free = int(1.2 * (3 * (20 << 30) + (100 << 30))) - 1
         rc, out = self.go("check-start")
@@ -206,6 +224,7 @@ class StartGateTests(CoordinatorBase):
         rc, out = self.go("check-start")
         self.assertIn("no passing leak test", out[-1])
         self.pass_leaks()
+        self.go("bring-up")
         data = Path(json.loads(self.cfg_path.read_text())["arms"]["A"]["stack"]) / "data"
         data.mkdir()
         (data / "lodestar.db").write_text("x")
@@ -214,6 +233,7 @@ class StartGateTests(CoordinatorBase):
 
     def test_up_starts_each_arm_with_its_declared_settings(self):
         self.pass_leaks()
+        self.go("bring-up")
         rc, out = self.go("up")
         self.assertEqual(rc, 0, out)
         ups = [(argv, env) for argv, env in self.host.calls if "up" in argv]
@@ -229,6 +249,118 @@ class StartGateTests(CoordinatorBase):
         self.assertEqual({e["LODESTAR_IMAGE"] for e in env.values()}, {IMAGE})
 
 
+class ReviewFixTests(CoordinatorBase):
+    """The runner's review of #1150 at 36ba68cf."""
+
+    def test_a_repeated_day_runs_without_repeating_its_repeat_number(self):
+        for arm in mk.LAYOUTS["L3"][1]:
+            rc, out = self.go("leak", "--arm", arm, "--phase", "before", "--log", str(self.leak_log()), repeat=1)
+            self.assertEqual(rc, 0, out)
+        rc, out = self.go("bring-up", repeat=1, placement=False)  # as the run sheet runs it
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.state_of(self.day_dir(1, 1))["repeat"], 1)
+        rc, out = self.go("bring-up", "--repeat", "2", repeat=1, placement=False)
+        self.assertIn("not", out[-1])
+        self.assertEqual(rc, 1)
+
+    def state_of(self, d):
+        return json.loads((d / "state.json").read_text())
+
+    def test_the_coordinator_file_stays_out_of_the_round_folder(self):
+        inside = self.round / "coordinator.json"
+        inside.write_text(self.cfg_path.read_text())
+        rc = co.main(["check-endpoints", str(inside)], host=self.host)
+        self.assertEqual(rc, 1)
+
+    def test_the_leak_test_runs_privately_with_the_arms_settings_and_its_grammar_is_kept(self):
+        rc, out = self.go("leak", "--arm", "C", "--phase", "before", "--log", str(self.leak_log()))
+        self.assertEqual(rc, 0, out)
+        run = self.host.leak_runs[-1]
+        self.assertEqual(run["files"], sorted(co.LEAK_FILES))
+        self.assertEqual(run["mode"], 0o700)
+        self.assertFalse(run["work"].exists())  # removed after: its captures hold addresses
+        self.assertEqual(run["argv"][3], json.loads(self.cfg_path.read_text())["arms"]["C"]["stack"])
+        self.assertEqual((run["env"]["LODESTAR_ARM"], run["env"]["LODESTAR_UI_PORT"],
+                          run["env"]["LODESTAR_GLUETUN_RESTART"]), ("c", "8093", "no"))
+        test = self.state()["arms"]["C"]["leak_tests"][-1]
+        log = (self.day_dir() / test["log"]).read_text()
+        self.assertNotIn("stray", log)  # only the test's own grammar lines
+        self.assertTrue(log.rstrip().endswith("ok leak_test"))
+
+    def test_arms_are_leak_tested_one_at_a_time(self):
+        lock = co.leak_lock(co.load_config(self.cfg_path))
+        try:
+            rc, out = self.go("leak", "--arm", "B", "--phase", "before", "--log", str(self.leak_log()))
+        finally:
+            lock.close()
+        self.assertIn("one at a time", out[-1])
+        self.assertFalse(self.host.leak_runs)
+
+    def test_an_exit_check_must_follow_the_latest_leak_tests(self):
+        self.pass_leaks()
+        self.assertIn("no exit check", self.go("check-start")[1][-1])
+        self.go("bring-up")
+        self.assertEqual(self.go("check-start")[0], 0)
+        self.host.t += timedelta(minutes=5)
+        self.go("leak", "--arm", "A", "--phase", "before", "--log", str(self.leak_log()))
+        self.assertIn("after the last exit check", self.go("check-start")[1][-1])
+        self.assertIn("after the last exit check", self.go("up")[1][-1])
+        self.assertFalse([c for c in self.host.commands() if " up -d " in c])
+
+    def test_round1_stacks_never_restart_on_their_own(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("up")
+        ups = [env for argv, env in self.host.calls if "up" in argv]
+        self.assertTrue(ups and all(e["LODESTAR_GLUETUN_RESTART"] == "no" for e in ups))
+
+    def test_a_partial_up_stops_what_it_started(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        real = self.host.run
+
+        def run(argv, env=None, timeout=120):
+            if "up" in argv and "lodestar-c" in argv:
+                self.host.calls.append((list(argv), dict(env or {})))
+                return 1, ""
+            return real(argv, env, timeout)
+        self.host.run = run
+        rc, out = self.go("up")
+        self.assertEqual(rc, 1)
+        stopped = sorted(c for c in self.host.commands() if c.endswith(" stop"))
+        self.assertEqual(len(stopped), 2)
+        self.assertIn("ok stack_stopped arm=A", out)
+
+    def test_a_stack_that_wont_stop_fails_the_step_after_saving(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("collect")
+        real = self.host.run
+        self.host.run = lambda argv, env=None, timeout=120: (1, "") if argv[-1] == "stop" else real(argv, env, timeout)
+        rc, out = self.go("stop")
+        self.assertEqual(rc, 1)
+        self.assertIn("didn't stop", out[-1])
+        self.assertTrue(self.state()["shutdown_utc"])
+        self.assertTrue((self.day_dir() / "archive.json").exists())
+
+    def test_a_dead_sampler_is_started_again(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("collect")
+        pid = self.state()["sampler_pid"]
+        self.host.dead.add(pid)
+        self.go("collect")
+        self.assertNotEqual(self.state()["sampler_pid"], pid)
+        self.assertIn("started again", self.state()["notes"][-1])
+
+    def test_commands_run_in_a_scrubbed_environment(self):
+        with mock.patch.dict(co.os.environ, {"LODESTAR_DHT_UTP": "true", "HTTPS_PROXY": "http://x"}):
+            env = co.base_env({"LODESTAR_ARM": "b"})
+        self.assertNotIn("LODESTAR_DHT_UTP", env)
+        self.assertNotIn("HTTPS_PROXY", env)
+        self.assertEqual(env["LODESTAR_ARM"], "b")
+
+
 class RehearsalAndIdentityTests(CoordinatorBase):
     def test_the_rehearsal_never_runs_beside_the_comparator(self):
         comp = json.loads((self.round / "comparator.json").read_text())
@@ -237,8 +369,9 @@ class RehearsalAndIdentityTests(CoordinatorBase):
         day = self.round / "rehearsal"
         argv = ["--day-dir", str(day), "--attempt", "r1-a1", "--day", "1", "--rehearsal"]
         for arm in mk.LAYOUTS["L3"][1]:
-            co.main(["leak", str(self.cfg_path), *argv, "--arm", arm, "--phase", "before", "--log", str(self.leak_log())],
-                    host=self.host)
+            self.main(["leak", str(self.cfg_path), *argv, "--arm", arm, "--phase", "before", "--log", str(self.leak_log())],
+                    )
+        self.main(["bring-up", str(self.cfg_path), *argv])
         self.assertEqual(co.main(["check-start", str(self.cfg_path), "--day-dir", str(day)], host=self.host), 1)
 
     def test_the_rehearsal_runs_inside_the_12h_and_never_reaches_the_manifest(self):
@@ -246,10 +379,10 @@ class RehearsalAndIdentityTests(CoordinatorBase):
         day = self.round / "rehearsal"
         argv = ["--day-dir", str(day), "--attempt", "r1-a1", "--day", "1", "--rehearsal"]
         for arm in mk.LAYOUTS["L3"][1]:
-            self.assertEqual(co.main(["leak", str(self.cfg_path), *argv, "--arm", arm, "--phase", "before",
-                                      "--log", str(self.leak_log())], host=self.host), 0)
-        self.assertEqual(co.main(["check-start", str(self.cfg_path), "--day-dir", str(day)], host=self.host), 0)
+            self.assertEqual(self.main(["leak", str(self.cfg_path), *argv, "--arm", arm, "--phase", "before",
+                                      "--log", str(self.leak_log())]), 0)
         co.main(["bring-up", str(self.cfg_path), *argv], host=self.host)
+        self.assertEqual(co.main(["check-start", str(self.cfg_path), "--day-dir", str(day)], host=self.host), 0)
         co.main(["collect", str(self.cfg_path), "--day-dir", str(day)], host=self.host)
         collector = next(a for a in self.host.spawned if "B" in a and "collect.py" in a[2])
         self.assertIn("--rehearsal", collector)
@@ -315,7 +448,7 @@ class LeakTests(CoordinatorBase):
         rc, out = self.go("leak", "--arm", "B", "--phase", "before", "--log", str(log))
         self.assertIn("skip leak_test", out[-1])
         self.assertEqual(self.state()["arms"]["B"]["leak_tests"], [])
-        self.assertFalse(self.host.commands())
+        self.assertFalse([c for c in self.host.commands() if not c.startswith("bash ")])  # nothing stopped
         self.assertEqual(co.leak_verdict("fail tool_missing_tcpdump\nfail leak_test\n"), "not_run")
         self.assertEqual(co.leak_verdict("fail block_running\nfail no_egress_captured_down\nfail leak_test\n"), "fail")
 
@@ -476,6 +609,20 @@ class LaunchPathTests(unittest.TestCase):
         self.assertTrue((co.TOOLS / "host_samples.py").is_file())
 
 
+class CollectorStateTests(unittest.TestCase):
+    def test_the_final_boundarys_retries_reach_the_archives_egress(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d)
+            (run / "run.json").write_text(json.dumps({"settings": {"baseline_hours": 2}}))
+            rows = [{"time": iso(T0), "boundary": [2], "egress": {"read": "failed"},
+                     "egress_retries": [{"read": "failed", "utc": iso(T0 + timedelta(seconds=20))},
+                                        {"read": "ok", "hash": "ab" * 32, "utc": iso(T0 + timedelta(seconds=40))}]}]
+            (run / "samples.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+            st = co.collector_state(run)
+        self.assertEqual(st["egress"], [{"utc": iso(T0 + timedelta(seconds=40)), "hash": "ab" * 32}])
+        self.assertEqual(st["final_boundary_utc"], iso(T0))
+
+
 class ActivityTests(unittest.TestCase):
     def rows(self, spec):
         return [{"utc": iso(T0 + timedelta(seconds=s)), "health": h, "queries_out": q} for s, h, q in spec]
@@ -598,24 +745,42 @@ class HostSamplerTests(unittest.TestCase):
 
     def test_drop_deltas_are_per_hour_and_per_series(self):
         rows = [{"utc": iso(T0 + timedelta(minutes=m)), "uplink_rx_dropped": rx, "uplink_tx_dropped": 0,
-                 "uplink_rx_missed_errors": 0} for m, rx in ((0, 5), (30, 5), (59, 9), (60, 9), (90, 9))]
+                 "uplink_rx_missed_errors": 0} for m, rx in ((0, 5), (30, 5), (59, 9), (61, 12), (90, 12))]
         self.assertEqual(hs.drop_deltas(rows), [
             {"hour_utc": iso(T0), "uplink_rx_dropped": 4, "uplink_rx_missed_errors": 0, "uplink_tx_dropped": 0},
-            {"hour_utc": iso(T0 + timedelta(hours=1)), "uplink_rx_dropped": 0, "uplink_rx_missed_errors": 0,
+            # carried across the hour: 9 (the last reading before it) to 12, not 12 to 12
+            {"hour_utc": iso(T0 + timedelta(hours=1)), "uplink_rx_dropped": 3, "uplink_rx_missed_errors": 0,
              "uplink_tx_dropped": 0}])
 
     def test_assemble_dedups_computes_medians_and_hourly_coverage(self):
-        rows = [{"utc": iso(T0 + timedelta(seconds=10 * k)), "cpu": 0.4, "steal": 0.0, "disk_write_ms": 3.0,
-                 "disk_inflight": 0, "uplink_drops_total": 0, "tunnels": {"B": {"rtt_ms": 30.0, "lost": False}}}
+        rows = [{"utc": iso(T0 + timedelta(seconds=10 * k)), "device": "nvme0n1", "cpu": 0.4, "steal": 0.0,
+                 "disk_write_ms": 3.0, "disk_inflight": 0, "uplink_drops_total": 0,
+                 "tunnels": {"B": {"rtt_ms": 30.0, "lost": False}}}
                  for k in range(360) if k % 50]  # a stall every 50th slot: those stay missing
         rows.append(dict(rows[0]))
+        headers = [{"kind": "header", "started_utc": iso(T0), "device": "nvme0n1", "tunnels": ["B", "C"], "vcpus": 8}]
         rehearsal = [{"utc": iso(T0), "tunnels": {"B": {"rtt_ms": v, "lost": False}}} for v in (20, 30, 90)]
-        doc = hs.assemble(rows, "nvme0n1", rehearsal, vcpus=8)
-        self.assertEqual(doc["rehearsal_rtt_median_ms"], {"B": 30})
+        doc = hs.assemble(rows, "nvme0n1", headers, rehearsal, end=T0 + timedelta(hours=2, minutes=5))
+        self.assertEqual((doc["rehearsal_rtt_median_ms"], doc["vcpus"], doc["tunnels"]), ({"B": 30}, 8, ["B", "C"]))
         self.assertEqual(len(doc["samples"]), 360 - 8)
         cov = doc["coverage_by_hour"][0]["coverage"]
         self.assertEqual(cov["cpu"], round(352 / 360, 4))
         self.assertLess(cov["tunnel_B"], 0.98)
+        self.assertEqual(cov["tunnel_C"], 0)  # a configured tunnel that never answered is listed, at 0
+        # every hour to the shutdown is listed, the empty ones at 0
+        self.assertEqual([h["hour_utc"] for h in doc["coverage_by_hour"]],
+                         [iso(T0 + timedelta(hours=k)) for k in range(3)])
+        self.assertEqual(set(doc["coverage_by_hour"][2]["coverage"].values()), {0})
+
+    def test_assemble_refuses_another_device_or_no_header(self):
+        rows = [{"utc": iso(T0), "device": "sda"}]
+        headers = [{"kind": "header", "started_utc": iso(T0), "device": "sda", "tunnels": [], "vcpus": 8}]
+        with self.assertRaises(ValueError):
+            hs.assemble(rows, "nvme0n1", headers)
+        with self.assertRaises(ValueError):
+            hs.assemble(rows, "sda", [])
+        with self.assertRaises(ValueError):
+            hs.assemble(rows, "sda", [dict(headers[0], vcpus=None)])
 
     def test_a_late_slot_is_skipped_not_backfilled(self):
         import threading
@@ -623,11 +788,15 @@ class HostSamplerTests(unittest.TestCase):
         times = iter([T0 + timedelta(seconds=s) for s in (0.2, 0.3, 12.5, 12.6, 20.1, 20.2, 30.0, 31.0)])
 
         class S:
+            device, tunnels = "nvme0n1", {"B": ("gluetun-b", "10.0.0.1")}
+
             def sample(self, slot):
                 return {"utc": iso(slot)}
         stop = threading.Event()
         hs.run_loop(S(), out, stop, now=lambda: next(times), sleep=lambda s: None, until=T0 + timedelta(seconds=30))
         self.assertEqual([r["utc"] for r in hs.load_lines(out)], [iso(T0), iso(T0 + timedelta(seconds=20))])
+        header = hs.load_headers(out)[0]
+        self.assertEqual((header["device"], header["tunnels"], header["vcpus"]), ("nvme0n1", ["B"], hs.os.cpu_count()))
 
 
 if __name__ == "__main__":

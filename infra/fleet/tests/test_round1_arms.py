@@ -177,9 +177,12 @@ class OneArm(unittest.TestCase):
         self.assertEqual(default(svc["docker-proxy"]["container_name"]), "lodestar-docker-proxy")
         self.assertEqual([default(p) for p in svc["gluetun"]["ports"]], ["127.0.0.1:8090:8090"])
         self.assertEqual(doc["name"], "lodestar")
+        # Round 1's coordinator sets "no", so a reboot brings no arm back untested.
+        self.assertEqual(default(svc["gluetun"]["restart"]), "unless-stopped")
         for s in svc.values():  # each arm's names and port follow its suffix and port, nothing else
-            for v in [s.get("container_name", "")] + s.get("ports", []):
-                self.assertEqual(set(re.findall(r"\$\{([A-Z_]+)", v)) - {"LODESTAR_ARM_SUFFIX", "LODESTAR_UI_PORT"}, set())
+            for v in [s.get("container_name", ""), str(s.get("restart", ""))] + s.get("ports", []):
+                self.assertEqual(set(re.findall(r"\$\{([A-Z_]+)", v))
+                                 - {"LODESTAR_ARM_SUFFIX", "LODESTAR_UI_PORT", "LODESTAR_GLUETUN_RESTART"}, set())
 
 
 class DeclaredSettingsReachTheContainer(unittest.TestCase):

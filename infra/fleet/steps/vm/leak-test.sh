@@ -626,7 +626,7 @@ if ((rc == 0)); then bad block_running; finish; fi
 if [[ -n $ARM ]] && running "lodestar$SUF"; then bad block_running; finish; fi
 
 # The tunnel.
-install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || { bad compose_installed; finish; }
+install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" 2>/dev/null || { bad compose_installed; finish; }
 guard_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment "$GUARD_TAG" -j DROP)
 host_guard_rule
 # A killed run can have left a recreate guard behind, for this endpoint or an

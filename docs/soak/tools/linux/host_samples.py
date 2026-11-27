@@ -3,7 +3,7 @@
 `analyze_cr.py gate-round` reads, docs/decisions/2026-11-27-X-cr-round1-gate.md).
 
   host_samples.py run --out FILE --device NAME --uplink IFACE [--tunnel ARM=CONTAINER:TARGET ...]
-  host_samples.py assemble --samples FILE --out FILE --device NAME [--rehearsal FILE]
+  host_samples.py assemble --samples FILE --out FILE --device NAME [--rehearsal FILE] [--archive FILE]
   host_samples.py median --samples FILE
   host_samples.py drops --samples FILE    (each uplink drop series' rise per hour)
 
@@ -112,17 +112,19 @@ RX_BREAKDOWN = ("rx_missed_errors", "rx_fifo_errors")  # the NIC's own counts, w
 
 
 def drop_deltas(rows):
-    """Each drop series' rise per UTC hour (the rehearsal's flatness check)."""
+    """Each drop series' rise per UTC hour (the rehearsal's flatness check), from the last
+    reading before the hour (carried across hours), or the hour's first if there's none."""
     names = ("uplink_rx_dropped", "uplink_tx_dropped") + tuple("uplink_" + n for n in RX_BREAKDOWN)
-    hours = {}
+    hours, last = {}, {}
     for row in sorted(rows, key=lambda r: r["utc"]):
         h = hours.setdefault(row["utc"][:13] + ":00:00Z", {})
         for n in names:
             v = row.get(n)
             if isinstance(v, int):
-                first, _ = h.get(n, (v, v))
-                h[n] = (first, v)
-    return [{"hour_utc": k, **{n: last - first for n, (first, last) in sorted(v.items())}} for k, v in sorted(hours.items())]
+                base = h[n][0] if n in h else last.get(n, v)
+                h[n] = (base, v)
+                last[n] = v
+    return [{"hour_utc": k, **{n: end - base for n, (base, end) in sorted(v.items())}} for k, v in sorted(hours.items())]
 
 
 class Sampler:
@@ -169,7 +171,7 @@ class Sampler:
 
     def sample(self, slot, now=None):
         now = time.monotonic() if now is None else now
-        row = {"utc": iso(slot)}
+        row = {"utc": iso(slot), "device": self.device}
         cpu = cpu_times(read(self.proc_root / "stat"))
         if cpu and self.prev_cpu and cpu[2] > self.prev_cpu[2]:
             total = cpu[2] - self.prev_cpu[2]
@@ -210,6 +212,10 @@ def run_loop(sampler, out, stop, now=lambda: datetime.now(timezone.utc), sleep=t
     out = Path(out)
     last_sync = time.monotonic()
     with out.open("a", encoding="utf-8") as fh:
+        # The header (no `utc`, so never a sample): what this run sampled, and on how many vCPUs.
+        fh.write(json.dumps({"kind": "header", "started_utc": iso(now()), "device": sampler.device,
+                             "tunnels": sorted(sampler.tunnels), "vcpus": os.cpu_count()}, separators=(",", ":")) + "\n")
+        fh.flush()
         while not stop.is_set():
             t = now()
             slot = t.replace(microsecond=0) - timedelta(seconds=t.second % INTERVAL)
@@ -241,6 +247,18 @@ def load_lines(path):
     return rows
 
 
+def load_headers(path):
+    out = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("kind") == "header":
+            out.append(row)
+    return out
+
+
 def rehearsal_medians(rows):
     """Each arm's median RTT over the rehearsal's answered probes (§6.3's network base)."""
     seen = {}
@@ -251,10 +269,16 @@ def rehearsal_medians(rows):
     return {arm: round(statistics.median(v), 3) for arm, v in sorted(seen.items())}
 
 
-def hourly_coverage(rows, arms):
-    """Per UTC hour: the slots expected (360) and the share each series covers. A tunnel slot
-    counts when its probe ran (answered or lost); a disk slot when the device was read."""
+def hourly_coverage(rows, arms, start=None, end=None):
+    """Per UTC hour from `start` to `end` (every hour, an empty one at 0): the slots expected
+    (360) and the share each series covers. A tunnel slot counts when its probe ran (answered
+    or lost); a disk slot when the device was read."""
     hours = {}
+    if start is not None and end is not None:
+        t = start.replace(minute=0, second=0, microsecond=0)
+        while t <= end:
+            hours[iso(t)] = {k: 0 for k in ("cpu", "steal", "disk", "uplink")} | {"tunnel_" + a: 0 for a in arms}
+            t += timedelta(hours=1)
     for row in rows:
         t = parse_utc(row["utc"])
         h = hours.setdefault(iso(t.replace(minute=0, second=0, microsecond=0)), {})
@@ -270,18 +294,29 @@ def hourly_coverage(rows, arms):
              "coverage": {s: round(v / expected, 4) for s, v in sorted(h.items())}} for k, h in sorted(hours.items())]
 
 
-def assemble(rows, device, rehearsal_rows=None, vcpus=None):
-    arms = sorted({a for r in rows for a in (r.get("tunnels") or {})}
-                  | {a for r in (rehearsal_rows or []) for a in (r.get("tunnels") or {})})
+def assemble(rows, device, headers, rehearsal_rows=None, end=None):
+    """The day's JSON for gate-round. `headers` are the run's header lines (one per sampler
+    start); the arms are the tunnels they name, the vCPUs the box's own count, and the hours
+    run from the first start to `end` (the day's shutdown) or the last sample."""
+    if not headers:
+        raise ValueError("the samples have no header line: they weren't written by `run`")
+    if any(h.get("device") != device for h in headers) or any(r.get("device") != device for r in rows):
+        raise ValueError(f"the samples were taken on another device than {device}")
+    vcpus = {h.get("vcpus") for h in headers}
+    if len(vcpus) != 1 or not isinstance(next(iter(vcpus)), int):
+        raise ValueError("the header's vCPU count is missing or changed between sampler starts")
+    arms = sorted({a for h in headers for a in h.get("tunnels") or []})
     seen, samples = set(), []
     for row in sorted(rows, key=lambda r: r["utc"]):
         if row["utc"] in seen:
             continue
         seen.add(row["utc"])
         samples.append(row)
-    return {"schema": 1, "interval_seconds": INTERVAL, "vcpus": vcpus or os.cpu_count(), "backing_device": device,
-            "rehearsal_rtt_median_ms": rehearsal_medians(rehearsal_rows or []),
-            "coverage_by_hour": hourly_coverage(samples, arms), "samples": samples}
+    start = min(parse_utc(h["started_utc"]) for h in headers)
+    stop = end or (parse_utc(samples[-1]["utc"]) if samples else start)
+    return {"schema": 1, "interval_seconds": INTERVAL, "vcpus": vcpus.pop(), "backing_device": device,
+            "tunnels": arms, "rehearsal_rtt_median_ms": rehearsal_medians(rehearsal_rows or []),
+            "coverage_by_hour": hourly_coverage(samples, arms, start, stop), "samples": samples}
 
 
 def tunnel_arg(text):
@@ -306,6 +341,7 @@ def main(argv=None):
     a.add_argument("--out", required=True)
     a.add_argument("--device", required=True)
     a.add_argument("--rehearsal", help="The rehearsal's samples, for each arm's median RTT")
+    a.add_argument("--archive", help="The day's archive.json: its shutdown time ends the hours listed")
     m = sub.add_parser("median")
     m.add_argument("--samples", required=True)
     d = sub.add_parser("drops")
@@ -331,7 +367,14 @@ def main(argv=None):
         return 0
     rows = load_lines(args.samples)
     rehearsal = load_lines(args.rehearsal) if args.rehearsal else None
-    doc = assemble(rows, args.device, rehearsal)
+    end = None
+    if args.archive:
+        end = parse_utc(json.loads(Path(args.archive).read_text(encoding="utf-8"))["shutdown_utc"])
+    try:
+        doc = assemble(rows, args.device, load_headers(args.samples), rehearsal, end)
+    except ValueError as error:
+        print(f"fail {error}")
+        return 1
     tmp = Path(args.out + ".tmp")
     tmp.write_text(json.dumps(doc, indent=1, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
     os.replace(tmp, args.out)

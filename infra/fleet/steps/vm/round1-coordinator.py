@@ -11,8 +11,9 @@ operator's steps are docs/soak/runsheets/host-round1-runsheet.md.
   check-endpoints  every arm on its own VPN server (before any leak test)
   check-start  spacing (the comparator's window end + 12 h), the host's disk budget, fresh
                data, and every arm's passing leak test; exit 1 with the reason otherwise
-  leak         record an arm's leak-test result from its output. A failure stops that arm's
-               Lodestar (every arm's with --host-level) until a later passing re-test
+  leak         run one arm's leak test (leak-test.sh with that arm's settings, from a private
+               temporary folder) and record it. A failure stops that arm's Lodestar (every
+               arm's with --host-level) until a later passing re-test
   up           start each arm's stack (gluetun and Lodestar) with its declared settings
   bring-up     read each arm's egress inside its own namespace and write the exit assignment
                (X, Y, Z to salted hashes); refuses two arms on one exit, or an exit that is
@@ -35,6 +36,7 @@ standard library only; root for the namespace reads (egress) and Docker.
 """
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -43,6 +45,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -111,6 +114,23 @@ class Fail(Exception):
     """A refusal: the coordinator prints it and exits 1, having changed nothing further."""
 
 
+class Partial(Fail):
+    """A step that did part of its work and failed: its lines are printed, then exit 1."""
+
+    def __init__(self, lines, message):
+        super().__init__(message)
+        self.lines = lines
+
+
+def base_env(extra=None):
+    """A scrubbed environment: no stray LODESTAR_* or proxy from root's shell reaches a
+    stack, a collector or the leak test; only what they need, plus `extra`."""
+    env = {"PATH": os.environ.get("PATH") or "/usr/sbin:/usr/bin:/sbin:/bin",
+           "HOME": os.environ.get("HOME") or "/root", "LANG": "C.UTF-8"}
+    env.update(extra or {})
+    return env
+
+
 class Host:
     """Everything the coordinator does to the host, so the tests can replace it."""
 
@@ -120,7 +140,7 @@ class Host:
     def run(self, argv, env=None, timeout=120):
         try:
             done = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False,
-                                  env=dict(os.environ, **(env or {})))
+                                  env=base_env(env))
         except (OSError, subprocess.SubprocessError):
             return None, ""
         return done.returncode, done.stdout
@@ -129,7 +149,7 @@ class Host:
         """A detached process (its own session), its output to `log`; returns its PID."""
         with open(log, "ab") as out:
             proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                    start_new_session=True, env=dict(os.environ, **(env or {})))
+                                    start_new_session=True, env=base_env(env))
         return proc.pid
 
     def alive(self, pid, needle):
@@ -182,10 +202,16 @@ def load_config(path):
     if not (isinstance(cfg, dict) and cfg.get("schema") == 1 and cfg.get("kind") == "cr_round1_coordinator"):
         raise Fail("config: schema 1, kind cr_round1_coordinator")
     base = Path(path).resolve().parent
-    for key in ("declaration", "comparator_report", "salt_file", "data_volume", "round_dir"):
+    for key in ("round_dir", "salt_file", "data_volume", "declaration", "comparator_report"):
         if not isinstance(cfg.get(key), str):
             raise Fail(f"config: {key}")
-        cfg[key] = str((base / cfg[key]).resolve()) if not os.path.isabs(cfg[key]) else cfg[key]
+        # The declaration and the comparator's report live in the round's folder (they're in
+        # its manifest); everything else is relative to this file.
+        rel = Path(cfg["round_dir"]) if key in ("declaration", "comparator_report") else base
+        cfg[key] = str((rel / cfg[key]).resolve()) if not os.path.isabs(cfg[key]) else cfg[key]
+    if Path(path).resolve().is_relative_to(Path(cfg["round_dir"]).resolve()):
+        # It names the stacks, the salt and the password files: the round's folder is copied off.
+        raise Fail("config: keep the coordinator file outside round_dir (it holds host paths; round_dir is copied off)")
     arms = cfg.get("arms")
     if not isinstance(arms, dict) or not arms or not all(ARM.fullmatch(a) for a in arms):
         raise Fail("config: arms {LETTER: {...}}")
@@ -232,8 +258,10 @@ def compose(cfg, arm, *args):
 
 def stack_env(cfg, arm):
     a = cfg["arms"][arm]
+    # Round 1's gluetun never restarts on its own (a reboot brings no arm back without its
+    # leak test; runner's review of #1150).
     return {"LODESTAR_ARM_SUFFIX": a["suffix"], "LODESTAR_UI_PORT": str(a["port"]),
-            "LODESTAR_IMAGE": cfg.get("image") or "unused", "DOCKER_GID": "unused"}
+            "LODESTAR_IMAGE": cfg.get("image") or "unused", "DOCKER_GID": "unused", "LODESTAR_GLUETUN_RESTART": "no"}
 
 
 # ------------------------------------------------------------------ the day's state
@@ -249,11 +277,17 @@ class Day:
         return self.state
 
     def init(self, attempt, day, repeat, rehearsal=False):
+        """The day's state: created from the given placement, or the stored one, which any
+        value given must match (an omitted --repeat is the stored one)."""
         if self.state is not None:
-            want = (self.state["attempt"], self.state["day"], self.state["repeat"])
-            if want != (attempt, day, repeat):
-                raise Fail(f"this day directory is {want}, not {(attempt, day, repeat)}")
+            have = (self.state["attempt"], self.state["day"], self.state["repeat"])
+            given = (attempt, day, repeat)
+            if any(g is not None and g != h for g, h in zip(given, have)):
+                raise Fail(f"this day directory is {have}, not {given}")
             return self.state
+        if not attempt or day is None:
+            raise Fail("--attempt and --day name a new day")
+        repeat = repeat or 0
         entries = {e["arm"]: e for e in self.cfg["decl"]["arms"] if e["attempt"] == attempt and e["day"] == day}
         if not entries:
             raise Fail(f"the declaration has no arms for attempt {attempt} day {day}")
@@ -383,7 +417,15 @@ def cmd_check_start(cfg, day, host, args):
             d = Path(cfg["arms"][arm]["stack"]) / sub
             if d.exists() and any(d.iterdir()):
                 raise Fail(f"arm {arm}'s {sub} directory isn't empty: every day starts fresh (§6.3)")
-    lines.append("ok leak_tests_before ok fresh_dirs")
+    checks = s.get("exit_checks") or []
+    if not checks:
+        raise Fail("no exit check yet: run bring-up after the leak tests")
+    last = parse_utc(checks[-1]["utc"])
+    for arm in day.arms():
+        tests = s["arms"][arm]["leak_tests"]
+        if tests and parse_utc(tests[-1]["utc"]) > last:
+            raise Fail(f"arm {arm}'s latest leak test is after the last exit check: run bring-up again")
+    lines.append("ok leak_tests_before ok fresh_dirs ok exits_checked_after_leak_tests")
     return lines
 
 
@@ -399,25 +441,66 @@ def measuring(day, host):
             and not (day.dir / arm / "result.json").exists() and host.alive(st["collector_pid"], "collect.py")]
 
 
+GRAMMAR = re.compile(r"^(?:(?:ok|fail|skip) [a-z0-9_]{1,64}|count [a-z0-9_]{1,80} [0-9]{1,12})$")
+LEAK_FILES = ("leak-test.sh", "block-lib.sh", "compose.yaml")
+LEAK_TIMEOUT = 1500  # the step's own 900 s, and margin for a loaded host
+
+
+def run_leak_test(cfg, host, arm):
+    """The arm's leak test, run by the coordinator from a fresh private work folder (its
+    captures hold raw addresses, so they never touch the checkout and are deleted after).
+    Only the test's grammar lines (stdout) are kept."""
+    a = cfg["arms"][arm]
+    work = tempfile.mkdtemp(prefix="round1-leak-")
+    try:
+        os.chmod(work, 0o700)
+        for name in LEAK_FILES:
+            shutil.copyfile(HERE / name, Path(work) / name)
+        env = {"LODESTAR_ARM": a["suffix"][1:], "LODESTAR_UI_PORT": str(a["port"]), "LODESTAR_GLUETUN_RESTART": "no"}
+        rc, out = host.run(["bash", str(Path(work) / "leak-test.sh"), work, a["stack"]], env=env, timeout=LEAK_TIMEOUT)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return [ln for ln in (out or "").splitlines() if GRAMMAR.fullmatch(ln)]
+
+
+def leak_lock(cfg):
+    """One leak test at a time on the host: each recreates its own tunnel and sets host rules."""
+    fh = open(Path(cfg["round_dir"]) / ".leak-test.lock", "a")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        raise Fail("another leak test is running: arms are tested one at a time") from None
+    return fh
+
+
 def cmd_leak(cfg, day, host, args):
-    """Record a leak test (§5.2 item 3). Leak tests run only while no window is open (§6.3).
-    A failure stops crawling on the arm (every arm with --host-level) until a passing re-test.
-    Before the day's collectors start nothing has been measured, so it blocks the arm and is
-    noted; once they have, it's an evidenced infrastructure fault (§6.3 class 1), an event."""
-    s = day.init(args.attempt, args.day, args.repeat, args.rehearsal) if day.state is None else day.state
+    """Run and record one arm's leak test (§5.2 item 3). Leak tests run only while no window is
+    open (§6.3), one arm at a time. A failure stops crawling on the arm (every arm with
+    --host-level) until a passing re-test. Before the day's collectors start nothing has been
+    measured, so it blocks the arm and is noted; once they have, it's an evidenced
+    infrastructure fault (§6.3 class 1), an event."""
+    s = day.init(args.attempt, args.day, args.repeat, args.rehearsal)
     if args.arm not in s["arms"]:
         raise Fail(f"arm {args.arm} isn't in this day")
     busy = measuring(day, host)
     if busy:
         raise Fail(f"arm(s) {busy} are still measuring: leak tests run only while no window is open")
-    text = Path(args.log).read_text(encoding="utf-8", errors="replace")
+    lock = leak_lock(cfg)
+    try:
+        lines_out = run_leak_test(cfg, host, args.arm)
+    finally:
+        lock.close()
+    text = "\n".join(lines_out) + "\n"
+    n = len(s["arms"][args.arm]["leak_tests"]) + 1
+    log = day.dir / f"leak-{args.arm}-{args.phase}-{n}.log"
+    log.write_text(text, encoding="utf-8")
     result = leak_verdict(text)
     started = any(a.get("collector_pid") for a in s["arms"].values())
-    lines = []
     if result == "not_run":
-        return [f"skip leak_test arm={args.arm}: the test refused before testing (see its log); nothing recorded"]
+        return [f"skip leak_test arm={args.arm}: the test refused before testing (see {log.name}); nothing recorded"]
     s["arms"][args.arm]["leak_tests"].append({"utc": iso(host.now()), "phase": args.phase, "result": result,
-                                              "after_start": started and args.phase != "after",
+                                              "after_start": started and args.phase != "after", "log": log.name,
                                               "log_sha256": hashlib.sha256(text.encode()).hexdigest()})
     lines = [f"{'ok' if result == 'pass' else 'fail'} leak_test arm={args.arm} phase={args.phase}"]
     if result == "fail":
@@ -455,12 +538,16 @@ def cmd_up(cfg, day, host, args):
         raise Fail("config: image must be pinned by digest (name@sha256:...)")
     if cfg["image"].rsplit("@", 1)[1] != cfg["decl"]["image_digest"]:
         raise Fail("config: image's digest isn't the declaration's image_digest")
-    lines = []
+    lines, up = [], []
     for arm in day.arms():
         env = dict(stack_env(cfg, arm), **arm_switch_env(day.entry(arm)))
         rc, _ = host.run(compose(cfg, arm, "--profile", "block", "up", "-d", "lodestar"), env=env, timeout=300)
-        if rc != 0:
-            raise Fail(f"arm {arm}'s stack didn't start")
+        if rc != 0:  # no partial day: what started is stopped again
+            for other in up:
+                rc2, _ = host.run(compose(cfg, other, "stop"), env=stack_env(cfg, other), timeout=300)
+                lines.append(f"{'ok' if rc2 == 0 else 'fail'} stack_stopped arm={other}")
+            raise Partial(lines, f"arm {arm}'s stack didn't start; the arms already up were stopped again")
+        up.append(arm)
         lines.append(f"ok up arm={arm}")
     return lines
 
@@ -563,7 +650,9 @@ def cmd_collect(cfg, day, host, args):
             break
         if waiting:
             host.sleep(1)
-    if not s.get("sampler_pid"):
+    if not s.get("sampler_pid") or not host.alive(s["sampler_pid"], "host_samples.py"):
+        if s.get("sampler_pid"):
+            s["notes"].append(f"{iso(host.now())} host sampler wasn't running; started again")
         argv = [sys.executable, "-I", str(TOOLS / "host_samples.py"), "run", "--out", str(day.dir / "host-samples.jsonl"),
                 "--device", cfg["decl"]["backing_device"], "--uplink", cfg["uplink_interface"]]
         for arm in day.arms():
@@ -650,6 +739,9 @@ def collector_state(run_dir):
                                     "lookups_completed": (row.get("values") or {}).get("dht_lookups_completed_total")})
         if isinstance(row.get("egress"), dict) and row["egress"].get("read") == "ok":
             out["egress"].append({"utc": row["time"], "hash": row["egress"]["hash"]})
+        for retry in row.get("egress_retries") or []:  # the final boundary's own retries, each with its time
+            if isinstance(retry, dict) and retry.get("read") == "ok" and isinstance(retry.get("utc"), str):
+                out["egress"].append({"utc": retry["utc"], "hash": retry["hash"]})
         if out["window_hours"] is not None and out["window_hours"] in (row.get("boundary") or []):
             out["final_boundary_utc"] = row["time"]
     return out
@@ -730,6 +822,14 @@ def cmd_watch(cfg, day, host, args, max_loops=None):
             s["arms"][arm]["collector_died"] = True
     lines += stop_all(cfg, day, host)
     lines += cmd_archive(cfg, day, host, args)
+    return failed_stops(lines)
+
+
+def failed_stops(lines):
+    """State and the archive are saved first; then a stack that didn't stop fails the step."""
+    bad = [ln for ln in lines if ln.startswith("fail stack_stopped")]
+    if bad:
+        raise Partial(lines, f"{len(bad)} stack(s) didn't stop: stop them by hand (run sheet), then tell the runner")
     return lines
 
 
@@ -753,7 +853,7 @@ def cmd_stop(cfg, day, host, args):
     if day.require().get("shutdown_utc"):
         raise Fail("this day was already shut down")
     day.require()["notes"].append(f"{iso(host.now())} stopped by `stop`, not at the coordinated shutdown")
-    return stop_all(cfg, day, host) + cmd_archive(cfg, day, host, args)
+    return failed_stops(stop_all(cfg, day, host) + cmd_archive(cfg, day, host, args))
 
 
 def cmd_archive(cfg, day, host, args):
@@ -915,10 +1015,9 @@ def build_parser():
     p.add_argument("--day-dir", help="This day's directory under the round directory")
     p.add_argument("--attempt")
     p.add_argument("--day", type=int, choices=(1, 2))
-    p.add_argument("--repeat", type=int, default=0)
+    p.add_argument("--repeat", type=int, help="A new day's repeat number (default 0); an existing day's is stored")
     p.add_argument("--arm")
     p.add_argument("--phase", choices=("before", "after", "retest"))
-    p.add_argument("--log", help="The leak test's output (leak)")
     p.add_argument("--host-level", action="store_true", help="A leak failure with a host-level cause stops every arm")
     p.add_argument("--reason", help="Why the attempt ended (end-attempt)")
     p.add_argument("--rehearsal", action="store_true", help="The rehearsal's day (leak, bring-up): never in the manifest")
@@ -935,11 +1034,8 @@ def main(argv=None, host=None):
             raise Fail(f"the declaration ({cfg['declaration']}) isn't there yet: the runner writes it")
         if needs_day and not args.day_dir:
             raise Fail("--day-dir is required")
-        if args.command in ("bring-up",) or (args.command == "leak" and not (Path(args.day_dir) / "state.json").exists()):
-            if not args.attempt or args.day is None:
-                raise Fail("--attempt and --day name the day")
-        if args.command == "leak" and (not args.arm or not args.phase or not args.log):
-            raise Fail("leak needs --arm, --phase and --log")
+        if args.command == "leak" and (not args.arm or not args.phase):
+            raise Fail("leak needs --arm and --phase")
         if args.command == "end-attempt" and (not args.attempt or not args.reason):
             raise Fail("end-attempt needs --attempt and --reason")
         day = Day(cfg, args.day_dir) if needs_day else None
@@ -947,6 +1043,8 @@ def main(argv=None, host=None):
             print(line)
         return 0
     except Fail as error:
+        for line in getattr(error, "lines", []):
+            print(line)
         print(f"fail {error}")
         return 1
     except SystemExit as error:  # the collector's own refusals (the salt file)

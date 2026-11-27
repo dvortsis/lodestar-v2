@@ -81,13 +81,13 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
    # then put each arm's own wg0.conf in <stacks>/<arm>/secrets/wg0.conf (mode 0600)
    ```
 
-4. **Make the round's folder** `<round>` on the data volume, and the coordinator file `<round>/coordinator.json` (fill in the `<...>` parts; ask the runner for any you don't know):
+4. **Make the round's folder** `<round>` on the data volume, and the coordinator file `/root/round1-coordinator.json`. The coordinator file stays **outside** `<round>`: it names the stacks, the salt and the password files, and `<round>` is copied off (the coordinator refuses a file inside it). Fill in the `<...>` parts; ask the runner for any you don't know:
 
    ```json
    {
      "schema": 1, "kind": "cr_round1_coordinator",
      "declaration": "declaration.json", "comparator_report": "comparator.json",
-     "salt_file": "/root/round1.salt", "round_dir": ".", "data_volume": "<stacks>",
+     "salt_file": "/root/round1.salt", "round_dir": "<round>", "data_volume": "<stacks>",
      "image": "<image>@<digest>", "commit": "<source commit>", "uplink_interface": "<uplink interface>",
      "ip_echo_url": "https://api.ipify.org",
      "expected_growth_bytes": {"default": <bytes per arm per 24 h, from the runner>},
@@ -101,6 +101,7 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
    }
    ```
 
+   - `declaration` and `comparator_report` are read from `<round>`; the other paths are full paths.
    - **`tunnel_target`** is the address each arm's 10 s tunnel probe pings inside its tunnel. The runner declares it before the rehearsal; the rehearsal checks it answers (§5, step 4).
    - Each **password file** holds the admin password you'll set when you claim that arm's fresh instance each day (§6, step 7). `chmod 600`, outside `<round>` and `<stacks>`.
    - The `next_run` times are the next scheduled runs of the items you excluded (stage-1 sheet, 3.4c).
@@ -108,13 +109,13 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
 
    ```bash
    C="python3 infra/fleet/steps/vm/round1-coordinator.py"
-   $C check-endpoints <round>/coordinator.json
+   $C check-endpoints /root/round1-coordinator.json
    ```
 
 5. **Read the identities for the runner** (salted hashes and kernel names only; safe to send):
 
    ```bash
-   $C identity <round>/coordinator.json
+   $C identity /root/round1-coordinator.json
    ```
 
    Send the runner the four lines. It writes `host_identity`, `network_identity.uplink_hash`, `backing_device` into the declaration, and you put `uplink_interface` in the coordinator file. Then the runner gives you `declaration.json` and the comparator's report (`comparator.json`) for `<round>`.
@@ -122,20 +123,13 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
 
 ## 4. Each arm's leak test
 
-The leak test is the cloud lane's, run for one arm: `LODESTAR_ARM` names the arm, and `LODESTAR_UI_PORT` its port. It recreates **only that arm's** gluetun and touches **only that arm's** rules, so the other arms' tunnels keep running.
+The coordinator runs the leak test itself and records the result in the same step. It's the cloud lane's test, run for one arm: it recreates **only that arm's** gluetun and touches **only that arm's** rules, so the other arms' tunnels keep running. It runs from a fresh private folder that is deleted afterwards (its packet captures hold raw addresses). **Test the arms one at a time**: the coordinator refuses a second leak test while one is running.
 
 ```bash
-LT() {  # LT <arm letter, lower case> <port> <log file>
-  LODESTAR_ARM=$1 LODESTAR_UI_PORT=$2 bash infra/fleet/steps/vm/leak-test.sh infra/fleet/steps/vm <stacks>/$1 > "$3" 2>&1
-  tail -n 1 "$3"
-}
+$C leak /root/round1-coordinator.json --day-dir <day dir> --attempt <attempt> --day <1|2> --arm B --phase before
 ```
 
-The last line is `ok leak_test` or `fail leak_test`. Record **every** result with the coordinator, pass or fail:
-
-```bash
-$C leak <round>/coordinator.json --day-dir <day dir> --attempt <attempt> --day <1|2> --arm B --phase before --log <log file>
-```
+It prints `ok leak_test` or `fail leak_test` with the arm and phase, and keeps the test's own lines (fixed names and counts, no addresses) as `leak-<arm>-<phase>-<n>.log` in the day folder. It takes a few minutes per arm.
 
 - `--phase before` before the day's starts; `--phase after` after the coordinator has stopped the day; `--phase retest` after a repair.
 - **The coordinator refuses a leak test while any arm is still measuring.** Leak tests never run inside a window.
@@ -153,10 +147,10 @@ The rehearsal checks the setup and the timing. Its stores are deleted afterwards
 2. Leak tests for every arm on its **day-1** exit, recorded with `--rehearsal`:
 
    ```bash
-   D="<round>/coordinator.json --day-dir <round>/rehearsal"
-   LT b 8091 <round>/rehearsal/leak-B-before.log
-   $C leak $D --attempt <attempt> --day 1 --rehearsal --arm B --phase before --log <round>/rehearsal/leak-B-before.log
-   # the same for A (a, 8092) and C (c, 8093)
+   D="/root/round1-coordinator.json --day-dir <round>/rehearsal"
+   $C leak $D --attempt <attempt> --day 1 --rehearsal --arm B --phase before
+   $C leak $D --arm A --phase before
+   $C leak $D --arm C --phase before
    ```
 
 3. Exits and start:
@@ -210,16 +204,19 @@ Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<
 2. **Leak tests before**, every arm on today's exit (§4), each recorded:
 
    ```bash
-   D="<round>/coordinator.json --day-dir <round>/<attempt>/day<n>"
-   $C leak $D --attempt <attempt> --day <n> --arm B --phase before --log <day dir>/leak-B-before.log
-   # a repeated day: add --repeat <k> to this first command
+   D="/root/round1-coordinator.json --day-dir <round>/<attempt>/day<n>"
+   $C leak $D --attempt <attempt> --day <n> --arm B --phase before   # a repeated day: add --repeat <k> here
+   $C leak $D --arm A --phase before
+   $C leak $D --arm C --phase before
    ```
 
 3. **Exits.** The coordinator reads each arm's address inside its own tunnel and keeps only the hash, by exit label. It refuses two arms on one exit, or an arm whose traffic leaves outside its tunnel:
 
    ```bash
-   $C bring-up $D --attempt <attempt> --day <n>
+   $C bring-up $D
    ```
+
+   Run it after the leak tests: `check-start` refuses an exit check older than any arm's latest leak test.
 
 4. **Start gates** (spacing, disk budget, leak tests, fresh folders). `up` runs them again itself:
 
@@ -267,7 +264,7 @@ Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<
 | A leak test failed | §4: the coordinator stopped the arm. Tell the runner. The day is repeated from fresh stores after a repair and a passing re-test |
 | An arm's collector stopped early (its `result.json` names a reason other than `baseline_window_complete`) | Leave the others running: the watch carries on and records the event. Tell the runner, who diagnoses it with a fresh reviewer |
 | The watch died, or your session dropped | Start the watch again at once with the same command. Inside a window, the collectors' own scrapes cover the gap. In the overhang, a gap of over 3 min ends the arms' recorded activity, so later candidates may not be judged: tell the runner the times. If every window has closed and the overhang has passed, it stops everything at once |
-| The host rebooted or lost power | The day is invalid. Write a note when you can. Restore. Tell the runner |
+| The host rebooted or lost power | The day is invalid. Round 1's stacks never restart by themselves, so no arm crawls untested after a reboot. Leave them down. Write a note when you can, restore, and tell the runner. The repeated day starts as any day does: leak tests, `bring-up`, then `up` |
 | A parity operation, sync, rebuild or mover run on the array | Write the note (`array_operation`). Data on `ssd_apps` isn't invalidated by mover or parity (§8 item 6); anything else, tell the runner |
 
 ## 7. After each day, before the exit swap
@@ -285,21 +282,24 @@ Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<
 
    ```bash
    python3 docs/soak/tools/linux/host_samples.py assemble --samples <day dir>/host-samples.jsonl \
-     --device <backing device> --rehearsal <round>/rehearsal/host-samples.jsonl --out <day dir>/host-samples.json
+     --device <the declaration's backing_device> --rehearsal <round>/rehearsal/host-samples.jsonl \
+     --archive <day dir>/archive.json --out <day dir>/host-samples.json
    ```
 
-3. **Copy off** the whole `<round>` folder (never the salt, never a password file, never `<stacks>`) to the place the runner names, then **read it back**: on the copy, run step 1's `segment` command for each arm with `--output <a new path outside the copy>` (it never overwrites a file) and compare the verdict line with the original's. Only then may the day's `data` folders be emptied.
+   It refuses samples taken on another device than the declaration's. Every hour from the sampler's start to the shutdown is listed with its coverage; tell the runner about any hour under 98 %.
+
+3. **Copy off** the whole `<round>` folder (never the salt, a password file, `<stacks>` or the coordinator file, all of which live outside it) to the place the runner names, then **read it back**: on the copy, run step 1's `segment` command for each arm with `--output <a new path outside the copy>` (it never overwrites a file) and compare the verdict line with the original's. Only then may the day's `data` folders be emptied.
 4. **Then the exit swap:** put each arm's day-2 `wg0.conf` in place (the layout's day-2 column), and run `check-endpoints`.
 
 ## 8. After day 2: the verdict
 
 ```bash
-python3 infra/fleet/steps/vm/round1-coordinator.py manifest <round>/coordinator.json
+python3 infra/fleet/steps/vm/round1-coordinator.py manifest /root/round1-coordinator.json
 python3 docs/soak/tools/analyze_cr.py gate-round <round>/manifest.json --output <round>/verdict.json
 ```
 
 - `manifest` refuses a report on another image, a repeated run ID or a gap in repeats: tell the runner, don't edit a file.
-- If an attempt ended short (the runner says so), record it first: `$C end-attempt <round>/coordinator.json --attempt <attempt> --reason <reason>`.
+- If an attempt ended short (the runner says so), record it first: `$C end-attempt /root/round1-coordinator.json --attempt <attempt> --reason <reason>`.
 - Send the runner `verdict.json` and the manifest's SHA-256 line. **The verdict and what follows are the runner's.**
 - **Keep every raw folder** (both days, the rehearsal's samples) until the runner has reproduced `gate-round` from the copy.
 

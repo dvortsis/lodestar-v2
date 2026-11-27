@@ -1439,6 +1439,7 @@ SALT_MIN_BYTES = 16
 # CR-0w (2512c5dc): with dht.safe_restart off no restart check runs and sampling starts at
 # once, so a zero beside `off` is the steady state; this long settles the DHT's start.
 OFF_SETTLE_SECONDS = 60
+FINAL_EGRESS_TRIES, FINAL_EGRESS_GAP = 3, 20  # the final boundary's own retries (seconds apart)
 CLONE_NEWNET = 0x40000000
 MACHINE_ID_PATHS = ("/etc/machine-id", "/var/lib/dbus/machine-id")
 SWITCH_LINE = re.compile(r'(?m)^lodestar_dht_switch\{switch="([a-z_]{1,32})"\} ([0-9]+(?:\.[0-9]+)?)\r?$')
@@ -1914,6 +1915,8 @@ class Collector:
 
     def prepare(self):
         a = self.args
+        if not self.spec and parse_round1(a) is not None:
+            raise SystemExit("--round is for --run-kind comb.")
         if a.leg == "gluetun" and not a.require_gluetun:
             raise SystemExit("--leg gluetun requires --require-gluetun.")
         hours = 2 if a.leg == "gluetun" else 24
@@ -2368,7 +2371,13 @@ class Collector:
                                 row["egress"] = self.egress.check(self.instance.process_id)
                             egress_retry = (baseline_at + passed[-1] * hour_seconds + BOUNDARY_SECONDS
                                             if row["egress"]["read"] == "failed" else None)
-                        if self.round1 is not None and isinstance(row.get("api"), dict) and "error" not in row["api"]:
+                            if egress_retry is not None and a.baseline_hours in passed:
+                                # The final boundary: no later scrape will retry, so retry here,
+                                # each reading stamped with its own time, inside rule 1.4's 90 s.
+                                row["egress_retries"] = self.final_egress_retries(baseline_at + passed[-1] * hour_seconds,
+                                                                                  started)
+                                egress_retry = None
+                        if self.round1 is not None and isinstance(row.get("api"), dict):
                             row["api"]["switches"] = switch_gauge(text)  # None if this scrape lacks it
                 self.write(self.root / "samples.jsonl", dumps(row), append=True)
                 if phase == "baseline" and getattr(self, "screen_run", None) is not None:
@@ -2453,6 +2462,20 @@ class Collector:
             self.note(f"screen baseline hour {h}: {result['line']}"
                       + ("; thresholds file changed since start" if result["thresholds_changed"] else "")
                       + ("; stop and investigate" if result["status"] == "trip" else ""))
+
+    def final_egress_retries(self, boundary_elapsed, started):
+        """Up to FINAL_EGRESS_TRIES more egress reads, FINAL_EGRESS_GAP s apart, while still
+        within BOUNDARY_SECONDS of the final boundary; stops at the first that reads."""
+        out = []
+        for _ in range(FINAL_EGRESS_TRIES):
+            if self.clock() - started + FINAL_EGRESS_GAP > boundary_elapsed + BOUNDARY_SECONDS:
+                break
+            self.sleep(FINAL_EGRESS_GAP)
+            reading = dict(self.egress.check(self.instance.process_id), utc=iso(self.now()))
+            out.append(reading)
+            if reading["read"] == "ok":
+                break
+        return out
 
     def round1_bounds(self, gauge):
         """The bad bounds a round-1 arm is held to: its declared preset's outstanding cap, and

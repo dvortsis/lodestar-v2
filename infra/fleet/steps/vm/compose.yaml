@@ -50,7 +50,8 @@ services:
     ports:
       - "127.0.0.1:${LODESTAR_UI_PORT:-8090}:8090"
     oom_score_adj: -500
-    restart: unless-stopped
+    # Round 1's coordinator sets "no": after a reboot no arm comes back without its leak test.
+    restart: ${LODESTAR_GLUETUN_RESTART:-unless-stopped}
   lodestar:
     image: ${LODESTAR_IMAGE:?start-block sets it from the screen rules}
     container_name: lodestar${LODESTAR_ARM_SUFFIX:-}
