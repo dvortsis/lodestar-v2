@@ -2040,7 +2040,7 @@ owner_queue:
   when: Any time; X-sec-S8-25 lands without it
 - n: 41
   type: review
-  action: 'Runner calls you may want to veto (§2.19; docs/decisions/2026-11-27-runner-records-r19.md): CR-0w (#1134) merged before round 1, its stage-1 timing hold being moot; round 1''s harness is built as three slices on disjoint files (X-dht-switch-identity, X-cr-round1-collect, X-cr-round1-gate) to meet the 12 h gap after the comparator; CR-AB-ADM, CR-AB-4 and CR-AB-LC no longer need cloud provisional runs, and the optional Aggressive cloud screen stays blocked while the test lanes'' SSM access is denied; D3 (CR-SPEC''s parallel-arm host design) and D4 (a bounded-load politeness check for 1.0) change rules you set and were approved in your blanket yes'
+  action: 'Runner calls you may want to veto (§2.19; docs/decisions/2026-11-27-runner-records-r19.md): CR-0w (#1134) merged before round 1, its stage-1 timing hold being moot; round 1''s harness is built as three slices on disjoint files (X-dht-switch-identity, X-cr-round1-collect, X-cr-round1-gate) to meet the 12 h gap after the comparator; CR-AB-ADM, CR-AB-4 and CR-AB-LC no longer need cloud provisional runs, and the optional Aggressive cloud screen stays blocked while the test lanes'' SSM access is denied'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
 
