@@ -11308,6 +11308,18 @@
       "id": "review-branches-held-detail",
       "asked": "2026-11-13T03:53Z",
       "text": "Held security/content-safety detail of the codebase review is on public branches the code-review branch (named to the owner directly) and the second review branch (and #810 head #810's branch). Move it to draft advisories (\u00a72.47 OQ6, docs/security/v1/README.md \u00a75), then delete those branches? Runner holds the review folders off main."
+    },
+    {
+      "id": "advisories-S8-25-27",
+      "at": "2026-11-27T01:40Z",
+      "ask": "Open a draft security advisory each for S8-25 (important, plugin TLS), S8-26 (important latent, enrichment runtimes), S8-27 (low, dht restart snapshot); detail given in the runner's chat (docs/security/v1/README.md \u00a75 step 3)",
+      "sent": "2026-11-27 runner chat"
+    },
+    {
+      "id": "handover-delete",
+      "at": "2026-11-27T01:40Z",
+      "ask": "Confirm deleting runner-state HANDOVER.md now the runner has resumed (docs/handoff.md \u00a75 step 5)",
+      "sent": "2026-11-27 runner chat"
     }
   ],
   "review_queue": [
