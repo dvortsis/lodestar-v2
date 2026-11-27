@@ -1,4 +1,4 @@
-# runner-records-r18 decisions
+# runner-records-r18 decisions (#1130)
 
 The runner's records PR after r17 (#1105). It records:
 - the owner's pause (2026-11-24T06:30Z), audit request and resume (2026-11-27), as owner-decisions §2.84, with the priority the runner set from them;
@@ -16,13 +16,13 @@ Apart from §2.84, everything here is the runner's, under the owner's delegation
 - **Resumed on 2026-11-27.** The owner's words came through the path-to-100 session. The runner checked each against that session's own events. The stand-in stays paused.
 - **§2.83's "Don't start any new slices" is superseded.** Build slots fill again, up to §2.81's four.
 - **Priority:**
-  1. the path to 100 (build-plan §0.5): cr-ab-comp-2 on the Unraid box, run by the owner; at least 12 h; CR-AB-ADM and CR-AB-4 back to back; Checkpoint 1; CR-AB-LC;
+  1. the path to 100 (build-plan §0.5): cr-ab-comp-2 (the second CR-AB-COMP run) on the Unraid box, run by the owner; a gap of at least 12 h after it ends; CR-AB-ADM and CR-AB-4 back to back; Checkpoint 1; CR-AB-LC;
   2. the audit's fix slices (below);
   3. the stand-in's queue: X-restart-fuzz-v2, X-gs-followups-2 and the `docs/metrics.md` runner docs PR;
   4. tracking CR-0w.
 
 ## The audit of the stand-in's merges
-The owner asked for it first (§2.84). Every merge had green CI, `main` stayed green, and repository hygiene was clean. A dash means the audit recorded no finding beyond the process notes.
+The owner asked for it first (§2.84). Every merge had green CI, `main` stayed green, and repository hygiene was clean. A dash means the audit recorded no finding beyond the process notes. The audit found three held findings, S8-25 to S8-27 (below).
 
 | PR | Slice | Merge | Verdict |
 |---|---|---|---|
@@ -52,10 +52,9 @@ The owner asked for it first (§2.84). Every merge had green CI, `main` stayed g
 - **Important test gaps,** carried to NOS-3's notes:
   - the kill switch in `recv` is untested;
   - the frame-cap header test is missing;
-  - an open session never re-checks `source_on`;
+  - an open session never re-checks `source_on` (no shipped plugin uses the client yet; NOS-3 builds the first, and closes or re-checks the session);
   - the trip-count baseline is untested.
 - **Nits:** the pong flush; the routed connect switch is untested.
-- The audit also found held finding S8-25 (below).
 
 ### ENR-11 (#1110)
 - **Size:** the index and store budgets are unmeasured for version 3 claims. Follow-up **X-enr11-size-measure**.
@@ -73,18 +72,16 @@ The owner asked for it first (§2.84). Every merge had green CI, `main` stayed g
 - **Important, carried to IRC-2's notes:**
   - bind the passkey host to `torrent_url_host`;
   - refuse loopback and private hosts;
-  - `{authkey}`;
+  - fill `{authkey}`;
   - reqwest's `without_url`;
   - no redirects on the `.torrent` fetch;
   - the `url::Url` lifetime.
 - **Nit:** 908 before `AUTHENTICATE` is untested.
 
 ### ENR-G (#1117)
-- **New held finding S8-26** (below). It gates ENR-13b and any enrichment wiring.
-- **Important (latent, public): a purge leaves served identification data in the index.** Follow-up **X-purge-index-shapes**: the served identification predicate must match the claims-shape predicate (`Claims::shapes_the_record`), and the purge must reindex.
+- **Important (latent; not held: no shipped build serves these fields, nothing leaves the machine, and it's a correctness gap in the purge): a purge leaves served identification data in the index.** Follow-up **X-purge-index-shapes**: the served identification predicate must match the claims-shape predicate (`Claims::shapes_the_record`), and the purge must reindex.
 
 ### X-split-resume-gate (#1118)
-- **New held finding S8-27** (below).
 - **Correction (§2.19).** The decisions file says the slice clears §2.77's "no blanket gate carried across a restart" for the split. It doesn't on the upgrade path: a version-1 snapshot still resumes with its gate, so the first restart after upgrading can hold sampling once, for up to about 6 h. The file records that migration but doesn't flag it. The split is off by default, so the impact is low. CR-0w removes that gate.
 - **Important, tracking (from before the stand-in):** CR-0w, CR-0w-soak, UX-start and D-start had no `runner/slices.yaml`, dashboard or build-plan entry. They were proposed with §2.77 (2026-11-15, `docs/decisions/2026-11-15-owner-no-start-wait.md`). So §2.77 is unmet for every user on first start and on every unproven restart. Their entries are added now.
 - **Nits:**
@@ -147,9 +144,9 @@ The owner asked for it first (§2.84). Every merge had green CI, `main` stayed g
 
 ## Held findings (ids only)
 `docs/security/v1/README.md` §5's hold applies: no detail in the repository until a release with the fix is published.
-- **S8-25:** important, plugin TLS on routed egress. Found by the audit of #1109. Fix **X-sec-S8-25**, #1125, in review.
-- **S8-26:** important, latent, enrichment runtimes. Found by the audit of #1117. Fix **X-sec-S8-26**, merging as #1129. It gates ENR-13b and any enrichment wiring.
-- **S8-27:** low, the DHT restart snapshot. Found by the audit of #1118. Fix **X-sec-S8-27**, building.
+- **S8-25:** important, plugin TLS on routed egress. Fix **X-sec-S8-25**, #1125, in review.
+- **S8-26:** important, latent, enrichment runtimes. Fix **X-sec-S8-26**, merging as #1129. It gates ENR-13b and any enrichment wiring.
+- **S8-27:** low, the DHT restart snapshot. Fix **X-sec-S8-27**, building.
 
 The three fix slices add their own `runner/slices.yaml` entries in their PRs.
 
@@ -160,18 +157,18 @@ The three fix slices add their own `runner/slices.yaml` entries in their PRs.
 - **X-irc-fuzz-seeds** (Opus): seeds for `irc_announce`, with the coverage recorded.
 - **X-watch-open-fstat** (Opus): `Folder::open` checks the folder it opened, not the path.
 - **X-tls-root-load-event** (Opus): the root-load event, after X-sec-S8-25.
-- **CR-0w** (Opus, protocol review): remove the start wait (§2.77). After X-sec-S8-27, which holds the restart snapshot's files.
+- **CR-0w** (Opus, protocol review): remove the start wait (§2.77). After X-sec-S8-27, which holds the restart snapshot's files. X-sec-S8-27's own entry lands with its PR; until then this dep names a slice with no entry.
 - **CR-0w-soak** (Opus): the analysis windows without a start suppression, then a soak sampling from minute one.
 - **UX-start** (Sonnet): the first hour shows progress.
 - **D-start** (Sonnet, docs): the user and packaging docs.
 
 ## Notes added to existing slices
 - **IRC-2:** IRC-1's six carry-forwards.
-- **NOS-3:** NOS-2b's test gaps and nits. Owns widen to `crates/sources/src/ws.rs` and its tests at launch, after X-sec-S8-25 merges.
+- **NOS-3:** NOS-2b's test gaps and nits. Its owns widen at launch to NOS-2b's WebSocket client files; the runner sets them.
 - **SRC-3b:** documents built from claims get no identification terms.
 
 ## Owner queue
 The runner-state ids are in brackets.
-- **Item 38** (`advisories-S8-25-27`): should the runner open draft security advisories for S8-25 to S8-27?
+- **Item 38** (`advisories-S8-25-27`): open draft security advisories for S8-25 to S8-27 (the runner gives you the detail directly).
 - **Item 39** (`handover-delete`): may the runner delete `HANDOVER.md` from runner-state?
 - **Item 40** (`license-cdla-permissive-2`): may the licence allowlist add CDLA-Permissive-2.0?

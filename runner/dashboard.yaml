@@ -1994,8 +1994,8 @@ owner_queue:
   unblocks: Debrid cache status (a Cached on TorBox badge) in v0.7
   when: Optional, before v0.7 closes; nothing waits on it
 - n: 38
-  type: decision
-  action: 'Should the runner open draft security advisories for S8-25, S8-26 and S8-27? docs/security/v1/README.md §5 has you open them, as item 20 does for the earlier held findings, and says Claude sessions here can''t create one'
+  type: action
+  action: 'Open draft security advisories for S8-25, S8-26 and S8-27 (the runner gives you the detail directly), as item 20 does for the earlier held findings. docs/security/v1/README.md §5 has you open them; Claude sessions here can''t create one'
   unblocks: Disclosure records for S8-25 to S8-27
   when: Any time; the advisories before the fixes ship
 - n: 39
