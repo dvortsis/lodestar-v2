@@ -1,4 +1,4 @@
-# X-claims-size decisions
+# X-claims-size decisions (#1141)
 
 Slice X-claims-size (runner brief, 2026-11-27T12:51Z): try to shrink identification answers' share of the store before any §3 budget moves (§2.26). Spec: architecture §3, `docs/decisions/2026-11-27-X-enr11-size-measure.md`. The runner's decision (2026-11-27T15:09Z) is that no lever is built. This PR keeps the measurements and the `size-report` fixes. There is no budget, schema or `ci.yml` change, and the gate stays at 0 %.
 
@@ -43,7 +43,7 @@ Dictionary sizes probed per blob, before the runs: 16, 32 and 64 KiB saved 44, 5
 - **About 60 B per torrent of the 0 % figure is slack from `size-report` itself.**
   - Its train-then-`recompress_files` step rewrites every file-tree blob in place and leaves partly filled pages. VACUUM takes the 60 % store from 1113.8 to 1047.6 B per torrent: 46 B in `torrent_files`, 12.5 B in `torrents`.
   - The slack is there at 0 % too.
-- **Production never trains the file-tree dictionary.** Only tests and `size-report` call `train_file_dict`. So the §3 file-tree figure (346 B blobs) assumes a dictionary real stores don't have.
+- **Production never trains the file-tree dictionary.** Only tests and the bench (`size-report` and the 10M dataset builder, `bench/src/dataset.rs`) call `train_file_dict`. So the §3 file-tree figure (346 B blobs) assumes a dictionary real stores don't have.
 - The runner noted both for follow-ups (2026-11-27T13:11Z).
 
 ## What this PR changes

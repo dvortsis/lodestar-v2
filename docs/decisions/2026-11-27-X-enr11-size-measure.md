@@ -25,7 +25,7 @@ Measured at CI's size: 50,000 torrents, seed 1, `size-report --torrents 50000 --
 | File index (smart) | 789.2 | 789.2 | 789.2 | 800 |
 | File-tree blob mean | 346.1 | 346.1 | 346.1 | 600 |
 
-- **These budgets don't hold once identification is on.** At the 60 % default share, the store is 1114.4 B against 976 and the torrent index 613.0 B against 560 (runner decision §2.26 above: the gate stays at 0 % until X-claims-size):
+- **These budgets don't hold once identification is on.** At the 60 % realistic share (the default is 0 %), the store is 1114.4 B against 976 and the torrent index 613.0 B against 560 (runner decision §2.26 above: the gate stays at 0 % until X-claims-size):
   - the canonical store is 138 B over its 976 B;
   - the torrent index is 53 B over its 560 B;
   - so store plus index is 1,727 B, over §3's 1.5 KB (1,536 B).
