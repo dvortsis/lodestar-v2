@@ -68,12 +68,7 @@ test.describe('navigation', () => {
 		await interact(page); // the full bar loads on the first interaction
 		await page.getByTestId('more-button').click();
 		const menu = page.getByRole('menu', { name: 'More' });
-		await expect(menu.getByRole('menuitem')).toHaveText([
-			'Add torrent files',
-			'Logs',
-			'About',
-			'Sign out'
-		]);
+		await expect(menu.getByRole('menuitem')).toHaveText(['Import', 'Logs', 'About', 'Sign out']);
 		await menu.getByRole('menuitem', { name: 'About' }).click();
 		await expect(page).toHaveURL(/\/settings\/about/);
 		await expect(page.getByRole('main').getByRole('heading', { level: 1 })).toBeVisible();

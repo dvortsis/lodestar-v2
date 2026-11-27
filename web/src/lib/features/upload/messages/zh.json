@@ -1,6 +1,5 @@
 {
 	"upload_title": "添加种子文件",
-	"upload_menu_item": "添加种子文件",
 	"upload_purpose": "添加你已有的 .torrent 文件，可手动添加，也可从文件夹添加。每个文件都会经过你的过滤器，与爬虫发现的种子相同。",
 	"upload_files_heading": "上传文件",
 	"upload_drop_hint": "将 .torrent 文件拖放到此页面任意位置。",

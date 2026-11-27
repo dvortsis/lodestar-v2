@@ -30,11 +30,11 @@ export interface MoreItem {
 
 // The overflow menu's items. Only existing routes are offered (§10.3), and
 // nav.test.ts fails when an href names neither a route nor a registered Settings screen.
-// Import is Settings → Add torrent files (UP-2), with a label of its own: sharing the screen's
-// title would put that message in a chunk of its own that every Settings page fetches. Backup returns when its Settings screen registers;
-// the Syntax guide, when /help/syntax exists.
+// Import opens Settings → Add torrent files (UP-2), labelled "Import" as §10.3 names it (the
+// screen's own words cost the Search route a byte over its budget). Backup returns when its
+// Settings screen registers; the Syntax guide, when /help/syntax exists.
 export const MORE: readonly MoreItem[] = [
-	{ id: 'import', href: '/settings/import', label: () => m.upload_menu_item() },
+	{ id: 'import', href: '/settings/import', label: () => m.shell_more_import() },
 	{ id: 'logs', href: '/logs', label: () => m.shell_more_logs() },
 	{ id: 'about', href: '/settings/about', label: () => m.shell_more_about() }
 ];

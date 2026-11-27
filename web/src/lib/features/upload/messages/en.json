@@ -1,6 +1,5 @@
 {
 	"upload_title": "Add torrent files",
-	"upload_menu_item": "Add torrent files",
 	"upload_purpose": "Add .torrent files you already have, by hand or from a folder. Each one goes through your filters, like a torrent the crawler finds.",
 	"upload_files_heading": "Upload files",
 	"upload_drop_hint": "Drop .torrent files anywhere on this page.",

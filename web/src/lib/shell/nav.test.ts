@@ -15,7 +15,7 @@ describe('overflow menu (§10.3)', () => {
 		}
 	});
 
-	it('offers Add torrent files, Logs and About, in that order', () => {
+	it('offers Import, Logs and About, in that order', () => {
 		expect(MORE.map((i) => i.id)).toEqual(['import', 'logs', 'about']);
 	});
 });
