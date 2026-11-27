@@ -17,8 +17,8 @@
 //!   found by an always-adult source, made adult by your correction or
 //!   rule, or detected as adult now. Adult goes only to ENR-1's services.
 //!   Each of the plugin's requests asks the same gate again, for the same
-//!   item and query, just before it goes ([`crate::presend`]): a change
-//!   while it waited for the host's pacing sends nothing.
+//!   item and query, after the client's waits and just before it's handed
+//!   to egress ([`crate::presend`]).
 //! - **What is sent** is a [`Query`]: the title and year the release
 //!   parser reads from the torrent's name alone, and its kind of work.
 //!   Never the hash, the raw name, files or trackers: a [`Query`] has no
@@ -925,7 +925,7 @@ impl IdentifySource {
                 return Step::Skipped;
             }
         }
-        let gate = Arc::new(self.gate(ctx.source));
+        let gate: crate::presend::Gate<Candidate, Ineligible> = Arc::new(self.gate(ctx.source));
         let candidate = gate(id, now).await;
         let candidate = match candidate {
             Ok(Ok(Ok(c))) => c,
@@ -954,29 +954,17 @@ impl IdentifySource {
         // Asked again before each request, for the same item and the same
         // query: anything else (a refusal, an error, a changed query) sends
         // nothing, and the reason decides what the runtime does next.
-        let why: Arc<Mutex<Option<Ineligible>>> = Arc::default();
-        let admit: crate::presend::Admit = {
-            let (gate, why, expected) = (gate.clone(), why.clone(), candidate.clone());
-            let clock = self.config.clock;
-            Arc::new(move || {
-                let (gate, why, expected) = (gate.clone(), why.clone(), expected.clone());
-                Box::pin(async move {
-                    let verdict = match gate(expected.id, clock()).await {
-                        Ok(Ok(Ok(c))) if c == expected => return true,
-                        Ok(Ok(Ok(_))) => Ineligible::NoQuery,
-                        Ok(Ok(Err(why))) => why,
-                        // Fail closed; as a plugin-wide reason, so the
-                        // runtime waits before trying again.
-                        _ => Ineligible::KillSwitch,
-                    };
-                    why.lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .get_or_insert(verdict);
-                    false
-                })
-            })
-        };
-        let (gated, refused) = crate::presend::kit(kit, admit);
+        // Fail closed on a store error or a panic, as a plugin-wide
+        // reason, so the runtime waits before trying again.
+        let (gated, outcome) = crate::presend::for_item(
+            kit,
+            gate,
+            id,
+            candidate.clone(),
+            self.config.clock,
+            Ineligible::NoQuery,
+            Ineligible::KillSwitch,
+        );
         let lookup = tokio::select! {
             biased;
             _ = ctx.shutdown.requested() => return Step::Shutdown,
@@ -984,9 +972,13 @@ impl IdentifySource {
         };
         // A request the gate refused: whatever the plugin made of it, the
         // answer is dropped, nothing is cached and the host isn't charged.
-        if refused.load(Ordering::Acquire) {
+        if let Some((why, sent)) = outcome.refused() {
             bump(&self.stats.withheld);
-            let why = why.lock().unwrap_or_else(|e| e.into_inner()).take();
+            // A request of the lookup went before the refusal: the host was
+            // asked, so the next lookup waits the interval.
+            if sent {
+                return Step::Asked;
+            }
             return why.map_or(Step::Wait, step_for);
         }
         // A lookup that took too long failed: dropped, as on shutdown.

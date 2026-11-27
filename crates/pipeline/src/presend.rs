@@ -2,25 +2,25 @@
 //!
 //! The enrichment runtimes ([`adult_enrich`](crate::adult_enrich) and
 //! [`identify`](crate::identify)) judge an item with their whole gate
-//! before they call the plugin. A plugin's request can then wait in its
-//! client for the host's pacing or back-off, for as long as the host asks.
-//! So the plugin is handed a client of its own ([`kit`]): the same limiter
-//! (the pacing is shared), and a [`Fetch`] that asks the runtime's gate
-//! again, for the same item, after every wait and just before the request
-//! is handed to the plugin's egress. Every way a plugin sends (`send`,
-//! `poll`, `poll_stream`) goes through it.
+//! before they call the plugin, and again for every request the plugin
+//! makes: the plugin is handed a client of its own ([`for_item`]) on the
+//! same limiter (the pacing is shared), whose [`Fetch`] asks the runtime's
+//! gate again, for the same item and query, after the client's waits and
+//! just before each request is handed to the plugin's egress. Every way a
+//! plugin sends (`send`, `poll`, `poll_stream`) goes through it.
 //!
-//! - **Fail closed.** A gate that refuses, errs or panics sends nothing,
-//!   and the refusal holds for the rest of the lookup: no later request
-//!   of the same lookup goes, whatever the gate would say by then.
+//! - **Fail closed.** A gate that refuses, errs or panics, or a query that
+//!   differs, sends nothing, and the refusal holds for the rest of the
+//!   lookup: no later request of the same lookup goes, whatever the gate
+//!   would say by then.
 //! - **Not the host's fault.** A refused request fails with
 //!   [`HttpError::EgressDown`], which the limiter doesn't count against
 //!   the host.
 //!
 //! Nothing here logs a name, a query or a hash.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use lodestar_sources::http::{StreamLimits, StreamResponse};
 use lodestar_sources::{BoxFuture, Client, Fetch, HttpError, Kit, Request, Response};
@@ -28,32 +28,74 @@ use lodestar_sources::{BoxFuture, Client, Fetch, HttpError, Kit, Request, Respon
 /// What a refused request fails with.
 pub(crate) const WITHHELD: &str = "withheld by the enrichment gate";
 
-/// The runtime's gate for one lookup's item: true when the request may go
-/// now. Called once per request, after the client's waits.
+/// One request's check: true when it may go now. Called once per request,
+/// after the client's waits.
 pub(crate) type Admit = Arc<dyn Fn() -> BoxFuture<'static, bool> + Send + Sync>;
 
-/// A [`Fetch`] that asks [`Admit`] before each request.
-struct Gated {
-    inner: Arc<dyn Fetch>,
-    admit: Admit,
-    refused: Arc<AtomicBool>,
+/// A runtime's gate (its `check_with`, run on the blocking pool) for item
+/// `id` at time `now`.
+pub(crate) type Gate<C, W> =
+    Arc<dyn Fn(i64, i64) -> BoxFuture<'static, Answer<C, W>> + Send + Sync>;
+
+/// The gate's answer: a candidate, or why not; a store error; a panic.
+pub(crate) type Answer<C, W> =
+    Result<Result<Result<C, W>, lodestar_store::Error>, tokio::task::JoinError>;
+
+/// What one lookup's requests met.
+#[derive(Debug)]
+pub(crate) struct Outcome<W> {
+    refused: AtomicBool,
+    sent: AtomicBool,
+    why: Mutex<Option<W>>,
 }
 
-impl Gated {
+impl<W> Default for Outcome<W> {
+    fn default() -> Outcome<W> {
+        Outcome {
+            refused: AtomicBool::new(false),
+            sent: AtomicBool::new(false),
+            why: Mutex::new(None),
+        }
+    }
+}
+
+impl<W: Copy> Outcome<W> {
+    /// `Some` once a request was refused: the first reason, and whether an
+    /// earlier request of the lookup had gone.
+    pub(crate) fn refused(&self) -> Option<(Option<W>, bool)> {
+        self.refused.load(Ordering::Acquire).then(|| {
+            let why = *self.why.lock().unwrap_or_else(|e| e.into_inner());
+            (why, self.sent.load(Ordering::Acquire))
+        })
+    }
+}
+
+/// A [`Fetch`] that asks [`Admit`] before each request.
+struct Gated<W> {
+    inner: Arc<dyn Fetch>,
+    admit: Admit,
+    outcome: Arc<Outcome<W>>,
+}
+
+impl<W> Gated<W> {
     async fn admitted(&self) -> bool {
-        if self.refused.load(Ordering::Acquire) {
+        if self.outcome.refused.load(Ordering::Acquire) {
             return false;
         }
         let ok = (self.admit)().await;
         if !ok {
-            self.refused.store(true, Ordering::Release);
+            self.outcome.refused.store(true, Ordering::Release);
         }
         // A refusal from a concurrent request of the same lookup counts.
-        ok && !self.refused.load(Ordering::Acquire)
+        let ok = ok && !self.outcome.refused.load(Ordering::Acquire);
+        if ok {
+            self.outcome.sent.store(true, Ordering::Release);
+        }
+        ok
     }
 }
 
-impl Fetch for Gated {
+impl<W: Send + Sync> Fetch for Gated<W> {
     fn fetch<'a>(&'a self, req: &'a Request) -> BoxFuture<'a, Result<Response, HttpError>> {
         Box::pin(async move {
             if !self.admitted().await {
@@ -78,20 +120,59 @@ impl Fetch for Gated {
 }
 
 /// The kit one lookup hands its plugin: `kit`'s state, and a client on
-/// `kit`'s limiter whose every request asks `admit` first. The flag is
-/// set once a request was refused.
-pub(crate) fn kit(kit: &Kit, admit: Admit) -> (Kit, Arc<AtomicBool>) {
-    let refused = Arc::new(AtomicBool::new(false));
+/// `kit`'s limiter whose every request asks `admit` first.
+fn kit<W: Send + Sync + 'static>(kit: &Kit, admit: Admit, outcome: Arc<Outcome<W>>) -> Kit {
     let fetch: Arc<dyn Fetch> = Arc::new(Gated {
         inner: kit.http.fetcher().clone(),
         admit,
-        refused: refused.clone(),
+        outcome,
     });
-    let gated = Kit {
+    Kit {
         state: kit.state.clone(),
         http: Client::new(fetch, kit.http.limiter().clone()),
+    }
+}
+
+/// The kit for a lookup of item `id`, whose gate passed `expected`: each
+/// request asks `gate` again at `clock()` and goes only if it answers
+/// `expected` again. Otherwise the reason is kept: the gate's own,
+/// `changed` for a different candidate, `failed` for a store error or a
+/// panic.
+pub(crate) fn for_item<C, W>(
+    base: &Kit,
+    gate: Gate<C, W>,
+    id: i64,
+    expected: C,
+    clock: fn() -> i64,
+    changed: W,
+    failed: W,
+) -> (Kit, Arc<Outcome<W>>)
+where
+    C: PartialEq + Clone + Send + Sync + 'static,
+    W: Copy + Send + Sync + 'static,
+{
+    let outcome: Arc<Outcome<W>> = Arc::default();
+    let admit: Admit = {
+        let outcome = outcome.clone();
+        Arc::new(move || {
+            let (gate, outcome, expected) = (gate.clone(), outcome.clone(), expected.clone());
+            Box::pin(async move {
+                let why = match gate(id, clock()).await {
+                    Ok(Ok(Ok(c))) if c == expected => return true,
+                    Ok(Ok(Ok(_))) => changed,
+                    Ok(Ok(Err(why))) => why,
+                    _ => failed,
+                };
+                outcome
+                    .why
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_or_insert(why);
+                false
+            })
+        })
     };
-    (gated, refused)
+    (kit(base, admit, outcome.clone()), outcome)
 }
 
 #[cfg(test)]
@@ -137,7 +218,12 @@ mod tests {
     async fn every_path_asks_the_gate_before_it_sends() {
         let wire = Arc::new(Wire::default());
         let (open, asked) = (Arc::new(AtomicBool::new(true)), Arc::default());
-        let (k, refused) = kit(&base(wire.clone()), admit(open, Arc::clone(&asked)));
+        let outcome: Arc<Outcome<()>> = Arc::default();
+        let k = kit(
+            &base(wire.clone()),
+            admit(open, Arc::clone(&asked)),
+            outcome.clone(),
+        );
         let req = Request::get("https://a.example.test/x");
         k.http.send(&req).await.unwrap();
         k.http.poll("unit", &req).await.unwrap();
@@ -149,7 +235,7 @@ mod tests {
         k.http.poll_stream("unit2", &req, limits).await.unwrap();
         assert_eq!(asked.load(Ordering::SeqCst), 3);
         assert_eq!(wire.0.lock().unwrap().len(), 3);
-        assert!(!refused.load(Ordering::SeqCst));
+        assert!(outcome.refused().is_none());
     }
 
     #[tokio::test]
@@ -157,11 +243,16 @@ mod tests {
         let wire = Arc::new(Wire::default());
         let (open, asked) = (Arc::new(AtomicBool::new(false)), Arc::default());
         let base = base(wire.clone());
-        let (k, refused) = kit(&base, admit(open.clone(), Arc::clone(&asked)));
+        let outcome: Arc<Outcome<()>> = Arc::default();
+        let k = kit(
+            &base,
+            admit(open.clone(), Arc::clone(&asked)),
+            outcome.clone(),
+        );
         let req = Request::get("https://a.example.test/x");
         let e = k.http.send(&req).await.unwrap_err();
         assert_eq!(e, HttpError::EgressDown(WITHHELD.into()));
-        assert!(refused.load(Ordering::SeqCst));
+        assert_eq!(outcome.refused(), Some((None, false)));
         // The gate opening again doesn't reopen this lookup.
         open.store(true, Ordering::SeqCst);
         assert!(k.http.send(&req).await.is_err());

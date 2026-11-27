@@ -1956,8 +1956,8 @@ enum Change {
     BecameAdult,
 }
 
-/// The gate is asked again when the request goes, not only when the
-/// lookup starts: whatever changes while a lookup waits in its client
+/// The gate is asked again when each request goes, not only when the
+/// lookup starts: whatever changes between the two
 /// (any plugin-wide condition, a rule, a hold, the item becoming Adult),
 /// its request isn't sent and the answer is neither emitted nor cached.
 /// With nothing changed, the one request goes.
@@ -1987,6 +1987,7 @@ async fn the_gate_is_asked_again_when_the_request_goes() {
         let store = Arc::new(Mutex::new(s));
         let filter = stand_in();
         let flags = Arc::new(Flags::default());
+        let state = Arc::new(MemoryState::new());
         let mut r = run(
             Arc::new(plugin),
             store.clone(),
@@ -1995,7 +1996,7 @@ async fn the_gate_is_asked_again_when_the_request_goes() {
             flags.clone(),
             src,
             interest_only(),
-            Arc::new(MemoryState::new()),
+            state.clone(),
             &[id],
         );
         until("the lookup to wait", || n(&hold.waiting) == 1).await;
@@ -2045,9 +2046,17 @@ async fn the_gate_is_asked_again_when_the_request_goes() {
         if matches!(change, Change::Nothing) {
             assert_eq!((sent, withheld, matched), (1, 0, 1), "{change:?}");
             assert!(emitted.is_ok(), "{change:?}: the match is emitted");
+            let bucket = format!("enr10/cache/{:03}", id.rem_euclid(identify::BUCKETS));
+            assert!(
+                state.get(&bucket).await.unwrap().is_some(),
+                "the hit is cached"
+            );
         } else {
             assert_eq!((sent, withheld, matched), (0, 1, 0), "{change:?}");
             assert!(emitted.is_err(), "{change:?}: nothing is emitted");
+            // Nor cached: tried again once the change is undone.
+            let bucket = format!("enr10/cache/{:03}", id.rem_euclid(identify::BUCKETS));
+            assert_eq!(state.get(&bucket).await.unwrap(), None, "{change:?}");
         }
     }
 }

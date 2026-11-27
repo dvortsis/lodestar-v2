@@ -2149,8 +2149,8 @@ enum Change {
     MarkedNotAdult,
 }
 
-/// The gate is asked again when the request goes, not only when the
-/// lookup starts: whatever changes while a lookup waits in its client
+/// The gate is asked again when each request goes, not only when the
+/// lookup starts: whatever changes between the two
 /// (any plugin-wide condition, a rule, a hold, a correction), its request
 /// isn't sent, and the answer is neither emitted nor cached. With nothing
 /// changed, the one request goes.
@@ -2183,7 +2183,8 @@ async fn the_gate_is_asked_again_when_the_request_goes() {
         let store = Arc::new(Mutex::new(s));
         let filter = stand_in();
         let flags = on();
-        let mut r = run(
+        let state = Arc::new(MemoryState::new());
+        let mut r = run_with_state(
             plugin,
             store.clone(),
             filter.clone(),
@@ -2191,6 +2192,7 @@ async fn the_gate_is_asked_again_when_the_request_goes() {
             flags.clone(),
             enr,
             interest_only(),
+            state.clone(),
         );
         assert!(r.interest.opened(id));
         until("the lookup to wait", || {
@@ -2239,16 +2241,24 @@ async fn the_gate_is_asked_again_when_the_request_goes() {
         .await;
         let sent = r.wire.0.lock().unwrap().len();
         let withheld = r.stats.withheld.load(Ordering::SeqCst);
-        let state = r.found.try_recv();
+        let emitted = r.found.try_recv();
         let _ = r.stop.send(true);
         let _ = r.task.await;
         if matches!(change, Change::Nothing) {
             assert_eq!((sent, withheld), (1, 0), "{change:?}");
-            assert!(state.is_ok(), "{change:?}: the match is emitted");
+            assert!(emitted.is_ok(), "{change:?}: the match is emitted");
+            let bucket = format!("enr1/cache/{:03}", id.rem_euclid(adult_enrich::BUCKETS));
+            assert!(
+                state.get(&bucket).await.unwrap().is_some(),
+                "the hit is cached"
+            );
         } else {
             assert_eq!((sent, withheld), (0, 1), "{change:?}");
-            assert!(state.is_err(), "{change:?}: nothing is emitted");
+            assert!(emitted.is_err(), "{change:?}: nothing is emitted");
             assert_eq!(r.stats.matched.load(Ordering::SeqCst), 0, "{change:?}");
+            // Nor cached: tried again once the change is undone.
+            let bucket = format!("enr1/cache/{:03}", id.rem_euclid(adult_enrich::BUCKETS));
+            assert_eq!(state.get(&bucket).await.unwrap(), None, "{change:?}");
         }
     }
 }

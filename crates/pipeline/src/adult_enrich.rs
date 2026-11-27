@@ -15,8 +15,8 @@
 //!   unverified item, or anything while the plugin's egress kill switch is
 //!   tripped (SRC-5).
 //!   Each of the plugin's requests asks the same gate again, for the same
-//!   item and query, just before it goes ([`crate::presend`]): a change
-//!   while it waited for the host's pacing sends nothing.
+//!   item and query, after the client's waits and just before it's handed
+//!   to egress ([`crate::presend`]).
 //! - **What is sent** is a [`Query`]: the display name, or the release
 //!   parser's site, date and title, whichever the plugin asks for. The info
 //!   hash, files and trackers stay here: a [`Query`] has no field for them.
@@ -897,7 +897,7 @@ impl AdultEnrichSource {
             bump(&self.stats.cached);
             return Step::Skipped;
         }
-        let gate = Arc::new(self.gate(ctx.source));
+        let gate: crate::presend::Gate<Candidate, Ineligible> = Arc::new(self.gate(ctx.source));
         let candidate = match gate(id, now).await {
             Ok(Ok(Ok(c))) => c,
             Ok(Ok(Err(why))) => {
@@ -913,28 +913,17 @@ impl AdultEnrichSource {
         // Asked again before each request, for the same item and the same
         // query: anything else (a refusal, an error, a changed query) sends
         // nothing, and the reason decides what the runtime does next.
-        let why: Arc<Mutex<Option<Ineligible>>> = Arc::default();
-        let admit: crate::presend::Admit = {
-            let (gate, why, expected) = (gate.clone(), why.clone(), candidate.clone());
-            Arc::new(move || {
-                let (gate, why, expected) = (gate.clone(), why.clone(), expected.clone());
-                Box::pin(async move {
-                    let verdict = match gate(expected.id, crate::unix_now()).await {
-                        Ok(Ok(Ok(c))) if c == expected => return true,
-                        Ok(Ok(Ok(_))) => Ineligible::NoQuery,
-                        Ok(Ok(Err(why))) => why,
-                        // Fail closed; as a plugin-wide reason, so the
-                        // runtime waits before trying again.
-                        _ => Ineligible::KillSwitch,
-                    };
-                    why.lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .get_or_insert(verdict);
-                    false
-                })
-            })
-        };
-        let (kit, refused) = crate::presend::kit(kit, admit);
+        // Fail closed on a store error or a panic, as a plugin-wide
+        // reason, so the runtime waits before trying again.
+        let (kit, outcome) = crate::presend::for_item(
+            kit,
+            gate,
+            id,
+            candidate.clone(),
+            crate::unix_now,
+            Ineligible::NoQuery,
+            Ineligible::KillSwitch,
+        );
         // One cap for both (plan Q15): an opened item jumps the queue, but
         // within the same day's budget (ENR-1c).
         if !Budget::take(state, now, self.config.per_day).await {
@@ -948,9 +937,13 @@ impl AdultEnrichSource {
         };
         // A request the gate refused: whatever the plugin made of it, the
         // answer is dropped and nothing is cached.
-        if refused.load(Ordering::Acquire) {
+        if let Some((why, sent)) = outcome.refused() {
             bump(&self.stats.withheld);
-            let why = why.lock().unwrap_or_else(|e| e.into_inner()).take();
+            // A request of the lookup went before the refusal: the host was
+            // asked, so the next lookup waits the interval.
+            if sent {
+                return Step::Asked;
+            }
             return why.map_or(Step::Wait, step_for);
         }
         match lookup {
