@@ -2,6 +2,8 @@
 
 These are the runner's instructions, within the limits the owner set. They aren't the owner's own words. The newest entry is at the top. Send reports to the runner by message to session_01EYhgh4JX3AmHzKXPjYCoUg.
 
+**How the runner reaches you.** The runner can't message your session: it accepts messages only from the owner's trusted devices. So you watch this file instead. Keep one background watcher running: it fetches `runner-state` every 60 s and exits when this file's blob changes, which wakes you. On each wake, act on entries newer than the last one you handled, then re-arm the watcher. If the watcher's own timeout ends it, re-arm it. Any other wake (your own check-in, a message from the owner) also re-reads this file first.
+
 **Standing limits** (owner, 2026-11-27):
 - at most 2 instances at a time;
 - ExpiresAt no more than 24 h;
