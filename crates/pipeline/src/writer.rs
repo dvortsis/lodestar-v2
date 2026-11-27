@@ -180,6 +180,15 @@ pub(crate) type MarkedHook = fn(&Store, &HeldSet, &Handle, &[[u8; 20]]);
 /// under `HeldSet`'s lock, so a release since isn't undone and a hold is
 /// never missed (`2026-10-31-B-held-exact.md`,
 /// `2026-10-31-B-held-precommit.md`). On a store error every hash goes in.
+/// The one Info event for a trained claims dictionary (X-claims-size).
+fn log_claims_dict(t: &lodestar_store::claims_dict::Trained) {
+    lodestar_log::log_event!(
+        crate::log_events::CLAIMS_DICT_TRAINED,
+        samples = t.samples,
+        bytes = t.bytes
+    );
+}
+
 fn hold_committed(store: &Store, pending: Option<Pending<'_>>, ingest: bool) {
     let Some(pending) = pending else { return };
     if let Err(e) = pending.settle(|hs| store.held_among(hs)) {
@@ -528,6 +537,7 @@ impl Writer {
                     if unix_now() - self.last_purge >= PURGE_EVERY {
                         self.purge().await;
                     }
+                    self.train_claims_dict().await;
                 }
             }
         }
@@ -726,6 +736,29 @@ impl Writer {
     /// Removes expired quarantine (its keys become fetchable again, except
     /// adult holds, which stay refused as tombstones) and filter hits past
     /// their retention.
+    /// Trains the store's claims dictionary once enough identification
+    /// answers are stored (X-claims-size, `lodestar_store::claims_dict`):
+    /// nothing once one is active, which the store knows without a query.
+    /// Sampling and training run outside any transaction; the dictionary
+    /// and its setting are stored in one short one. An error leaves it for
+    /// the next flush.
+    async fn train_claims_dict(&mut self) {
+        let Some(store) = self.store.take_if(|s| s.active_claims_dict().is_none()) else {
+            return;
+        };
+        let (store, result) = tokio::task::spawn_blocking(move || {
+            let mut store = store;
+            let r = store.train_claims_dict();
+            (store, r)
+        })
+        .await
+        .expect("claims dictionary task");
+        self.store = Some(store);
+        if let Ok(Some(t)) = result {
+            log_claims_dict(&t);
+        }
+    }
+
     async fn purge(&mut self) {
         let now = unix_now();
         self.last_purge = now;
@@ -3357,6 +3390,82 @@ mod tests {
         assert_eq!(count(&gate), (1, 1, 1, 1));
         assert_eq!(w.stats.errors.load(Ordering::Relaxed), 1);
         assert_eq!(w.stats.stored.load(Ordering::Relaxed), 1);
+    }
+
+    /// The flush trains the claims dictionary once enough answers are
+    /// stored, and only once (X-claims-size).
+    #[tokio::test]
+    async fn the_flush_trains_the_claims_dictionary_once() {
+        use lodestar_store::claims::{Claims, Details, ExternalId};
+        let funnel = Arc::new(FunnelCounts::default());
+        let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+        let gate = Arc::new(GateStats::new(0));
+        let mut store = Store::open_in_memory(StoreConfig::default()).unwrap();
+        store.register_source("dht", "1", 1).unwrap();
+        let src = store.register_source("wikidata", "1", 1).unwrap();
+        let terms = lodestar_sources::terms::Terms::default().record();
+        store
+            .set_plugin_state(src, lodestar_store::identify_sweep::TERMS_KEY, Some(&terms))
+            .unwrap();
+        let answer = |i: i64| Claims {
+            ids: vec![ExternalId {
+                scheme: "wikidata".into(),
+                value: format!("Q{}", 100 + i),
+            }],
+            details: Some(Box::new(Details {
+                canonical_title: Some(format!("A Work Called {i}")),
+                genres: vec!["drama".into()],
+                year: Some(1990 + (i % 30) as u16),
+                match_confidence: Some(80),
+                ..Details::default()
+            })),
+            ..Claims::default()
+        };
+        let put = |store: &mut Store, from: i64, to: i64| {
+            for i in from..to {
+                let mut hash = [0u8; 20];
+                hash[..8].copy_from_slice(&i.to_be_bytes());
+                store
+                    .connection()
+                    .execute(
+                        "INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                             file_count, info_size, flags, discovered_at, metadata_at, last_seen_at)
+                         VALUES (?1, ?2, 't', 0, 0, 0, 0, 0, 0, 0, 0, 0)",
+                        (i, &hash[..]),
+                    )
+                    .unwrap();
+                assert!(store.put_claims_at(i, src, &answer(i), false, 1).unwrap());
+            }
+        };
+        let min = lodestar_store::claims_dict::MIN_ROWS as i64;
+        put(&mut store, 1, min);
+        let mut w = writer(store, coordinator, gate);
+        w.train_claims_dict().await;
+        assert_eq!(
+            w.store.as_ref().unwrap().active_claims_dict(),
+            None,
+            "one short"
+        );
+        put(w.store.as_mut().unwrap(), min, min + 1);
+        w.train_claims_dict().await;
+        let id = w
+            .store
+            .as_ref()
+            .unwrap()
+            .active_claims_dict()
+            .expect("trained");
+        w.train_claims_dict().await;
+        let store = w.store.as_ref().unwrap();
+        assert_eq!(store.active_claims_dict(), Some(id));
+        let dicts: i64 = store
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM zstd_dicts WHERE kind = 'claims'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dicts, 1, "trained once");
     }
 
     /// A commit that finds its row already stored (a partial import's

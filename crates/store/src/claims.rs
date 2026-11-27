@@ -11,7 +11,10 @@
 //! store file can be corrupt or crafted, so [`decode`] trusts nothing:
 //!
 //! ```text
-//! blob   = version:u8 (1, 2 or 3) · codec:u8 (0 raw, 1 zstd) · body
+//! blob   = version:u8 (1, 2 or 3) · codec:u8 · body
+//! codec  = 0 raw (body = plain) | 1 zstd (body = a zstd frame of plain)
+//!          | 2 zstd with a trained dictionary:
+//!            body = dict_id:uvar (≥ 1) · the frame without its 4-byte magic
 //! plain  = present:u8 · confidence:u8
 //!          [name:str] [size:uvar] [description:str] [publisher:str]
 //!          [external_ref:str] [published_at:svar]
@@ -79,6 +82,16 @@
 //!   re-encodes to the same bytes. The fuzz target checks that.
 //! - A new layout takes a new version byte; [`decode`] refuses versions it
 //!   doesn't know rather than guessing.
+//! - **Codec 2 (X-claims-size) is a codec, not a layout:** the version byte
+//!   stays first and means what it did, so SQL that filters on it
+//!   (`substr(data, 1, 1)`) is unchanged. The body names its dictionary
+//!   (`zstd_dicts.id`, [`crate::claims_dict`]); the frame carries neither
+//!   magic nor a dictionary id, so the blob's own id is the only one, and a
+//!   dictionary is never deleted or replaced in place. [`decode_with`]
+//!   asks its [`Inflate`] for that id and fails closed with
+//!   [`ClaimsError::Dictionary`] when it isn't known: never another
+//!   dictionary, never a guess. [`decode`] knows no dictionary, so it
+//!   refuses every codec 2 blob that way. Codecs 0 and 1 read as before.
 //! - **The adult section holds no personal data beyond names** (owner
 //!   §2.37, plan Q4 and Q5): performers are bare names on the item, with
 //!   no id that could link one across items, and there's no field for a
@@ -152,6 +165,13 @@ pub const VERSION_ADULT: u8 = 2;
 pub const VERSION_DETAILS: u8 = 3;
 const RAW: u8 = 0;
 const ZSTD: u8 = 1;
+/// zstd with a trained dictionary named in the body (X-claims-size).
+pub const ZSTD_DICT: u8 = 2;
+/// The zstd frame magic number, little-endian, which codec 2 leaves out.
+const ZSTD_MAGIC: [u8; 4] = 0xFD2F_B528u32.to_le_bytes();
+/// The shortest blob `torrent_claims` and `unverified_items` accept (their
+/// `CHECK (length(...) BETWEEN 7 AND ...)`).
+pub const MIN_STORED: usize = 7;
 
 const NAME: u8 = 1 << 0;
 const SIZE: u8 = 1 << 1;
@@ -935,6 +955,8 @@ pub enum ClaimsError {
     Malformed(&'static str),
     /// A field over its limit, or empty where it can't be.
     Limit(&'static str),
+    /// A codec 2 blob names a dictionary that isn't known here.
+    Dictionary(i64),
 }
 
 impl fmt::Display for ClaimsError {
@@ -947,6 +969,7 @@ impl fmt::Display for ClaimsError {
             ClaimsError::Trailing => f.write_str("bytes after the claims"),
             ClaimsError::Malformed(w) => write!(f, "malformed claims: {w}"),
             ClaimsError::Limit(w) => write!(f, "claims over a limit: {w}"),
+            ClaimsError::Dictionary(id) => write!(f, "claims dictionary {id} isn't known"),
         }
     }
 }
@@ -972,15 +995,99 @@ pub fn encode(claims: &Claims, level: i32) -> Result<Vec<u8>, ClaimsError> {
     Ok(out)
 }
 
-/// Reads a stored blob back, version 1, 2 or 3. Bounded: it never holds
-/// more than [`MAX_PLAIN`] bytes of body.
+/// The stored blob for `claims` compressed with dictionary `id` (codec 2),
+/// or stored raw when that isn't smaller. `compressor` must hold that
+/// dictionary and leave the dictionary id and checksum out of its frames
+/// ([`crate::claims_dict`] builds it). The level is the compressor's.
+pub fn encode_dict(
+    claims: &Claims,
+    id: i64,
+    compressor: &mut zstd::bulk::Compressor<'_>,
+) -> Result<Vec<u8>, ClaimsError> {
+    if id < 1 {
+        return Err(ClaimsError::Malformed("dictionary id"));
+    }
+    let plain = encode_plain(claims)?;
+    let frame = compressor
+        .compress(&plain)
+        .map_err(|_| ClaimsError::Compression)?;
+    let bare = frame
+        .strip_prefix(&ZSTD_MAGIC[..])
+        .ok_or(ClaimsError::Compression)?;
+    let mut out = Vec::with_capacity(plain.len() + 2);
+    out.push(claims.version());
+    out.push(ZSTD_DICT);
+    put_uvar(&mut out, id as u64);
+    out.extend_from_slice(bare);
+    if out.len() >= plain.len() + 2 || out.len() < MIN_STORED {
+        out.truncate(1);
+        out.push(RAW);
+        out.extend_from_slice(&plain);
+    }
+    Ok(out)
+}
+
+/// Decompresses a codec 2 frame for [`decode_with`].
+pub trait Inflate {
+    /// `frame` (a whole zstd frame, its magic restored) decompressed with
+    /// dictionary `id` into at most `capacity` bytes. `None` when `id`
+    /// isn't a dictionary this knows: the blob is refused, never read with
+    /// another one.
+    fn inflate(
+        &mut self,
+        id: i64,
+        frame: &[u8],
+        capacity: usize,
+    ) -> Option<std::io::Result<Vec<u8>>>;
+}
+
+/// One dictionary under one id: for tests, fuzzing and tools. The store
+/// reads through [`crate::claims_dict`], which caches its decompressors.
+#[derive(Debug, Clone, Copy)]
+pub struct Dictionary<'a> {
+    pub id: i64,
+    pub bytes: &'a [u8],
+}
+
+impl Inflate for Dictionary<'_> {
+    fn inflate(
+        &mut self,
+        id: i64,
+        frame: &[u8],
+        capacity: usize,
+    ) -> Option<std::io::Result<Vec<u8>>> {
+        (id == self.id).then(|| {
+            zstd::bulk::Decompressor::with_dictionary(self.bytes)
+                .and_then(|mut d| d.decompress(frame, capacity))
+        })
+    }
+}
+
+/// Knows no dictionary: what [`decode`] reads with.
+struct NoDictionaries;
+
+impl Inflate for NoDictionaries {
+    fn inflate(&mut self, _: i64, _: &[u8], _: usize) -> Option<std::io::Result<Vec<u8>>> {
+        None
+    }
+}
+
+/// Reads a stored blob back, version 1, 2 or 3, codec 0 or 1. A codec 2
+/// blob is refused ([`ClaimsError::Dictionary`]): read those with
+/// [`decode_with`]. Bounded: it never holds more than [`MAX_PLAIN`] bytes
+/// of body.
 pub fn decode(blob: &[u8]) -> Result<Claims, ClaimsError> {
+    decode_with(blob, &mut NoDictionaries)
+}
+
+/// [`decode`], reading codec 2 blobs through `dicts`.
+pub fn decode_with(blob: &[u8], dicts: &mut dyn Inflate) -> Result<Claims, ClaimsError> {
     let (&version, rest) = blob.split_first().ok_or(ClaimsError::Truncated)?;
     if !matches!(version, VERSION | VERSION_ADULT | VERSION_DETAILS) {
         return Err(ClaimsError::Version(version));
     }
     let (&codec, body) = rest.split_first().ok_or(ClaimsError::Truncated)?;
-    let claims = decode_body(codec, body)?;
+    let claims = decode_body(codec, body, dicts)?;
     // One version per value: a section is what versions 2 and 3 add.
     if claims.version() != version {
         return Err(ClaimsError::Malformed("section and version disagree"));
@@ -988,7 +1095,31 @@ pub fn decode(blob: &[u8]) -> Result<Claims, ClaimsError> {
     Ok(claims)
 }
 
-fn decode_body(codec: u8, body: &[u8]) -> Result<Claims, ClaimsError> {
+/// The dictionary a stored blob names: `Some` for codec 2 alone. Reads no
+/// further than the id, so it says nothing of whether the rest decodes.
+pub fn dictionary_of(blob: &[u8]) -> Option<i64> {
+    match blob {
+        [_, ZSTD_DICT, rest @ ..] => dict_id(&mut Reader { rest, text: 0 }).ok(),
+        _ => None,
+    }
+}
+
+fn dict_id(r: &mut Reader<'_>) -> Result<i64, ClaimsError> {
+    match r.uvar()? {
+        id @ 1..=0x7fff_ffff_ffff_ffff => Ok(id as i64),
+        _ => Err(ClaimsError::Malformed("dictionary id")),
+    }
+}
+
+/// What a frame may declare: its content size, never more than the cap. A
+/// larger body fails the decompression instead.
+fn declared(frame: &[u8]) -> Result<usize, ClaimsError> {
+    Ok(zstd::zstd_safe::get_frame_content_size(frame)
+        .map_err(|_| ClaimsError::Compression)?
+        .map_or(MAX_PLAIN, |n| n.min(MAX_PLAIN as u64) as usize))
+}
+
+fn decode_body(codec: u8, body: &[u8], dicts: &mut dyn Inflate) -> Result<Claims, ClaimsError> {
     match codec {
         RAW => {
             if body.len() > MAX_PLAIN {
@@ -1000,13 +1131,30 @@ fn decode_body(codec: u8, body: &[u8]) -> Result<Claims, ClaimsError> {
             if body.len() > MAX_PLAIN {
                 return Err(ClaimsError::Limit("body"));
             }
-            // Reserve what the frame declares, never more than the cap: a
-            // larger body fails the decompression instead.
-            let declared = zstd::zstd_safe::get_frame_content_size(body)
-                .map_err(|_| ClaimsError::Compression)?
-                .map_or(MAX_PLAIN, |n| n.min(MAX_PLAIN as u64) as usize);
-            let plain =
-                zstd::bulk::decompress(body, declared).map_err(|_| ClaimsError::Compression)?;
+            let plain = zstd::bulk::decompress(body, declared(body)?)
+                .map_err(|_| ClaimsError::Compression)?;
+            decode_plain(&plain)
+        }
+        ZSTD_DICT => {
+            if body.len() > MAX_PLAIN {
+                return Err(ClaimsError::Limit("body"));
+            }
+            let mut r = Reader {
+                rest: body,
+                text: 0,
+            };
+            let id = dict_id(&mut r)?;
+            let mut frame = Vec::with_capacity(ZSTD_MAGIC.len() + r.rest.len());
+            frame.extend_from_slice(&ZSTD_MAGIC);
+            frame.extend_from_slice(r.rest);
+            let capacity = declared(&frame)?;
+            let plain = dicts
+                .inflate(id, &frame, capacity)
+                .ok_or(ClaimsError::Dictionary(id))?
+                .map_err(|_| ClaimsError::Compression)?;
+            if plain.len() > MAX_PLAIN {
+                return Err(ClaimsError::Limit("body"));
+            }
             decode_plain(&plain)
         }
         c => Err(ClaimsError::Codec(c)),

@@ -15,6 +15,7 @@
 
 mod api_keys;
 pub mod claims;
+pub mod claims_dict;
 mod collections;
 mod compress;
 pub mod filetree;
@@ -602,6 +603,8 @@ const FILE_DICT_SETTING: &str = "file_dict";
 pub struct Store {
     conn: Connection,
     codec: BlobCodec,
+    /// The claims dictionaries (X-claims-size, [`claims_dict`]).
+    claims_dicts: claims_dict::ClaimsDicts,
     config: StoreConfig,
     /// A WAL scrub after a delete couldn't finish (a reader held an old
     /// snapshot): the next delete or purge tries again. When another
@@ -691,9 +694,11 @@ impl Store {
             active_dict_present(&conn, id)?;
         }
         codec.set_active(active);
+        let claims_dicts = claims_dict::ClaimsDicts::load(&conn)?;
         Ok(Store {
             conn,
             codec,
+            claims_dicts,
             config,
             scrub_pending: false,
             path: None,
@@ -748,6 +753,7 @@ impl Store {
         let Store {
             conn,
             codec,
+            claims_dicts: _,
             config,
             scrub_pending: _,
             path: _,

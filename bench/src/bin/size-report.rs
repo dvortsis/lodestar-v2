@@ -443,13 +443,16 @@ fn build(
     ))
 }
 
-/// A terms record (`lodestar_sources::terms::Terms::record`) that lets
-/// answers be passed on: version 1, the redistribute flag, 180 days'
-/// retention.
-const TERMS_REDISTRIBUTE: [u8; 10] = {
-    let r = (180u64 * 86_400).to_be_bytes();
-    [1, 0b10, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]]
-};
+/// The terms record of a plugin whose answers may be passed on
+/// (`Terms::record`, the runtime's own encoding): the strict default
+/// otherwise, so 180 days' retention.
+fn terms_redistribute() -> Vec<u8> {
+    lodestar_sources::terms::Terms {
+        redistribute: true,
+        ..lodestar_sources::terms::Terms::default()
+    }
+    .record()
+}
 
 /// What a plugin looks up for a stored content type
 /// (`lodestar_classify::ContentType::code`: Movie 0, Tv 1, Music 2,
@@ -475,6 +478,11 @@ fn work_of(content_type: Option<i64>, name: &str) -> Option<Work> {
 /// written at 0 %, so that report is the one before ENR-11. Private
 /// torrents (`flags::PRIVACY`) are never looked up (ENR-10), so they
 /// aren't identifiable.
+/// Answers between two checks for the claims dictionary: about what one
+/// plugin stores between two of the writer's flushes at a full day's
+/// budget, rounded up (100,000 lookups a day is about 6 per 5 s flush).
+const TRAIN_CHECK_EVERY: u64 = 50;
+
 fn identify(
     store: &mut Store,
     seed: u64,
@@ -490,7 +498,7 @@ fn identify(
     if finder.get() != 0 || source == finder {
         return Err("the identification source must not be the finder".into());
     }
-    store.set_plugin_state(source, TERMS_KEY, Some(&TERMS_REDISTRIBUTE))?;
+    store.set_plugin_state(source, TERMS_KEY, Some(&terms_redistribute()))?;
     let rows: Vec<(i64, String, Option<i64>)> = store
         .connection()
         .prepare("SELECT id, name, content_type FROM torrents WHERE flags & ?1 = 0 ORDER BY id")?
@@ -510,6 +518,12 @@ fn identify(
         let claims = synth::answer(seed, id as u64, work, &synth::work_title(&name));
         if store.put_claims_at(id, source, &claims, false, synth::EPOCH)? {
             identified += 1;
+        }
+        // The writer checks at each flush (X-claims-size), so the
+        // dictionary is trained once the store holds enough answers, and
+        // those stored before it keep their codec 1 blobs.
+        if identified % TRAIN_CHECK_EVERY == 0 && store.active_claims_dict().is_none() {
+            store.train_claims_dict()?;
         }
     }
     Ok((identifiable, identified))
@@ -585,6 +599,28 @@ fn measure(
             terms as f64 / answered.max(1) as f64,
             titles as f64 / answered.max(1) as f64,
             claims_bytes / answered.max(1) as f64
+        );
+        // The claims dictionary (X-claims-size): how many blobs use it,
+        // and their mean beside the codec 1 ones written before it.
+        let (dict_rows, dict_bytes, dict_size): (i64, f64, f64) = conn.query_row(
+            "SELECT count(*), total(length(data)),
+                 (SELECT total(length(data)) FROM zstd_dicts WHERE kind = 'claims')
+             FROM torrent_claims WHERE substr(data, 2, 1) = x'02'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        let rows: i64 = conn.query_row("SELECT count(*) FROM torrent_claims", [], |r| r.get(0))?;
+        println!(
+            "  claims dictionary   {} ({:.1} KiB); {} of {} rows use it, {:.0} B mean, \
+             {:.0} B mean without",
+            store
+                .active_claims_dict()
+                .map_or_else(|| "none".to_owned(), |id| format!("id {id}")),
+            dict_size / 1024.0,
+            group(dict_rows as u64),
+            group(rows as u64),
+            dict_bytes / dict_rows.max(1) as f64,
+            (claims_bytes - dict_bytes) / (rows - dict_rows).max(1) as f64,
         );
         if answered != t.identified || answered == 0 {
             invalid.push(format!(
@@ -1175,7 +1211,7 @@ mod tests {
     #[test]
     fn the_terms_record_lets_answers_be_served() {
         assert!(lodestar_store::identify_sweep::record_redistributes(
-            &TERMS_REDISTRIBUTE
+            &terms_redistribute()
         ));
     }
 

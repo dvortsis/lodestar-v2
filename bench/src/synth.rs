@@ -1264,7 +1264,9 @@ pub fn work_title(name: &str) -> String {
 /// releases of one work share their answer, as they do in a real
 /// catalogue. Always in stored form (`claims::encode` accepts it).
 pub fn answer(seed: u64, id: u64, work: Work, title: &str) -> lodestar_store::claims::Claims {
-    use lodestar_store::claims::{AltTitle, Claims, Details, ExternalId};
+    use lodestar_sources::ExternalId;
+    use lodestar_sources::claims::AltTitle;
+    use lodestar_sources::identify::Identification;
 
     let key = title
         .bytes()
@@ -1395,17 +1397,29 @@ pub fn answer(seed: u64, id: u64, work: Work, title: &str) -> lodestar_store::cl
         .collect();
     let year = rng.random_range(1950..=2025);
     let confidence = 60 + (unit(seed, id, ANSWER_STREAM) * 41.0) as u8;
-    Claims {
+    // Through the plugin API's own conversion, clamps included, then to
+    // the store's model as `store_claims` maps a details-only find.
+    let c = Identification {
         ids,
-        details: Some(Box::new(Details {
-            canonical_title: Some(canonical),
-            alt_titles,
-            genres,
-            year: Some(year),
-            match_confidence: Some(confidence.min(100)),
-            ..Details::default()
-        })),
-        ..Claims::default()
+        canonical_title: Some(canonical),
+        alt_titles,
+        genres,
+        year: Some(year),
+        confidence,
+        adult: Some(false),
+    }
+    .into_claims();
+    lodestar_store::claims::Claims {
+        ids: c
+            .ids
+            .into_iter()
+            .map(|i| lodestar_store::claims::ExternalId {
+                scheme: i.scheme,
+                value: i.value,
+            })
+            .collect(),
+        details: c.details,
+        ..lodestar_store::claims::Claims::default()
     }
 }
 

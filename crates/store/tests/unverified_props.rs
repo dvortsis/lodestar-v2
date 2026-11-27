@@ -70,8 +70,63 @@ fn claims() -> impl Strategy<Value = Claims> {
         )
 }
 
+/// A raw-content dictionary: zstd takes any bytes as one.
+const DICT: &[u8] = b"wikidata imdb tmdb Q tt0 en de fr ja drama comedy The Night River";
+
+fn dict_compressor() -> zstd::bulk::Compressor<'static> {
+    lodestar_store::claims_dict::compressor(DICT, 3).unwrap()
+}
+
+fn fixed() -> claims::Dictionary<'static> {
+    claims::Dictionary { id: 5, bytes: DICT }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Codec 2 (X-claims-size): what's encoded with a dictionary decodes
+    /// to the same claims through it, and fails closed without it.
+    #[test]
+    fn dictionary_blobs_round_trip(c in claims()) {
+        let blob = claims::encode_dict(&c, 5, &mut dict_compressor()).unwrap();
+        prop_assert!(blob.len() <= claims::MAX_STORED);
+        prop_assert!(blob.len() >= claims::MIN_STORED);
+        prop_assert_eq!(&claims::decode_with(&blob, &mut fixed()).unwrap(), &c);
+        if blob[1] == claims::ZSTD_DICT {
+            prop_assert_eq!(claims::decode(&blob), Err(claims::ClaimsError::Dictionary(5)));
+        }
+    }
+
+    /// Any bytes after a codec 2 prefix, and a valid codec 2 blob with a
+    /// byte changed or cut short: an error or claims within the limits,
+    /// never a panic.
+    #[test]
+    fn dictionary_bodies_decode_safely(
+        c in claims(),
+        tail in proptest::collection::vec(any::<u8>(), 0..256),
+        at in any::<prop::sample::Index>(),
+        byte in any::<u8>(),
+        cut in any::<prop::sample::Index>(),
+    ) {
+        for version in [1u8, 2, 3] {
+            let mut b = vec![version, claims::ZSTD_DICT];
+            b.extend_from_slice(&tail);
+            if let Ok(d) = claims::decode_with(&b, &mut fixed()) {
+                prop_assert!(d.check().is_ok());
+            }
+        }
+        let blob = claims::encode_dict(&c, 5, &mut dict_compressor()).unwrap();
+        let mut m = blob.clone();
+        let i = at.index(m.len());
+        m[i] = byte;
+        if let Ok(d) = claims::decode_with(&m, &mut fixed()) {
+            prop_assert!(d.check().is_ok());
+        }
+        let cut = &blob[..cut.index(blob.len())];
+        if let Ok(d) = claims::decode_with(cut, &mut fixed()) {
+            prop_assert!(d.check().is_ok());
+        }
+    }
 
     /// What's encoded decodes to the same claims, at any level.
     #[test]

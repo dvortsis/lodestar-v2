@@ -773,6 +773,7 @@ placement:
   - X-purge-rederive
   - X-purge-index-shapes
   - X-claims-refile-rearm
+  - X-claims-size
   - X-restart-fuzz-v2
 - ws: ws-m7-w5
   match:

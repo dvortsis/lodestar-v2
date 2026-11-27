@@ -551,6 +551,8 @@
 	"settings_logging_ev_pipeline_source_state_changed_h": "A source started, stopped or changed state. A start says why it turned one off.",
 	"settings_logging_ev_pipeline_dht_started_n": "DHT started",
 	"settings_logging_ev_pipeline_dht_started_h": "The DHT crawler began running.",
+	"settings_logging_ev_pipeline_claims_dict_trained_n": "Answers dictionary trained",
+	"settings_logging_ev_pipeline_claims_dict_trained_h": "New identification answers now take less space. This happens once.",
 	"settings_logging_ev_pipeline_cs_origin_unknown_n": "Unknown crowd-sourced origin",
 	"settings_logging_ev_pipeline_cs_origin_unknown_h": "A crowd-sourced rule came from an origin Lodestar doesn't know.",
 	"settings_logging_ev_pipeline_starting_n": "Pipeline starting",

@@ -102,6 +102,16 @@ lodestar_log::catalogue! {
         message: "Source state changed",
         fields: { plugin: Label, state: Label, reason: Label },
     }
+    /// The store trained its dictionary for identification answers
+    /// (X-claims-size), once: how many answers it learned from and its
+    /// size in bytes. Answers stored from now on are smaller.
+    CLAIMS_DICT_TRAINED {
+        id: "pipeline.claims_dict_trained",
+        component: Pipeline,
+        level: Info,
+        message: "Trained the identification answers' dictionary",
+        fields: { samples: Size, bytes: Size },
+    }
     /// The DHT node bound its sockets.
     DHT_STARTED {
         id: "pipeline.dht_started",

@@ -143,7 +143,7 @@ impl Store {
                 continue;
             }
             // A row that doesn't decode is dropped, as everywhere else.
-            let Ok(c) = claims::decode(&data) else {
+            let Ok(c) = self.decode_claims(&data) else {
                 continue;
             };
             // The claims-shape rule's own test (`Claims::identification`):
