@@ -373,7 +373,8 @@ class Compose(unittest.TestCase):
         env = self.svc["lodestar"]["environment"]
         bare = [e for e in env if "=" not in e]
         self.assertEqual(len(bare), len(set(bare)))
-        self.assertEqual(sorted(bare), switch_env())
+        # Round 1's preset passes through too, unset by default (runner's grant, X-cr-round1-collect).
+        self.assertEqual(sorted(bare), sorted(switch_env() + ["LODESTAR_INTENSITY"]))
         self.assertFalse([e for e in env if e.startswith("LODESTAR_DHT_") and "=" in e])  # none pinned here
         # Every LODESTAR_DHT_* variable Lodestar reads is a switch the collector knows,
         # or one of the settings it knows aren't switches: a new switch can't be missed.
@@ -456,7 +457,10 @@ class Compose(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(shown.stdout).hexdigest(), digest, f"{doc}: {pin}")
 
     def test_only_the_ui_on_the_hosts_loopback(self):
-        ports = [p for s in self.svc.values() for p in s.get("ports", [])]
+        # Round 1 (X-cr-round1-collect) gives each arm its own port; with no arm set,
+        # Compose's default is the single stack's (runner's grant, 2026-11-27).
+        ports = [re.sub(r"\$\{LODESTAR_UI_PORT:-([0-9]+)\}", r"\1", p)
+                 for s in self.svc.values() for p in s.get("ports", [])]
         self.assertEqual(ports, ["127.0.0.1:8090:8090"])
         self.assertNotIn("network_mode", self.svc["gluetun"])
 
@@ -481,7 +485,7 @@ class Compose(unittest.TestCase):
         self.assertEqual(lod["depends_on"], {"gluetun": {"condition": "service_started", "restart": True}})
         self.assertEqual(lod["environment"][:2], ["TZ=Etc/UTC", "LODESTAR_EXIT_ON_NETWORK_LOSS=true"])
         # Then every crawler switch, by bare name (test_every_crawler_switch_passes_through_by_bare_name).
-        self.assertEqual(sorted(lod["environment"][2:]), switch_env())
+        self.assertEqual(sorted(lod["environment"][2:]), sorted(switch_env() + ["LODESTAR_INTENSITY"]))
         self.assertIn("no-new-privileges:true", lod["security_opt"])
         self.assertEqual(set(self.svc), {"gluetun", "lodestar", "docker-proxy"})
 

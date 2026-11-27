@@ -18,6 +18,7 @@ import argparse
 import ctypes
 import ctypes.util
 import hashlib
+import hmac
 import http.client
 import ipaddress
 import json
@@ -228,6 +229,16 @@ SOFT = {
     "late": "dht_soft_timeout_late_replies_total",      # of those, the ones answered late
 }
 PLAIN = PLAIN | frozenset(SOFT.values())
+# X-cr-round1-collect: §6.1's bundle evidence (analyze_cr.py BUNDLE_COUNTERS) and the §5.1
+# switch gauge, one series per switch with safe_restart (13, always rendered; names as in
+# docs/metrics.md). Absent from older binaries; the analyzer judges an absent row.
+SWITCH_GAUGE = "dht_switch"
+LABELLED.update({
+    "dht_target_prefix_queries_total": (("kind", frozenset(("sample", "explore"))),),
+    "dht_sample_cooling_reason": (("reason", frozenset((
+        "interval", "unsupported", "timeout", "error", "first_failure", "restored", "sealed"))),),
+})
+PLAIN = PLAIN | frozenset(("dht_hints_captured_total", "fetch_stream_batches_total"))
 MAX_SERIES = 512  # a snapshot holding more is cut off and flagged; the allowlist renders about 300
 KEEP = frozenset(REQUIRED) | frozenset(COUNTERS) | frozenset(STORAGE) | frozenset(LABELLED) | PLAIN
 NUMBER = r"[0-9]+(?:\.[0-9]+)?"
@@ -1183,6 +1194,8 @@ SWITCH_ENV = {
 # value), so a switch this list doesn't know isn't silently read as off.
 DHT_SETTING_ENV = frozenset(("LODESTAR_DHT_PORT", "LODESTAR_DHT_ENABLED", "LODESTAR_DHT_WITNESS_DIR"))
 PRESETS = ("low", "balanced", "aggressive")
+LABELLED[SWITCH_GAUGE] = (("switch", frozenset(SWITCH_ENV)),)
+KEEP = KEEP | {SWITCH_GAUGE}
 CHECKLIST_ITEMS = ("auto_update", "backup")
 CHECKLIST_STATES = ("excluded", "not_applicable")
 # Rule 6.11's fixed host-activity categories.
@@ -1197,13 +1210,21 @@ BOUNDARY_SECONDS = 90  # rule 1.4
 FIRST_START_SECONDS = 6 * 3600
 
 
-def open_eligible(values, process_age):
+def open_eligible(values, process_age, safe_restart=None):
     """D6: the scrape that can be T_open. The DHT reads suppression 0 with reason
     `off` for about a second after start, before its restart check reports, so a
-    zero beside `off` counts only once the full 6 h suppression could have run."""
+    zero beside `off` counts only once the full 6 h suppression could have run.
+
+    Round 1 (CR-0w builds) passes `safe_restart` from the §5.1 gauge. Off, no restart
+    check runs and sampling starts at once, so `off` is the steady state and the zero
+    counts after OFF_SETTLE_SECONDS. On, `off` is still only the pre-check moment."""
     if values.get("dht_sample_suppression_seconds") != 0:
         return False
-    return values.get("suppression_reason") != "off" or process_age >= FIRST_START_SECONDS
+    if values.get("suppression_reason") != "off":
+        return True
+    if safe_restart is False:
+        return process_age >= OFF_SETTLE_SECONDS
+    return process_age >= FIRST_START_SECONDS
 
 
 def suppression_reason(text):
@@ -1402,6 +1423,204 @@ class PublicIP:
         return "unchanged" if address == self.reference else "changed"
 
 
+# ------------------------------------------------- X-cr-round1-collect: round 1
+# docs/plan/2026-11-27-revised-path-to-100.md §5.2 items 1, 3, 4, 11; the schema the
+# collector writes is the one analyze_cr.py gate-round reads (docs/decisions/
+# 2026-11-27-X-cr-round1-gate.md, recorded as the agreed interface in
+# docs/decisions/2026-11-27-X-cr-round1-collect.md).
+ROUND1_ARM = re.compile(r"^[A-Z]$")
+RUN_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")  # analyze_cr.py's RUN_ID
+# The declared preset's caps (analyze_cr.py's preset_caps and PRESET_SLOTS): round 1 takes
+# its bad bounds from them, so an Aggressive arm isn't stopped at Balanced's 1,024.
+PRESET_OUTSTANDING = {"low": 256, "balanced": 1024, "aggressive": 4096}
+PRESET_SLOTS = {"low": 32, "balanced": 80, "aggressive": 256}
+BASE_SLOTS = 32  # dht_lookup_slots_capacity with dht.preset_slots off
+SALT_MIN_BYTES = 16
+# CR-0w (2512c5dc): with dht.safe_restart off no restart check runs and sampling starts at
+# once, so a zero beside `off` is the steady state; this long settles the DHT's start.
+OFF_SETTLE_SECONDS = 60
+FINAL_EGRESS_TRIES, FINAL_EGRESS_GAP = 3, 20  # the final boundary's own retries (seconds apart)
+CLONE_NEWNET = 0x40000000
+MACHINE_ID_PATHS = ("/etc/machine-id", "/var/lib/dbus/machine-id")
+SWITCH_LINE = re.compile(r'(?m)^lodestar_dht_switch\{switch="([a-z_]{1,32})"\} ([0-9]+(?:\.[0-9]+)?)\r?$')
+
+
+def read_salt(path):
+    """The round's salt (§5.2 item 4): kept outside the archive, owner-only, never written."""
+    path = Path(path)
+    if not path.is_file() or os.stat(path).st_mode & 0o077:
+        raise SystemExit("--identity-salt-file must name a file readable by its owner only (chmod 600).")
+    salt = path.read_bytes().strip()
+    if len(salt) < SALT_MIN_BYTES:
+        raise SystemExit(f"--identity-salt-file must hold at least {SALT_MIN_BYTES} bytes.")
+    return salt
+
+
+def salted_hash(salt, kind, value):
+    """HMAC-SHA256 of `kind:value` under the round's salt, as hex. Egress and the uplink are
+    both kind `ip`, so a crawler whose egress is the uplink's own address shows the same hash."""
+    return hmac.new(salt, f"{kind}:{value}".encode(), hashlib.sha256).hexdigest()
+
+
+def host_key(paths=MACHINE_ID_PATHS):
+    """The machine ID that host_identity hashes; None if unreadable. Never recorded itself."""
+    for path in paths:
+        text = (read_text(path) or "").strip()
+        if re.fullmatch(r"[0-9a-f]{32}", text):
+            return text
+    return None
+
+
+def switch_gauge(text):
+    """§5.1's gauge as {switch: bool}: all 13 series, each exactly once, each 0 or 1. Anything
+    else is None (unknown), never a guess."""
+    found = {}
+    for name, value in SWITCH_LINE.findall(text):
+        if name not in SWITCH_ENV or name in found or float(value) not in (0.0, 1.0):
+            return None
+        found[name] = float(value) == 1.0
+    return found if set(found) == set(SWITCH_ENV) else None
+
+
+def env_switch_state(env):
+    """Each switch's environment value as the collector found it: true, false, unset or
+    invalid (an unparsable value; never the text itself)."""
+    out = {}
+    for name, var in SWITCH_ENV.items():
+        if var not in env:
+            out[name] = "unset"
+        else:
+            value = parse_bool(env[var])
+            out[name] = "invalid" if value is None else ("true" if value else "false")
+    return out
+
+
+def round1_switches(env_state, gauge):
+    """Round 1's switch identity (§5.2 item 1). The gauge is the effective value whatever set
+    it (compiled default, file or environment); the environment's value and the source sit
+    beside it. Without the gauge an unset switch is unknown (None), not "off": a build whose
+    switches default on would otherwise be recorded as all off (§5, `config_identity`)."""
+    switches, sources = {}, {}
+    for name in SWITCH_ENV:
+        set_by_env = env_state.get(name) in ("true", "false")
+        if gauge is not None:
+            switches[name] = gauge[name]
+            sources[name] = "env" if set_by_env else "default"
+        else:
+            switches[name] = (env_state.get(name) == "true") if set_by_env else None
+            sources[name] = "env" if set_by_env else "unset"
+    return switches, sources
+
+
+def in_netns(ns_path, work, timeout=30):
+    """Run `work()` in a throwaway thread that has joined the network namespace at ns_path
+    (Linux setns; needs CAP_SYS_ADMIN, so root on the host). Sockets opened there stay in
+    that namespace, so a lookup leaves by the crawler's own route, through its tunnel. The
+    collector's other threads never change namespace."""
+    out = {}
+
+    def target():
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            fd = os.open(ns_path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+            try:
+                if libc.setns(fd, CLONE_NEWNET) != 0:
+                    raise OSError(ctypes.get_errno(), "setns")
+            finally:
+                os.close(fd)
+            out["value"] = work()
+        except BaseException as error:  # noqa: BLE001: handed back to the caller
+            out["error"] = error
+    thread = threading.Thread(target=target, name="netns-lookup", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise OSError("netns lookup timed out")
+    if "error" in out:
+        raise out["error"]
+    return out["value"]
+
+
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS to an address resolved beforehand, with SNI and certificate checks for the host.
+    The name is resolved outside the crawler's namespace (the host's resolver), so the lookup
+    inside it needs no DNS through the tunnel."""
+
+    def __init__(self, host, address, **kw):
+        super().__init__(host, **kw)
+        self.address = address
+
+    def connect(self):
+        sock = socket.create_connection((self.address, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+def netns_ip_echo(ns_path, url, timeout=10):
+    """The public IPv4 address as the crawler's own namespace reaches the IP-echo service."""
+    parts = urllib.parse.urlsplit(url)
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    address = socket.getaddrinfo(parts.hostname, port, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+
+    def work():
+        if parts.scheme == "https":
+            conn = PinnedHTTPSConnection(parts.hostname, address, port=port, timeout=timeout)
+        else:
+            conn = http.client.HTTPConnection(address, port, timeout=timeout)
+        try:
+            target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+            conn.request("GET", target, headers={"Host": parts.hostname})
+            response = conn.getresponse()
+            body = response.read(128)
+        finally:
+            conn.close()
+        if response.status != 200:
+            raise ValueError("ip echo status")
+        return str(ipaddress.ip_address(body.decode("ascii").strip()))
+    return in_netns(ns_path, work, timeout=timeout * 3)
+
+
+class Egress:
+    """§5.2 item 4: the crawler's public address, read inside its own namespace, kept only as
+    a salted hash. `lookup(pid)` returns the address; the address itself is never stored."""
+
+    def __init__(self, salt, lookup):
+        self.salt, self.lookup = salt, lookup
+
+    def check(self, pid):
+        try:
+            address = self.lookup(pid)
+        except (OSError, ValueError, UnicodeError, http.client.HTTPException, AttributeError):
+            return {"read": "failed"}
+        return {"read": "ok", "hash": salted_hash(self.salt, "ip", address)}
+
+
+def namespace_lookup(proc_root, url):
+    """The default egress lookup: the IP echo inside /proc/<pid>/ns/net."""
+    def lookup(pid):
+        if not pid:
+            raise OSError("no process id")
+        return netns_ip_echo(str(Path(proc_root) / str(pid) / "ns" / "net"), url)
+    return lookup
+
+
+def parse_round1(args):
+    """The arm's placement from --round, --attempt, --day, --arm and --repeat; None outside round 1."""
+    if getattr(args, "round", None) is None:
+        if any(getattr(args, k, None) is not None for k in ("attempt", "day", "arm", "repeat", "run_id")):
+            raise SystemExit("--attempt, --day, --arm, --repeat and --run-id are round-1 options: add --round.")
+        return None
+    if args.round < 1 or not args.attempt or not RUN_ID.fullmatch(args.attempt) or args.day not in (1, 2) \
+            or not args.arm or not ROUND1_ARM.fullmatch(args.arm) or (args.repeat or 0) < 0:
+        raise SystemExit("Round 1 needs --round N, --attempt ID, --day 1|2, --arm LETTER and --repeat K >= 0.")
+    place = {"round": args.round, "attempt": args.attempt, "day": args.day, "arm": args.arm,
+             "repeat": args.repeat or 0}
+    run_id = args.run_id or "r{round}-{attempt}-d{day}-{arm}".format(**place) + (
+        f"-rep{place['repeat']}" if place["repeat"] else "") + "-" + uuid.uuid4().hex[:8]
+    if not RUN_ID.fullmatch(run_id):
+        raise SystemExit("--run-id: 1 to 80 of A-Z a-z 0-9 _ . : -")
+    return place, run_id
+
+
 class NoticeRequired(Exception):
     """Lodestar answered `409 notice_required`: the Legal Notice isn't accepted.
 
@@ -1555,7 +1774,9 @@ def resolve_defaults(args):
                           ("sample_seconds", SAMPLE_SECONDS), ("ip_echo_url", DEFAULT_IP_ECHO),
                           ("password_file", None), ("checklist", []), ("next_run", []),
                           ("postgres_container", None), ("postgres_user", "postgres"),
-                          ("postgres_db", "bitmagnet"), ("spec_commit", None)):
+                          ("postgres_db", "bitmagnet"), ("spec_commit", None), ("round", None),
+                          ("attempt", None), ("day", None), ("arm", None), ("repeat", None), ("run_id", None),
+                          ("identity_salt_file", None), ("vpn_provider", "pia"), ("vpn_protocol", "wireguard")):
         if not hasattr(args, name):
             setattr(args, name, default)
     spec = args.run_kind in SPEC_KINDS
@@ -1644,7 +1865,7 @@ def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sy
 class Collector:
     def __init__(self, args, instance, *, clock=time.monotonic, sleep=time.sleep,
                  now=utc_now, fetch=http_get, volumes=statvfs_volumes, ip_lookup=ip_echo,
-                 api_call=None, run_command=subprocess_output):
+                 api_call=None, run_command=subprocess_output, egress_lookup=None, host_id=host_key):
         self.args, self.instance = args, instance
         self.clock, self.sleep, self.now, self.fetch, self.volume_reader = clock, sleep, now, fetch, volumes
         self.root = Path(args.root)
@@ -1656,6 +1877,8 @@ class Collector:
                     if getattr(args, "password_file", None) else None)
         self.target_pending = False  # run_json sets it when the first /system read fails
         self.run_command = run_command
+        self.egress_lookup, self.host_id = egress_lookup, host_id
+        self.round1 = self.egress = None  # prepare_spec sets them for a round-1 arm
         self.stop_flag = threading.Event()
         self.stop_signal = None
         self.reason = "collector_error"
@@ -1692,6 +1915,8 @@ class Collector:
 
     def prepare(self):
         a = self.args
+        if not self.spec and parse_round1(a) is not None:
+            raise SystemExit("--round is for --run-kind comb.")
         if a.leg == "gluetun" and not a.require_gluetun:
             raise SystemExit("--leg gluetun requires --require-gluetun.")
         hours = 2 if a.leg == "gluetun" else 24
@@ -1779,6 +2004,42 @@ class Collector:
         check_checklist_complete(self.instance.kind, self.checklist)
         if not (read_text("/proc/sys/kernel/random/boot_id") or "").strip():
             raise SystemExit("Cannot read the boot ID; host-activity notes couldn't be placed (rule 6.11).")
+        self.prepare_round1()
+
+    def prepare_round1(self):
+        """Round 1 (plan §5.2): the placement, the salted identities, and the rules that differ."""
+        a = self.args
+        parsed = parse_round1(a)
+        if parsed is None:
+            if a.identity_salt_file:
+                raise SystemExit("--identity-salt-file is a round-1 option: add --round.")
+            return
+        if a.run_kind != "comb":
+            raise SystemExit("Round 1 arms are --run-kind comb.")
+        if a.intensity is None:
+            raise SystemExit("Round 1 needs --intensity: the declared preset sets the arm's bounds.")
+        if a.stop:
+            raise SystemExit("Round 1 collectors run without --stop: the coordinator stops every stack (§5.2 item 11).")
+        if not a.identity_salt_file:
+            raise SystemExit("Round 1 needs --identity-salt-file: egress, host and uplink are recorded as salted hashes.")
+        if not re.fullmatch(r"[a-z0-9_-]{1,32}", a.vpn_provider or "") or \
+                not re.fullmatch(r"[a-z0-9_-]{1,32}", a.vpn_protocol or ""):
+            raise SystemExit("--vpn-provider and --vpn-protocol are short lowercase names (pia, wireguard).")
+        salt = read_salt(a.identity_salt_file)
+        key = self.host_id()
+        if key is None:
+            raise SystemExit("Cannot read the machine ID that host_identity hashes (/etc/machine-id).")
+        try:  # §8 item 10: the uplink, read outside any tunnel (the collector's own network)
+            uplink = self.ip.lookup(self.ip.url)
+        except (OSError, ValueError, UnicodeError, http.client.HTTPException):
+            raise SystemExit("Cannot read the uplink's public address outside the tunnel (--ip-echo-url).") from None
+        self.round1, self.run_id = parsed
+        self.host_identity = salted_hash(salt, "host", key)
+        self.network_identity = {"uplink_hash": salted_hash(salt, "ip", uplink),
+                                 "provider": a.vpn_provider, "protocol": a.vpn_protocol}
+        lookup = self.egress_lookup or namespace_lookup(getattr(self.instance, "proc", None) or a.proc_root,
+                                                        a.ip_echo_url)
+        self.egress = Egress(salt, lookup)
 
     def run_json(self):
         a, inst = self.args, self.instance
@@ -1847,7 +2108,14 @@ class Collector:
                         self.note("settings API unavailable at start")
                 if identity is not None:
                     identity["config_file"] = self.config_file
+                if identity is not None and self.round1 is not None:  # §5.2 item 1: the gauge decides
+                    identity["switch_env"] = env_switch_state(env)
+                    identity["switches"], identity["switch_sources"] = round1_switches(identity["switch_env"], None)
                 run["config"] = identity
+            if self.round1 is not None:
+                run.update(run_id=self.run_id, round1=dict(self.round1), host_identity=self.host_identity,
+                           network_identity=dict(self.network_identity))
+                settings["round1"] = {"bounds": self.round1_bounds(None), "coordinated_shutdown": True}
         if self.screen_bytes is not None:  # frozen with the run; the analyzer checks the hash
             self.write(self.root / "screen-thresholds.json", self.screen_bytes.decode("utf-8"))
             run["screen_thresholds_sha256"] = hashlib.sha256(self.screen_bytes).hexdigest()
@@ -1878,7 +2146,8 @@ class Collector:
         self.verdict = self.start_time = None
         history, volumes = {}, self.volumes_now
         next_sample, next_watch = 5.0, 0.0
-        hour_seconds, next_k, ip_retry = a.hour_seconds, 0, None
+        hour_seconds, next_k, ip_retry, egress_retry = a.hour_seconds, 0, None, None
+        self.gauge = None
         horizon = (8 + a.baseline_hours) * 3600 if not self.spec else (
             7 * 3600 + (a.warmup_minutes * 60 + a.baseline_hours * hour_seconds) + 600)
         self.shutdown = None
@@ -1994,10 +2263,13 @@ class Collector:
                     reason = suppression_reason(text)
                     if values["dht_sample_suppression_seconds"] > 0:
                         suppression_seen = True
+                    if self.round1 is not None and self.gauge is None:
+                        self.read_gauge(text, elapsed)
                     if self.spec:  # D6: the first eligible zero, however the run started
                         opened = open_eligible({"dht_sample_suppression_seconds": values["dht_sample_suppression_seconds"],
                                                 "suppression_reason": reason},
-                                               stamp.timestamp() - values["start_time_seconds"])
+                                               stamp.timestamp() - values["start_time_seconds"],
+                                               (self.gauge or {}).get("safe_restart"))
                     else:
                         opened = suppression_seen and values["dht_sample_suppression_seconds"] == 0
                     if opened and baseline_at is None:
@@ -2011,9 +2283,11 @@ class Collector:
                             end_at = elapsed + a.baseline_hours * 3600
                         self.write(self.root / "baseline-start.prom", snapshot)
                         self.note(f"baseline started; collecting {a.baseline_hours:g} hours")
-                    over = (values["dht_peer_active"] + values["dht_peer_queued"] > 32
+                    limit = self.round1_bounds(self.gauge) if self.round1 is not None else {
+                        "peer_requests": BASE_SLOTS, "outstanding": 1024}
+                    over = (values["dht_peer_active"] + values["dht_peer_queued"] > limit["peer_requests"]
                             or values["dht_sample_cooling"] + values["dht_sample_inflight"] > SAMPLER_TABLE
-                            or values["dht_sample_frontier"] > 20000 or values["dht_outstanding"] > 1024
+                            or values["dht_sample_frontier"] > 20000 or values["dht_outstanding"] > limit["outstanding"]
                             or values["fetch_lookups"] > 256)
                     bad_bounds = bad_bounds + 1 if over else 0
                     if values["dht_lookups_completed_total"] != last_completed or values["dht_peer_active"] == 0:
@@ -2080,6 +2354,10 @@ class Collector:
                         except (OSError, ValueError, KeyError, TypeError, AttributeError,
                                 http.client.HTTPException):
                             pass
+                    if self.egress is not None and (self.sample == 0 or egress_retry is not None):
+                        row["egress"] = self.egress.check(self.instance.process_id)  # bring-up, or a retry
+                        if row["egress"]["read"] == "ok" or (egress_retry is not None and elapsed > egress_retry):
+                            egress_retry = None
                     if passed:  # rule 1.4's boundary scrape: public IP, imports, settings
                         row["boundary"] = passed
                         if "public_ip" not in row:
@@ -2088,6 +2366,19 @@ class Collector:
                                     if row["public_ip"] == "failed" else None)
                         if self.kind != "comparator":
                             row["api"] = self.api_checks(values["start_time_seconds"], stamp)
+                        if self.egress is not None:  # §5.2 item 4: every boundary, inside the namespace
+                            if "egress" not in row:
+                                row["egress"] = self.egress.check(self.instance.process_id)
+                            egress_retry = (baseline_at + passed[-1] * hour_seconds + BOUNDARY_SECONDS
+                                            if row["egress"]["read"] == "failed" else None)
+                            if egress_retry is not None and a.baseline_hours in passed:
+                                # The final boundary: no later scrape will retry, so retry here,
+                                # each reading stamped with its own time, inside rule 1.4's 90 s.
+                                row["egress_retries"] = self.final_egress_retries(baseline_at + passed[-1] * hour_seconds,
+                                                                                  started)
+                                egress_retry = None
+                        if self.round1 is not None and isinstance(row.get("api"), dict):
+                            row["api"]["switches"] = switch_gauge(text)  # None if this scrape lacks it
                 self.write(self.root / "samples.jsonl", dumps(row), append=True)
                 if phase == "baseline" and getattr(self, "screen_run", None) is not None:
                     try:  # the screen never ends or changes a run
@@ -2171,6 +2462,45 @@ class Collector:
             self.note(f"screen baseline hour {h}: {result['line']}"
                       + ("; thresholds file changed since start" if result["thresholds_changed"] else "")
                       + ("; stop and investigate" if result["status"] == "trip" else ""))
+
+    def final_egress_retries(self, boundary_elapsed, started):
+        """Up to FINAL_EGRESS_TRIES more egress reads, FINAL_EGRESS_GAP s apart, while still
+        within BOUNDARY_SECONDS of the final boundary; stops at the first that reads."""
+        out = []
+        for _ in range(FINAL_EGRESS_TRIES):
+            if self.clock() - started + FINAL_EGRESS_GAP > boundary_elapsed + BOUNDARY_SECONDS:
+                break
+            self.sleep(FINAL_EGRESS_GAP)
+            reading = dict(self.egress.check(self.instance.process_id), utc=iso(self.now()))
+            out.append(reading)
+            if reading["read"] == "ok":
+                break
+        return out
+
+    def round1_bounds(self, gauge):
+        """The bad bounds a round-1 arm is held to: its declared preset's outstanding cap, and
+        its lookup slots (the preset's with dht.preset_slots on, else 32). Without the gauge,
+        the preset's slots, so an unknown switch never stops a run on a bound it may not have."""
+        preset = self.args.intensity
+        slots = BASE_SLOTS if gauge is not None and gauge.get("preset_slots") is False else PRESET_SLOTS[preset]
+        return {"peer_requests": max(BASE_SLOTS, slots), "outstanding": PRESET_OUTSTANDING[preset]}
+
+    def read_gauge(self, text, elapsed):
+        """§5.1's gauge, once: the effective switches, beside the environment's values."""
+        gauge = switch_gauge(text)
+        config = self.run.get("config")
+        if gauge is None or not isinstance(config, dict):
+            if not getattr(self, "gauge_missing_noted", False):
+                self.gauge_missing_noted = True
+                self.note("switch gauge (lodestar_dht_switch) absent or incomplete; switches unknown")
+            return
+        self.gauge = gauge
+        config["effective_switches"] = dict(gauge)
+        config["effective_switches_read_at_elapsed"] = round(elapsed, 1)
+        config["switches"], config["switch_sources"] = round1_switches(config.get("switch_env") or {}, gauge)
+        self.run["settings"]["round1"]["bounds"] = self.round1_bounds(gauge)
+        self.save(self.run, self.root / "run.json")
+        self.note(f"effective switches read from the gauge at elapsed {round(elapsed, 1)} s")
 
     def api_checks(self, start_time, stamp):
         """Rule 5.5: imports and preset changes since the process started, and the
@@ -2318,6 +2648,16 @@ def build_parser():
     p.add_argument("--screen-thresholds", default=default_screen_thresholds(),
                    help="X-soak-screen thresholds, frozen into the run (default: docs/soak/screen-thresholds.json "
                         "beside this checkout, if present)")
+    r = p.add_argument_group("round 1 (docs/plan/2026-11-27-revised-path-to-100.md §5.2; comb only)")
+    r.add_argument("--round", type=int, help="Round number; makes this a round-1 arm")
+    r.add_argument("--attempt", help="The attempt's ID, as the declaration names it")
+    r.add_argument("--day", type=int, choices=(1, 2))
+    r.add_argument("--arm", help="The arm's letter (B, A or C)")
+    r.add_argument("--repeat", type=int, help="0, or the repeat number of a repeated day")
+    r.add_argument("--run-id", help="Default: derived from the placement, with a random suffix")
+    r.add_argument("--identity-salt-file", help="The round's salt (chmod 600, kept outside the archive)")
+    r.add_argument("--vpn-provider", default="pia")
+    r.add_argument("--vpn-protocol", default="wireguard")
     p.add_argument("--user-timezone", default="UTC")
     p.add_argument("--tick-seconds", type=float, default=1.0, help=argparse.SUPPRESS)
     return p

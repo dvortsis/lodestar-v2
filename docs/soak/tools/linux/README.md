@@ -400,6 +400,29 @@ Each treatment's series are required in both arms of its own segments. Every oth
 segment reports them under `hint_first` and `sampler_split` and lists the missing
 ones as `absent`. See `docs/decisions/2026-11-21-CR-COL-6.md`.
 
+## Round 1: three VPN-isolated arms (X-cr-round1-collect)
+
+Round 1 (`docs/plan/2026-11-27-revised-path-to-100.md` §5.2, §6.3) runs B, A and C at
+once, each behind its own gluetun on its own PIA exit. The operator's steps are
+`docs/soak/runsheets/host-round1-runsheet.md`; the formats are
+`docs/decisions/2026-11-27-X-cr-round1-collect.md`. Three tools:
+
+- **`collect.py --round N --attempt ID --day D --arm X --identity-salt-file F`** (comb
+  only, with `--intensity`, never `--stop`): records `run_id`, the placement, the salted
+  host and network identities, the effective switches from the `lodestar_dht_switch`
+  gauge with each one's environment value beside it, and a salted egress hash read
+  inside the crawler's own network namespace at every boundary. Its bad bounds follow
+  the declared preset. Without `--round`, nothing changes.
+- **`host_samples.py`**: the 10 s host series gate-round's contention rule reads (CPU,
+  steal, `/data` write latency, uplink drops, each arm's tunnel probe), one line per
+  slot, a gap left as a gap; `assemble` makes the day's JSON with each hour's coverage.
+- **`infra/fleet/steps/vm/round1-coordinator.py`**: the start gates, the exit
+  assignment, leak-test results (a failure stops that arm), the collectors and sampler,
+  one coordinated shutdown at the latest final boundary + 2 min, the day archive and
+  the round's manifest.
+
+The namespace reads and Docker need root on the box; the tests replace them with fakes.
+
 ## Tests
 
 ```sh
@@ -412,6 +435,9 @@ python3 -I -m unittest discover -s docs/soak/tools -p 'test_*.py'
 fixture for each rule the analyzer judges, `../test_analyze_cr_col5.py` for
 r5.1's checks, with stage 1's verdicts pinned in `../fixtures/`, and
 `../test_analyze_cr_col6.py` for stage 3's treatments and their rehearsal.
+`test_collect_round1.py` covers the round-1 collector, `test_collect_round1_coordinator.py`
+the coordinator and the host sampler, and `test_collect_round1_e2e.py` runs three arms'
+real 24 h windows on two days through `segment --declaration` and `gate-round` (about 90 s).
 
 The Linux tests use a fake HTTP server on 127.0.0.1, fake cgroup and `/proc`
 trees, a fake Docker API and a virtual clock. They need no network and no
