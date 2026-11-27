@@ -32,7 +32,7 @@ SALT = b"coordinator test salt, never real"
 UPLINK = "198.51.100.7"
 EXIT_IP = {"X": "203.0.113.21", "Y": "203.0.113.22", "Z": "203.0.113.23"}
 T0 = datetime(2026, 11, 29, 8, 0, tzinfo=timezone.utc)
-IMAGE = "lodestar@" + mk.DIGEST
+IMAGE = mk.DIGEST  # name@sha256:<hex>, as the declaration names it
 
 
 def iso(t):
@@ -383,6 +383,73 @@ class ReviewFixTests(CoordinatorBase):
         self.assertNotIn("LODESTAR_DHT_UTP", env)
         self.assertNotIn("HTTPS_PROXY", env)
         self.assertEqual(env["LODESTAR_ARM"], "b")
+
+
+class BindComparatorTests(CoordinatorBase):
+    def comparator_run(self, ended=True, kind="comparator"):
+        run = self.tmp / "cr-ab-comp-2"
+        run.mkdir(exist_ok=True)
+        (run / "run.json").write_text(json.dumps({"settings": {"run_kind": kind}}))
+        if ended:
+            (run / "result.json").write_text(json.dumps({"ended": iso(T0 - timedelta(hours=12, minutes=59))}))
+        return run
+
+    def bind(self, run):
+        argv = ["bind-comparator", str(self.cfg_path), "--comparator-run", str(run)]
+        with mock.patch.object(co.collect, "host_key", lambda: "0" * 32):
+            import io
+            from contextlib import redirect_stdout
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = co.main(argv, host=self.host)
+        return rc, out.getvalue().splitlines()
+
+    def test_binds_once_from_the_finished_run_with_identities_computed_now(self):
+        rc, out = self.bind(self.comparator_run())
+        self.assertEqual(rc, 0, out)
+        b = json.loads((self.round / "comparator-binding.json").read_text())
+        self.assertEqual(b["run_id"], "comparator-cr-ab-comp-2")
+        self.assertEqual(b["host_identity"], collect.salted_hash(SALT, "host", "0" * 32))
+        self.assertEqual(b["network_identity"], {"uplink_hash": collect.salted_hash(SALT, "ip", UPLINK),
+                                                 "provider": "pia", "protocol": "wireguard"})
+        self.assertEqual((b["ended_utc"], b["bound_after_window"]), (iso(T0 - timedelta(hours=12, minutes=59)), True))
+        self.assertNotIn(UPLINK, json.dumps(b))
+        rc, out = self.bind(self.comparator_run())
+        self.assertIn("never changed", out[-1])
+
+    def test_refuses_a_running_comparator_or_another_kind(self):
+        rc, out = self.bind(self.comparator_run(ended=False))
+        self.assertEqual(rc, 1)
+        (self.tmp / "cr-ab-comp-2" / "result.json").write_text(json.dumps({"ended": None}))
+        self.assertIn("hasn't finished", self.bind(self.tmp / "cr-ab-comp-2")[1][-1])
+        rc, out = self.bind(self.comparator_run(kind="comb"))
+        self.assertIn("isn't a comparator", out[-1])
+
+    def test_refuses_a_comparator_that_ended_before_its_window(self):
+        run = self.comparator_run()
+        (run / "result.json").write_text(json.dumps({"ended": iso(T0 - timedelta(hours=14))}))
+        rc, out = self.bind(run)
+        self.assertIn("interrupted", out[-1])
+        self.assertFalse((self.round / "comparator-binding.json").exists())
+
+    def test_the_manifest_carries_the_binding_and_the_rehearsal_gate_reads_it(self):
+        comp = json.loads((self.round / "comparator.json").read_text())
+        comp.pop("binding")  # as the old collector's report: no binding
+        (self.round / "comparator.json").write_text(json.dumps(comp))
+        self.bind(self.comparator_run())
+        self.host.t = T0 - timedelta(hours=5)
+        day = self.round / "rehearsal"
+        argv = ["--day-dir", str(day), "--attempt", "r1-a1", "--day", "1", "--rehearsal"]
+        for arm in mk.LAYOUTS["L3"][1]:
+            self.main(["leak", str(self.cfg_path), *argv, "--arm", arm, "--phase", "before", "--log", str(self.leak_log())])
+        self.main(["bring-up", str(self.cfg_path), *argv])
+        self.assertEqual(co.main(["check-start", str(self.cfg_path), "--day-dir", str(day)], host=self.host), 0)
+        ManifestTests.make_day(self, 1)
+        ManifestTests.make_day(self, 2)
+        rc, out = self.go("manifest")
+        self.assertEqual(rc, 0, out)
+        man = json.loads((self.round / "manifest.json").read_text())
+        self.assertEqual(man["comparator_binding"]["path"], "comparator-binding.json")
 
 
 class RehearsalAndIdentityTests(CoordinatorBase):

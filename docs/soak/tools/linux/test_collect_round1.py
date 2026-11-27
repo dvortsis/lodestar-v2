@@ -39,7 +39,7 @@ RELABEL = {"lodestar_fetch_admission_waits_total": '{kind="arrival"}',
 
 def declaration(layout="L3"):
     """test_gate_round's declaration, on the fake Docker image's digest."""
-    decl = json.loads(json.dumps(gr.mk.archive(layout)["declaration"]).replace(gr.mk.DIGEST, IMAGE))
+    decl = json.loads(json.dumps(gr.mk.archive(layout)["declaration"]).replace(gr.mk.DIGEST, "lodestar@" + IMAGE))
     return analyze_cr.check_declaration(decl)
 
 

@@ -24,7 +24,7 @@ SWITCHES = ("coordinated_admission", "responder_hints", "streaming_peers", "targ
             "sample_backoff_escalate", "soft_timeout")
 ALL_ON = {s: s != "route_backoff" for s in SWITCHES}  # O3: route_backoff declared off
 ALL_OFF = {s: False for s in SWITCHES}
-DIGEST = "sha256:" + "d" * 64
+DIGEST = "lodestar@sha256:" + "d" * 64  # name@sha256: the declaration's form (X-cr-round1-collect-fixes)
 SPEC_COMMIT = "c" * 40
 DEVICE = "nvme0n1"  # the /data device's kernel name, as a declaration names it (§6.3)
 COMMIT = "e" * 40
@@ -42,6 +42,7 @@ LAYOUTS = {
     "L3": {1: {"B": "X", "A": "Y", "C": "Z"}, 2: {"B": "Y", "A": "Z", "C": "X"}},
     "L2": {1: {"B": "X", "A": "Y"}, 2: {"B": "Y", "A": "X"}},
     "L2b": {1: {"B": "X", "C": "Y"}, 2: {"B": "Y", "C": "X"}},
+    "L2c": {1: {"A": "X", "C": "Y"}, 2: {"A": "Y", "C": "X"}},
     "S": {1: {"B": "X"}, 2: {"B": "Y"}},
 }
 ROLE = {"B": "candidate", "A": "candidate", "C": "diagnostic"}
@@ -138,6 +139,7 @@ def archive(layout="L3", attempt="r1-a1"):
                      "archive": day_archive(attempt, day, reports, placed), "contention": host_samples(reports)})
     decl = {"schema": 1, "kind": "cr_round1_declaration", "round": 1, "spec_commit": SPEC_COMMIT,
             "image_digest": DIGEST, "host_identity": HOST, "network_identity": dict(NETWORK), "backing_device": DEVICE,
+            "vcpus": 8,
             "comparator": {"run_id": "comp-1"}, "selection_order": ["B", "A"],
             "attempts": [{"id": attempt, "layout": layout,
                           "candidate_digests": {a: DIGEST for a in LAYOUTS[layout][1] if ROLE[a] == "candidate"}}],

@@ -132,7 +132,7 @@ class EndToEnd(unittest.TestCase):
         pw.write_text(PASSWORD + "\n")
         pw.chmod(0o600)
         # The declaration and booked comparator, on this host, network and image.
-        a = json.loads(json.dumps(mk.archive("L3")).replace(mk.DIGEST, r1.IMAGE))
+        a = json.loads(json.dumps(mk.archive("L3")).replace(mk.DIGEST, "lodestar@" + r1.IMAGE))
         decl = a["declaration"]
         decl.update(host_identity=HOST, network_identity=NETWORK)
         (cls.round / "declaration.json").write_text(json.dumps(decl))

@@ -27,7 +27,7 @@
       "verdict": "ok"
      },
      "day": 1,
-     "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+     "digest": "lodestar@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
      "layout": "L3",
      "memory": {
       "ci95_mib_per_hour": [
@@ -79,7 +79,7 @@
       "verdict": "ok"
      },
      "day": 2,
-     "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+     "digest": "lodestar@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
      "layout": "L3",
      "memory": {
       "ci95_mib_per_hour": [
@@ -153,7 +153,7 @@
       "verdict": "ok"
      },
      "day": 1,
-     "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+     "digest": "lodestar@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
      "layout": "L3",
      "memory": {
       "ci95_mib_per_hour": [
@@ -205,7 +205,7 @@
       "verdict": "ok"
      },
      "day": 2,
-     "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+     "digest": "lodestar@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
      "layout": "L3",
      "memory": {
       "ci95_mib_per_hour": [
@@ -254,6 +254,7 @@
    "valid_misses": []
   }
  },
+ "comparator_bound_after_window": false,
  "contention_thresholds": {
   "coverage_min": 0.98,
   "cpu_p95_max": 0.8,
@@ -396,21 +397,22 @@
  },
  "inputs": {
   "comparator.json": "f588338ab59146afc4b30afe0111e1e8ea07fd9a401dee2d7e0e6022517efadf",
-  "declaration.json": "8e59d318e3774cee4291ab7c47360ae2b35ac9f0c52fd8902be3301d3635dd41",
-  "r1-a1/day1/A.json": "657b7830339cab957bf5febe4f74cc84dfa56214053a6fd2d934adb6f807c32f",
-  "r1-a1/day1/B.json": "334d3253965fdc1f65ea2091a6d0386a15569b542cb94d5f4609ade09a5cf556",
-  "r1-a1/day1/C.json": "45224520b79595fa5fc7a5d0af3f2b8293eefd3aefbedb2678457db1ec500d76",
+  "declaration.json": "66ce305e59739f1836d8c9b91ee5ad5d7bb600c0372446c04c0b1570e1e625c6",
+  "r1-a1/day1/A.json": "5f6c610d5e1c874deba71d62563f5738c4322199e471afcf27fe52b69a2889cf",
+  "r1-a1/day1/B.json": "fdf6915e762d7025a050b8b5dc6180a3a6554ca47eb63ad2bf59719418cb7c0a",
+  "r1-a1/day1/C.json": "2d79bbdb2e6d7f5db669fa3e25979cec3997d715c0aac739b724a1a0e40b2718",
   "r1-a1/day1/archive.json": "f24f5e72406bc8538cd5a5dafcf7e27c467745a25c8522995957dac6df9459b2",
   "r1-a1/day1/host-samples.json": "2283c0db5925ca4d329739a0174cc1f81aa9ed1fd578daca8d2e9a51046e0d82",
-  "r1-a1/day2/A.json": "2bb8f482b9cee09212e53cf202dadc4e2d6f61ec10e5182650e2f3bad883e4c1",
-  "r1-a1/day2/B.json": "bf8d48f93347f0f8cff2f2d5756cd3ea634ef964a8cbcf88f1e5db392f5b2002",
-  "r1-a1/day2/C.json": "5e9814ed4dc0798b81c6b36ee048dacbae5b1936ab078cc9749924b0326c1188",
+  "r1-a1/day2/A.json": "295ad72c488ad388e7a3459e8e8c9a9bed4b29797d817a86acef20b87b55e687",
+  "r1-a1/day2/B.json": "2f4e44f31c1fb1da834a2c921e0a2936149aed1135cadcc935eec84f7c4de3bd",
+  "r1-a1/day2/C.json": "04989737354393f873c11dbea111507aa314137d8b90b734902581ea2bcf8d24",
   "r1-a1/day2/archive.json": "183931e0d429d476930af45922a3c2f8897db4e6d16072c34cae2a23db2de7eb",
   "r1-a1/day2/host-samples.json": "1d15a57467cc6b98feb1acbc4ab3ac231ff2d8cc61a075520e3929f09d023942"
  },
  "kind": "cr_round1_verdict",
  "plan": "docs/plan/2026-11-27-revised-path-to-100.md",
  "round": 1,
+ "round1_spec": "docs/decisions/2026-11-27-CR-SPEC-round1.md",
  "schema": 1,
  "selection": {
   "ships": "B",
