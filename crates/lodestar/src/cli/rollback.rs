@@ -399,8 +399,13 @@ pub fn restore(
 /// start rebuilds them (X-import-hot-stamp). Before the purge, which folds
 /// in and checks for any WAL this write leaves.
 fn mark_hot_stale(staged: &Path) -> Outcome {
-    let conn = lodestar_store::rusqlite::Connection::open(staged)
-        .map_err(failed(format!("opening {}", staged.display())))?;
+    use lodestar_store::rusqlite::{Connection, OpenFlags};
+    // Never creates: the copy was just made, and a missing one is an error.
+    let conn = Connection::open_with_flags(
+        staged,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(failed(format!("opening {}", staged.display())))?;
     lodestar_pipeline::invalidate_hot(&conn)
         .map_err(failed("marking the hot-column snapshot stale"))?;
     conn.close()

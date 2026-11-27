@@ -2,7 +2,7 @@
 
 - **Invariant: any writer but the running pipeline that changes a hot-column input marks the snapshot stale before its first such write.** The inputs are what `Store::load_hot` reads: `swarm` (seeders, leechers, trackers reporting, DHT seeds and peers, flags, whether it was ever answered) and `torrents` (id, `last_seen_at`). Marked first, so a crash part-way still forces the rebuild. Before this, an offline `lodestar import` left the stamp a clean shutdown recorded, and the next start loaded a snapshot missing every imported torrent (architecture §7: SQLite stays authoritative).
 - **One helper, `lodestar_pipeline::invalidate_hot(conn)`, beside `open_hot`/`save_hot`.** It deletes the `hot_stamp` row, which reads as 0 (stale) once absent. It takes a SQLite connection rather than a `Store`, so the rollback can clear its staged raw copy without opening it as a store (which could migrate it). The key stays private to that section.
-- **`lodestar import`:** `start`, `resume` and the legacy `import-bitmagnet` all run through `run_job`, which clears the stamp before its first write. `remove` clears it after the confirmation and before the first removal step, since removal deletes torrents and their swarm rows. A run refused before then (source missing or refused, no room, job conflict) has written nothing and keeps the stamp; that is tested. `pause`, `cancel`, `inspect` and `status` change only job rows, or nothing, and keep it.
+- **`lodestar import`:** `start`, `resume` and the legacy `import-bitmagnet` all run through `run_job`, which clears the stamp before its first write. `remove` clears it after the confirmation and before the first removal step, since removal deletes torrents and their swarm rows. A run refused before then (source missing or refused, no room, job conflict) has written no torrent and keeps the stamp; a missing source for `start` and `resume`, and a job conflict, are tested. `pause`, `cancel`, `inspect` and `status` change only job rows, or nothing, and keep it.
 - **The writer audit** (`crates/lodestar/src/cli/`, with the server stopped):
 
   | Writer | Changes a hot input? | Verdict |
@@ -11,7 +11,7 @@
   | `import remove` | Deletes torrents and swarm rows | Cleared before the first step |
   | `import pause` / `cancel` | Job rows only | Kept (tested for cancel) |
   | `rollback` | Restores a copy with its own stamp, then purges torrents deleted since | Cleared in the staged copy, before the purge and the rename (tested) |
-  | `settings set` / `reset` | `settings.*` rows only; `hot_stamp` isn't under that prefix | Kept |
+  | `settings set` / `reset` | `settings.*` rows and the `system.keep_or_revert.*` records only, never `hot_stamp` | Kept |
   | `rollup repair` | Rollup tables only | Kept |
   | `vacuum` | Same rows and ids (`VACUUM INTO`, then a rename) | Kept |
   | `reindex` | Moves the index folder only | Kept |

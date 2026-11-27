@@ -1142,15 +1142,27 @@ fn an_offline_import_makes_the_next_start_rebuild_the_hot_columns() {
 }
 
 /// The stamp is cleared at the start of the run, after the source and the
-/// store's room are checked: an import refused before then wrote nothing,
-/// and leaves the snapshot good.
+/// job are checked: a start or resume refused before then wrote no
+/// torrent, and leaves the snapshot good.
 #[test]
 fn an_import_refused_before_its_first_write_keeps_the_hot_snapshot() {
     let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 700);
     let config = data(&dir.path().join("data"));
-    snapshot_hot(&config);
     let missing = magnetico(&dir.path().join("nope.sqlite3"));
+    snapshot_hot(&config);
     assert!(block_on(start(&config, &missing, None, true, None)).is_err());
+    assert!(start_hot(&config).1, "a refused start keeps the snapshot");
+
+    // A real job: its pilot, then a resume whose source has gone, and a
+    // second start of the same source.
+    block_on(start(&config, &magnetico(&src), Some(1), true, None)).unwrap();
+    snapshot_hot(&config);
     assert!(block_on(resume(&config, 1, &missing, None, true)).is_err());
-    assert!(start_hot(&config).1);
+    assert!(matches!(
+        block_on(start(&config, &magnetico(&src), None, true, None)),
+        Err(Failure::Refused(m)) if m.contains("job 1")
+    ));
+    assert!(start_hot(&config).1, "a refused resume keeps the snapshot");
 }
