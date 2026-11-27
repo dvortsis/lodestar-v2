@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T09:39:17Z",
+  "updated_at": "2026-11-27T10:14:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11200,7 +11200,9 @@
         "booked_by": "runner 05:36Z on X-test-vm's request; owner words relayed by X-test-vm, unverified by the runner",
         "holds": "ext:import-host for the Magnetico ladder only; bitmagnet restore waits until after CR-AB-LC",
         "run_by": "a Remote Control session the owner starts on the VM, briefed by X-test-vm",
-        "instructions": "inbox/x-test-vm.md 2026-11-27T05:36Z"
+        "instructions": "inbox/x-test-vm.md 2026-11-27T05:36Z",
+        "status": "done 08:52Z; VM idle and cleaned, reported 10:14Z (provisional: VM, not the box)",
+        "result": "main 68799e1b6, 8 vCPU KVM. inspect 29.0M torrents. 200k 1,576/s; 1M 1,461/s (11-14: 990/s); 10M 1,324/s, 9,983,559 new, 0 dup, 14,288 quarantined, 0 invalid; pause/resume exact. Search 10M cold p50/p95 10.9/34.2 ms, warm 2.8/3.0. RSS 10M drain peak 4.45 GB (1M 1.005 GB), 920 MB searching. Bytes/torrent 10M: torrent index 722, file index 793, sqlite 798, 2,314 all in. SB-6 complete; no DHT sockets. Leads: F1 imports index verified:yes (doc.rs stored_torrent hard-codes Verified::Yes) -> X-import-verified-no; F2 drain memory 4.45 GB at 10M -> X-import-drain-memory; F3 WAL copy needs a writable folder (guide line); F4 network: is a syntax error though SB-6 lists it."
       }
     ],
     "run_sheet": "briefs/CR-AB-COMP-run-sheet.md",
