@@ -755,7 +755,7 @@ proptest! {
             }
             prop_assert!(s.known() <= cap, "the table holds at most its capacity");
             prop_assert_eq!(s.cooling_by_reason(), s.recount_cooling());
-            prop_assert!(s.spill_counts().1 <= spill::BYTES);
+            prop_assert!(s.spill_counts().1 <= spill::MAX_BYTES);
         }
     }
 }
@@ -859,4 +859,103 @@ async fn full_scale() {
     println!("off: sent {off_sent}, full {} s", off_full.as_secs());
     println!("on:  sent {on_sent}, full {} s", on_full.as_secs());
     assert!(on_sent > off_sent);
+}
+
+fn key_of(keys: [u64; 2]) -> [u8; 16] {
+    let mut out = [0; 16];
+    out[..8].copy_from_slice(&keys[0].to_le_bytes());
+    out[8..].copy_from_slice(&keys[1].to_le_bytes());
+    out
+}
+
+/// X-sec-S8-27: a rebuilt filter keeps what it restored read only, under
+/// the keys it was made with, and takes everything new under keys of its
+/// own. A snapshot taken meanwhile keeps each set with its keys, and the
+/// next rebuild draws fresh keys again.
+#[test]
+fn a_rebuilt_filter_takes_new_cooldowns_under_fresh_keys() {
+    let now = Instant::now();
+    let h = MAX_INTERVAL;
+    let mut f = Spill::new(now);
+    let mut ends = Vec::new();
+    for i in 0..20u32 {
+        let until = now + MINUTE * (10 + 15 * i);
+        assert!(f.insert(&wide(i), until, now));
+        ends.push((wide(i), until));
+    }
+    let (_, old) = f.generations();
+    let mut g = Spill::restore(&seeded(f.export(now, h).unwrap(), now, h), now).unwrap();
+    let (kept, fresh) = g.generations();
+    assert_eq!(kept, 1);
+    assert_ne!(fresh, old, "new inserts never use restored keys");
+    let later = now + MINUTE;
+    let mut new = Vec::new();
+    for i in 100..110u32 {
+        let until = later + MINUTE * 30;
+        assert!(g.insert(&wide(i), until, later));
+        new.push((wide(i), until));
+    }
+    let sp = g.export(later, h).unwrap();
+    assert_eq!(sp.older.len(), 1);
+    assert_eq!((sp.older[0].0, sp.key), (key_of(old), key_of(fresh)));
+    let words = |raw: &[u8]| crate::restart::Spilled::words(raw).count();
+    assert_eq!((words(&sp.older[0].1), words(&sp.raw)), (20, 10));
+    for (a, until) in ends.iter().chain(&new) {
+        assert!(g.contains(a, *until - NS), "{a} ended early");
+    }
+    let k = Spill::restore(&seeded(sp, later, h), later).unwrap();
+    let (kept, again) = k.generations();
+    assert_eq!(kept, 2);
+    assert!(again != fresh && again != old, "fresh keys at each rebuild");
+    for (a, until) in ends.iter().chain(&new) {
+        assert!(k.contains(a, *until - NS), "{a} ended early");
+        assert_eq!(k.shares(a, later), g.shares(a, later), "{a}");
+    }
+}
+
+/// A read-only section stays while any of its cooldowns is live and is
+/// dropped once the last ends, which is within the horizon of the rebuild.
+#[test]
+fn read_only_sections_are_dropped_by_the_horizon() {
+    let now = Instant::now();
+    let h = MAX_INTERVAL;
+    let mut f = Spill::new(now);
+    for (i, until) in [MINUTE * 5, h / 2, h * 3].into_iter().enumerate() {
+        assert!(f.insert(&wide(i as u32), now + until, now));
+    }
+    let mut g = Spill::restore(&seeded(f.export(now, h).unwrap(), now, h), now).unwrap();
+    g.sweep(now + h - MINUTE);
+    assert_eq!(g.generations().0, 1);
+    assert!(g.contains(&wide(2), now + h - MINUTE));
+    g.sweep(now + h);
+    assert_eq!(g.generations().0, 0, "dropped by the horizon");
+    assert_eq!((g.used(), g.live_count()), (0, 0));
+    assert!(g.export(now + h, h).is_none());
+}
+
+/// With every read-only section place taken, nothing new moves in until
+/// the oldest is dropped, and each snapshot still holds every section.
+#[test]
+fn with_every_section_place_taken_nothing_new_moves_in() {
+    let h = MAX_INTERVAL;
+    let start = Instant::now();
+    let mut f = Spill::new(start);
+    let mut t = start;
+    for r in 0..crate::restart::MAX_SPILL_GENS as u32 {
+        assert!(f.has_room());
+        assert!(f.insert(&wide(r), t + MINUTE * 60, t));
+        f = Spill::restore(&seeded(f.export(t, h).unwrap(), t, h), t).unwrap();
+        t += MINUTE;
+    }
+    assert_eq!(f.generations().0, crate::restart::MAX_SPILL_GENS);
+    assert!(!f.has_room());
+    assert!(!f.insert(&wide(999), t + MINUTE, t));
+    let sp = f.export(t, h).unwrap();
+    assert_eq!(sp.older.len() + 1, crate::restart::MAX_SPILL_GENS);
+    // The oldest ends an hour after the start; then there's room again.
+    let after = start + MINUTE * 60 + MINUTE / 2;
+    f.sweep(after);
+    assert_eq!(f.generations().0, crate::restart::MAX_SPILL_GENS - 1);
+    assert!(f.has_room());
+    assert!(f.insert(&wide(999), after + MINUTE, after));
 }

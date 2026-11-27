@@ -642,6 +642,7 @@ placement:
   - X-sampler-cooldown-split
   - X-split-spill-horizon
   - X-split-resume-gate
+  - X-sec-S8-27
   - X-crawler-sim-calibrate
   - CR-COL-5
   - CR-COL-6
