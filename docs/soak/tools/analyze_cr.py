@@ -1833,6 +1833,18 @@ def check_declaration(decl):
             att = next(a for a in attempts if a["id"] == e["attempt"])
             require(isinstance(att["candidate_digests"].get(e["arm"]), str),
                     f"declaration: attempt {att['id']} records candidate {e['arm']}'s digest")
+    # Runner, 2026-11-27: layouts only shrink (L3 → L2 or L2b → S), so each later attempt that
+    # isn't a solo confirmation drops an arm, and the round can't loop through fresh attempts.
+    # A solo confirmation (S) is one arm from the attempt before it, outside that chain.
+    arms_of = {a["id"]: {e["arm"] for e in arms if e["attempt"] == a["id"]} for a in attempts}
+    chain = None
+    for a in attempts:
+        own = arms_of[a["id"]]
+        if chain is not None and a["layout"] == "S" and len(own) == 1 and own <= chain:
+            continue
+        require(chain is None or own < chain,
+                f"declaration: attempt {a['id']} must drop an arm from the attempt before it (layouts only shrink)")
+        chain = own
     return decl
 
 

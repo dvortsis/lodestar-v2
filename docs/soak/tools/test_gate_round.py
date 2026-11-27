@@ -267,6 +267,30 @@ class DeclarationSchemaTests(unittest.TestCase):
         del d["attempts"][0]["candidate_digests"]["A"]
         self.refused(d)
 
+    def two_attempts(self, second):
+        d = self.decl()
+        later = mk.archive(second, attempt="r1-a2")["declaration"]
+        d["attempts"] += later["attempts"]
+        d["arms"] += later["arms"]
+        return d
+
+    def test_a_layout_change_must_drop_an_arm(self):
+        self.refused(self.two_attempts("L3"))  # L3 again: a loop
+        analyze_cr.check_declaration(self.two_attempts("L2"))
+        analyze_cr.check_declaration(self.two_attempts("L2b"))
+        analyze_cr.check_declaration(self.two_attempts("S"))  # a solo confirmation of B
+
+    def test_a_solo_confirmation_after_another_solo_is_allowed_but_not_growth(self):
+        d = self.two_attempts("S")
+        grow = mk.archive("L2", attempt="r1-a3")["declaration"]
+        d["attempts"] += grow["attempts"]
+        d["arms"] += grow["arms"]
+        analyze_cr.check_declaration(d)  # L3 → S(B) → L2 still shrinks the chain L3 → L2
+        again = mk.archive("L2", attempt="r1-a4")["declaration"]
+        d["attempts"] += again["attempts"]
+        d["arms"] += again["arms"]
+        self.refused(d)  # L2 → L2 doesn't drop an arm
+
     def test_other_contention_thresholds_are_refused(self):
         d = self.decl()
         d["contention"] = dict(analyze_cr.CONTENTION, cpu_p95_max=0.9)
@@ -744,7 +768,7 @@ class ValidityTests(RoundBase):
     def test_a_valid_miss_in_an_earlier_attempt_still_ends_the_claim(self):
         a = mk.archive("L3")
         self.day(a, 2)["reports"]["B"]["numerator"]["hourly"][3]["net_per_min"] = 60.0
-        later = mk.archive("L3", attempt="r1-a2")
+        later = mk.archive("L2", attempt="r1-a2")  # C dropped: a fresh attempt
         a["declaration"]["attempts"] += later["declaration"]["attempts"]
         a["declaration"]["arms"] += later["declaration"]["arms"]
         a["days"] += later["days"]
