@@ -210,6 +210,8 @@ struct Fixture {
     saved_search: i64,
     /// [`fixture_with`]'s imported torrent's hash.
     imported: Option<String>,
+    /// [`fixture_with`]'s remote worker's torrent's hash.
+    remote: Option<String>,
     _dir: tempfile::TempDir,
 }
 
@@ -218,12 +220,14 @@ fn hex(b: &[u8]) -> String {
 }
 
 fn fixture() -> Fixture {
-    fixture_with(false)
+    fixture_with(false, false)
 }
 
 /// The fixture, plus (with `import`) a torrent from a Magnetico import
-/// job: no info dict and an unverified import record (IMP-1, IMP-2).
-fn fixture_with(import: bool) -> Fixture {
+/// job: no info dict and an unverified import record (IMP-1, IMP-2),
+/// and (with `remote`) one a remote worker brought in (WK-9): an info
+/// dict, but `REMOTE_UNVERIFIED`, since the coordinator never hashed it.
+fn fixture_with(import: bool, remote: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -316,6 +320,22 @@ fn fixture_with(import: bool) -> Fixture {
         )
         .unwrap();
     let imported = import.then(|| import_magnetico(&mut store, "Imported.Library.Item"));
+    let remote = remote.then(|| {
+        let raw = metainfo("Remote.Worker.Find", &[("find.mkv", 1 << 20)]);
+        let info = Info::parse(&raw).unwrap();
+        let worker = store.register_source("dht", "1", 1_700_000_000).unwrap();
+        store
+            .insert(&[NewTorrent {
+                info: &info,
+                raw_info: Some(&raw),
+                discovered_at: 1_700_000_300,
+                metadata_at: 1_700_000_301,
+                extra_flags: flags::REMOTE_UNVERIFIED,
+                source: worker,
+            }])
+            .unwrap();
+        hex(&info.primary_hash().0)
+    });
     let index = SearchIndex::in_memory().unwrap();
     let mut w = index.writer(15 << 20).unwrap();
     w.catch_up(&mut store, 10).unwrap();
@@ -352,6 +372,7 @@ fn fixture_with(import: bool) -> Fixture {
         ],
         saved_search,
         imported,
+        remote,
         _dir: dir,
     }
 }
@@ -709,7 +730,7 @@ async fn an_export_carries_no_provenance() {
 /// verified; a crawled torrent still is.
 #[tokio::test]
 async fn an_import_is_shown_but_never_called_verified() {
-    let f = fixture_with(true);
+    let f = fixture_with(true, false);
     let c = signed_in(&f).await;
     let imported = f.imported.clone().unwrap();
     let s = get_as(&f, "/api/v1/search?sort=%2Bdiscovered", &c).await;
@@ -745,4 +766,43 @@ async fn an_import_is_shown_but_never_called_verified() {
     let d = get_as(&f, &format!("/api/v1/torrents/{}", f.hashes[0]), &c).await;
     assert_eq!(d["provenance"]["verified"], true);
     assert!(d["provenance"].get("imported").is_none());
+}
+
+/// X-remote-verified: a remote worker's find (`REMOTE_UNVERIFIED`, WK-9)
+/// has an info dict, but the coordinator never hashed it to its key, so
+/// until WK-13 re-verifies it the hit and the detail say what its index
+/// value says: `imported`, never verified.
+#[tokio::test]
+async fn a_remote_workers_find_is_shown_but_never_called_verified() {
+    let f = fixture_with(false, true);
+    let c = signed_in(&f).await;
+    let remote = f.remote.clone().unwrap();
+    let s = get_as(&f, "/api/v1/search?sort=%2Bdiscovered", &c).await;
+    let hits = s["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 3, "shown by default: {hits:?}");
+    let r = hits
+        .iter()
+        .find(|h| h["hash"] == remote.as_str())
+        .unwrap_or_else(|| panic!("{remote} in {hits:?}"));
+    assert_eq!(
+        (&r["verified"], &r["imported"]),
+        (&json!(false), &json!(true))
+    );
+    // Its index value agrees: `verified:imported` finds it alone, and
+    // `verified:yes` leaves it out.
+    let only = get_as(&f, "/api/v1/search?q=verified%3Aimported", &c).await;
+    let only = only["hits"].as_array().unwrap();
+    assert_eq!(only.len(), 1, "{only:?}");
+    assert_eq!(only[0]["hash"], remote.as_str());
+    assert_eq!(only[0]["imported"], true);
+    let yes = get_as(&f, "/api/v1/search?q=verified%3Ayes", &c).await;
+    let yes = yes["hits"].as_array().unwrap();
+    assert_eq!(yes.len(), 2, "{yes:?}");
+    assert!(yes.iter().all(|h| h["verified"] == true), "{yes:?}");
+
+    let d = get_as(&f, &format!("/api/v1/torrents/{remote}"), &c).await;
+    assert_eq!(
+        (&d["provenance"]["verified"], &d["provenance"]["imported"]),
+        (&json!(false), &json!(true))
+    );
 }

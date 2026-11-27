@@ -102,8 +102,15 @@ impl DocProvenance {
 /// when the indexer has read it, its import record's verification
 /// ([`lodestar_store::Store::import_quality`], IMP-1):
 ///
+/// - a row with [`flags::REMOTE_UNVERIFIED`] is `imported`, whatever
+///   else it carries: a remote worker fetched it, and the coordinator
+///   never hashes a remote record's info dict to its key (the worker
+///   parsed it, and the wire format never carries `pieces`, WK-6), so its
+///   metadata is the worker's word
+///   until WK-13's re-verification clears the flag. Checked first, so an
+///   import record saying `verified` can't vouch for it either;
 /// - a row that isn't [`flags::IMPORTED`] was fetched from the network
-///   and hashed to its key: `yes`;
+///   and hashed to its key here: `yes`;
 /// - an imported row whose import record says `verified` (a network
 ///   fetch upgraded it): `yes`;
 /// - one whose record says anything else (`unknown`, `unverified`,
@@ -122,6 +129,9 @@ pub fn stored_verified(
     record: Option<lodestar_store::import::Verification>,
 ) -> Verified {
     use lodestar_store::import::Verification;
+    if row_flags & flags::REMOTE_UNVERIFIED != 0 {
+        return Verified::Imported;
+    }
     if row_flags & flags::IMPORTED == 0 {
         return Verified::Yes;
     }

@@ -590,9 +590,10 @@ pub struct SearchHit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub verified: Option<bool>,
-    /// From another indexer's database; not checked against the hash (the
-    /// "Imported" badge, in place of "Unverified"). Shown by default, like
-    /// a verified torrent. On `/search` hits only, and only when true.
+    /// Not checked against the hash here: from another indexer's database,
+    /// or a remote worker's find not yet re-verified (the "Imported"
+    /// badge, in place of "Unverified"). Shown by default, like a verified
+    /// torrent. On `/search` hits only, and only when true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub imported: Option<bool>,
@@ -712,15 +713,16 @@ pub struct CompositionShare {
 
 /// A `verified:` value (§18.6): `yes`, the info dict was fetched and
 /// hashed to the key; `no`, an unverified item known only from claims;
-/// `imported`, a stored torrent from another indexer's database, not
-/// checked against the hash.
+/// `imported`, a stored torrent not checked against the hash here (from
+/// another indexer's database, or a remote worker's find not yet
+/// re-verified).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AstVerified {
     Yes,
     No,
-    /// A stored torrent from another indexer's database, not checked
-    /// against the hash.
+    /// A stored torrent not checked against the hash here: from another
+    /// indexer's database, or a remote worker's find not yet re-verified.
     Imported,
 }
 

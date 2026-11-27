@@ -412,9 +412,9 @@ impl Catalogue {
     /// `closed` is what this caller may not be given under the sources'
     /// terms ([`TermsClosed`]): a public caller gets those claims left
     /// out, with `withheld` set, as for a private claim. `imported` is
-    /// whether its metadata came from another indexer's database and was
-    /// never hashed here (`search::is_import`, X-import-verified-no):
-    /// such a torrent isn't `verified`.
+    /// whether its metadata was never hashed here (another indexer's
+    /// database, or a remote worker's find not yet re-verified:
+    /// `search::is_import`): such a torrent isn't `verified`.
     pub(crate) fn provenance(
         &self,
         row: &TorrentRow,

@@ -978,6 +978,7 @@ placement:
   - X-import-status-lock
   - X-import-rate-1m
   - X-import-verified-no
+  - X-remote-verified
   - X-saved-verified-rewrite
   - X-store-load-busy-map
   - X-store-busy-nits
