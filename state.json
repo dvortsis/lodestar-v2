@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T14:34Z",
+  "updated_at": "2026-11-27T15:36Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T14:34Z",
+    "updated": "2026-11-27T15:36Z",
     "items": [
       {
         "slot": 1,
@@ -11138,12 +11138,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-watch-open-fstat",
+        "slice": "X-remote-verified",
         "role": "build",
         "agent": "claude",
-        "session": "session_01MMjhn9qvWsn7Gc3vmbw61L",
-        "doing": "building: watch folder checks the opened handle, not the path",
-        "since": "2026-11-27T12:29:45Z"
+        "session": "session_01MMjhnC8xWNQaf7ssYaxCym",
+        "doing": "step 0: remote intake hashing report",
+        "since": "2026-11-27T15:36Z"
       },
       {
         "slot": 4,
@@ -11151,7 +11151,7 @@
         "role": "build",
         "agent": "claude",
         "session": "session_01MMjhnCJG6k74cLW98Cc2qX",
-        "doing": "measuring claims size levers (dictionary, stored titles, indexes); runner picks before any format change",
+        "doing": "#1141 stripped to bench fixes; in review",
         "since": "2026-11-27T12:51:35Z"
       }
     ],
