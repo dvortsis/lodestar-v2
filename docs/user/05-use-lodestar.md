@@ -20,7 +20,7 @@ The **Search** screen pairs a query bar with a left-hand facet rail for type, di
 
 Select any value in the facet rail to include it, or select the minus button beside a count to exclude it. Select **Syntax** beside the search box to view operators such as `res:1080p`, `type:movie` or `ext:mkv`.
 
-`verified:imported` finds torrents that came from another [indexer](glossary.md#indexer)'s database, such as a Magnetico or [bitmagnet](glossary.md#bitmagnet) import. Lodestar shows them by default, but hasn't checked their file lists against the torrent's hash, so `verified:yes` leaves them out (newer than v0.5.1).
+`verified:imported` finds torrents that came from another [indexer](glossary.md#indexer)'s database, such as a Magnetico or [bitmagnet](glossary.md#bitmagnet) import. Lodestar shows them by default, but hasn't checked their file lists against the torrent's hash, so `verified:yes` leaves them out (newer than v0.5.1). A saved search or alert made with **Show unverified** before this version leaves imports out until you turn **Show unverified** off and on again.
 
 ## 5.2 Inspect a torrent
 <!-- index: detail drawer; magnet link; file tree -->
