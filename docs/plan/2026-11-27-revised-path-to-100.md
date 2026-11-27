@@ -679,6 +679,8 @@ The round-2 fix comes from round 1's measurements. Each diagnosis names its sour
 
 **Independent review of revision 5, answered in revision 6:**
 
+The review is `docs/reviews/2026-11-27-path-to-100-independent-review.md` (branch `docs/dht-throughput-plans-20261119`, commit c3d431cc5).
+
 | Finding | Change |
 |---|---|
 | An all-on candidate can be voided for an idle `route_backoff`, or pass with no evidence that another switch worked | §6.1: `route_backoff` declared off in both candidates, and a frozen per-switch evidence table (what's required, what a measured zero and a missing counter mean). §5.2 item 9: bundle dispatch. Fixtures for an absent counter, a void zero, a soft zero and an over-cap interval. O3 |
@@ -704,3 +706,4 @@ The round-2 fix comes from round 1's measurements. Each diagnosis names its sour
 - `docs/decisions/2026-11-27-CR-0w.md` (branch `slice/CR-0w`, #1134)
 - runner-state `state.json` and `inbox/x-test-vm.md`
 - `docs/plan/evidence/2026-11-24-cloud-screens/` (reported lane reports)
+- `docs/reviews/2026-11-27-path-to-100-independent-review.md` (branch `docs/dht-throughput-plans-20261119`, c3d431cc5): the independent review of revision 5
