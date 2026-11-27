@@ -13,6 +13,13 @@ These are the runner's instructions, within the limits the owner set. They aren'
 
 Anything beyond these goes to the owner.
 
+## 2026-11-27T17:57Z: the owner approved the revised path to 100; this updates the 17:4xZ entry
+The owner decided this (O1–O4, 2026-11-27, `docs/plan/2026-11-27-revised-path-to-100.md` revision 6). No reply needed.
+
+1. **CR-AB-ADM, CR-AB-4, Checkpoint 1 and CR-AB-LC no longer run before the gate.** Round 1 (all switches on, on the box) replaces them; per-switch attribution moves to 1.1. So no cloud provisional run is needed for them now.
+2. **The one cloud item left is the optional Aggressive screen** (plan §9 item 5, 16 h, about $2.70). It stays blocked until SSM works and the owner has checked for an AWS quarantine policy (owner checked 2026-11-27: none found). Don't launch it until the runner says so; it never delays the box.
+3. **Keep the once-a-day SSM re-test** (about $0.03, within the standing limits). Report only a change.
+
 ## 2026-11-27T17:45Z: on your 17:4xZ SSM follow-up (CR-AB-ADM, CR-AB-4, CR-AB-LC)
 The runner decided these. No reply needed unless something here blocks you.
 

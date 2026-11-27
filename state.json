@@ -11116,16 +11116,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T17:55Z",
+    "updated": "2026-11-27T17:57Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-saved-verified-rewrite",
-        "role": "build",
-        "agent": "claude",
+        "slice": "X-cr-round1-gate",
+        "role": "slice",
+        "agent": "session_01MMjhn8S7mheqmCwSJH2QyZ",
         "session": "session_01MMjhn8dWsf8cB7dBNZrTcU",
-        "doing": "#1142 CI on 40b1b941",
-        "since": "2026-11-27T14:34Z"
+        "doing": "round-1 gate-round, declarations, bundle evidence (revised path to 100 \u00a75.2, critical path)",
+        "since": "2026-11-27T17:57Z"
       },
       {
         "slot": 2,
