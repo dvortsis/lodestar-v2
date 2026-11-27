@@ -860,8 +860,9 @@ enum MoveError {
 /// rule are read from the handle, and the listing, each entry and both
 /// subfolders through it. Windows has no handle-relative calls without
 /// `unsafe`, so the path is checked to still name the held folder (by
-/// volume serial and file index) after the open, after the listing and
-/// after each read, and the poll stops on a mismatch.
+/// volume serial and file index) after the open, after the listing,
+/// before and after each read and before each move or removal, and the
+/// poll stops on a mismatch.
 struct Folder {
     #[cfg(not(unix))]
     path: PathBuf,
@@ -1111,6 +1112,12 @@ impl Folder {
         let Ok(meta) = file.metadata() else {
             return Taken::Refuse(Cause::Unreadable);
         };
+        // Opened by its path on Windows: judged only as a file of the held
+        // folder, else afresh by a later poll.
+        #[cfg(windows)]
+        if !self.still_here() {
+            return Taken::Wait;
+        }
         #[cfg(windows)]
         if is_link(&meta) {
             return Taken::Refuse(Cause::Link);
@@ -1134,8 +1141,7 @@ impl Folder {
         let mut body = Vec::with_capacity(meta.len() as usize);
         match file.take(MAX_BYTES as u64 + 1).read_to_end(&mut body) {
             Ok(_) if body.len() > MAX_BYTES => Taken::Refuse(Cause::TooLarge),
-            // Opened by its path on Windows: only a file of the held
-            // folder counts. Judged afresh by a later poll otherwise.
+            // And still so once it's read.
             #[cfg(windows)]
             Ok(_) if !self.still_here() => Taken::Wait,
             Ok(_) => Taken::Body(body),
@@ -1171,6 +1177,12 @@ impl Folder {
     /// file already there.
     fn move_out(&self, name: &OsStr, cause: Option<Cause>) -> Result<(), MoveError> {
         let sub = if cause.is_some() { FAILED } else { ADDED };
+        // By path on Windows: never in a folder other than the held one.
+        // The file stays, and the poll stops.
+        #[cfg(windows)]
+        if !self.still_here() {
+            return Err(MoveError::Subfolder(Problem::Unreadable));
+        }
         self.subfolder(sub).map_err(MoveError::Subfolder)?;
         // A link entry stays where it is on Windows (see
         // `rename_no_replace`), told by its own entry and nothing else, so
@@ -1279,6 +1291,10 @@ impl Folder {
         let done = rustix::fs::unlinkat(&self.fd, name, rustix::fs::AtFlags::empty())
             .map_err(std::io::Error::from);
         #[cfg(windows)]
+        if !self.still_here() {
+            return Err(MoveError::Subfolder(Problem::Unreadable));
+        }
+        #[cfg(windows)]
         let done = std::fs::remove_file(self.path.join(name));
         done.map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound if self.absent(name) => MoveError::Gone,
@@ -1339,6 +1355,7 @@ fn handle_problem(
 ) -> rustix::io::Result<Option<FolderProblem>> {
     use rustix::fs::{FileType, Mode, OFlags};
     let here = ancestry(folder)?;
+    // `O_DIRECTORY` already made sure; kept so the rule reads whole.
     if !FileType::from_raw_mode(here[0].st_mode).is_dir() {
         return Ok(Some(FolderProblem::NotDirectory));
     }
@@ -2749,6 +2766,17 @@ mod tests {
                 f.read(OsStr::new("b.torrent"), shape),
                 Taken::Wait
             ));
+            let b = OsStr::new("b.torrent");
+            assert!(matches!(
+                f.move_out(b, Some(Cause::TooLarge)),
+                Err(MoveError::Subfolder(Problem::Unreadable))
+            ));
+            assert!(matches!(
+                f.remove(b),
+                Err(MoveError::Subfolder(Problem::Unreadable))
+            ));
+            assert_eq!(std::fs::read(y.join("w").join("b.torrent")).unwrap(), b"OTHER");
+            assert!(!y.join("w").join(FAILED).exists(), "nothing made in the other");
             drop(f);
             // The next poll follows the path, as it always has.
             let next = Folder::open(&j.join("w"), data.path()).unwrap();

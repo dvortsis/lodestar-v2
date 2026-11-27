@@ -317,13 +317,17 @@ fn a_folder_inside_the_data_directory_is_never_read() {
 
 /// X-watch-open-fstat: a watched folder swapped for a file, then for a
 /// link to another folder, stops the watch with the reason each time, and
-/// the other folder is never read or written.
+/// the other folder is never read or written. (A regression guard: the
+/// swap after the open is tested in `src/watch.rs`, since the binary opens
+/// the folder afresh on every poll.)
 #[test]
 fn a_folder_swapped_for_a_file_or_a_link_is_refused() {
     let s = start();
     let root = tempfile::tempdir().unwrap();
     let folder = root.path().join("w");
     std::fs::create_dir(&folder).unwrap();
+    // Reachable and writable by the account Lodestar runs as, as in the
+    // tests above (it drops root's rights at start, privdrop).
     {
         use std::os::unix::fs::PermissionsExt;
         for dir in [root.path(), &folder] {
