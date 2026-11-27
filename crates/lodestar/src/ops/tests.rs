@@ -559,22 +559,22 @@ async fn stats_match_the_metrics() {
         stats["data_bytes"].as_u64().unwrap() > 0,
         "the database is there"
     );
-    // The running node, with the restart proof off, holds its samples
-    // back for the whole suppression and says why.
+    // The running node, with the restart proof off, samples at once
+    // (owner §2.77, CR-0w): once it has reported, nothing is held back.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    let blocked = loop {
-        let (_, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
-        if !stats["sampling_blocked"].is_null() {
-            break stats["sampling_blocked"].clone();
+    let report = loop {
+        if let Some(s) = f.dht.stats() {
+            break s;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "no sampling_blocked after 15 s: {stats}"
+            "the DHT never reported within 15 s"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert_eq!(blocked["reason"], json!("off"), "{blocked}");
-    assert!(blocked["remaining_s"].as_u64().unwrap() > 0, "{blocked}");
+    assert_eq!(report.sample_suppression_seconds, 0);
+    let (_, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
+    assert_eq!(stats["sampling_blocked"], Value::Null, "{stats}");
     f.stop().await;
 }
 
