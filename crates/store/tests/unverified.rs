@@ -5,8 +5,10 @@
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_store::claims::{
-    AdultEnrichment, AdultKind, ClaimedFile, Claims, Confidence, ExternalId, Provenance,
+    AdultEnrichment, AdultKind, AltTitle, ClaimedFile, Claims, Confidence, Details, ExternalId,
+    Provenance,
 };
+use lodestar_store::identify_sweep::TERMS_KEY;
 use lodestar_store::unverified::{
     ClaimsRefiled, MAX_PAGE, MAX_ROW, Network, NewUnverified, PAGE_BYTES, PurgeCursor,
     PurgePreview, PurgeStep, Put, RefiledClaims, RefiledUnverified, UnverifiedRefiled,
@@ -2015,4 +2017,193 @@ fn a_claims_purge_moves_the_generation_only_for_claims_that_shape_the_record() {
         "a batch that read the purged match is refused"
     );
     assert_eq!(parser_ver(&store, b_id), None);
+}
+
+/// A terms record that lets a source's answers be passed on
+/// (`lodestar_sources::terms::Terms::record`: version 1, the redistribute
+/// flag, a retention in seconds).
+fn redistributing() -> Vec<u8> {
+    let mut v = vec![1, 0b10];
+    v.extend((180u64 * 86_400).to_be_bytes());
+    v
+}
+
+/// Every claims shape the two predicates read: no section, an adult
+/// section with and without a kind, and a details section with each of
+/// a canonical title, a match confidence and an alternative title on or
+/// off, each with and without an external id. Shapes `Claims::check`
+/// refuses are left out by the caller.
+fn every_shape() -> Vec<Claims> {
+    let mut out = Vec::new();
+    let adult = |kind| AdultEnrichment {
+        scene_id: "1".into(),
+        kind,
+        title: None,
+        studio: None,
+        released: None,
+        performers: Vec::new(),
+        performers_truncated: false,
+    };
+    for ids in [false, true] {
+        let base = Claims {
+            ids: if ids {
+                vec![ExternalId {
+                    scheme: "imdb".into(),
+                    value: "tt0133093".into(),
+                }]
+            } else {
+                Vec::new()
+            },
+            ..Claims::default()
+        };
+        out.push(base.clone());
+        for kind in [None, Some(AdultKind::Scene)] {
+            out.push(Claims {
+                adult: Some(adult(kind)),
+                ..base.clone()
+            });
+        }
+        for bits in 0..8u8 {
+            out.push(Claims {
+                details: Some(Box::new(Details {
+                    canonical_title: (bits & 1 != 0).then(|| "The Matrix".into()),
+                    match_confidence: (bits & 2 != 0).then_some(90),
+                    alt_titles: if bits & 4 != 0 {
+                        vec![AltTitle {
+                            language: "ja".into(),
+                            title: "Matrix ja".into(),
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                    ..Details::default()
+                })),
+                ..base.clone()
+            });
+        }
+    }
+    out
+}
+
+fn logged(store: &Store, id: i64) -> i64 {
+    store
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM reindex_log WHERE torrent_id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+/// X-purge-index-shapes: the served identification rule and the claims
+/// shape rule agree on every shape. Where everything else allows serving,
+/// a row is served exactly when it holds an identification answer, every
+/// served row shapes the record, and each path that deletes claims (the
+/// source purge, a refresh's drop and a refile) logs the torrent for the
+/// index exactly when the deleted row shaped it.
+#[test]
+fn served_identifications_and_record_shapes_agree_on_every_shape() {
+    let mut checked = 0;
+    for c in every_shape() {
+        if c.check().is_err() {
+            continue;
+        }
+        checked += 1;
+        let mut store = mem();
+        let (dht, enr, _) = sources(&mut store);
+        store
+            .set_plugin_state(enr, TERMS_KEY, Some(&redistributing()))
+            .unwrap();
+        let ids: Vec<i64> = ["purged", "dropped", "refiled"]
+            .iter()
+            .map(|name| {
+                let p = prepared(&store, name);
+                let id = store_torrent(&mut store, &p, dht);
+                assert!(store.put_claims(id, enr, &c, false).unwrap());
+                id
+            })
+            .collect();
+        let before: Vec<i64> = ids.iter().map(|&id| logged(&store, id)).collect();
+        let served = !store.served_identifications(ids[0]).unwrap().is_empty();
+        assert_eq!(served, c.identification().is_some(), "{c:?}");
+        assert!(
+            !served || c.shapes_the_record(),
+            "served but no shape: {c:?}"
+        );
+        let want = i64::from(c.shapes_the_record());
+
+        assert!(store.drop_claims(ids[1], enr).unwrap());
+        let rc = [RefiledClaims {
+            torrent_id: ids[2],
+            source: enr,
+            filtered: None,
+        }];
+        assert_eq!(
+            store.refile_claims(&rc, || true).unwrap().unwrap().claims,
+            1
+        );
+        store.set_source_state(enr, SourceState::Disabled).unwrap();
+        purge_all(&mut store, enr, 100);
+        for (&id, b) in ids.iter().zip(before) {
+            assert_eq!(logged(&store, id) - b, want, "torrent {id}: {c:?}");
+            assert!(store.served_identifications(id).unwrap().is_empty());
+        }
+    }
+    // 22 built; refused: an empty details section (with and without an
+    // id) and an adult section beside an id (with and without a kind).
+    assert_eq!(checked, 18);
+}
+
+/// X-purge-index-shapes: a purge step's claim deletes and the log entries
+/// for the index commit together or not at all, so a crash between the
+/// purge and the next index pass still leaves the torrent logged.
+#[test]
+fn a_purge_deletes_claims_and_logs_them_together_or_not_at_all() {
+    let mut store = mem();
+    let (dht, enr, _) = sources(&mut store);
+    store
+        .set_plugin_state(enr, TERMS_KEY, Some(&redistributing()))
+        .unwrap();
+    let p = prepared(&store, "one");
+    let id = store_torrent(&mut store, &p, dht);
+    let answer = Claims {
+        details: Some(Box::new(Details {
+            alt_titles: vec![AltTitle {
+                language: "ja".into(),
+                title: "One ja".into(),
+            }],
+            match_confidence: Some(80),
+            ..Details::default()
+        })),
+        ..Claims::default()
+    };
+    assert!(store.put_claims(id, enr, &answer, false).unwrap());
+    assert_eq!(store.served_identifications(id).unwrap().len(), 1);
+    store.set_source_state(enr, SourceState::Disabled).unwrap();
+    let before = logged(&store, id);
+    let claims_stage = {
+        // The unverified stage has nothing to do: its cursor is the next.
+        let s = store.purge_source(enr, PurgeCursor::START, 100).unwrap();
+        s.next.unwrap()
+    };
+    store
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER fail_purge_reindex BEFORE INSERT ON reindex_log BEGIN
+             SELECT RAISE(ABORT, 'injected reindex failure'); END;",
+        )
+        .unwrap();
+    assert!(store.purge_source(enr, claims_stage, 100).is_err());
+    assert_eq!(claims_of(&store, id).len(), 1, "the delete rolled back");
+    assert_eq!(logged(&store, id), before);
+    store
+        .connection()
+        .execute_batch("DROP TRIGGER fail_purge_reindex")
+        .unwrap();
+    let s = store.purge_source(enr, claims_stage, 100).unwrap();
+    assert_eq!(s.claims_deleted, 1);
+    assert!(claims_of(&store, id).is_empty());
+    assert_eq!(logged(&store, id), before + 1);
+    assert!(store.served_identifications(id).unwrap().is_empty());
 }

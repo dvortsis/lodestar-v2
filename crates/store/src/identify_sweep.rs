@@ -6,8 +6,10 @@
 //! Each must be all of these, the same rule as the effective title's
 //! (`lodestar_pipeline::identify::stored_title`, ENR-10 and ENR-terms):
 //! - an answer: a version 3 row whose details section holds a match
-//!   confidence, from a source whose bit isn't in the torrent's
-//!   `sources` (a finder can't enrich what it found);
+//!   confidence ([`Claims::identification`], the test
+//!   `Claims::shapes_the_record` makes too, so a purge that removes it
+//!   reindexes the torrent), from a source whose bit isn't in the
+//!   torrent's `sources` (a finder can't enrich what it found);
 //! - not through a private source (ENR-9b: the section follows the
 //!   row's `private_source` flag as the claimed name does);
 //! - on a torrent that isn't [`flags::PRIVACY`](crate::flags::PRIVACY);
@@ -26,6 +28,8 @@
 //! and end live in `settings` under `identify_sweep.`, written in the
 //! same transaction as the step's log entries, so a restart goes on
 //! where it stopped and never loses a step.
+//!
+//! [`Claims::identification`]: crate::claims::Claims::identification
 
 use rusqlite::{OptionalExtension, params};
 
@@ -142,10 +146,12 @@ impl Store {
             let Ok(c) = claims::decode(&data) else {
                 continue;
             };
-            let Some(d) = c.details else { continue };
-            let Some(confidence) = d.match_confidence else {
+            // The claims-shape rule's own test (`Claims::identification`):
+            // a purge reindexes every torrent losing an answer served here.
+            let Some((_, confidence)) = c.identification() else {
                 continue;
             };
+            let Some(d) = c.details else { continue };
             if !self.redistributes(source)? {
                 continue;
             }

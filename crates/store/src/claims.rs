@@ -764,18 +764,29 @@ impl fmt::Debug for Claims {
 }
 
 impl Claims {
-    /// Whether these claims can change a torrent's derived record: an
-    /// adult-enrichment section that names a kind (the match ENR-6 pins),
-    /// or an identification with a title and its confidence (ENR-10). The
-    /// one test both the purge (which re-derives a torrent that lost such
-    /// a claim) and the pipeline's `enrich::mark_matched` apply; plain feed
-    /// claims never change the record, so neither marks for them.
+    /// The identification answer these claims hold, with its match
+    /// confidence: a details section that states one (ENR-10, ENR-11).
+    /// Only such a section is ever served
+    /// ([`Store::served_identifications`](crate::Store::served_identifications)
+    /// applies this test, then its row, torrent and terms checks), and
+    /// [`Claims::shapes_the_record`] counts every one, so a purge that
+    /// removes a served answer always reindexes its torrent
+    /// (X-purge-index-shapes).
+    pub fn identification(&self) -> Option<(&Details, u8)> {
+        let d = self.details.as_deref()?;
+        Some((d, d.match_confidence?))
+    }
+
+    /// Whether these claims can change a torrent's derived record or what
+    /// its index entry serves: an adult-enrichment section that names a
+    /// kind (the match ENR-6 pins), or an identification answer
+    /// ([`Claims::identification`]: its title for the record, ENR-10, and
+    /// its ids and alternative titles for the index, ENR-11). The one test
+    /// both the purge (which re-derives and reindexes a torrent that lost
+    /// such a claim) and the pipeline's `enrich::mark_matched` apply; plain
+    /// feed claims change neither, so neither marks for them.
     pub fn shapes_the_record(&self) -> bool {
-        self.adult.as_ref().is_some_and(|a| a.kind.is_some())
-            || self
-                .details
-                .as_deref()
-                .is_some_and(|d| d.canonical_title.is_some() && d.match_confidence.is_some())
+        self.adult.as_ref().is_some_and(|a| a.kind.is_some()) || self.identification().is_some()
     }
 
     /// Bytes the decoded claims take in memory, near enough: their text

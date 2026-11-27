@@ -899,15 +899,21 @@ impl Store {
         }
         let mut done = ClaimsRefiled::default();
         for r in refiled {
-            let n = tx
+            let lost: Option<Vec<u8>> = tx
                 .prepare_cached(
-                    "DELETE FROM torrent_claims WHERE torrent_id = ?1 AND source_id = ?2",
+                    "DELETE FROM torrent_claims WHERE torrent_id = ?1 AND source_id = ?2
+                     RETURNING data",
                 )?
-                .execute(params![r.torrent_id, r.source.get()])?;
-            if n == 0 {
-                continue;
+                .query_row(params![r.torrent_id, r.source.get()], |r| r.get(0))
+                .optional()?;
+            let Some(data) = lost else { continue };
+            done.claims += 1;
+            // An answer the index serves goes with the claim it came from
+            // (X-purge-index-shapes), in this transaction.
+            if shaped_or_unreadable(&data) {
+                tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
+                    .execute([r.torrent_id])?;
             }
-            done.claims += n;
             let Some(f) = &r.filtered else { continue };
             filter::write(&tx, std::slice::from_ref(f))?;
             if f.held.is_some()
@@ -1167,11 +1173,15 @@ impl Store {
             }
             Stage::Claims => {
                 // A torrent that loses a claim that shaped its record is
-                // derived again (ENR-G): a purged enrichment match or
-                // identification must not stay in its record or its index
-                // entry. RETURNING pairs the marks with exactly the rows
-                // deleted. Plain feed claims never shape the record, so
-                // their torrents aren't marked.
+                // derived again (ENR-G) and reindexed (X-purge-index-shapes):
+                // a purged enrichment match or identification must not stay
+                // in its record or its index entry. The index reads served
+                // answers from the claims themselves, so the log entry, in
+                // this transaction with the delete, drops the purged ids and
+                // titles at its next pass whether or not the derivation
+                // changes anything. RETURNING pairs the marks with exactly
+                // the rows deleted. Plain feed claims shape neither, so their
+                // torrents aren't marked.
                 let lost: Vec<(i64, Vec<u8>)> = tx
                     .prepare_cached(concat!(
                         "DELETE FROM torrent_claims WHERE rowid IN (SELECT rowid FROM ",
@@ -1185,14 +1195,19 @@ impl Store {
                 let mut mark = tx.prepare_cached(
                     "UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1",
                 )?;
+                let mut log =
+                    tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
                 let mut marked = false;
                 for (id, data) in &lost {
                     // One that doesn't decode is marked: deriving again is
                     // the safe side. A torrent with no record yet has no
                     // row to mark but still counts: the backfill picks it
                     // up, and a batch may already have read the claim.
-                    if !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record()) {
+                    // A source holds one row per torrent, so each is
+                    // logged once a step.
+                    if shaped_or_unreadable(data) {
                         mark.execute(params![id])?;
+                        log.execute(params![id])?;
                         marked = true;
                     }
                 }
@@ -1795,17 +1810,33 @@ fn write_claims(
     Ok(())
 }
 
-/// Deletes one claims row and marks its torrent for the backfill. False
-/// when there was none.
+/// Whether a deleted claims blob could have shaped its torrent's record or
+/// index entry ([`Claims::shapes_the_record`](crate::claims::Claims::shapes_the_record)).
+/// One that doesn't decode counts: re-deriving and reindexing is the safe
+/// side.
+fn shaped_or_unreadable(data: &[u8]) -> bool {
+    !matches!(crate::claims::decode(data), Ok(c) if !c.shapes_the_record())
+}
+
+/// Deletes one claims row and marks its torrent for the backfill, and
+/// logs it for the index when the row could have supplied a served answer
+/// ([`shaped_or_unreadable`], X-purge-index-shapes). False when there was
+/// none.
 fn drop_one(conn: &Connection, torrent_id: i64, source: SourceId) -> Result<bool> {
-    let n = conn
-        .prepare_cached("DELETE FROM torrent_claims WHERE torrent_id = ?1 AND source_id = ?2")?
-        .execute(params![torrent_id, source.get()])?;
-    if n > 0 {
-        conn.prepare_cached("UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1")?
+    let lost: Option<Vec<u8>> = conn
+        .prepare_cached(
+            "DELETE FROM torrent_claims WHERE torrent_id = ?1 AND source_id = ?2 RETURNING data",
+        )?
+        .query_row(params![torrent_id, source.get()], |r| r.get(0))
+        .optional()?;
+    let Some(data) = lost else { return Ok(false) };
+    conn.prepare_cached("UPDATE torrent_parsed SET parser_ver = 0 WHERE torrent_id = ?1")?
+        .execute([torrent_id])?;
+    if shaped_or_unreadable(&data) {
+        conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
             .execute([torrent_id])?;
     }
-    Ok(n > 0)
+    Ok(true)
 }
 
 fn read_claims(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<StoredClaims>> {
