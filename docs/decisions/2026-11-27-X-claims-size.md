@@ -1,6 +1,6 @@
 # X-claims-size decisions
 
-Slice X-claims-size (runner brief, 2026-11-27T12:51Z; runner's choice of levers, 2026-11-27T13:11Z): identification answers' claims blobs made smaller with a trained zstd dictionary. Spec: architecture §3, `docs/decisions/2026-11-27-X-enr11-size-measure.md`. No budget, schema or `ci.yml` change.
+Slice X-claims-size (runner brief, 2026-11-27T12:51Z; runner's choice of levers, 2026-11-27T13:11Z): identification answers' claims blobs made smaller with a trained zstd dictionary. Spec: architecture §3, `docs/decisions/2026-11-27-X-enr11-size-measure.md`. No budget or `ci.yml` change; one marker migration, V17.
 
 ## What was measured (step 2)
 At CI's size, 50,000 torrents, seed 1. Each lever was applied to a copy of `size-report`'s store and vacuumed; the claims tables fill in id order, so their deltas carry over to the unvacuumed gate figure.
@@ -14,7 +14,7 @@ At CI's size, 50,000 torrents, seed 1. Each lever was applied to a copy of `size
 | (c1) drop `torrent_claims_source` | −6.6 | −11.1 | a schema slot |
 | (c2) `torrent_claims` `WITHOUT ROWID` | −9.2 | −16.4 | a table rebuild |
 
-- **The runner chose (a) alone** (§2.26). (c1) and (c2) save 7–14 B for a schema slot, and (c1) slows `mark_claims_unenriched`, a long transaction already flagged in #1138's review. (c2) suits rows under about 200 B, and claims rows can reach 1.18 MB.
+- **The runner chose (a) alone** (§2.26). (c1) and (c2) save 7–14 B for a table change, and (c1) slows `mark_claims_unenriched`, a long transaction already flagged in #1138's review. (c2) suits rows under about 200 B, and claims rows can reach 1.18 MB.
 - **(b) isn't available:** the drawer's API shows every stored title, up to 32 (`identification()` in `crates/api/src/torrents.rs`), and the content-safety check judges each one (`details_alone` in `crates/pipeline/src/unverified.rs`). With a dictionary it would save under 2 B anyway.
 - **No lever brings the 60 % share within 976 B.** The store already holds 949.3 B at 0 %, which leaves about 49 B per answer, page and index overhead included. A dictionary-compressed answer is still about 124 B.
 
@@ -36,12 +36,15 @@ At CI's size, 50,000 torrents, seed 1. Each lever was applied to a copy of `size
 - **Readers find a new dictionary themselves:** a connection opened before training loads the dictionary from `zstd_dicts` the first time a blob names it, then keeps its decompressor.
 - **Never deleted or replaced in place.** Nothing in this slice deletes a `zstd_dicts` row.
 
-## Running an older build on a newer store
-- **There's no schema bump** (the runner chose no schema slot), so a build from before this slice opens a store that holds codec 2 rows without complaint. It reads each one as an unknown codec, that is, unreadable:
-  - those answers stop being served;
-  - its re-judge removes each one it reaches, as it removes any unreadable claim.
-- **Nothing else is lost:** feed claims, unverified items and older answers are codecs 0 and 1. ENR-10 looks the removed answers up again once a current build runs.
-- This is the cost of no schema slot, flagged to the runner. A rollback that restores the store snapshot taken before the upgrade isn't affected.
+## Migration V17: an older build refuses the store
+- **The store's rule is that an older build refuses a newer store and changes nothing** (`older_builds_refuse_a_newer_store_untouched`). Without a schema bump, a build from before this slice would read codec 2 rows as an unknown codec, that is, unreadable. It would stop serving those answers, and its re-judge would remove each one it reached. No pre-upgrade snapshot would exist to roll back to either. So the runner gave this slice a schema slot (2026-11-27T14:22Z).
+- **V17 changes no table.** It records that claims blobs may be codec 2, and the version alone does the work:
+  - a V16 or older build refuses a V17 store, untouched;
+  - the upgrade from V16 takes the usual `pre-v17` snapshot, which the update rollback restores;
+  - a V16 store's codec 0 and 1 answers migrate byte for byte and read unchanged.
+  Each has a test in `schema.rs`.
+- **The runner named V16; V16 is X-unverified-cap-index's,** already on `main`, so this is V17.
+- **The snapshot purge's plan for V17 is V15's and V16's** (`snapshots::Plan::KNOWN_THROUGH`): it deletes claims by SQL and never reads them.
 
 ## No background rewrite
 - **Rows written before the dictionary keep their codec 1 blobs** (runner, 2026-11-27T13:11Z). Training happens at the 1,000th answer, so at most about 1,000 rows (plus any stored while a check was pending) stay larger: about 112 B each, about 0.1 MB in all, whatever the store's size.
@@ -71,8 +74,9 @@ At CI's size, 50,000 torrents, seed 1. Each lever was applied to a copy of `size
 - **Paths beyond the brief's owns:** the runner granted `crates/pipeline/src/writer.rs`, `crates/pipeline/src/identify.rs` (unused in the end) and the log-catalogue files. This slice also edits:
   - `crates/store/src/lib.rs`: the module, the `Store` field, and the file-tree codec skipping claims dictionaries;
   - `crates/store/src/identify_sweep.rs`: `served_identifications` reads codec 2;
-  - `bench/Cargo.toml`: the dependency below.
-  All three are named to the runner.
+  - `bench/Cargo.toml`: the dependency below;
+  - `crates/store/src/schema.rs`: V17 and the tests that pin the latest version.
+  The runner granted these (2026-11-27T14:22Z). `crates/store/src/snapshots.rs` gets two lines, V17's purge plan, which the runner was told about.
 - **`synth::answer` goes through `Identification::into_claims`** (the plugin API's own conversion and clamps), and the terms record comes from `Terms { redistribute: true, .. }.record()` (#1136's review nits). `lodestar-sources` moves from the bench's dev-dependencies to its dependencies for that; the pipeline already depends on it, so nothing new is compiled.
 - **`docs/decisions/2026-11-27-X-enr11-size-measure.md`:** the "default share" heading now says "realistic share" (brief).
 

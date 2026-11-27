@@ -314,7 +314,7 @@ pub(crate) struct Plan {
 impl Plan {
     /// The newest schema version this table knows. A new migration must
     /// say here what its schema means for the purge.
-    pub(crate) const KNOWN_THROUGH: i64 = 16;
+    pub(crate) const KNOWN_THROUGH: i64 = 17;
 
     /// Per schema version (see the PR's table and `docs/decisions`):
     ///
@@ -409,6 +409,8 @@ impl Plan {
             // V16 (X-unverified-cap-index) adds an index and the kept
             // per-network counts of unverified items: its triggers count
             // the purge's deletes, so nothing else changes here.
+            // V17 (X-claims-size) changes no table: claims blobs may be
+            // codec 2, and the purge deletes claims without reading them.
             15..=Self::KNOWN_THROUGH => Some(Plan {
                 torrents: true,
                 filter: true,
