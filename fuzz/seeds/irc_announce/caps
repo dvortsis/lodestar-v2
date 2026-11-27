@@ -1,0 +1,34 @@
+Ølodestar-announce = 1
+id = caps
+name = At the caps
+network = irc.caps.test
+channel = #announce-0
+channel = #announce-1
+channel = #announce-2
+channel = #announce-3
+channel = #announce-4
+channel = #announce-5
+channel = #announce-6
+channel = #Caps[Main]
+announcer = Bot0
+announcer = Bot1
+announcer = Bot2
+announcer = Bot3
+announcer = Bot4
+announcer = Bot5
+announcer = Bot6
+announcer = Caps[Bot]
+announcer-host = bot0.caps.test
+announcer-host = bot1.caps.test
+announcer-host = bot2.caps.test
+announcer-host = bot3.caps.test
+announcer-host = bot4.caps.test
+announcer-host = bot5.caps.test
+announcer-host = bot6.caps.test
+announcer-host = bot7.caps.test
+pattern = ^\[(?P<category>[^\]]+)\] (?P<name>\S+) \((?P<size>[0-9.]+ ?[KMGT]i?B)\) #(?P<id>[0-9]+)$
+pattern = ^(?P<name>\S+) in (?P<category>\S+) #(?P<id>[0-9]+)$
+pattern = ^(?P<name>\S+) (?P<size>[0-9]+) #(?P<id>[0-9]+)$
+pattern = ^(?P<name>.+) #(?P<id>[A-Za-z0-9._-]+)$
+torrent-url = https://caps.test/get/{id}?key={passkey}&n={name}
+:Caps[Bot]!bot@bot7.caps.test PRIVMSG #Caps[Main] :[TV] Some.Show.S02E01.1080p (2.5 GiB) #31337

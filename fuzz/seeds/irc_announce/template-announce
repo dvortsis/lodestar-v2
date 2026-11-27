@@ -1,0 +1,41 @@
+ì# Template for a Lodestar announce definition (format 1).
+#
+# This file describes a fictional tracker. It is parsed by the tests, so
+# the format shown here always works. Copy it, then fill in what the
+# tracker publishes about its announce channel. Read the README in this
+# folder first: a definition is written from the tracker's own published
+# announce format, and only for a tracker whose rules allow announce bots.
+
+lodestar-announce = 1
+
+# A short id: lower-case letters, digits and "-", at most 32 characters.
+id = example-tracker
+
+# The name shown in Settings.
+name = Example Tracker
+
+# The IRC network's host name.
+network = irc.example-tracker.test
+
+# The announce channel (repeat the line for more, at most 8).
+channel = #example-announce
+
+# The nick that posts announces (repeat the line for more, at most 8).
+announcer = ExampleBot
+
+# Optionally, the host its messages must come from (the part after "@"
+# in nick!user@host), where the network lets anyone take an unused nick
+# (repeat the line for more, at most 8).
+# announcer-host = services.example-tracker.test
+
+# How an announce reads: a regular expression with named captures.
+# "name" is required; "size", "category" and "id" are optional. Repeat
+# the line for other layouts (at most 4); the first that matches wins.
+# Lines are matched after colours and formatting are removed.
+pattern = ^New Torrent: (?P<name>.+?) Category: (?P<category>.+?) Size: (?P<size>[0-9.,]+ ?[KMGT]i?B) - https://example-tracker\.test/torrents/(?P<id>[0-9]+)$
+
+# Where the .torrent is. Optional. "https://" only. {id}, {name} and
+# {passkey} are filled in when, and only when, you ask for the file.
+# Never paste your own passkey here: write {passkey}.
+torrent-url = https://example-tracker.test/download/{id}/{passkey}
+:ExampleBot!bot@services.example-tracker.test PRIVMSG #example-announce :New Torrent: Some.Show.S01E02.1080p.WEB-DL Category: TV Size: 1.37 GiB - https://example-tracker.test/torrents/12345
