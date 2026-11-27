@@ -439,11 +439,14 @@ pub struct Stats {
     pub residences: std::sync::Mutex<Vec<(tokio::time::Instant, u64)>>,
     pub sample_frontier: AtomicU64,
     /// Gauge: seconds until sampling may start. 0 in production once the
-    /// restart proof's start work lands (at most 10 s, CR-0w).
+    /// restart proof's start work lands (at most 10 s, CR-0w), except in
+    /// a crash loop (at most 60 s); `u64::MAX` for a fixture's delay that
+    /// doesn't fit the clock.
     pub sample_suppression_seconds: AtomicU64,
     /// Gauge: the restart proof's outcome (why the last run's restrictions
     /// were or weren't restored), as an index into
-    /// [`crate::restart::Reason::ALL`]. No longer a reason not to sample.
+    /// [`crate::restart::Reason::ALL`]. Only `dirty` can hold sampling, for
+    /// at most a minute in a crash loop (CR-0w).
     pub sample_suppression_reason: AtomicU64,
     /// Gauges: restrictions restored at start, and those still cooling.
     pub restart_obligations_restored: AtomicU64,

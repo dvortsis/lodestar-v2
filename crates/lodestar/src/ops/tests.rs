@@ -559,8 +559,9 @@ async fn stats_match_the_metrics() {
         stats["data_bytes"].as_u64().unwrap() > 0,
         "the database is there"
     );
-    // The running node, with the restart proof off, samples at once
-    // (owner §2.77, CR-0w): once it has reported, nothing is held back.
+    // The running node, a legacy one (no `state_path`, so no restart
+    // proof), samples at once (owner §2.77, CR-0w): once it has reported,
+    // nothing is held back.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let report = loop {
         if let Some(s) = f.dht.stats() {

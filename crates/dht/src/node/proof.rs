@@ -14,8 +14,10 @@
 //! (`docs/decisions/2026-11-27-CR-0w.md`). The one hold left is
 //! [`START_HOLD`]: an on-run holds samples for at most that long after its
 //! epoch while its start work is landing, so a resume's restrictions are in
-//! the table before its first sample. A resume that lands after the hold
-//! restores nothing: the sampler is only ever seeded before it samples.
+//! the table before its first sample. A resume that lands after the run's
+//! first sample restores nothing: the sampler is only ever seeded before
+//! it samples. And [`CRASH_LOOP`]: a start right after a run that lived
+//! under a minute holds until a minute after that run's start.
 //!
 //! Modes:
 //! - **Legacy:** no data directory (`state_path: None`). No lock and no
@@ -54,6 +56,14 @@ const MAX_RETRY: Duration = Duration::from_secs(60);
 /// start work land (CR-0w). Past it the run samples whatever the proof
 /// says, and a resume that lands later restores nothing (`locked`).
 pub(crate) const START_HOLD: Duration = Duration::from_secs(10);
+/// The crash-loop guard (CR-0w): a start whose previous run left a dirty
+/// marker stamped less than this before it holds samples until this long
+/// after that stamp, so a crash loop asks the same nodes at most about
+/// once a minute, the sampler's interval floor. The dirty marker is
+/// written at a run's start (S4), so this means "the last run lived under
+/// a minute". A first start, a clean restart and an ordinary crash never
+/// wait.
+pub(crate) const CRASH_LOOP: Duration = Duration::from_secs(60);
 /// At shutdown, how long to wait for a start or retry job still running
 /// on the blocking pool, so a resume it earned isn't lost.
 const DRAIN: Duration = Duration::from_secs(5);
@@ -82,6 +92,9 @@ enum Phase {
 #[derive(Debug)]
 struct Started {
     decision: Decision,
+    /// The [`CRASH_LOOP`] guard's end on this run's clock, if the last
+    /// run left a dirty marker stamped under a minute before this start.
+    crash_hold: Option<Instant>,
     reason: Reason,
     /// The marker (dirty or off) or, when on, the witness, made durable.
     /// False until one lands; a run that had no clean marker needs none.
@@ -144,6 +157,14 @@ pub(crate) struct Proof {
     seed_spill: Option<restart::SeededSpill>,
     /// The restored count, for the gauge.
     restored: u64,
+    /// Whether this run has reserved a sample: a resume landing after it
+    /// restores nothing (CR-0w).
+    sampled: bool,
+    /// The [`CRASH_LOOP`] guard's end, once the start work finds one.
+    crash_hold: Option<Instant>,
+    /// The maintenance tick: the lock is retried every tick inside
+    /// [`START_HOLD`].
+    tick: Duration,
 }
 
 impl Proof {
@@ -200,6 +221,9 @@ impl Proof {
             seed: None,
             seed_spill: None,
             restored: 0,
+            sampled: false,
+            crash_hold: None,
+            tick,
         }
     }
 
@@ -214,8 +238,9 @@ impl Proof {
         self.cfg.as_ref().is_some_and(|c| c.inline_io)
     }
 
-    /// Whether the run may send a sample now: past a fixture's delay, and
-    /// not inside an on-run's [`START_HOLD`] while its start work lands.
+    /// Whether the run may send a sample now: past a fixture's delay, not
+    /// inside an on-run's [`START_HOLD`] while its start work lands, and
+    /// past the [`CRASH_LOOP`] guard where it applies.
     pub(crate) fn may_sample(&self, now: Instant) -> bool {
         self.sample_from().is_some_and(|t| now >= t)
     }
@@ -227,11 +252,14 @@ impl Proof {
         let held =
             matches!(self.mode, Mode::On) && !matches!(self.phase, Phase::Ready | Phase::Lockless);
         let hold = if held { START_HOLD } else { Duration::ZERO };
-        self.epoch.checked_add(self.delay.max(hold))
+        let from = self.epoch.checked_add(self.delay.max(hold))?;
+        Some(self.crash_hold.map_or(from, |h| h.max(from)))
     }
 
-    /// Seconds until sampling may start, never 0 while it can't. At most
-    /// [`START_HOLD`] in production, and 0 once the start work lands.
+    /// Seconds until sampling may start, never 0 while it can't. In
+    /// production at most [`START_HOLD`] while the start work lands, or
+    /// [`CRASH_LOOP`] in a crash loop; otherwise 0. `u64::MAX` when a
+    /// fixture's delay doesn't fit the clock (never).
     pub(crate) fn suppression_seconds(&self, now: Instant) -> u64 {
         if self.may_sample(now) {
             return 0;
@@ -244,6 +272,13 @@ impl Proof {
     #[cfg(test)]
     pub(crate) fn reason(&self) -> Reason {
         self.reason
+    }
+
+    /// The actor reserved a sample (CR-0w): from now on a resume that
+    /// lands restores nothing, since the sampler is only seeded before it
+    /// samples.
+    pub(crate) fn note_sampled(&mut self) {
+        self.sampled = true;
     }
 
     /// Whether the actor may rewrite `dht-state.bin` now. An on-run must
@@ -273,7 +308,7 @@ impl Proof {
             match rx.try_recv() {
                 Ok(started) => {
                     self.job = None;
-                    self.land(started, now, stats);
+                    self.land(started, stats);
                 }
                 // The job died (a panic on the pool): try again later (I6).
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -378,9 +413,19 @@ impl Proof {
                     fail(stats, PersistStep::Lock, e.kind());
                 }
                 self.reason = Reason::Locked;
-                self.phase = Phase::Locking {
-                    next: now + backoff,
-                    backoff: (backoff * 2).min(MAX_RETRY),
+                // Every tick inside START_HOLD, so a predecessor that lets
+                // go late in the hold still hands over a resume; then the
+                // backoff (N3).
+                self.phase = if now < self.epoch + START_HOLD {
+                    Phase::Locking {
+                        next: now + self.tick,
+                        backoff,
+                    }
+                } else {
+                    Phase::Locking {
+                        next: now + backoff,
+                        backoff: (backoff * 2).min(MAX_RETRY),
+                    }
                 };
             }
         }
@@ -406,16 +451,19 @@ impl Proof {
         });
     }
 
-    fn land(&mut self, mut started: Started, now: Instant, stats: &Stats) {
+    fn land(&mut self, mut started: Started, stats: &Stats) {
         for (e, kind) in &started.errors {
             fail(stats, *e, *kind);
         }
-        // A resume that lands after the run began sampling (past
+        self.crash_hold = started.crash_hold;
+        // A resume that lands after the run reserved a sample (past
         // START_HOLD: a busy lock, a slow disk, a rerun job) restores
-        // nothing, as a failed proof doesn't (CR-0w). Seeding a sampler
-        // that already has samples in flight, or a spill filter in use,
-        // isn't a state the sampler takes; the cost is re-asks.
-        if self.may_sample(now)
+        // nothing, as a failed proof doesn't, and reports `locked`
+        // (CR-0w). Seeding a sampler that already has samples in flight,
+        // or a spill filter in use, isn't a state the sampler takes; the
+        // cost is re-asks. A run that hasn't sampled (paused, sampling
+        // off, or in the shutdown drain before any sample) still resumes.
+        if self.sampled
             && matches!(self.mode, Mode::On)
             && matches!(started.decision, Decision::Resume(_))
         {
@@ -554,7 +602,7 @@ impl Proof {
         if let Some(rx) = self.job.take()
             && let Ok(started) = rx.recv_timeout(DRAIN)
         {
-            self.land(started, Instant::now(), stats);
+            self.land(started, stats);
         }
         if let Some(rx) = self.retrying.take()
             && let Ok(r) = rx.recv_timeout(DRAIN)
@@ -803,6 +851,7 @@ impl StartJob {
         };
         Started {
             decision: Decision::Suppress(Reason::Off),
+            crash_hold: None,
             reason: Reason::Off,
             invalidated,
             witness_ok: true,
@@ -845,6 +894,21 @@ impl StartJob {
         // there's no marker, or one that can't resume; the marker or the
         // witness for a readable clean one; only the marker for one we
         // can't read, which may be clean.
+        // The crash-loop guard: the last run's dirty marker was stamped at
+        // its start (S4, rounded up); under a minute before this one's
+        // floored wall reading means it lived under a minute.
+        let crash_hold = match &marker {
+            Found::Ok(m) if matches!(m.state, MarkerState::Dirty) => {
+                let window = CRASH_LOOP.as_millis() as u64;
+                let now_ms = restart::floor_ms(here.wall0);
+                let end = m.at_ms.saturating_add(window);
+                // Capped at the window: a clock that stepped back can't
+                // stretch it.
+                (end > now_ms)
+                    .then(|| here.mono0 + Duration::from_millis((end - now_ms).min(window)))
+            }
+            _ => None,
+        };
         let (had_clean, unreadable) = match &marker {
             Found::Ok(m) => (matches!(m.state, MarkerState::Clean { .. }), false),
             Found::Bad(_) => (false, true),
@@ -921,6 +985,7 @@ impl StartJob {
         };
         Started {
             decision,
+            crash_hold,
             reason,
             invalidated,
             witness_ok,

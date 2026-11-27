@@ -200,6 +200,8 @@ impl Run {
             "{addr} must be free"
         );
         assert!(self.sampler.complete(addr, token, interval, now));
+        // As the actor does on every sample it reserves.
+        self.proof.note_sampled();
     }
 
     fn commit(mut self, d: &Dirs) {
@@ -416,6 +418,7 @@ async fn a_busy_lock_is_retried_and_nothing_is_touched_meanwhile() {
     // It has been sampling: a node in flight, another cooling.
     let now = Instant::now();
     assert!(r.sampler.reserve(addr(1), 1, now));
+    r.proof.note_sampled();
     r.sampled(addr(2), 2, Duration::from_secs(60));
     drop(other);
     // The retry backs off to at most a minute.
@@ -423,7 +426,8 @@ async fn a_busy_lock_is_retried_and_nothing_is_touched_meanwhile() {
     r.tick();
     r.take_lock();
     // The proof would resume, but the run already sampled: it restores
-    // nothing (seeding is only ever into a sampler that hasn't sampled).
+    // nothing (seeding is only ever into a sampler that hasn't sampled),
+    // and reports `locked`.
     assert_eq!(r.proof.reason(), Reason::Locked, "landed past the hold");
     assert_eq!(
         r.stats.restart_obligations_restored.load(Ordering::Relaxed),
@@ -696,8 +700,15 @@ async fn reload_send_crash_reload_never_resumes_past_a_crash() {
         } else {
             assert_eq!(r.proof.reason(), Reason::Dirty, "iteration {i}");
         }
-        // No window or gate: sample a couple of peers at once.
-        assert_eq!(r.proof.suppression_seconds(Instant::now()), 0);
+        // No window or gate; only the crash-loop guard, after a run that
+        // lived under a minute, and never longer than that minute.
+        let wait = r.proof.suppression_seconds(Instant::now());
+        assert!(
+            wait == 0 || (!last_clean && wait <= CRASH_LOOP.as_secs()),
+            "iteration {i}: {wait} s"
+        );
+        advance(Duration::from_secs(wait)).await;
+        r.tick();
         assert!(r.proof.may_sample(Instant::now()));
         let mut sampled = Vec::new();
         for k in 0..2u32 {
@@ -1059,56 +1070,62 @@ async fn a_start_job_landing_in_the_shutdown_drain_is_seeded_before_the_capture(
     // Runner review B2: the run stops right after its first tick, while
     // S0–S4 run on the pool. The commit drains the job, seeds what it
     // restored, and only then captures the table.
-    let d = Dirs::new("drain");
-    let c = clock();
-    let mut r = Run::boot(&d, &c, true);
-    r.sampled(addr(7), 1, Duration::from_secs(3600));
-    r.commit(&d);
-    past_the_marker(&d, &c).await;
-    let cfg = pool_config(&d, &c);
-    let path = d.state_path();
-    let mut run = Run {
-        proof: Proof::new(
-            Some(&path),
-            Some(&cfg),
-            None,
-            horizon(),
-            TICK,
-            Instant::now(),
-        ),
-        sampler: Sampler::default(),
-        stats: Stats::default(),
-    };
-    // Hold the start job on the pool until the shutdown is under way.
-    let (release, held) = std::sync::mpsc::channel();
-    *HOLD_START.lock().unwrap() = Some((d.data.clone(), held));
-    // Takes the lock and spawns S0–S4 on the pool, retrying only if a
-    // forked child briefly shares the lock file (see `take_lock`).
-    run.tick();
-    run.take_lock();
-    let Run {
-        mut proof,
-        mut sampler,
-        stats,
-    } = run;
-    assert!(
-        proof.job.is_some(),
-        "the start job is still out: the drain is what lands it"
-    );
-    assert!(proof.started.is_none());
-    release.send(()).unwrap();
-    assert_eq!(
-        proof.commit(&mut sampler, &state(), &path, &stats),
-        Some(Ok(())),
-        "the drained start job resumed, so this run commits"
-    );
-    let Found::Ok((snap, _)) = restart::read_snapshot(&d.data) else {
-        panic!("a snapshot was written")
-    };
-    assert!(
-        snap.entries.iter().any(|e| e.addr == addr(7)),
-        "the restored restriction survives into the new snapshot"
-    );
+    // CR-0w: also for a run older than START_HOLD that never sampled: the
+    // drain still seeds what it restored.
+    for age in [Duration::ZERO, Duration::from_secs(30)] {
+        let d = Dirs::new("drain");
+        let c = clock();
+        let mut r = Run::boot(&d, &c, true);
+        r.sampled(addr(7), 1, Duration::from_secs(3600));
+        r.commit(&d);
+        past_the_marker(&d, &c).await;
+        let cfg = pool_config(&d, &c);
+        let path = d.state_path();
+        let mut run = Run {
+            proof: Proof::new(
+                Some(&path),
+                Some(&cfg),
+                None,
+                horizon(),
+                TICK,
+                Instant::now()
+                    .checked_sub(age)
+                    .expect("the clock is past 30 s"),
+            ),
+            sampler: Sampler::default(),
+            stats: Stats::default(),
+        };
+        // Hold the start job on the pool until the shutdown is under way.
+        let (release, held) = std::sync::mpsc::channel();
+        *HOLD_START.lock().unwrap() = Some((d.data.clone(), held));
+        // Takes the lock and spawns S0–S4 on the pool, retrying only if a
+        // forked child briefly shares the lock file (see `take_lock`).
+        run.tick();
+        run.take_lock();
+        let Run {
+            mut proof,
+            mut sampler,
+            stats,
+        } = run;
+        assert!(
+            proof.job.is_some(),
+            "the start job is still out: the drain is what lands it"
+        );
+        assert!(proof.started.is_none());
+        release.send(()).unwrap();
+        assert_eq!(
+            proof.commit(&mut sampler, &state(), &path, &stats),
+            Some(Ok(())),
+            "the drained start job resumed, so this run commits"
+        );
+        let Found::Ok((snap, _)) = restart::read_snapshot(&d.data) else {
+            panic!("a snapshot was written")
+        };
+        assert!(
+            snap.entries.iter().any(|e| e.addr == addr(7)),
+            "the restored restriction survives into the new snapshot"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1297,4 +1314,95 @@ async fn an_old_snapshots_gate_is_dropped() {
     r.commit(&d);
     let (s, _) = restart::Snapshot::decode(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(s.gate_s, 0, "and none is passed on");
+}
+
+/// CR-0w, item 4 of the runner's review: inside START_HOLD a busy lock is
+/// retried every tick, so a predecessor that lets go at about 8 s still
+/// hands over a resume before the hold ends.
+#[tokio::test(start_paused = true)]
+async fn a_lock_freed_late_in_the_hold_still_resumes() {
+    let d = Dirs::new("late-lock");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    r.sampled(addr(1), 1, Duration::from_secs(3600));
+    r.commit(&d);
+    let LockAttempt::Held(holder) = restart::try_lock(&d.data).unwrap() else {
+        panic!("this test needs file locks in the temp dir");
+    };
+    let start = Instant::now();
+    let mut r = Run::boot_locked(&d, &c, true);
+    for _ in 0..8 {
+        advance(TICK).await;
+        r.tick();
+    }
+    assert_eq!(r.proof.reason(), Reason::Locked);
+    drop(holder);
+    // The next tick's retry takes it; allow the forked-child case a few
+    // more ticks, still inside the hold.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while matches!(r.proof.phase, Phase::Locking { .. })
+        && Instant::now() < start + START_HOLD - TICK
+        && std::time::Instant::now() < deadline
+    {
+        advance(TICK).await;
+        r.tick();
+    }
+    assert!(Instant::now() < start + START_HOLD, "inside the hold");
+    assert_eq!(r.proof.reason(), Reason::Resumed);
+    assert!(!r.sampler.reserve(addr(1), 2, Instant::now()), "restored");
+}
+
+/// CR-0w, item 3: a run that hasn't sampled (paused, or sampling off)
+/// still resumes when its lock frees long after START_HOLD.
+#[tokio::test(start_paused = true)]
+async fn a_run_that_hasnt_sampled_resumes_after_the_hold() {
+    let d = Dirs::new("paused-late");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    r.sampled(addr(1), 1, Duration::from_secs(3600));
+    r.commit(&d);
+    let LockAttempt::Held(holder) = restart::try_lock(&d.data).unwrap() else {
+        panic!("this test needs file locks in the temp dir");
+    };
+    let mut r = Run::boot_locked(&d, &c, true);
+    advance(Duration::from_secs(120)).await;
+    r.tick();
+    assert!(r.proof.may_sample(Instant::now()), "past the hold");
+    drop(holder);
+    advance(MAX_RETRY).await;
+    r.tick();
+    r.take_lock();
+    assert_eq!(r.proof.reason(), Reason::Resumed, "nothing was sampled");
+    assert!(!r.sampler.reserve(addr(1), 2, Instant::now()), "restored");
+}
+
+/// CR-0w, item 2: the crash-loop guard. A run that crashed under a minute
+/// after it started holds the next start until a minute after that start;
+/// one that crashed after longer doesn't hold it at all.
+#[tokio::test(start_paused = true)]
+async fn a_crash_loop_samples_at_most_once_a_minute() {
+    for lived in [20u64, 90] {
+        let d = Dirs::new("crashloop");
+        let c = clock();
+        Run::boot(&d, &c, true).commit(&d);
+        let prev_start = Instant::now();
+        let crashed = Run::boot(&d, &c, true);
+        assert_eq!(crashed.proof.reason(), Reason::Resumed);
+        advance(Duration::from_secs(lived)).await;
+        drop(crashed); // kill -9 after `lived` seconds
+        let r = Run::boot(&d, &c, true);
+        assert_eq!(r.proof.reason(), Reason::Dirty, "lived {lived}");
+        let now = Instant::now();
+        if lived >= 60 {
+            assert!(r.proof.may_sample(now), "lived {lived}: no hold");
+            assert_eq!(r.proof.suppression_seconds(now), 0);
+            continue;
+        }
+        assert!(!r.proof.may_sample(now), "lived {lived}: held");
+        let left = r.proof.suppression_seconds(now);
+        assert!((1..=CRASH_LOOP.as_secs()).contains(&left), "{left}");
+        let end = prev_start + CRASH_LOOP;
+        assert!(!r.proof.may_sample(end - Duration::from_secs(1)));
+        assert!(r.proof.may_sample(end + Duration::from_secs(1)));
+    }
 }

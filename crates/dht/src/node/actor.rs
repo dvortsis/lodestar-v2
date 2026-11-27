@@ -1331,9 +1331,13 @@ impl Actor {
         let Some(tid) = self.tids.next_id() else {
             return Err(Sent::Throttled);
         };
-        if matches!(purpose, Purpose::Sample) && !self.sampler.reserve(to, tid, now) {
-            Stats::inc(&self.stats.sample_deferred);
-            return Err(Sent::Throttled);
+        if matches!(purpose, Purpose::Sample) {
+            if !self.sampler.reserve(to, tid, now) {
+                Stats::inc(&self.stats.sample_deferred);
+                return Err(Sent::Throttled);
+            }
+            // A resume landing after this restores nothing (CR-0w).
+            self.proof.note_sampled();
         }
         let tid_bytes = tid.to_be_bytes();
         let id = match node {
@@ -4640,7 +4644,7 @@ mod tests {
     }
 
     #[test]
-    fn sample_restart_suppression_and_wire_exhaustion_do_not_block_replies() {
+    fn a_start_delay_and_wire_exhaustion_do_not_block_replies() {
         let (mut a, sockets) = fixture();
         let peer = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let to = peer.local_addr().unwrap();
