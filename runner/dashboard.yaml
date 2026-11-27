@@ -573,6 +573,7 @@ placement:
   - X-fuzz-slow-targets
   - X-fuzz-nits-1115
   - X-operator-unattended-wake
+  - X-operator-cap-60
   - X-operator-check8-compare
   - X-cleanup-fits-quota
   - X-release-dead-code
