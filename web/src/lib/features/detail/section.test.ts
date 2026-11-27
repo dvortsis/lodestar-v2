@@ -48,6 +48,35 @@ describe('revealSection', () => {
 		expect(document.activeElement).toBe(document.body);
 	});
 
+	it('gives up after 5 s, and when focus has moved elsewhere', () => {
+		vi.useFakeTimers();
+		try {
+			const root = drawer();
+			revealSection(root, 'related');
+			vi.advanceTimersByTime(5001);
+			const late = mounted(root);
+			return vi
+				.waitFor(() => Promise.resolve())
+				.then(() => {
+					expect(document.activeElement).not.toBe(late);
+				});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('does not take focus from where the user moved to', async () => {
+		const root = drawer();
+		const other = document.createElement('button');
+		document.body.append(other);
+		revealSection(root, 'related');
+		other.focus();
+		mounted(root);
+		await Promise.resolve();
+		await new Promise((r) => queueMicrotask(() => r(null)));
+		expect(document.activeElement).toBe(other);
+	});
+
 	it('does nothing when the drawer has no such section', () => {
 		const root = document.createElement('div');
 		expect(() => revealSection(root, 'related')()).not.toThrow();

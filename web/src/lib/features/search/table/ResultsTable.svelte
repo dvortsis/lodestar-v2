@@ -99,6 +99,7 @@
 		void results.shown;
 		if (!mounted) {
 			mounted = true;
+			active = untrack(() => Math.min(active, Math.max(hits.length - 1, 0)));
 			return;
 		}
 		active = untrack(focusedRow) ?? 0;

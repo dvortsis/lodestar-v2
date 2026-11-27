@@ -184,6 +184,11 @@
 			if (container && !gone) stopReveal = revealSection(container, asked.section);
 		});
 	});
+	// A different torrent (j/k) ends a reveal still waiting on the last one.
+	$effect(() => {
+		void hash;
+		return () => stopReveal?.();
+	});
 	onDestroy(() => stopReveal?.());
 
 	// A different torrent in an open drawer (j/k) swaps in place; its title is announced once. The

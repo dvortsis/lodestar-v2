@@ -84,7 +84,9 @@ describe('Parsed', () => {
 		get.mockRejectedValue(new ApiError(404, 'torrent_not_found', ''));
 		render(Parsed, { hash: HASH, hit: searchHit() });
 		await waitFor(() => expect(get).toHaveBeenCalled());
-		await new Promise((r) => setTimeout(r, 0));
+		await get.mock.results[0]!.value.catch(() => {}); // the 404 has been answered
+		await Promise.resolve();
+		expect(screen.getByTestId('detail-parsed-title').textContent).toContain('Show');
 		expect(screen.queryByText("Couldn't load the parsed details.")).toBeNull();
 		expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
 		expect(screen.queryByTestId('detail-parsed-years')).toBeNull();

@@ -58,8 +58,8 @@ function fly(hash: string): Flight {
 		}
 	};
 	// Through a resolved promise, so a client that throws at once fails the same way as a request.
-	// The answer and the failure are separate handlers: a section that throws on a ready answer must
-	// not turn it into a failure for every other section.
+	// The answer and the failure are separate handlers, so a ready answer is never turned into a
+	// failure after the fact.
 	Promise.resolve()
 		.then(() => api.get('/torrents/{hash}/siblings', { path: { hash }, signal }))
 		.then(
