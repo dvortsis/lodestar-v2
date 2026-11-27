@@ -51,3 +51,15 @@
   - `events`, with `diagnosis` (pending | product | infrastructure);
   - the 10 s host samples, with `backing_device`.
   Write to that schema. Where it doesn't fit what you can collect, agree a change with that session directly; in your decisions file, record the final schema as the agreed interface.
+
+## Additions (runner, 2026-11-27T19:45Z): the gate has merged
+- **X-cr-round1-gate merged** (PR #1147). Its session is archived, so there is no peer to message. The plan is on `main` now too: read it from `main`, not from the branch named above.
+- **The interface is fixed:** `gate-round` on `main` reads the schema in `docs/decisions/2026-11-27-X-cr-round1-gate.md`. Write to it as merged. Where it can't fit what the box can collect, tell the runner with the field and the reason. The runner decides between a small reader change in your PR (owns granted case by case) and a follow-up. Never change `analyze_cr.py` without that grant.
+- **Manifest fields the coordinator must write** (read `load_manifest` and `check_declaration` in `analyze_cr.py`):
+  - the declaration's single `image_digest`, which every entry and every attempt's `candidate_digests` must equal;
+  - unique `run_id`s across the manifest, the comparator included;
+  - repeats numbered 0..k with no gaps;
+  - `attempt_ends` {attempt id: {reason, days_run}}, with days_run exactly [], [1] or [1, 2]. Every listed day must be in the manifest, and [] only when no day of that attempt is listed. Write it whenever an attempt ends short of its declared days.
+- **Spacing:** every arm's process start and window start must be at or after the comparator's window end + 12 h. The coordinator refuses to start earlier.
+- **Uplink counters:** any decrease voids the contention window, so the coordinator must not reset or restart the interface counters mid-day.
+- **Done means:** an end-to-end fixture. The collector output from your fakes is assembled into a manifest and run through `analyze_cr.py gate-round` on `main`, which must give the expected verdict. Add it as a test.
