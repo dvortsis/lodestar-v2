@@ -653,6 +653,8 @@
 	"settings_logging_ev_search_file_search_failed_h": "搜索文件名失败。",
 	"settings_logging_ev_search_enrichment_unreadable_n": "补充信息无法读取",
 	"settings_logging_ev_search_enrichment_unreadable_h": "无法读取搜索用的补充信息。",
+	"settings_logging_ev_search_saved_verified_rewritten_n": "已保存搜索已更新以包含导入项",
+	"settings_logging_ev_search_saved_verified_rewritten_h": "用“显示未验证项”创建的已保存搜索现在也包含导入的种子。",
 	"settings_logging_ev_dht_socket_buffers_n": "DHT 网络缓冲",
 	"settings_logging_ev_dht_socket_buffers_h": "DHT 网络缓冲区的大小已设置或受限。",
 	"settings_logging_ev_dht_bootstrap_unreachable_n": "无法连接 DHT 引导节点",
