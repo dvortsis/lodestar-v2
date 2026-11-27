@@ -3,8 +3,9 @@
 A torrent a remote worker brought in is indexed `verified:imported`, never `verified:yes`, until it's re-verified. #1139's review asked whether such a row's metadata is verified or only the worker's word. It's the worker's word. Decided by the runner (step 0, 2026-11-27), flagged to the owner under `docs/owner-decisions.md` §2.19. Amends `2026-11-27-X-import-verified-no.md` "Read from the row".
 
 ## What the coordinator checks of a remote record (step 0)
-- **It never hashes the info dict to the key, and can't.** The wire format never carries `pieces` (`crates/pipeline/src/wire/results.rs`, WK-6), and the swarm hashes and leased key come from the worker. The intake (`remote.rs` `build`, WK-9) rebuilds the file list from the worker's blob, checks it against the worker's own `size`, `file_count` and piece count, and rebuilds the flags and enrichment. That's consistency, not a hash to the key.
+- **It never hashes the info dict to the key.** The wire format never carries `pieces` (`crates/pipeline/src/wire/results.rs`, WK-6), and the swarm hashes and leased key come from the worker. The intake (`remote.rs` `rebuild`, WK-9) rebuilds the file list from the worker's blob, checks it against the worker's own `size`, `file_count` and piece count, and rebuilds the flags and enrichment. That's consistency, not a hash to the key.
 - **That holds for every remote record.** `archive_raw` only decides whether the worker's raw dict is kept, and it's never hashed either.
+- **A cheap option for WK-13:** a v2-only info dict has no `pieces`, so with `archive_raw` on the coordinator holds the whole dict and could SHA-256 it against the v2 key itself, without a re-fetch. A v1 or hybrid dict can't be checked that way.
 - **This is a trust ruling, not a missing check.** The worker hashes the dict during its own fetch (§19.4); the coordinator just can't confirm it. So `yes` would rest on the worker's word.
 - **A remote result that upgrades a partial import** keeps `IMPORTED`, gains `REMOTE_UNVERIFIED`, and its import record is marked `verified` (`store` `verified_upgrade`) on the worker's word. Checking the flag first keeps that row `imported` too. Anything else that reads `import_quality` still sees `verified`; that predates this slice and is left for WK-13 (below).
 - **Only WK-13's re-verification checks a remote row,** by re-fetching its dict, and only it clears `REMOTE_UNVERIFIED` (`2026-11-07-WK-9.md`). It isn't built yet.
@@ -17,6 +18,7 @@ A torrent a remote worker brought in is indexed `verified:imported`, never `veri
 
 ## Existing indexes: the `verified` generation goes to 3 (`population.rs`)
 - **Every existing index rewrites `verified` through the population walk,** as #1139 did with generation 2, so remote rows indexed `yes` become `imported`. While the walk runs, the notices and facet behaviour #1139 describes apply.
+- **Cost:** the walk rewrites every torrent's document, not only remote rows. Released installs are at generation 1 and walk once, straight to 3. Only dev and test installs already at generation 2 walk a second time.
 
 ## Wording (runner's grant)
 - **The Imported help text covers both kinds of row:** "Not checked against the torrent's hash: from another indexer or a remote worker." (zh: 未与种子的哈希核对：来自另一个索引器或工作节点。). The label stays "Imported", the `verified:imported` value's name.

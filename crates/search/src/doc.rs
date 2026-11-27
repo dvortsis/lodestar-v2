@@ -104,8 +104,9 @@ impl DocProvenance {
 ///
 /// - a row with [`flags::REMOTE_UNVERIFIED`] is `imported`, whatever
 ///   else it carries: a remote worker fetched it, and the coordinator
-///   never hashes a remote record's info dict to its key (the wire format
-///   never carries `pieces`, WK-6), so its metadata is the worker's word
+///   never hashes a remote record's info dict to its key (the worker
+///   parsed it, and the wire format never carries `pieces`, WK-6), so its
+///   metadata is the worker's word
 ///   until WK-13's re-verification clears the flag. Checked first, so an
 ///   import record saying `verified` can't vouch for it either;
 /// - a row that isn't [`flags::IMPORTED`] was fetched from the network
