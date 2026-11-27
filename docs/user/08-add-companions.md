@@ -296,20 +296,29 @@ On Windows, a source on such a route can fail to verify a site whose root certif
 To add the root certificate without contacting the site:
 
 1. Select **Start**, type `cmd`, right-click **Command Prompt** and select **Run as administrator**. Windows asks whether to let it make changes to your device: select **Yes**.
-2. Download Microsoft's list of root certificates. This contacts Windows Update, not the site. In that Command Prompt, paste:
+2. Go to your Downloads folder, so the files below land where you can find them. In that Command Prompt, paste:
+
+   ```bat
+   cd /d "%USERPROFILE%\Downloads"
+   ```
+3. Download Microsoft's list of root certificates. This contacts Windows Update, not the site. In the same Command Prompt, paste:
 
    ```bat
    certutil -generateSSTFromWU roots.sst
    ```
-3. Double-click `roots.sst`. Find the root certificate the site's operator names, right-click it, select **All Tasks** > **Export**, and save it as `root.cer`.
-4. Add only that certificate to **Trusted Root Certification Authorities**. In the same Command Prompt, paste:
+4. Open your Downloads folder and double-click `roots.sst`. Find the root certificate the site's operator names, right-click it, select **All Tasks** > **Export**, and save it in your Downloads folder as `root.cer`.
+5. Add only that certificate to **Trusted Root Certification Authorities**. In the same Command Prompt, paste:
 
    ```bat
    certutil -addstore Root root.cer
    ```
-5. Restart Lodestar. It reads the root certificates once, when it starts.
 
-   **Result:** `certutil` reports that the certificate was added. Then try the source again. To undo step 4, run `certutil -delstore Root "<name>"` with the certificate's name. On Docker, update the Lodestar image instead.
+   **Result:** `certutil` reports that the certificate was added.
+6. Restart Lodestar. It reads the root certificates once, when it starts.
+
+   **Result:** after the restart, try the source again; it connects.
+
+To undo step 5, run `certutil -delstore Root "<name>"` with the certificate's name. On Docker, update the Lodestar image instead.
 
 **Passwords and keys.** A companion Lodestar installed has a generated password or key. To see it, select **Passwords and keys** on the row, then **Show**, enter **Your Lodestar password** and select **Show it**. Lodestar asks every time and never remembers it. The value stays until you select **Hide**.
 
