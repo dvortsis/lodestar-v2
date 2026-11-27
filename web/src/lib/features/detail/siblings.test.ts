@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '$lib/api/client';
-import { clearDetailCaches } from './cache';
+import { FRESH_MS, clearDetailCaches } from './cache';
 import { HASH } from './fixtures';
 import type { Loaded } from './siblings';
 
@@ -137,5 +137,55 @@ describe('loadSiblings', () => {
 		expect(signal.aborted).toBe(false);
 		stop();
 		expect(signal.aborted).toBe(true);
+	});
+
+	describe('kept answers', () => {
+		const echo = () => get.mockImplementation(async (_p, o) => ({ hash: o.path.hash }));
+		const hex = (n: number) => n.toString(16).padStart(40, '0');
+		const load = async (hash: string) => {
+			const states: Loaded['status'][] = [];
+			loadSiblings(hash, (s) => states.push(s.status));
+			await settle();
+			return states;
+		};
+
+		afterEach(() => vi.useRealTimers());
+
+		it('reuses an answer for FRESH_MS and asks again after it', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] }); // only the clock: settle() still runs on real timers
+			echo();
+			await load(HASH);
+			expect(await load(HASH)).toEqual(['ready']); // kept: answered at once, nothing asked
+			expect(get).toHaveBeenCalledTimes(1);
+			vi.advanceTimersByTime(FRESH_MS + 1);
+			expect(await load(HASH)).toEqual(['loading', 'ready']);
+			expect(get).toHaveBeenCalledTimes(2);
+		});
+
+		it('keeps a read answer among the newest when the oldest are dropped', async () => {
+			echo();
+			for (let n = 1; n <= 8; n++) await load(hex(n));
+			await load(hex(1)); // read: now the newest
+			await load(hex(9)); // the ninth drops the oldest, which is now hex(2)
+			get.mockClear();
+			expect(await load(hex(1))).toEqual(['ready']);
+			expect(get).not.toHaveBeenCalled();
+			expect(await load(hex(2))).toEqual(['loading', 'ready']);
+			expect(get).toHaveBeenCalledTimes(1);
+		});
+
+		it('tells every section even when one throws', async () => {
+			echo();
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const heard: Loaded['status'][] = [];
+			loadSiblings(HASH, (s) => {
+				if (s.status === 'ready') throw new Error('boom');
+			});
+			loadSiblings(HASH, (s) => heard.push(s.status));
+			await settle();
+			expect(heard).toEqual(['loading', 'ready']);
+			expect(log).toHaveBeenCalledTimes(1);
+			log.mockRestore();
+		});
 	});
 });

@@ -60,6 +60,13 @@ describe('openDetail', () => {
 		expect(wanted()).toBeNull();
 	});
 
+	it('drops the section wish when the drawer is marked closed', () => {
+		openDetail(H1, { hit, section: 'related' });
+		expect(wanted()).not.toBeNull();
+		markClosed();
+		expect(wanted()).toBeNull();
+	});
+
 	it('replaces when asked and a drawer is already open (j/k)', () => {
 		page.state = { detail: { hash: H1 } };
 		openDetail(H2, { replace: true });

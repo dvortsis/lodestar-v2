@@ -178,11 +178,14 @@
 		const asked = wanted();
 		if (!asked || asked.hash !== hash || model.detail?.hash !== hash) return;
 		want(asked.hash, null);
-		void tick().then(() =>
+		void tick().then(() => {
+			if (!container) return;
 			container
-				?.querySelector(`[data-section="${asked.section}"]`)
-				?.scrollIntoView?.({ block: 'start' })
-		);
+				.querySelector(`[data-section="${asked.section}"]`)
+				?.scrollIntoView?.({ block: 'start' });
+			// Related takes focus when it mounts for this torrent, if the reader hasn't moved it.
+			container.dataset.ask = asked.hash;
+		});
 	});
 
 	// A different torrent in an open drawer (j/k) swaps in place; its title is announced once. The

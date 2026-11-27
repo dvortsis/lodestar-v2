@@ -771,6 +771,7 @@ placement:
   - GS-4
   - GS-5
   - X-gs-followups
+  - X-gs-followups-2
   - ENR-13
   - ENR-13b
   - X-always-adult-detail-mask

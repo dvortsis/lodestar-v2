@@ -175,6 +175,8 @@ test('Show all on an open group opens the best version’s drawer at Related', a
 	await expect(
 		drawer.locator('[data-list="other_versions"]').getByTestId('detail-related-row')
 	).toHaveCount(6);
+	// Focus lands on Related's heading, so a keyboard or screen-reader user is where the click went.
+	await expect(section(page).getByRole('heading', { name: 'Related' })).toBeFocused();
 	// The group's own load, then one for the drawer: Parsed, scrolled to now, uses Related's answer.
 	await drawer.locator('[data-section="parsed"]').scrollIntoViewIfNeeded();
 	await expect(drawer.getByTestId('detail-parsed-years')).toHaveText('2019');

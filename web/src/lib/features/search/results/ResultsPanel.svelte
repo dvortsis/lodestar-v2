@@ -274,30 +274,23 @@
 	const view = $derived(tableView ? 'table' : cards ? 'cards' : 'list');
 	let viewWas = untrack(() => view);
 	let rowsWas: typeof rows = [];
-	/** The row carried into the Table, set again once it mounts (it starts each mount at row 1). */
-	let carried: number | null = null;
 	$effect.pre(() => {
 		const now = view;
 		const next = rows;
 		untrack(() => {
 			const was = rowsWas[active];
-			if (now !== viewWas) carried = null;
+			// A new query's first rows start at row 1, as a fresh list does.
+			if (now === viewWas && rowsWas.length === 0 && next.length > 0) active = 0;
 			if (now !== viewWas && was && G) {
 				const find = (hash: string) =>
 					next.findIndex((r) => !G!.isGroupRow(r) && (r as SearchHit).hash === hash);
 				let i = find(G.hitOf(was).hash);
 				if (i < 0 && G.isGroupRow(was)) i = find(was.parent.hash);
 				if (i >= 0) active = i;
-				if (i >= 0 && now === 'table') carried = i;
 			}
 			viewWas = now;
 			rowsWas = next;
 		});
-	});
-	$effect(() => {
-		if (!grid || carried === null) return;
-		active = carried;
-		carried = null;
 	});
 	let listEl = $state<HTMLElement>();
 	type Detail = typeof import('$lib/features/detail/open');
