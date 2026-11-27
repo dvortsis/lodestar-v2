@@ -98,13 +98,15 @@ export function stallReason(p: ProgressSnapshot): StallReason | null {
 /**
  * The pill's extra state for these facts, if any. `warming` is a start inside its grace: the pill
  * turns it into "Warming up" while the crawler has stored nothing since the start, and into
- * "Starting" while the DHT has no routing nodes (it reads both from the crawler snapshot).
+ * "Starting" while the DHT has no routing nodes (it reads both from the crawler snapshot). After the
+ * grace it is `settled`, and a DHT that never joined then reads as stalled.
  */
 export function overlayOf(p: ProgressSnapshot): ProgressOverlay {
 	const reason = stallReason(p);
 	if (reason) return { kind: 'stalled', reason };
 	if (p.sampling) return { kind: 'starting' };
-	return p.uptimeS !== null && p.uptimeS < START_GRACE_S ? { kind: 'warming' } : null;
+	if (p.uptimeS === null) return null;
+	return p.uptimeS < START_GRACE_S ? { kind: 'warming' } : { kind: 'settled' };
 }
 
 /** `/stats` is asked this often; the rates are the server's, never computed here. */

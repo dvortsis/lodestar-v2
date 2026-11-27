@@ -255,7 +255,10 @@
 					</Banner>
 				{/if}
 
-				<StageStrip stages={overview.stages} onjump={jump} />
+				<!-- Its links jump to sections the first hour doesn't render, so it waits for them. -->
+				{#if !firstHour}
+					<StageStrip stages={overview.stages} onjump={jump} />
+				{/if}
 
 				{#if overview.stale}
 					<Banner kind="warning" title={m.insights_overview_stale_title()}>
@@ -276,8 +279,8 @@
 					/>
 				{/if}
 
-				<!-- Empty charts say nothing in the first hour; the pipeline above shows the progress, and the
-				     charts take over with the first completed cohort (startup is no longer "yes"). -->
+				<!-- Empty charts say nothing in the first hour; the pipeline above shows the progress. The charts
+				     return as soon as something is searchable or needs attention (`isFirstHour`). -->
 				{#if !firstHour}
 					<section
 						id="insights-status"

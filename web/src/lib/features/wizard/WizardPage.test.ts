@@ -238,6 +238,24 @@ describe('how it works', () => {
 	});
 });
 
+describe('live counts', () => {
+	it('are absent on "How it works", then stay mounted from step to step', async () => {
+		start('how');
+		await heading('How it works');
+		await screen.findByTestId('wizard-how');
+		expect(screen.queryByTestId('wizard-live')).toBeNull();
+		await fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+		await heading('Crawl intensity');
+		const live = await screen.findByTestId('wizard-live');
+		await fireEvent.click(await screen.findByRole('button', { name: 'Skip this step' }));
+		await waitFor(() =>
+			expect(screen.getByRole('heading', { level: 2 }).textContent).not.toBe('Crawl intensity')
+		);
+		// The same element: the stream behind it was not closed and reopened.
+		expect(screen.getByTestId('wizard-live')).toBe(live);
+	});
+});
+
 describe('storage step filesystem warning', () => {
 	const show = (step: StepId) => {
 		writeProgress({ step, skipped: [], done: [] });

@@ -159,6 +159,30 @@ describe('pill progress states', () => {
 		expect(pill(null, lost).kind).not.toBe('starting');
 	});
 
+	it('the grace ends exactly at START_GRACE_S, and an unknown uptime is not a start', () => {
+		const fresh = crawler({ stored: 0 });
+		const q = (uptimeS: number | null) => progress({ uptimeS, reasons: [] });
+		expect(pill(q(START_GRACE_S - 1), fresh).kind).toBe('warming');
+		expect(pill(q(START_GRACE_S), fresh).kind).not.toBe('warming');
+		expect(pill(q(null), fresh).kind).not.toBe('warming');
+		expect(overlayOf(q(START_GRACE_S))).toEqual({ kind: 'settled' });
+		expect(overlayOf(q(null))).toBeNull();
+	});
+
+	it('a DHT that never joined is a stall once the grace is over, never a calm "Idle"', () => {
+		const none = crawler({ dht_nodes: 0, stored: 0, fetch_active: 0, fetch_pending: 0 });
+		const q = (uptimeS: number) => progress({ uptimeS, ingestPerHour: 5, fetchedPerHour: 5 });
+		expect(pill(q(START_GRACE_S - 1), none).kind).toBe('starting');
+		expect(pill(q(START_GRACE_S), none)).toMatchObject({ kind: 'stalled', reason: 'no_progress' });
+		expect(pill(q(DAY), none).kind).toBe('stalled');
+		// Not for a DHT that is off (null), one with nodes, or something stored.
+		expect(pill(q(DAY), { ...none, dht_nodes: null }).kind).not.toBe('stalled');
+		expect(pill(q(DAY), { ...none, dht_nodes: 4 }).kind).not.toBe('stalled');
+		expect(pill(q(DAY), { ...none, stored: 1 }).kind).not.toBe('stalled');
+		// No progress facts (the stats call failed): the grace is unknown, so no verdict.
+		expect(pill(null, none).kind).not.toBe('stalled');
+	});
+
 	it('warming up ends at the first stored torrent', () => {
 		const p = progress({ uptimeS: 120, ingestPerHour: null, fetchedPerHour: null });
 		expect(pill(p, crawler({ stored: 0 })).kind).toBe('warming');
@@ -237,7 +261,9 @@ describe('pill progress states', () => {
 					expect(s.kind).not.toBe('starting');
 				}
 			}
-			expect(overlayOf(progress({ uptimeS: DAY, sampling: undefined }))).toBeNull();
+			expect(overlayOf(progress({ uptimeS: DAY, sampling: undefined }))).toEqual({
+				kind: 'settled'
+			});
 		});
 	});
 
@@ -274,7 +300,7 @@ describe('StatusPill progress states', () => {
 		render(StatusPill, { state: { kind: 'starting', ...none } });
 		expect(screen.getByTestId('status-pill-text').textContent).toBe('Starting');
 		const help = screen.getByTestId('status-pill-announce').textContent;
-		expect(help).toContain('Lodestar is joining the DHT');
+		expect(help).toContain('getting ready to sample');
 		expect(help).not.toMatch(/\d\s*h\b/);
 	});
 
@@ -463,7 +489,7 @@ describe('progress source', () => {
 		Object.defineProperty(document, 'hidden', { value: false, configurable: true });
 		document.dispatchEvent(new Event('visibilitychange'));
 		await vi.advanceTimersByTimeAsync(0);
-		expect(set).toHaveBeenLastCalledWith(null);
+		expect(set).toHaveBeenLastCalledWith({ kind: 'settled' });
 		expect(source).toHaveBeenCalledTimes(3);
 		document.dispatchEvent(new Event('visibilitychange')); // inside the minimum gap: ignored
 		await vi.advanceTimersByTimeAsync(0);

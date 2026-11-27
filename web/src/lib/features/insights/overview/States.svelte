@@ -35,7 +35,7 @@
 		>
 			{#snippet illustration()}<StateScene id="searching_crawling" />{/snippet}
 			{#snippet action()}
-				<dl class="ins-counters" aria-label={m.insights_overview_starting_pipeline()}>
+				<dl class="ins-counters" role="group" aria-label={m.insights_overview_starting_pipeline()}>
 					<div>
 						<dt>{m.insights_overview_starting_nodes()}</dt>
 						<dd data-testid="insights-starting-nodes">

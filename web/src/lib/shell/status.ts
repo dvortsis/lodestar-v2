@@ -26,9 +26,16 @@ export type PillKind =
 /** Why the pill says "Stalled": the API's own reason, or `no_progress` (nothing stored for a window). */
 export type StallReason = 'writer_stalled' | 'cohort_stalled' | 'index_lag' | 'no_progress';
 
-/** What the progress facts add to the pill (`progress.ts` decides); null = nothing to add. */
+/**
+ * What the progress facts add to the pill (`progress.ts` decides); null = nothing to add or no
+ * facts. `settled` = the start grace is over (the crawler reads what that means for it).
+ */
 export type ProgressOverlay =
-	{ kind: 'starting' } | { kind: 'warming' } | { kind: 'stalled'; reason: StallReason } | null;
+	| { kind: 'starting' }
+	| { kind: 'warming' }
+	| { kind: 'settled' }
+	| { kind: 'stalled'; reason: StallReason }
+	| null;
 
 export interface PillState {
 	kind: PillKind;
@@ -67,13 +74,18 @@ export function pillState(input: {
 	if (!crawler) return { kind: 'unknown', ...none };
 	if (crawler.paused && !restartNeeded)
 		return { kind: 'paused', torrents: crawler.torrents, done: null, total: null };
-	// Starting: a start inside its grace and the DHT has no routing nodes yet (null is "off" or "not
-	// reported", not this; later it is a stall to report, not a start), or the
-	// server holds sampling back. Warming up: a start with nothing stored yet, showing what's found.
+	// Starting: a start inside its grace with no routing nodes yet (null is "off" or "not reported"),
+	// or sampling held back by the server. Warming up: a start with nothing stored yet. Past the
+	// grace, a DHT that never joined with nothing stored is a stall, not a calm "Idle".
+	const k = progress?.kind;
+	const fresh = crawler.stored === 0;
+	const joining = crawler.dht_nodes === 0;
+	if (k === 'settled' && joining && fresh)
+		return { ...none, kind: 'stalled', reason: 'no_progress', torrents: crawler.torrents };
 	const start =
-		(crawler.dht_nodes === 0 && progress?.kind === 'warming') || progress?.kind === 'starting'
+		k === 'starting' || (k === 'warming' && joining)
 			? 'starting'
-			: progress?.kind === 'warming' && crawler.stored === 0
+			: k === 'warming' && fresh
 				? 'warming'
 				: null;
 	if (start)

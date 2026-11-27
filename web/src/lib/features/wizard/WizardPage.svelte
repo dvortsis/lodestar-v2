@@ -205,7 +205,7 @@
 	</section>
 
 	<!-- The crawler is already running, so the steps after "How it works" show what it has found. -->
-	{#if index > stepIndex('how') && Step && Live}
+	{#if index > stepIndex('how') && Live}
 		<Live />
 	{/if}
 
