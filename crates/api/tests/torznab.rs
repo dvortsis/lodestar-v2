@@ -3,7 +3,9 @@
 //! source, BEP 27 private, hidden, unverified, Adult with
 //! `torznab_adult` off and on), hostile names written as well-formed XML
 //! (parsed back strictly below), parameter refusals, and every auth
-//! refusal as a Torznab error document that never carries the key.
+//! refusal as a Torznab error document that never carries the key; caps
+//! without ID parameters at any coverage, and ID searches that still find
+//! unidentified releases (X-torznab-id-caps).
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -20,7 +22,8 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_classify::Correction;
 use lodestar_metainfo::Info;
 use lodestar_search::SearchIndex;
-use lodestar_store::claims::Claims;
+use lodestar_store::claims::{Claims, Details, ExternalId};
+use lodestar_store::identify_sweep::TERMS_KEY;
 use lodestar_store::unverified::{Network, NewUnverified};
 use lodestar_store::{KeyKind, NewApiKey, NewTorrent, SourceId, Store, StoreConfig, flags};
 use tower::ServiceExt;
@@ -299,12 +302,14 @@ fn the_reader_is_strict() {
 // ── The fixture ───────────────────────────────────────────────────────
 
 /// One fixture torrent: raw name bytes, whether it's corrected to Adult,
-/// and its extra flags. Single-file, 1 MiB.
+/// its extra flags, and the IDs an identification answer that may be
+/// served gives it (`scheme`, `value`). Single-file, 1 MiB.
 #[derive(Clone)]
 struct T {
     name: Vec<u8>,
     adult: bool,
     flags: i64,
+    ids: &'static [(&'static str, &'static str)],
 }
 
 fn t(name: &str) -> T {
@@ -312,6 +317,44 @@ fn t(name: &str) -> T {
         name: name.as_bytes().to_vec(),
         adult: false,
         flags: 0,
+        ids: &[],
+    }
+}
+
+/// `name`, identified with `ids` by a catalogue whose terms allow
+/// passing answers on.
+fn identified(name: &str, ids: &'static [(&'static str, &'static str)]) -> T {
+    T { ids, ..t(name) }
+}
+
+/// A terms record that allows passing answers on: version 1, the
+/// redistribute flag, 180 days. Hand-encoded from
+/// `lodestar_sources::terms::Terms::record` (the search crate's
+/// `tests/enrichment.rs` does the same); if that layout changes, the ID
+/// searches below find nothing and `caps_do_not_follow_identification`'s
+/// `by_id` count is the first to fail.
+fn redistributable_terms() -> Vec<u8> {
+    let mut v = vec![1, 1 << 1];
+    v.extend((180u64 * 86_400).to_be_bytes());
+    v
+}
+
+/// An identification answer (a version 3 claims row: details with a
+/// match confidence) naming `ids`.
+fn answer(ids: &[(&str, &str)]) -> Claims {
+    Claims {
+        ids: ids
+            .iter()
+            .map(|(s, v)| ExternalId {
+                scheme: (*s).into(),
+                value: (*v).into(),
+            })
+            .collect(),
+        details: Some(Box::new(Details {
+            match_confidence: Some(90),
+            ..Details::default()
+        })),
+        ..Claims::default()
     }
 }
 
@@ -397,6 +440,25 @@ fn build(db: &std::path::Path, ts: &[T], unverified: Option<&str>) -> (Store, Ve
         enriched.push((*id, e));
     }
     store.set_enrichments(&enriched).unwrap();
+    if ts.iter().any(|t| !t.ids.is_empty()) {
+        // The finder (id 0) first, so the catalogue isn't the source
+        // that found the torrents: its answers wouldn't be served.
+        assert_eq!(
+            store.register_source("dht", "1", 1).unwrap(),
+            SourceId::new(0).unwrap()
+        );
+        let catalogue = store.register_source("wikidata", "1", 1).unwrap();
+        store
+            .set_plugin_state(catalogue, TERMS_KEY, Some(&redistributable_terms()))
+            .unwrap();
+        for (id, t) in ids.iter().zip(ts).filter(|(_, t)| !t.ids.is_empty()) {
+            assert!(
+                store
+                    .put_claims(*id, catalogue, &answer(t.ids), false)
+                    .unwrap()
+            );
+        }
+    }
     if let Some(name) = unverified {
         let feed = store.register_source("nyaa", "1", 1_700_000_000).unwrap();
         let claims = Claims {
@@ -440,6 +502,7 @@ fn fixture(ts: &[T], o: Opts) -> Fixture {
                 name: t.name.clone(),
                 adult: false,
                 flags: 0,
+                ids: &[],
             })
             .collect();
         build(&dir.path().join("twin.db"), &plain, o.unverified).0
@@ -644,8 +707,8 @@ const CAPS: &str = concat!(
     "<caps><server title=\"Lodestar\"/><limits default=\"100\" max=\"100\"/>",
     "<searching>",
     "<search available=\"yes\" supportedParams=\"q\"/>",
-    "<tv-search available=\"yes\" supportedParams=\"q,season,ep,tvdbid,imdbid,tmdbid\"/>",
-    "<movie-search available=\"yes\" supportedParams=\"q,imdbid,tmdbid\"/>",
+    "<tv-search available=\"yes\" supportedParams=\"q,season,ep\"/>",
+    "<movie-search available=\"yes\" supportedParams=\"q\"/>",
     "<music-search available=\"yes\" supportedParams=\"q\"/>",
     "<audio-search available=\"yes\" supportedParams=\"q\"/>",
     "<book-search available=\"yes\" supportedParams=\"q\"/>",
@@ -674,14 +737,12 @@ async fn caps_is_the_golden_document() {
     assert_eq!(r.cache_control.as_deref(), Some("no-store"));
     assert_eq!(r.body, CAPS);
     let caps = parse_xml(&r.body);
-    // ID search (ENR-11): TV and films only.
+    // No ID parameters (X-torznab-id-caps): an *arr app sends an ID
+    // search, with no title, for each one advertised.
     let searching = caps.child("searching").unwrap();
     let params = |n: &str| searching.child(n).unwrap().attr("supportedParams");
-    assert_eq!(
-        params("tv-search"),
-        Some("q,season,ep,tvdbid,imdbid,tmdbid")
-    );
-    assert_eq!(params("movie-search"), Some("q,imdbid,tmdbid"));
+    assert_eq!(params("tv-search"), Some("q,season,ep"));
+    assert_eq!(params("movie-search"), Some("q"));
     assert_eq!(params("search"), Some("q"));
     assert_eq!(caps.child("limits").unwrap().attr("max"), Some("100"));
     // Caps doesn't need search.
@@ -694,6 +755,95 @@ async fn caps_is_the_golden_document() {
     );
     let key = off.torznab_key();
     assert_eq!(off.api(&key, "t=caps").await.body, CAPS);
+}
+
+/// Releases of one show and one film, some identified and some not.
+const SHOW_IDS: &[(&str, &str)] = &[("tvdb", "81189"), ("imdb", "tt0903747")];
+const FILM_IDS: &[(&str, &str)] = &[("imdb", "tt0133093"), ("tmdb", "603")];
+const SHOW_A: &str = "Breaking.Bad.S01E01.1080p.WEB.x264-GRP.mkv";
+const SHOW_B: &str = "Breaking.Bad.S01E01.720p.HDTV.x264-OTHER.mkv";
+const FILM_A: &str = "The.Matrix.1999.1080p.BluRay.x264-GRP.mkv";
+const FILM_B: &str = "The.Matrix.1999.2160p.WEB.x265-OTHER.mkv";
+
+/// The four releases, the ones with `identify` set identified.
+fn shelf(identify: [bool; 4]) -> Vec<T> {
+    [
+        (SHOW_A, SHOW_IDS),
+        (SHOW_B, SHOW_IDS),
+        (FILM_A, FILM_IDS),
+        (FILM_B, FILM_IDS),
+    ]
+    .into_iter()
+    .zip(identify)
+    .map(|((n, ids), on)| if on { identified(n, ids) } else { t(n) })
+    .collect()
+}
+
+/// Caps is the same document whatever share of releases is identified:
+/// none, some or all. Coverage on a DHT index is never complete for
+/// long, and Prowlarr keeps the caps it synced.
+#[tokio::test]
+async fn caps_do_not_follow_identification() {
+    for identify in [[false; 4], [true, false, true, false], [true; 4]] {
+        let f = fixture(&shelf(identify), Opts::default());
+        let key = f.torznab_key();
+        // The answers reached the index: the ID clauses find them.
+        let want = identify.iter().filter(|i| **i).count();
+        let found = f.titles(&key, "t=search&cat=2000,5000&q=").await.len();
+        assert_eq!(found, 4, "{identify:?}");
+        let by_id = f.titles(&key, "t=tvsearch&tvdbid=81189").await.len()
+            + f.titles(&key, "t=movie&imdbid=tt0133093").await.len();
+        assert_eq!(by_id, want, "{identify:?}");
+        // `caps()` takes no input: this pins that it stays that way.
+        assert_eq!(f.api(&key, "t=caps").await.body, CAPS, "{identify:?}");
+    }
+}
+
+/// An ID search with a title, as a client that ignores caps may send:
+/// the identified releases and the unidentified ones the title finds.
+/// Without a title there's nothing to find the unidentified ones by.
+#[tokio::test]
+async fn an_id_search_with_words_finds_unidentified_releases_too() {
+    let f = fixture(&shelf([true, false, true, false]), Opts::default());
+    let key = f.torznab_key();
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    assert_eq!(
+        sorted(
+            f.titles(&key, "t=tvsearch&tvdbid=81189&q=breaking+bad&season=1&ep=1")
+                .await
+        ),
+        [SHOW_A, SHOW_B]
+    );
+    assert_eq!(
+        sorted(
+            f.titles(&key, "t=movie&imdbid=tt0133093&tmdbid=603&q=matrix")
+                .await
+        ),
+        [FILM_A, FILM_B]
+    );
+    // The rest of the request still applies: season, episode, category.
+    assert!(
+        f.titles(&key, "t=tvsearch&tvdbid=81189&q=breaking+bad&season=2")
+            .await
+            .is_empty()
+    );
+    assert!(
+        f.titles(&key, "t=movie&tvdbid=81189&q=breaking+bad")
+            .await
+            .is_empty()
+    );
+    // An identified release is found by its ID whatever the words.
+    assert_eq!(
+        f.titles(&key, "t=movie&imdbid=tt0133093&q=nothing+like+it")
+            .await,
+        [FILM_A]
+    );
+    // Only the ID: the identified releases alone.
+    assert_eq!(f.titles(&key, "t=tvsearch&tvdbid=81189").await, [SHOW_A]);
+    assert_eq!(f.titles(&key, "t=movie&tmdbid=603").await, [FILM_A]);
 }
 
 // ── Searching ─────────────────────────────────────────────────────────
@@ -997,6 +1147,7 @@ async fn hostile_names_are_well_formed_xml() {
             name: n.clone(),
             adult: false,
             flags: 0,
+            ids: &[],
         })
         .collect();
     let f = fixture(&ts, Opts::default());

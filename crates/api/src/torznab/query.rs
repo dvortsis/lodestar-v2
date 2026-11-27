@@ -33,7 +33,9 @@
 //! - each word of `q`, on name and paths;
 //! - each external id, as its `imdb:`, `tmdb:` or `tvdb:` clause, which
 //!   matches only torrents an identification answer that may be served
-//!   names (ENR-11);
+//!   names (ENR-11). Several IDs match any of them; with `q` as well,
+//!   `q`'s words on their own match too, so a release no source has
+//!   identified isn't hidden (X-torznab-id-caps);
 //! - `season` and `ep` as ranges (a daily `MM/DD` becomes the phrase
 //!   `YYYY MM DD`, the year from `season`);
 //! - the categories, or the mode's own when there's no `cat`;
@@ -347,7 +349,7 @@ impl Request {
     /// The search's AST, before search's own defaults; `None` when it
     /// can match nothing (only categories this server doesn't list).
     pub fn ast(&self, mode: Mode) -> Option<Node> {
-        let mut of: Vec<Node> = self
+        let mut words: Vec<Node> = self
             .words
             .iter()
             .map(|w| Node::Word {
@@ -365,8 +367,21 @@ impl Request {
                 any: vec![v.clone()],
             })
             .collect();
+        // With words too, the words match on their own: identification
+        // is partial, so an ID clause alone would hide every release no
+        // source has identified (X-torznab-id-caps).
+        let mut of = Vec::new();
+        if !ids.is_empty() && !words.is_empty() {
+            let title = match words.len() {
+                1 => words.remove(0),
+                _ => Node::And {
+                    of: std::mem::take(&mut words),
+                },
+            };
+            ids.push(title);
+        }
         match ids.len() {
-            0 => {}
+            0 => of.append(&mut words),
             1 => of.append(&mut ids),
             _ => of.push(Node::Or { of: ids }),
         }
@@ -641,6 +656,38 @@ mod tests {
                 ]
             }
         );
+        // With words: the ID, or the words on their own, so a release
+        // nothing identified is still found.
+        let word = |w: &str| Node::Word {
+            field: TextField::Any,
+            word: w.into(),
+        };
+        let r = ok("t=movie&imdbid=tt0133093&q=the+matrix");
+        let Some(Node::And { of }) = r.ast(Mode::Movie) else {
+            panic!()
+        };
+        assert_eq!(
+            of[0],
+            Node::Or {
+                of: vec![
+                    tag(TagKey::Imdb, "tt0133093"),
+                    Node::And {
+                        of: vec![word("the"), word("matrix")]
+                    },
+                ]
+            }
+        );
+        let r = ok("t=movie&imdbid=tt0133093&q=matrix");
+        let Some(Node::And { of }) = r.ast(Mode::Movie) else {
+            panic!()
+        };
+        assert_eq!(
+            of[0],
+            Node::Or {
+                of: vec![tag(TagKey::Imdb, "tt0133093"), word("matrix")]
+            }
+        );
+        assert!(!of.contains(&word("matrix")));
     }
 
     #[test]

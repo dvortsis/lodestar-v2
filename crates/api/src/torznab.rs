@@ -4,7 +4,8 @@
 //!
 //! **Functions:** `t=caps`, and the searches `search`, `tvsearch`,
 //! `movie`, `music` and `book` with `q`, `cat`, `season`, `ep`, `limit`
-//! (≤ 100) and `offset`. Every parameter is untrusted and parsed in
+//! (≤ 100) and `offset`; `imdbid`, `tmdbid` and `tvdbid` are read but not
+//! advertised (see [`caps`]). Every parameter is untrusted and parsed in
 //! [`query`]. Results are magnet links only, as RSS 2.0 with Torznab's
 //! attributes, written by [`xml`]. Categories follow [`categories`].
 //!
@@ -185,7 +186,17 @@ async fn api(
 }
 
 /// The caps document: what this server searches and its categories.
-/// The ID parameters are ENR-11's.
+///
+/// **No ID parameters** (`tvdbid`, `imdbid`, `tmdbid`), whatever share
+/// of releases is identified (X-torznab-id-caps). Sonarr and Radarr send
+/// an ID search, with no title, whenever caps advertises one, and fall
+/// back to a title search only when it finds nothing. Identification is
+/// partial for a DHT index and stays so, as new finds keep arriving
+/// unidentified, so an ID answer would hide every release no source has
+/// identified. Caps doesn't follow coverage either: Prowlarr keeps the
+/// caps it synced. A title search loses nothing: catalogue titles are
+/// indexed too (ENR-11). The parameters are still read when a client
+/// sends them anyway ([`query`]).
 pub fn caps() -> String {
     let mut x = Xml::new();
     x.open("caps", &[]);
@@ -195,8 +206,8 @@ pub fn caps() -> String {
     x.open("searching", &[]);
     for (name, params) in [
         ("search", "q"),
-        ("tv-search", "q,season,ep,tvdbid,imdbid,tmdbid"),
-        ("movie-search", "q,imdbid,tmdbid"),
+        ("tv-search", "q,season,ep"),
+        ("movie-search", "q"),
         ("music-search", "q"),
         ("audio-search", "q"),
         ("book-search", "q"),
