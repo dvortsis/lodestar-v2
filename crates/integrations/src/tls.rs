@@ -166,11 +166,23 @@ mod tests {
         ]
     }
 
+    /// What each route must verify with. No wildcard arm: a new `Route`
+    /// variant fails to compile here until it is given its verification.
+    fn wanted(route: &Route) -> Verification {
+        match route {
+            Route::Direct => Verification::Platform,
+            Route::BindAddress(_) => Verification::SelfContained,
+            Route::Interface(_) => Verification::SelfContained,
+            Route::Socks5(_) => Verification::SelfContained,
+        }
+    }
+
     #[test]
     fn every_route_but_direct_verifies_self_contained() {
-        assert_eq!(verification_for(&Route::Direct), Verification::Platform);
+        assert_eq!(verification_for(&Route::Direct), wanted(&Route::Direct));
         for r in routed() {
-            assert_eq!(verification_for(&r), Verification::SelfContained, "{r:?}");
+            assert_eq!(wanted(&r), Verification::SelfContained, "{r:?}");
+            assert_eq!(verification_for(&r), wanted(&r), "{r:?}");
             assert!(verifier_for(&r, provider()).is_ok(), "{r:?}");
         }
         assert!(verifier_for(&Route::Direct, provider()).is_ok());
