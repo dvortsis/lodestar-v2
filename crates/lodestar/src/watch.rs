@@ -2775,8 +2775,14 @@ mod tests {
                 f.remove(b),
                 Err(MoveError::Subfolder(Problem::Unreadable))
             ));
-            assert_eq!(std::fs::read(y.join("w").join("b.torrent")).unwrap(), b"OTHER");
-            assert!(!y.join("w").join(FAILED).exists(), "nothing made in the other");
+            assert_eq!(
+                std::fs::read(y.join("w").join("b.torrent")).unwrap(),
+                b"OTHER"
+            );
+            assert!(
+                !y.join("w").join(FAILED).exists(),
+                "nothing made in the other"
+            );
             drop(f);
             // The next poll follows the path, as it always has.
             let next = Folder::open(&j.join("w"), data.path()).unwrap();
