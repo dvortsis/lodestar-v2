@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T12:51:35Z",
+  "updated_at": "2026-11-27T14:34Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,16 +11116,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T12:51:35Z",
+    "updated": "2026-11-27T14:34Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-import-verified-no",
+        "slice": "X-saved-verified-rewrite",
         "role": "build",
         "agent": "claude",
-        "session": "session_01MMjhnBYvsxSGDbhAEgUbG8",
-        "doing": "PR #1139 open, under review",
-        "since": "2026-11-27T10:27:21Z"
+        "session": "session_01MMjhn8dWsf8cB7dBNZrTcU",
+        "doing": "building (release blocker)",
+        "since": "2026-11-27T14:34Z"
       },
       {
         "slot": 2,

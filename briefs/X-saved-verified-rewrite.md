@@ -1,10 +1,10 @@
 # X-saved-verified-rewrite: Saved searches and alerts made with Show unverified keep finding imports
 
-**Runner brief, 2026-11-27T14:50Z.** Core, Opus (stored user data rewrite; the percolator's input). **A release blocker:** it must land before the next release. Target < 500 changed lines. `/security-review` before you report ready.
+**Runner brief, 2026-11-27T14:33Z.** Core, Opus (stored user data rewrite; the percolator's input). **A release blocker:** it must land before the next release. Target < 500 changed lines. `/security-review` before you report ready.
 - **Branch:** `slice/X-saved-verified-rewrite` from fresh `origin/main` (with #1139, X-import-verified-no, merged as 10db45b4).
 - **PR title:** `X-saved-verified-rewrite: Saved searches and alerts made with Show unverified keep finding imports`.
 - Follow `.claude/skills/steward/SKILL.md`. The runner merges; you never do. A fresh Opus review gates the merge.
-- **Add this slice's own `runner/slices.yaml` entry** (kind core, model opus, deps [X-import-verified-no], your owns, notes "runner 2026-11-27T14:50Z, release blocker from #1139") and run `cd tools/status-connector && npm test`. Edit nothing else in that file or in `runner/dashboard.yaml`.
+- **Add this slice's own `runner/slices.yaml` entry** (kind core, model opus, deps [X-import-verified-no], your owns, notes "runner 2026-11-27T14:33Z, release blocker from #1139") and run `cd tools/status-connector && npm test`. Edit nothing else in that file or in `runner/dashboard.yaml`.
 
 ## Why
 #1139 gave imports a third provenance value, `verified:imported`, shown by default. "Show unverified" now sends `verified:yes,imported,no`. Before #1139 it sent `verified:yes,no`, and imports matched that only because they were indexed `yes`. So a saved search or alert stored with `verified:yes,no` now leaves imports out, with no notice (see `docs/decisions/2026-11-27-X-import-verified-no.md`, the "saved search or URL" and "Follow-up, a release blocker" lines). Nothing released is affected yet. This slice makes sure nothing released ever is.
