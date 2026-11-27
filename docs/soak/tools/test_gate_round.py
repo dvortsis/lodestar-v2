@@ -1156,7 +1156,8 @@ class D3ExemptionTests(SegmentBase):
     def test_the_note_command_records_kind_and_pools(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            (root / "run.json").write_text(json.dumps({"clock": {"monotonic_origin": 0.0, "boot_id": "b"}}))
+            (root / "run.json").write_text(json.dumps({"clock": {"monotonic_origin": 0.0, "boot_id": "b"},
+                                                       "round1": {"round": 1}}))
             boot = root / "boot_id"
             boot.write_text("b\n")
             rc = collect.note_command(["--root", d, "--category", "array_operation", "--kind", "mover",
@@ -1164,9 +1165,9 @@ class D3ExemptionTests(SegmentBase):
             self.assertEqual(rc, 0)
             entry = json.loads((root / "activity.jsonl").read_text())
             self.assertEqual((entry["kind"], entry["pools"]), ("mover", ["array", "cache"]))
-            with self.assertRaises(SystemExit):
-                collect.note_command(["--root", d, "--category", "array_operation", "--kind", "mover"],
-                                     boot_id_path=boot)
+            for argv in (["--kind", "mover"], []):  # a round-1 run needs both
+                with self.assertRaises(SystemExit):
+                    collect.note_command(["--root", d, "--category", "array_operation", *argv], boot_id_path=boot)
 
 
 class RoundSpecAndVcpuTests(RoundBase):

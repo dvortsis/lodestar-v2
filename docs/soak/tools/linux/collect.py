@@ -1856,11 +1856,10 @@ def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sy
     args = parser.parse_args(argv)
     if len(args.text) > 200 or any(ord(c) < 32 for c in args.text):
         parser.error("--text must be one line of at most 200 characters")
-    if args.category == "array_operation" and (args.kind is None or not args.pool
-                                               or not all(re.fullmatch(r"[a-z0-9_]{1,32}", p) for p in args.pool)):
-        parser.error("array_operation needs --kind mover|parity|other and a --pool for every pool it touches")
     if args.category != "array_operation" and (args.kind or args.pool):
         parser.error("--kind and --pool are for array_operation only")
+    if not all(re.fullmatch(r"[a-z0-9_]{1,32}", p) for p in args.pool) or bool(args.kind) != bool(args.pool):
+        parser.error("--kind and --pool go together: --kind mover|parity|other and a --pool for every pool it touches")
     root = Path(args.root)
     try:
         run = json.loads((root / "run.json").read_text(encoding="utf-8"))
@@ -1868,6 +1867,9 @@ def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sy
     except (OSError, ValueError, KeyError, TypeError):
         sys.stderr.write("Not a CR-COL-3 run directory (run.json has no clock origin).\n")
         return 2
+    if run.get("round1") and args.category == "array_operation" and not args.kind:
+        # Round 1 (D3): what ran and on which pools decides whether it spares the window.
+        parser.error("a round-1 run's array_operation needs --kind mover|parity|other and a --pool for every pool")
     boot = (read_text(boot_id_path) or "").strip()
     entry = {"time": iso(now()), "elapsed_seconds": round(clock() - origin, 1), "category": args.category,
              "same_boot": bool(boot) and boot == run["clock"].get("boot_id"),

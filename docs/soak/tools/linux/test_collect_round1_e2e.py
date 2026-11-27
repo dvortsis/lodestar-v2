@@ -115,7 +115,9 @@ def sample_host(root, out, arms, start, end):
     def sleep(seconds):
         clock[0] += timedelta(seconds=seconds)
     import threading
-    hs.run_loop(sampler, out, threading.Event(), now=lambda: clock[0], sleep=sleep, until=end)
+    from unittest import mock
+    with mock.patch.object(hs.os, "cpu_count", lambda: 8):  # the box's 8 vCPUs (the declaration's)
+        hs.run_loop(sampler, out, threading.Event(), now=lambda: clock[0], sleep=sleep, until=end)
 
 
 class EndToEnd(unittest.TestCase):
