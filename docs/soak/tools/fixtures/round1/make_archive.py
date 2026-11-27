@@ -26,6 +26,7 @@ ALL_ON = {s: s != "route_backoff" for s in SWITCHES}  # O3: route_backoff declar
 ALL_OFF = {s: False for s in SWITCHES}
 DIGEST = "sha256:" + "d" * 64
 SPEC_COMMIT = "c" * 40
+DEVICE = "nvme0n1"  # the /data device's kernel name, as a declaration names it (§6.3)
 COMMIT = "e" * 40
 
 
@@ -118,7 +119,7 @@ def host_samples(reports, cpu=0.40):
         out.append({"utc": iso(t), "cpu": cpu, "steal": 0.01, "disk_write_ms": 4.0, "disk_inflight": 0,
                     "uplink_drops_total": drops, "tunnels": {arm: {"rtt_ms": 31.0, "lost": False} for arm in reports}})
         t += timedelta(seconds=10)
-    return {"schema": 1, "interval_seconds": 10, "vcpus": 8,
+    return {"schema": 1, "interval_seconds": 10, "vcpus": 8, "backing_device": DEVICE,
             "rehearsal_rtt_median_ms": {arm: 30.0 for arm in reports}, "samples": out}
 
 
@@ -136,7 +137,7 @@ def archive(layout="L3", attempt="r1-a1"):
         days.append({"attempt": attempt, "day": day, "repeat": 0, "reports": reports,
                      "archive": day_archive(attempt, day, reports, placed), "contention": host_samples(reports)})
     decl = {"schema": 1, "kind": "cr_round1_declaration", "round": 1, "spec_commit": SPEC_COMMIT,
-            "image_digest": DIGEST, "host_identity": HOST, "network_identity": dict(NETWORK),
+            "image_digest": DIGEST, "host_identity": HOST, "network_identity": dict(NETWORK), "backing_device": DEVICE,
             "comparator": {"run_id": "comp-1"}, "selection_order": ["B", "A"],
             "attempts": [{"id": attempt, "layout": layout,
                           "candidate_digests": {a: DIGEST for a in LAYOUTS[layout][1] if ROLE[a] == "candidate"}}],

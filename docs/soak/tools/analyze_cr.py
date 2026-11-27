@@ -1760,6 +1760,8 @@ LAYOUTS = {
     "S": None,
 }
 EXIT_LABELS = ("X", "Y", "Z")
+SELECTION_ORDER = ["B", "A"]  # O2: B Balanced first, A Aggressive the authorized fallback
+DIAGNOSES = (None, "pending", "product", "infrastructure")  # an event's diagnosis (§6.3)
 RETRY_BUDGET = 2  # §6.3: repeated days per round, not counting a solo confirmation's own
 # §6.3's contention thresholds, as proposed; the CR-SPEC decisions file freezes them and a
 # declaration's `contention` block may only restate them (gate-round refuses other values).
@@ -1784,6 +1786,8 @@ def check_declaration(decl):
     for key in ("spec_commit", "image_digest", "host_identity"):
         require(isinstance(decl.get(key), str) and decl[key], f"declaration: {key}")
     require(HASH.fullmatch(decl["host_identity"]) is not None, "declaration: host_identity must be a salted hash")
+    require(isinstance(decl.get("backing_device"), str) and re.fullmatch(r"[a-z0-9_-]{1,32}", decl["backing_device"])
+            is not None, "declaration: backing_device (the /data device's kernel name, §6.3)")
     net = decl.get("network_identity")
     require(isinstance(net, dict) and HASH.fullmatch(str(net.get("uplink_hash"))) is not None
             and isinstance(net.get("provider"), str) and isinstance(net.get("protocol"), str),
@@ -1791,8 +1795,9 @@ def check_declaration(decl):
     comp = decl.get("comparator")
     require(isinstance(comp, dict) and RUN_ID.fullmatch(str(comp.get("run_id"))) is not None,
             "declaration: comparator.run_id (the booked comparator)")
-    order = decl.get("selection_order", ["B", "A"])
-    require(isinstance(order, list) and len(set(order)) == len(order) and order, "declaration: selection_order")
+    # O2: Balanced first. The order is the owner's, so a declaration may only restate it.
+    require(decl.get("selection_order", SELECTION_ORDER) == SELECTION_ORDER,
+            "declaration: selection_order must be B then A (O2, Balanced first)")
     thresholds = decl.get("contention", CONTENTION)
     require(thresholds == CONTENTION, "declaration: contention thresholds differ from the frozen ones")
     attempts = decl.get("attempts")
@@ -1824,6 +1829,10 @@ def check_declaration(decl):
     for e in arms:  # a role is the arm's for the whole round
         require(all(o["role"] == e["role"] for o in arms if o["arm"] == e["arm"]),
                 f"declaration: arm {e['arm']} has one role")
+        if e["role"] == "candidate":  # each attempt records its candidates' digests (§6.3)
+            att = next(a for a in attempts if a["id"] == e["attempt"])
+            require(isinstance(att["candidate_digests"].get(e["arm"]), str),
+                    f"declaration: attempt {att['id']} records candidate {e['arm']}'s digest")
     return decl
 
 
@@ -1853,8 +1862,9 @@ def load_manifest(path):
     out = {"declaration": check_declaration(load(man.get("declaration"))),
            "comparator": load(man["comparator"]) if man.get("comparator") is not None else None, "days": []}
     for d in man.get("days") or []:
-        require(isinstance(d, dict) and d.get("day") in (1, 2) and isinstance(d.get("attempt"), str),
-                "manifest: each day has its attempt and day")
+        require(isinstance(d, dict) and d.get("day") in (1, 2) and isinstance(d.get("attempt"), str)
+                and type(d.get("repeat", 0)) is int and d.get("repeat", 0) >= 0,
+                "manifest: each day has its attempt, day and repeat (an integer from 0)")
         out["days"].append({
             "attempt": d["attempt"], "day": d["day"], "repeat": d.get("repeat", 0),
             "reports": {arm: load(ref) for arm, ref in sorted((d.get("reports") or {}).items())},
@@ -1881,21 +1891,25 @@ def nearest_rank(values, p):
     return math.inf if v is None else v
 
 
-def contention(samples, arm, ws, we):
+def contention(samples, arm, ws, we, device):
     """§6.3's contention verdict for one candidate window [ws, we): `ok`, `breach` or
     `not_judged` (a series under 98 % coverage). Every 10 s interval is read; a missing one
     counts over the threshold. Uplink drops are a cumulative counter, read as each hour's delta."""
     c = CONTENTION
     if not isinstance(samples, dict) or samples.get("interval_seconds") != c["interval_seconds"]:
         return {"verdict": "not_judged", "reasons": ["contention_samples_missing"]}
+    if samples.get("backing_device") != device:  # §6.3: /data latency on the declared device
+        return {"verdict": "not_judged", "reasons": ["backing_device_differs"]}
     step = c["interval_seconds"]
-    n = int((we - ws).total_seconds() // step)
+    # Every interval that starts inside the window, the last one possibly partial (a window is
+    # boundary scrape to boundary scrape, rarely a multiple of 10 s).
+    n = math.ceil((we - ws).total_seconds() / step)
     slots = [None] * n
     for s in samples.get("samples") or []:
         t = utc(s.get("utc"))
         if t is None or not ws <= t < we:
             continue
-        k = int((t - ws).total_seconds() // step)
+        k = min(n - 1, int((t - ws).total_seconds() // step))
         if slots[k] is None:
             slots[k] = s
     median = (samples.get("rehearsal_rtt_median_ms") or {}).get(arm)
@@ -1939,14 +1953,18 @@ def contention(samples, arm, ws, we):
         breaches.append("steal")
     if out["disk_write_p99_ms"] > c["disk_write_p99_ms_max"]:
         breaches.append("disk")
+    # The window's hours: a final partial interval (the boundary scrape's lag) joins hour 23.
     per_hour = 3600 // step
+    count = max(1, round(n * step / 3600))
     hours = []
-    for h in range(math.ceil(n / per_hour)):
-        part = tunnel[h * per_hour:(h + 1) * per_hour]
+    for h in range(count):
+        lo, hi = h * per_hour, n if h == count - 1 else (h + 1) * per_hour
+        part = tunnel[lo:hi]
         lost = sum(not (isinstance(t, dict) and t.get("lost") is False) for t in part)
         rtts = [t.get("rtt_ms") if isinstance(t, dict) and t.get("lost") is False and number(t.get("rtt_ms"))
                 else None for t in part]
-        drops = [v for v in up[h * per_hour:(h + 1) * per_hour + 1] if v is not None]
+        # The counter from the hour's last reading before it (or its first) to its last.
+        drops = [v for v in up[max(0, lo - 1):hi] if v is not None]
         rec = {"hour": h, "loss": lost / len(part), "rtt_p95_ms": nearest_rank(rtts, 0.95),
                "uplink_drops": (drops[-1] - drops[0]) if len(drops) >= 2 else None}
         rec["ok"] = (rec["loss"] <= c["tunnel_loss_max"]
@@ -2121,21 +2139,38 @@ def judge_day(cand, attempt, decl, day, comparator_ok):
             reasons.append("leak_test_not_passed")
         if arm in reports:
             reasons += egress_problems(archive, arm, e["exit"], reports[arm])
+            pb = reports[arm].get("binding") or {}
+            pp = pb.get("placement") or {}
+            if arm != cand and ({k: pp.get(k) for k in want} != dict(want, arm=arm)
+                                or pp.get("repeat", 0) != day["repeat"] or not RUN_ID.fullmatch(str(pb.get("run_id")))):
+                reasons.append("peer_report_not_bound")
+    runs = [(r.get("binding") or {}).get("run_id") for r in reports.values()]
+    if len(set(runs)) != len(runs):
+        reasons.append("duplicate_run_in_day")
     # Events (§6.3's classification): an infrastructure fault invalidates the affected arms'
     # day; a product failure on any arm breaks the layout for its peers.
+    # A product failure is terminal only once diagnosed as one; a diagnosis that finds an
+    # infrastructure cause reclassifies it (§6.2, §6.3). An unknown class is never ignored.
+    out["product_failure"] = False
     for ev in archive.get("events") or []:
-        hit = ev.get("arms") or []
-        if ev.get("class") == "infrastructure" and (cand in hit or not hit):
-            reasons.append("infrastructure_fault")
-        elif ev.get("class") == "product":
-            reasons.append("product_failure" if cand in hit else "peer_product_failure")
-    out["product_failure"] = any(ev.get("class") == "product" and cand in (ev.get("arms") or [])
-                                 for ev in archive.get("events") or [])
+        hit, cls, diag = ev.get("arms") or [], ev.get("class"), ev.get("diagnosis")
+        if diag not in DIAGNOSES or cls not in ("infrastructure", "product") or not isinstance(hit, list):
+            reasons.append("unknown_event")
+            continue
+        if cls == "product" and diag == "infrastructure":
+            cls = "infrastructure"
+        if cls == "infrastructure":  # the whole concurrent day is repeated
+            reasons.append("infrastructure_fault" if (not hit or cand in hit) else "peer_infrastructure_fault")
+        elif cand in hit:
+            reasons.append("product_failure" if diag == "product" else "product_failure_under_diagnosis")
+            out["product_failure"] = out["product_failure"] or diag == "product"
+        else:
+            reasons.append("peer_product_failure")
     if not comparator_ok:
         reasons.append("comparator_not_valid")
     # Contention for this window (O4): a breach isn't a valid miss.
     if ws is not None and we is not None:
-        out["contention"] = contention(day["contention"], cand, ws, we)
+        out["contention"] = contention(day["contention"], cand, ws, we, decl["backing_device"])
     else:
         out["contention"] = {"verdict": "not_judged", "reasons": ["window_unknown"]}
     if out["contention"]["verdict"] == "not_judged":
@@ -2153,37 +2188,67 @@ def judge_day(cand, attempt, decl, day, comparator_ok):
     return out
 
 
+def candidate_days(inputs, decl, attempt, cand):
+    """Every manifest day of `attempt` the candidate is declared in: {day: [versions by repeat]}."""
+    out = {}
+    for d in inputs["days"]:
+        if d["attempt"] == attempt["id"] and cand in day_entries(decl, attempt["id"], d["day"]):
+            out.setdefault(d["day"], []).append(d)
+    return {k: sorted(v, key=lambda d: d["repeat"]) for k, v in sorted(out.items())}
+
+
+# Problems that keep any day from counting, a valid miss included: the arm can't qualify, or
+# the comparator or spacing that every window of the round depends on isn't there.
+UNJUDGEABLE = ("not_authorized", "spacing", "retry_budget_exhausted")
+
+
 def judge_candidate(cand, inputs):
     """§5.2 item 5: one candidate's crawler verdict, its per-day memory verdicts and
-    shipping eligibility, from its latest attempt (days pair only within one attempt)."""
+    shipping eligibility. Its two days pair only within its latest attempt; a valid miss in
+    any attempt, or in a day a repeat followed, still ends the claim (§6.2, §6.4)."""
     decl = inputs["declaration"]
     entries = [e for e in decl["arms"] if e["arm"] == cand]
     out = {"arm": cand, "role": entries[0]["role"] if entries else None, "reasons": []}
     attempts = [a for a in decl["attempts"] if any(e["attempt"] == a["id"] for e in entries)]
     if not attempts:
-        out.update(crawler="not_judged", shipping_eligible=False, reasons=["not_declared"])
+        out.update(crawler="not_judged", memory="not_judged", shipping_eligible=False, reasons=["not_declared"])
         return out
     attempt = attempts[-1]
     out["attempt"], out["layout"] = attempt["id"], attempt["layout"]
-    out["earlier_attempts"] = [a["id"] for a in attempts[:-1]]
     reasons = []
     if out["role"] != "candidate":
         reasons.append("not_authorized")  # a diagnostic arm is never eligible (§6.2, §6.4)
     comp = comparator_problems(inputs["comparator"], decl)
+    out["comparator_problems"] = comp
     reasons += comp
-    # Days pair within one attempt; a repeated day replaces the one it repeats (§6.3).
-    days = {}
-    for d in inputs["days"]:
-        if d["attempt"] == attempt["id"] and cand in day_entries(decl, attempt["id"], d["day"]):
-            if d["day"] not in days or d["repeat"] > days[d["day"]]["repeat"]:
-                days[d["day"]] = d
+    ok_comp = not comp
+    # Earlier attempts: reported, and a valid miss in one still counts.
+    earlier = []
+    for a in attempts[:-1]:
+        for k, versions in candidate_days(inputs, decl, a, cand).items():
+            earlier += [judge_day(cand, a, decl, d, ok_comp) for d in versions]
+    out["earlier_attempts"] = [{"attempt": j["attempt"], "day": j["day"], "repeat": j["repeat"],
+                                "status": j["status"], "reasons": j["reasons"]} for j in earlier]
+    # This attempt: a repeated day replaces the one it repeats only if that one wasn't judged
+    # (§6.3 repeats a day after an evidenced fault); a judged miss stays a miss.
+    versions = candidate_days(inputs, decl, attempt, cand)
+    replaced, judged, days = [], [], {}
+    for k, vs in versions.items():
+        if len({d["repeat"] for d in vs}) != len(vs):
+            reasons.append("repeat_supplied_twice")
+        js = [judge_day(cand, attempt, decl, d, ok_comp) for d in vs]
+        replaced += js[:-1]
+        judged.append(js[-1])
+        days[k] = vs[-1]
+    if any(j["status"] == "pass" for j in replaced):
+        reasons.append("repeat_of_a_judged_day")
+    out["replaced_days"] = [{"day": j["day"], "repeat": j["repeat"], "status": j["status"], "reasons": j["reasons"]}
+                            for j in replaced]
     declared_days = sorted({e["day"] for e in entries if e["attempt"] == attempt["id"]})
     if declared_days != [1, 2]:
         reasons.append("attempt_does_not_declare_two_days")
-    judged = [judge_day(cand, attempt, decl, days[k], not comp) for k in sorted(days)]
     if sorted(days) != [1, 2]:
         reasons.append("day_missing")
-    out["comparator_problems"] = comp
     # Binding across the two days: distinct runs, separate windows, two different exits.
     runs = [j.get("run_id") for j in judged]
     if len(runs) == 2 and (runs[0] == runs[1] or None in runs):
@@ -2205,24 +2270,28 @@ def judge_candidate(cand, inputs):
         out["spacing_problems"] = problems
         if problems:
             reasons.append("spacing")
-    repeats = sum(1 for d in inputs["days"] if d["repeat"] > 0
-                  and next((a for a in decl["attempts"] if a["id"] == d["attempt"]), {}).get("layout") != "S")
-    if repeats > RETRY_BUDGET:
-        reasons.append("retry_budget_exhausted")
+    # §6.3: at most two repeated days per round, whatever the cause (a solo confirmation's
+    # own two days are attempts of their own, repeat 0, so they never count).
+    repeats = sum(1 for d in inputs["days"] if d["repeat"] > 0)
     out["retry_budget_exhausted"] = repeats > RETRY_BUDGET
+    if out["retry_budget_exhausted"]:
+        reasons.append("retry_budget_exhausted")
     out["days"] = judged
+    every = earlier + replaced + judged
     out["solo_confirmation_required"] = any(j.get("solo_confirmation_required") for j in judged)
     out["solo_confirmation_failed"] = any(j.get("solo_confirmation_failed") for j in judged)
-    out["product_failure"] = any(j.get("product_failure") for j in judged)
+    out["product_failure"] = any(j.get("product_failure") for j in every)
+    misses = [j for j in every if j["status"] == "fail"]
+    out["valid_misses"] = [{"attempt": j["attempt"], "day": j["day"], "repeat": j["repeat"]} for j in misses]
     status = [j["status"] for j in judged]
-    if reasons:
+    if any(r in UNJUDGEABLE for r in reasons) or comp:
         crawler = "not_judged"
-    elif "fail" in status:  # a valid miss on either day ends the claim (§6.4)
+    elif misses:  # a valid miss on either day ends the claim (§6.4), whatever is still missing
         crawler = "fail"
-    elif status == ["pass", "pass"]:
-        crawler = "pass"
-    else:
+    elif reasons:
         crawler = "not_judged"
+    else:
+        crawler = "pass" if status == ["pass", "pass"] else "not_judged"
     out["reasons"] = sorted(set(reasons))
     out["crawler"] = crawler
     mem = [j["memory"]["verdict"] for j in judged if "memory" in j]
@@ -2278,7 +2347,7 @@ def gate_round(inputs):
            "inputs": dict(sorted(inputs["inputs"].items())), "contention_thresholds": CONTENTION,
            "candidates": {a: j for a, j in judged.items() if j["role"] == "candidate"},
            "diagnostics": {a: j for a, j in judged.items() if j["role"] != "candidate"}}
-    out["selection"] = select(judged, decl.get("selection_order", ["B", "A"]))
+    out["selection"] = select(judged, SELECTION_ORDER)
     return out
 
 

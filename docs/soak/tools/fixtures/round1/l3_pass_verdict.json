@@ -112,12 +112,14 @@
    "memory": "pass",
    "product_failure": false,
    "reasons": [],
+   "replaced_days": [],
    "retry_budget_exhausted": false,
    "role": "candidate",
    "shipping_eligible": true,
    "solo_confirmation_failed": false,
    "solo_confirmation_required": false,
-   "spacing_problems": []
+   "spacing_problems": [],
+   "valid_misses": []
   },
   "B": {
    "arm": "B",
@@ -231,12 +233,14 @@
    "memory": "pass",
    "product_failure": false,
    "reasons": [],
+   "replaced_days": [],
    "retry_budget_exhausted": false,
    "role": "candidate",
    "shipping_eligible": true,
    "solo_confirmation_failed": false,
    "solo_confirmation_required": false,
-   "spacing_problems": []
+   "spacing_problems": [],
+   "valid_misses": []
   }
  },
  "contention_thresholds": {
@@ -364,27 +368,29 @@
    "reasons": [
     "not_authorized"
    ],
+   "replaced_days": [],
    "retry_budget_exhausted": false,
    "role": "diagnostic",
    "shipping_eligible": false,
    "solo_confirmation_failed": false,
    "solo_confirmation_required": false,
-   "spacing_problems": []
+   "spacing_problems": [],
+   "valid_misses": []
   }
  },
  "inputs": {
   "comparator.json": "f588338ab59146afc4b30afe0111e1e8ea07fd9a401dee2d7e0e6022517efadf",
-  "declaration.json": "8949e1a51b0d51efc5eae5467c516343f61e5ea8c758c07f883e5752da0fa36b",
+  "declaration.json": "8e59d318e3774cee4291ab7c47360ae2b35ac9f0c52fd8902be3301d3635dd41",
   "r1-a1/day1/A.json": "ffeee615e13c1c58cf0f63235bcbf81230caa163f9301d8cc974c4de9be68d1f",
   "r1-a1/day1/B.json": "bdf93dd49eff9e2e365e76d6274517e44ddceddf37122f14d0899d94e4c73b73",
   "r1-a1/day1/C.json": "a4e14e8d5df826348670eab20de83e2ca164d6be5ca1927e38349a2d0e127a74",
   "r1-a1/day1/archive.json": "45894f8ac775856e5b2c5e428316e97605f1c91a5af6ac7cadb1e59b9ade9755",
-  "r1-a1/day1/host-samples.json": "9482015a0ee5feb580ef5399f9e09817aff286654bede27ad5c5fe2aaafb9339",
+  "r1-a1/day1/host-samples.json": "e78bf146b6ae1ee582dd8ca33f6716150f0087b4651c57d828ffec0a2ad64317",
   "r1-a1/day2/A.json": "2bb8f482b9cee09212e53cf202dadc4e2d6f61ec10e5182650e2f3bad883e4c1",
   "r1-a1/day2/B.json": "bf8d48f93347f0f8cff2f2d5756cd3ea634ef964a8cbcf88f1e5db392f5b2002",
   "r1-a1/day2/C.json": "5e9814ed4dc0798b81c6b36ee048dacbae5b1936ab078cc9749924b0326c1188",
   "r1-a1/day2/archive.json": "183931e0d429d476930af45922a3c2f8897db4e6d16072c34cae2a23db2de7eb",
-  "r1-a1/day2/host-samples.json": "61bfaaafad5bb56f3b953c5db550e83e7a77147b56d66b04fc5f5c54b23ee2e9"
+  "r1-a1/day2/host-samples.json": "1d15a57467cc6b98feb1acbc4ab3ac231ff2d8cc61a075520e3929f09d023942"
  },
  "kind": "cr_round1_verdict",
  "plan": "docs/plan/2026-11-27-revised-path-to-100.md",

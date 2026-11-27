@@ -252,6 +252,21 @@ class DeclarationSchemaTests(unittest.TestCase):
         d["host_identity"] = "192.0.2.7"
         self.refused(d)
 
+    def test_the_selection_order_is_the_owners(self):
+        d = self.decl()
+        d["selection_order"] = ["A", "B"]
+        self.refused(d)
+
+    def test_a_backing_device_is_required(self):
+        d = self.decl()
+        del d["backing_device"]
+        self.refused(d)
+
+    def test_every_candidate_digest_is_recorded(self):
+        d = self.decl()
+        del d["attempts"][0]["candidate_digests"]["A"]
+        self.refused(d)
+
     def test_other_contention_thresholds_are_refused(self):
         d = self.decl()
         d["contention"] = dict(analyze_cr.CONTENTION, cpu_p95_max=0.9)
@@ -400,36 +415,38 @@ class MemoryWindowTests(SegmentBase):
         self.assertTrue(fit["window_complete"])
 
 
+def edge_scrapes(le600, total_count, dropped):
+    """Two scrapes whose histogram deltas hold `le600` samples within 600 s of `total_count`, and `dropped`."""
+    def snap(scale):
+        s = {"discovery_to_searchable_seconds_count": {(): total_count * scale},
+             "discovery_to_searchable_dropped_total": {(): dropped * scale},
+             "discovery_to_searchable_seconds_bucket": {}}
+        for e in collect.LATENCY_EDGES:
+            v = total_count if e == "+Inf" or (e != "+Inf" and float(e) > 600) else (le600 if float(e) >= 600 else 0)
+            s["discovery_to_searchable_seconds_bucket"][(("le", e),)] = v * scale
+        return s
+    return {"snap": snap(0)}, {"snap": snap(1)}
+
+
 class LatencyEdgeTests(unittest.TestCase):
     """§6.4 and CR-SPEC §3: the latency cohort keeps carry-in samples and charges dropped
     samples above 600 s. A hand calculation at the 95 % edge."""
 
-    def scrapes(self, le600, total_count, dropped):
-        def snap(scale):
-            s = {"discovery_to_searchable_seconds_count": {(): total_count * scale},
-                 "discovery_to_searchable_dropped_total": {(): dropped * scale},
-                 "discovery_to_searchable_seconds_bucket": {}}
-            for e in collect.LATENCY_EDGES:
-                v = total_count if e == "+Inf" or (e != "+Inf" and float(e) > 600) else (le600 if float(e) >= 600 else 0)
-                s["discovery_to_searchable_seconds_bucket"][(("le", e),)] = v * scale
-            return s
-        return {"snap": snap(0)}, {"snap": snap(1)}
-
     def test_exactly_95_percent_within_600s_passes(self):
         # 10,000 samples + 100 dropped = 10,100. 95 % of that is 9,595: 9,595 within 600 s passes.
-        a, b = self.scrapes(9595, 10000, 100)
+        a, b = edge_scrapes(9595, 10000, 100)
         lat = analyze_cr.latency(a, b)
         self.assertAlmostEqual(lat["coverage"], 10000 / 10100)
         self.assertTrue(lat["passes_p95_600"])
 
     def test_one_sample_below_the_edge_fails(self):
-        a, b = self.scrapes(9594, 10000, 100)  # 9,594 < 9,595: the dropped are charged above 600 s
+        a, b = edge_scrapes(9594, 10000, 100)  # 9,594 < 9,595: the dropped are charged above 600 s
         self.assertFalse(analyze_cr.latency(a, b)["passes_p95_600"])
 
     def test_carry_in_samples_are_not_filtered(self):
         # Carry-in samples are in the histogram's count: removing them would raise the share.
         # The cohort is the whole histogram delta, so the result depends on it alone.
-        a, b = self.scrapes(9595, 10000, 100)
+        a, b = edge_scrapes(9595, 10000, 100)
         self.assertEqual(analyze_cr.latency(a, b)["count_delta"], 10000)
 
 
@@ -636,9 +653,98 @@ class ValidityTests(RoundBase):
         self.assertIsNone(v["selection"]["ships"])
         self.assertEqual(v["selection"]["state"], "pending_retry")
 
+    def test_a_product_failure_under_diagnosis_is_not_terminal(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"], "diagnosis": "pending"}]
+        v = self.gate(a)
+        self.assertNotJudged(v, "product_failure_under_diagnosis")
+        self.assertEqual(v["selection"]["state"], "pending_retry")
+        self.assertEqual(v["selection"]["waiting_on"], "B")  # A isn't read until B's diagnosis
+
+    def test_a_diagnosis_that_finds_infrastructure_reclassifies_it(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"], "diagnosis": "infrastructure"}]
+        self.assertNotJudged(self.gate(a), "infrastructure_fault")
+
+    def test_an_unknown_event_class_is_not_ignored(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "weather", "arms": ["C"]}]
+        self.assertNotJudged(self.gate(a), "unknown_event")
+
+    def test_an_infrastructure_fault_on_a_peer_takes_the_whole_day(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "infrastructure", "arms": ["C"]}]
+        self.assertNotJudged(self.gate(a), "peer_infrastructure_fault")
+
+    def test_a_peer_report_from_another_arm_is_not_bound(self):
+        a = mk.archive("L3")
+        d = self.day(a, 1)
+        fake = json.loads(json.dumps(d["reports"]["C"]))
+        fake["binding"]["placement"]["arm"] = "A"
+        d["reports"]["C"] = fake
+        self.assertNotJudged(self.gate(a), "peer_report_not_bound")
+
+    def test_a_valid_miss_is_not_undone_by_a_repeat(self):
+        a = mk.archive("L3")
+        miss = self.day(a, 1)
+        miss["reports"]["B"]["numerator"]["hourly"][7]["net_per_min"] = 65.0
+        again = json.loads(json.dumps(miss))
+        again["repeat"] = 1
+        again["reports"]["B"]["numerator"]["hourly"][7]["net_per_min"] = 120.0
+        for r in again["reports"].values():
+            r["binding"]["placement"]["repeat"] = 1
+            r["binding"]["run_id"] += "-repeat1"
+        a["days"].append(again)
+        v = self.gate(a)
+        self.assertEqual(self.cand(v)["crawler"], "fail")
+        self.assertEqual([d["status"] for d in self.cand(v)["replaced_days"]], ["fail"])
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "valid_miss")
+
+    def test_a_repeat_of_a_passing_day_is_not_judged(self):
+        a = mk.archive("L3")
+        again = json.loads(json.dumps(self.day(a, 1)))
+        again["repeat"] = 1
+        for r in again["reports"].values():
+            r["binding"]["placement"]["repeat"] = 1
+            r["binding"]["run_id"] += "-repeat1"
+        a["days"].append(again)
+        self.assertNotJudged(self.gate(a), "repeat_of_a_judged_day")
+
+    def test_a_valid_miss_in_an_earlier_attempt_still_ends_the_claim(self):
+        a = mk.archive("L3")
+        self.day(a, 2)["reports"]["B"]["numerator"]["hourly"][3]["net_per_min"] = 60.0
+        later = mk.archive("L3", attempt="r1-a2")
+        a["declaration"]["attempts"] += later["declaration"]["attempts"]
+        a["declaration"]["arms"] += later["declaration"]["arms"]
+        a["days"] += later["days"]
+        v = self.gate(a)
+        self.assertEqual(self.cand(v)["crawler"], "fail")
+        self.assertEqual(self.cand(v)["valid_misses"], [{"attempt": "r1-a1", "day": 2, "repeat": 0}])
+
+    def test_a_valid_miss_ends_the_claim_while_day_two_is_still_missing(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["reports"]["B"]["numerator"]["window"]["mean_net_per_min"] = 90.0
+        a["days"] = [d for d in a["days"] if d["day"] == 1]
+        v = self.gate(a)
+        self.assertEqual(self.cand(v)["crawler"], "fail")
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "valid_miss")
+
+    def test_repeats_in_a_solo_attempt_count_against_the_budget(self):
+        a = mk.archive("S")
+        for k in (1, 2, 3):
+            again = json.loads(json.dumps(self.day(a, 1)))
+            again["repeat"] = k
+            again["archive"]["events"] = [] if k == 3 else [{"class": "infrastructure", "arms": []}]
+            for r in again["reports"].values():
+                r["binding"]["placement"]["repeat"] = k
+                r["binding"]["run_id"] += f"-repeat{k}"
+            a["days"].append(again)
+        self.day(a, 1)["archive"]["events"] = [{"class": "infrastructure", "arms": []}]
+        self.assertNotJudged(self.gate(a), "retry_budget_exhausted")
+
     def test_a_candidates_product_failure_is_terminal_and_a_is_read(self):
         a = mk.archive("L3")
-        self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"]}]
+        self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"], "diagnosis": "product"}]
         v = self.gate(a)
         self.assertEqual(v["selection"]["trail"][0]["disposition"], "product_failure")
         # A continues in a fresh attempt (its day 1 lost its peer B): not terminal yet.
@@ -664,6 +770,7 @@ class ValidityTests(RoundBase):
 
     def test_a_third_repeated_day_stops_the_round(self):
         a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "infrastructure", "arms": []}]
         for k in (1, 2, 3):
             again = json.loads(json.dumps(self.day(a, 1)))
             again.update(repeat=k)
@@ -811,10 +918,59 @@ class ContentionTests(RoundBase):
         self.assertTrue(c["solo_confirmation_failed"])
         self.assertFalse(c["solo_confirmation_required"])
 
+    def test_a_window_that_is_not_a_multiple_of_ten_seconds(self):
+        a = mk.archive("L3")
+        r = self.day(a, 1)["reports"]["B"]["timeline"]
+        r["window_end_utc"] = mk.iso(analyze_cr.parse_utc(r["window_end_utc"]) + timedelta(seconds=5))
+        for s in self.day(a, 1)["contention"]["samples"]:
+            s["utc"] = mk.iso(analyze_cr.parse_utc(s["utc"]) + timedelta(seconds=3))
+        day1 = self.cand(self.gate(a))["days"][0]
+        self.assertEqual(day1["contention"]["verdict"], "ok")
+        self.assertEqual(day1["contention"]["intervals"], 8641)
+
+    def test_samples_from_another_device_are_not_judged(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["contention"]["backing_device"] = "sda"
+        self.assertNotJudged(self.gate(a), "contention_not_judged")
+
     def test_missing_host_samples_are_not_judged(self):
         a = mk.archive("L3")
         self.day(a, 1)["contention"] = None
         self.assertNotJudged(self.gate(a), "contention_not_judged")
+
+
+class CohortTests(RoundBase):
+    """§6.4's cohorts through gate-round, by hand: the mean and hours are net of the carry-in
+    bound; the latency cohort keeps carry-in samples and charges dropped ones above 600 s."""
+
+    def with_edge(self, le600, gross_mean, carry_mean):
+        a = mk.archive("S")
+        r = self.day(a, 1)["reports"]["B"]
+        lat = analyze_cr.latency(*edge_scrapes(le600, 10000, 100))
+        r["latency"] = lat
+        net = gross_mean - carry_mean
+        r["numerator"]["window"] = {"mean_gross_per_min": gross_mean, "mean_net_per_min": net,
+                                    "carry_in_bound": carry_mean * 1440}
+        return a
+
+    def test_at_the_edge_with_carry_in_it_passes(self):
+        # 9,595 of 10,000 samples + 100 dropped within 600 s: 9,595 / 10,100 = 0.95 exactly.
+        v = self.gate(self.with_edge(9595, 112.0, 8.0))
+        day1 = self.cand(v)["days"][0]
+        self.assertEqual(day1["tests"]["p95"], "pass")
+        self.assertEqual(day1["tests"]["mean_net_per_min"], 104.0)
+        self.assertEqual(self.cand(v)["crawler"], "pass")
+
+    def test_one_sample_under_the_edge_fails(self):
+        day1 = self.cand(self.gate(self.with_edge(9594, 112.0, 8.0)))["days"][0]
+        self.assertEqual(day1["tests"]["p95"], "fail")
+        self.assertEqual(day1["status"], "fail")
+
+    def test_the_mean_is_net_of_carry_in(self):
+        # Gross 105/min passes; net of an 8/min carry-in bound it's 97/min, which fails.
+        day1 = self.cand(self.gate(self.with_edge(9595, 105.0, 8.0)))["days"][0]
+        self.assertFalse(day1["tests"]["mean_passes"])
+        self.assertEqual(day1["status"], "fail")
 
 
 class SelectionTests(RoundBase):
@@ -863,6 +1019,14 @@ class SelectionTests(RoundBase):
 
 
 class ManifestTests(RoundBase):
+    def test_a_repeat_that_is_not_an_integer_is_an_error(self):
+        path = mk.write(self.root / "m", mk.archive("L3"))
+        man = json.loads(path.read_text())
+        man["days"][0]["repeat"] = "1"
+        path.write_text(json.dumps(man))
+        with self.assertRaises(ValueError):
+            analyze_cr.load_manifest(path)
+
     def test_a_hash_mismatch_is_an_error(self):
         path = mk.write(self.root / "m", mk.archive("L3"))
         (path.parent / "r1-a1" / "day1" / "B.json").write_text("{}")
