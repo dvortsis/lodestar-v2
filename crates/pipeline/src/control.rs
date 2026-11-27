@@ -1635,23 +1635,45 @@ impl Control {
     }
 
     /// One step of the purge: at most `MAX_PURGE_STEP` rows, in one
-    /// transaction (`Store::purge_source`).
+    /// transaction (`Store::purge_source`). A step that marked torrents for
+    /// deriving again (a purged enrichment match, ENR-G, or Adult that only
+    /// the purged source gave, X-purge-rederive) has the running writer's
+    /// backfill start another pass, so the record and the index change
+    /// without waiting for a restart.
     pub async fn purge_step(
         &self,
         id: SourceId,
         from: lodestar_store::unverified::PurgeCursor,
     ) -> Result<lodestar_store::unverified::PurgeStep, SourceError> {
         let store = self.inner.store.clone();
-        tokio::task::spawn_blocking(move || {
-            store.lock().expect("store lock").purge_source(
-                id,
-                from,
-                lodestar_store::unverified::MAX_PURGE_STEP,
-            )
+        // The always-adult sources, so a torrent only the purged one made
+        // Adult is derived again (X-purge-rederive).
+        let adult = crate::source_adult::AdultSources::of(
+            self.inner
+                .monitor
+                .sources()
+                .iter()
+                .map(|s| (s.id, &s.manifest)),
+        );
+        let step = tokio::task::spawn_blocking(move || {
+            let mut store = store.lock().expect("store lock");
+            // Set for this step only: the connection is shared, and its
+            // other writes keep the behaviour they had.
+            store.set_adult_mark(adult.store_mark());
+            let step = store.purge_source(id, from, lodestar_store::unverified::MAX_PURGE_STEP);
+            store.set_adult_mark(lodestar_store::AdultMark::default());
+            step
         })
         .await
         .map_err(|e| SourceError::Store(Error::Join(e)))?
-        .map_err(SourceError::from)
+        .map_err(SourceError::from)?;
+        if step.rederive {
+            self.inner
+                .monitor
+                .reenrich
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        Ok(step)
     }
 
     /// Ends the purge once every step is done: the source Purged and its

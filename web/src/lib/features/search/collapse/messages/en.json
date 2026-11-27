@@ -1,0 +1,20 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"search_collapse_toggle": "Group versions",
+	"search_collapse_unavailable": "Results aren't grouped yet: Lodestar is still sorting torrents into versions.",
+	"search_collapse_count": "{groups} groups · {torrents} torrents",
+	"search_collapse_count_one": "1 group · {torrents} torrents",
+	"search_collapse_others_one": "+1 other version",
+	"search_collapse_others_other": "+{count} other versions",
+	"search_collapse_show_all": "Show all {count}",
+	"search_collapse_show_all_versions": "Show all versions",
+	"search_collapse_loading": "Loading other versions…",
+	"search_collapse_failed": "Other versions couldn't load.",
+	"search_collapse_retry": "Retry",
+	"search_collapse_none": "No other versions are available now.",
+	"search_collapse_version_of": "Other version of {title}",
+	"search_collapse_versions": "Versions",
+	"search_collapse_shown_one": "1 other version shown",
+	"search_collapse_shown_other": "{count} other versions shown",
+	"search_collapse_count_single": "1 group · 1 torrent"
+}

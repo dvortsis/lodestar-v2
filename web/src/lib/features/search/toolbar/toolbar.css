@@ -3,6 +3,8 @@
 @reference "../../../../app.css";
 
 .tb {
+	/* The switches below follow the toolbar's own width (the drawer narrows it), not the window's. */
+	container: tb / inline-size;
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
@@ -67,9 +69,38 @@
 		}
 	}
 }
-/* Below 640 px Select and Save move into the More popover; labels stay for screen readers only. */
+/* Below 640 px Select and Save move into the More popover; labels stay for screen readers only.
+   "Group versions" (GS-5) has a row of its own width: it sits among the controls only when the toolbar
+   has room for it (52 rem leaves room for a grouped count too) and goes into More otherwise, so the
+   toolbar never wraps to a second row (which would move the rows when it arrives). */
 .tb-narrow {
+	display: block;
+}
+.tb-group {
 	display: none;
+}
+@container tb (width >= 52rem) {
+	.tb-narrow {
+		display: none;
+	}
+	.tb-group {
+		display: inline-flex;
+	}
+}
+@media (width >= 40rem) {
+	.tb-phone {
+		display: none;
+	}
+}
+/* A toolbar narrowed by the drawer: Sort and View keep their names for screen readers only. */
+@container tb (width < 38rem) {
+	.tb-lbl > span {
+		position: absolute;
+		overflow: hidden;
+		width: 1px;
+		height: 1px;
+		clip-path: inset(50%);
+	}
 }
 .tb-lbl {
 	display: flex;
@@ -97,9 +128,6 @@
 	}
 }
 @media (width < 40rem) {
-	.tb-narrow {
-		display: block;
-	}
 	.tb-wide {
 		display: none;
 	}

@@ -490,6 +490,7 @@ placement:
   - X-leaktest-vpn-held-down
   - X-flake-states-clock
   - X-flake-e2e-expect-timeout
+  - X-flake-search-keyboard-2
   - X-e2e-baseline-refresh
   - X-natural-strict-parity
   - X-natural-wording
@@ -503,6 +504,7 @@ placement:
   - X-relevance-finish-flake
   - X-flake-utp-lossy
   - X-flake-utp-lossy-win
+  - X-flake-cap-index-move
   - X-snapshot-claims-nits
   - X-network-lost-msg
   - X-enr-lane-nits
@@ -761,12 +763,17 @@ placement:
   - X-steam-followups
   - X-snapshot-claims-retention
   - X-snapshot-followups-2
+  - X-purge-rederive
+  - X-restart-fuzz-v2
 - ws: ws-m7-w5
   match:
   - ENR-11
   - GS-4
   - GS-5
+  - X-gs-followups
+  - X-gs-followups-2
   - ENR-13
+  - X-sec-S8-26
   - ENR-13b
   - X-always-adult-detail-mask
   - X-percolate-promoted-hold
@@ -832,6 +839,7 @@ placement:
   - X-ci-filter-docs-user
   - X-companions-mount-check
   - X-cmp-egress-ui
+  - X-web-followups-1124
   - D-companions-guide
   - X-cmp0-polish
   - X-cmp4b-mounts

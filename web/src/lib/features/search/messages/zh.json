@@ -76,6 +76,7 @@
 	"search_filters_group": "发布组",
 	"search_filters_has": "包含",
 	"search_filters_resolved": "标题来源",
+	"search_filters_id": "{name} 编号",
 	"search_filters_type_movie": "电影",
 	"search_filters_type_tv": "电视剧",
 	"search_filters_type_music": "音乐",

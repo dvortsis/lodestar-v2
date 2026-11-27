@@ -7,6 +7,8 @@ import TreeHarness from './testing/TreeHarness.svelte';
 import Tree from './Tree.svelte';
 import type { FlatNode } from './tree-model';
 
+// The waits below use a 10 s deadline (WAIT), so a test needs longer than vitest's 5 s default.
+vi.setConfig({ testTimeout: 30_000 });
 beforeAll(() => stubLayout());
 
 const rowBox = (n: number) =>
@@ -14,6 +16,8 @@ const rowBox = (n: number) =>
 const key = (el: Element, k: string, init: KeyboardEventInit = {}) =>
 	fireEvent.keyDown(el, { key: k, ...init });
 const active = () => document.activeElement as HTMLElement;
+/** The standards' deadline for a condition (no fixed sleeps): at least 10 s. */
+const WAIT = { timeout: 10_000 };
 const names = (n: number, prefix = 'item') =>
 	Array.from({ length: n }, (_, i) => ({ id: `${prefix}${i}`, name: `${prefix} ${i}` }));
 
@@ -426,6 +430,57 @@ describe('review follow-ups', () => {
 		await waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(1));
 		await rerender({ items: names(3, 'b'), hasMore: true, onLoadMore, resetKey: 'b' });
 		await waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(2));
+	});
+
+	it('a new resetKey keeps the focused row active when it is still listed (X-web-followups-1124)', async () => {
+		const items = names(5);
+		const { rerender } = render(ListHarness, { items, resetKey: 'asc' });
+		const first = screen.getAllByRole('option')[0]!;
+		first.focus();
+		await key(first, 'ArrowDown');
+		await waitFor(() => expect(active().textContent).toContain('item 1'), WAIT);
+		// A re-sort answered while row 1 has focus: item1 is now at index 3.
+		await rerender({
+			items: [items[4]!, items[3]!, items[2]!, items[1]!, items[0]!],
+			resetKey: 'desc'
+		});
+		await waitFor(() => expect(screen.getByTestId('active').textContent).toBe('3'), WAIT);
+		expect(active().textContent).toContain('item 1');
+		expect(active().tabIndex).toBe(0);
+		// The keys carry on from the focused row.
+		await key(active(), 'ArrowDown');
+		await waitFor(() => expect(active().textContent).toContain('item 0'), WAIT);
+		expect(screen.getByTestId('active').textContent).toBe('4');
+	});
+
+	it('a new resetKey starts at the first row when focus is elsewhere or the row is gone', async () => {
+		const items = names(5);
+		const { rerender } = render(ListHarness, { items, resetKey: 'a' });
+		const first = screen.getAllByRole('option')[0]!;
+		first.focus();
+		await key(first, 'ArrowDown');
+		await waitFor(() => expect(screen.getByTestId('active').textContent).toBe('1'), WAIT);
+		// The focused row is not in the new answer.
+		await rerender({ items: names(5, 'other'), resetKey: 'b' });
+		await waitFor(() => expect(screen.getByTestId('active').textContent).toBe('0'), WAIT);
+		// Focus outside the list: a new query starts over too.
+		await key(screen.getAllByRole('option')[0]!, 'ArrowDown');
+		await waitFor(() => expect(screen.getByTestId('active').textContent).toBe('1'), WAIT);
+		screen.getByRole('button', { name: 'before' }).focus();
+		await rerender({ items: names(5, 'other'), resetKey: 'c' });
+		await waitFor(() => expect(screen.getByTestId('active').textContent).toBe('0'), WAIT);
+	});
+
+	it('a new resetKey starts over when a control inside a row has focus, not the row (the cards)', async () => {
+		const items = names(5);
+		const { rerender } = render(ListHarness, { items, resetKey: 'asc', withControl: true });
+		const first = screen.getAllByRole('option')[0]!;
+		first.focus();
+		await key(first, 'ArrowDown');
+		await waitFor(() => expect(screen.getByTestId('active').textContent).toBe('1'), WAIT);
+		(document.querySelector('[data-index="1"] button') as HTMLButtonElement).focus();
+		await rerender({ items: [...items].reverse(), resetKey: 'desc', withControl: true });
+		await waitFor(() => expect(screen.getByTestId('active').textContent).toBe('0'), WAIT);
 	});
 
 	it('load more retries after a page that ended without new rows', async () => {

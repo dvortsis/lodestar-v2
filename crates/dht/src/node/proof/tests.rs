@@ -134,6 +134,24 @@ impl Run {
     }
 
     fn boot_with(d: &Dirs, clock: &Arc<SimClock>, on: bool, delay: Option<Duration>) -> Run {
+        Run::boot_into(d, clock, on, delay, Sampler::default())
+    }
+
+    /// An on-run whose sampler is `sampler` from the start, so a resume
+    /// seeds into it.
+    fn boot_sampler(d: &Dirs, clock: &Arc<SimClock>, sampler: Sampler) -> Run {
+        let mut run = Run::boot_into(d, clock, true, None, sampler);
+        run.take_lock();
+        run
+    }
+
+    fn boot_into(
+        d: &Dirs,
+        clock: &Arc<SimClock>,
+        on: bool,
+        delay: Option<Duration>,
+        sampler: Sampler,
+    ) -> Run {
         // dht-state.bin exists, as after any earlier run.
         if !d.state_path().exists() {
             state().save(&d.state_path()).unwrap();
@@ -158,7 +176,7 @@ impl Run {
                 TICK,
                 Instant::now(),
             ),
-            sampler: Sampler::default(),
+            sampler,
             stats: Stats::default(),
         };
         // The off-run still needs a clock and inline work in the tests.
@@ -1139,13 +1157,14 @@ async fn the_blocking_pool_path_reaches_a_resume() {
     run.commit(&d);
 }
 
-/// X-sampler-cooldown-split: a cooldown in the spill filter can't be
-/// listed, so the snapshot's gate holds the next run's sampling until it
-/// ends; the listed ones are restored as before. With nothing spilled, the
-/// split adds no gate.
+/// X-split-resume-gate: a cooldown in the spill filter goes in the snapshot
+/// with the filter, so the next run samples everyone else at once and
+/// still refuses that node until its own end (never sooner, and within a
+/// couple of minutes after). Whether the next run has the split on or off,
+/// and whether anything spilled, no gate is added.
 #[tokio::test(start_paused = true)]
-async fn a_spilled_cooldown_gates_the_next_run_until_it_ends() {
-    for spill in [true, false] {
+async fn a_spilled_cooldown_is_restored_and_the_next_run_samples_at_once() {
+    for (spill, split_next) in [(true, true), (true, false), (false, true)] {
         let d = Dirs::new("spill");
         let c = clock();
         let mut r = Run::boot(&d, &c, true);
@@ -1158,22 +1177,92 @@ async fn a_spilled_cooldown_gates_the_next_run_until_it_ends() {
         r.sampled(addr(2), 2, Duration::from_secs(600));
         assert_eq!(r.sampler.spill_counts().0, usize::from(spill));
         r.commit(&d);
+        let bytes = std::fs::read(d.data.join(restart::SNAPSHOT_FILE)).unwrap();
+        let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        assert_eq!(
+            version,
+            if spill {
+                restart::SNAPSHOT_SPILL_VERSION
+            } else {
+                restart::VERSION
+            },
+            "version 1 unless something spilled"
+        );
 
         advance(Duration::from_secs(60)).await;
-        let mut r = Run::boot(&d, &c, true);
+        let mut r = Run::boot_sampler(&d, &c, Sampler::new(split_next));
         assert_eq!(r.proof.reason(), Reason::Resumed);
+        assert!(r.proof.may_sample(Instant::now()), "no gate");
+        assert_eq!(r.proof.suppression_seconds(Instant::now()), 0);
+        // The listed restriction, as before.
         assert!(!r.sampler.reserve(addr(2), 10, Instant::now()), "restored");
+        assert!(
+            r.sampler.reserve(addr(3), 11, Instant::now()),
+            "others are free"
+        );
+        assert_eq!(r.sampler.spill_counts().0, usize::from(spill));
         if !spill {
-            assert!(r.proof.may_sample(Instant::now()), "no gate");
             continue;
         }
-        assert!(!r.proof.may_sample(Instant::now()), "gated");
+        // The spilled one: refused until its own end, then free within
+        // two minutes (the filter's minute and the snapshot's).
         let end = t0 + Duration::from_secs(3600);
         advance(end - Instant::now() - Duration::from_millis(1)).await;
         r.tick();
-        assert!(!r.proof.may_sample(Instant::now()));
-        advance(Duration::from_secs(1)).await;
-        r.tick();
-        assert!(r.proof.may_sample(Instant::now()));
+        assert!(
+            !r.sampler.reserve(addr(1), 12, Instant::now()),
+            "still cooling"
+        );
+        advance(Duration::from_secs(120)).await;
+        r.sampler.prune(Instant::now());
+        assert!(r.sampler.reserve(addr(1), 13, Instant::now()), "ended");
     }
+}
+
+/// X-split-resume-gate's fallback: if the snapshot's filter can't be
+/// rebuilt (here the new sampler's filter is already in use), the start
+/// holds every sample until the last spilled end, and the next commit
+/// carries that gate, as before this slice. Never shorter.
+#[tokio::test(start_paused = true)]
+async fn a_filter_that_cant_be_rebuilt_gates_until_its_last_end() {
+    let d = Dirs::new("spill-fallback");
+    let c = clock();
+    let mut r = Run::boot(&d, &c, true);
+    advance(horizon()).await;
+    r.tick();
+    r.sampler = Sampler::split_with_capacity(1);
+    let t0 = Instant::now();
+    r.sampled(addr(1), 1, Duration::from_secs(3600));
+    r.sampled(addr(2), 2, Duration::from_secs(600));
+    assert_eq!(r.sampler.spill_counts().0, 1);
+    r.commit(&d);
+
+    advance(Duration::from_secs(60)).await;
+    let now = Instant::now();
+    let mut busy = Sampler::split_with_capacity(1);
+    for (i, a) in [addr(5), addr(6)].into_iter().enumerate() {
+        assert!(busy.reserve(a, 20 + i as u64, now));
+        assert!(busy.complete(
+            a,
+            20 + i as u64,
+            Duration::from_secs(7200 - 600 * i as u64),
+            now
+        ));
+    }
+    assert_eq!(busy.spill_counts().0, 1, "in use before seeding");
+    let r = Run::boot_sampler(&d, &c, busy);
+    let now = Instant::now();
+    assert_eq!(r.proof.reason(), Reason::Resumed);
+    assert!(!r.proof.may_sample(now), "held for the spilled cooldown");
+    let end = t0 + Duration::from_secs(3600);
+    assert!(r.proof.may_sample(end + Duration::from_secs(120)));
+    assert!(!r.proof.may_sample(end - Duration::from_millis(1)));
+    r.commit(&d);
+    let bytes = std::fs::read(d.data.join(restart::SNAPSHOT_FILE)).unwrap();
+    let (s, _) = restart::Snapshot::decode(&bytes).unwrap();
+    assert!(
+        u64::from(s.gate_s) >= 3600 - 60 - 1,
+        "the next commit carries the gate: {}",
+        s.gate_s
+    );
 }

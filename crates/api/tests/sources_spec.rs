@@ -112,6 +112,7 @@ impl StoreOps {
                 Vec::new()
             },
             always_adult: false,
+            attribution: None,
             companion_need: None,
             needs: (account && names.is_empty()).then_some(SourceNeed::Credentials),
             credentials: names,

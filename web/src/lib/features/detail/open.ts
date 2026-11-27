@@ -4,6 +4,7 @@ import { pushState, replaceState } from '$app/navigation';
 import { resolve } from '$app/paths';
 import { page } from '$app/state';
 import { cacheHit, type SearchHit } from './cache';
+import { want, type Section } from './section.svelte';
 import { watchDetailVisibility } from './visibility';
 
 export interface OpenOptions {
@@ -13,6 +14,8 @@ export interface OpenOptions {
 	returnFocus?: () => HTMLElement | null | undefined;
 	/** Replace the history entry even with no drawer open. A drawer that is already open always replaces. */
 	replace?: boolean;
+	/** A section to scroll to once the torrent is on screen (Show all opens Related). */
+	section?: Section;
 }
 
 let pushed = false;
@@ -22,6 +25,7 @@ export function openDetail(hash: string, options: OpenOptions = {}) {
 	watchDetailVisibility();
 	if (options.hit) cacheHit(hash, options.hit);
 	if (options.returnFocus) returnTarget = options.returnFocus;
+	want(hash, options.section ?? null);
 	// The query string rides along so the mounted search page keeps reading its query.
 	const url = `${resolve('/t/[hash]', { hash })}${page.url.search}`;
 	// One history entry per drawer session: a second torrent replaces the first, so Back or Esc
@@ -51,6 +55,7 @@ export function closeDetail() {
 /** The host calls this when the drawer is gone for any reason (popstate included). */
 export function markClosed() {
 	pushed = false;
+	want('', null); // a wish for a torrent that never loaded goes with the drawer
 }
 
 export const returnFocusTarget = () => returnTarget?.();

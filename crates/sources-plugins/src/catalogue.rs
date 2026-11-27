@@ -18,6 +18,7 @@
 //! live here, or `lodestar import`'s mask won't see it.
 
 use lodestar_sources::Manifest;
+use lodestar_sources::terms::Terms;
 
 use crate::srrdb;
 use crate::{
@@ -61,6 +62,43 @@ pub fn manifests() -> impl Iterator<Item = &'static Manifest> {
 /// The plugins whose every find is adult (Sukebei today).
 pub fn always_adult() -> impl Iterator<Item = &'static Manifest> {
     manifests().filter(|m| m.always_adult)
+}
+
+/// One module's entry: its own manifest with its own terms, so the two
+/// can't be paired across plugins.
+macro_rules! own_terms {
+    ($m:ident) => {
+        (&crate::$m::MANIFEST, &crate::$m::TERMS)
+    };
+}
+
+/// `(manifest, terms)` for every lookup plugin with terms of its own
+/// (ENR-terms): each entry is the plugin's own `TERMS` const, the one its
+/// `Identifier::terms` returns. A unit test fails if a plugin with a
+/// `fn terms(&self)` isn't listed.
+const TERMS: &[(&Manifest, &Terms)] = &[
+    own_terms!(anidb),
+    own_terms!(anilist),
+    own_terms!(discogs),
+    own_terms!(igdb),
+    own_terms!(musicbrainz),
+    own_terms!(openlibrary),
+    own_terms!(predb),
+    own_terms!(srrdb),
+    own_terms!(steam),
+    own_terms!(tmdb),
+    own_terms!(tvdb),
+    own_terms!(wikidata),
+];
+
+/// The terms of the plugin with manifest id `plugin`, as its
+/// `Identifier::terms` gives them; `None` for a plugin that declares none
+/// (it isn't a lookup plugin) or one this build doesn't have. The host's
+/// Sources listing reads each source's attribution here (ENR-terms-api).
+/// Never a substitute for the recorded terms that decide redistribution
+/// (`identify::may_redistribute`).
+pub fn terms(plugin: &str) -> Option<&'static Terms> {
+    TERMS.iter().find(|(m, _)| m.id == plugin).map(|(_, t)| *t)
 }
 
 #[cfg(test)]
@@ -117,6 +155,21 @@ mod tests {
             }
         }
         text
+    }
+
+    /// Plugins in module `m` that declare terms: a `fn terms(&self)`
+    /// returning the module's own `TERMS` const. Whitespace is collapsed
+    /// first, so line endings (CRLF on a Windows checkout) and layout
+    /// don't matter.
+    fn with_terms(src: &Path, m: &str) -> usize {
+        let text = module_text(src, m)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let declared = text.matches("fn terms(&self)").count();
+        let own = text.matches("fn terms(&self) -> &Terms { &TERMS }").count();
+        assert_eq!(declared, own, "{m}: a `fn terms` that isn't `&TERMS`");
+        declared
     }
 
     fn listed(module: &str) -> usize {
@@ -198,6 +251,83 @@ mod tests {
                 m.id
             );
             assert_eq!(name, name.trim(), "{}: {name:?} has edge spaces", m.id);
+        }
+    }
+
+    /// Every lookup plugin's terms are listed, under its own manifest, so
+    /// the Sources listing shows its attribution.
+    #[test]
+    fn every_plugin_with_terms_is_listed() {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut total = 0;
+        for m in modules().into_iter().filter(|m| !NOT_PLUGINS.contains(m)) {
+            let declared = with_terms(&src, m);
+            // A module's plugins are listed in `PLUGINS` under its name;
+            // its terms entries are those plugins' manifests.
+            let ids: Vec<&str> = PLUGINS
+                .iter()
+                .filter(|(n, _)| *n == m)
+                .map(|(_, man)| man.id)
+                .collect();
+            let entries = super::TERMS
+                .iter()
+                .filter(|(man, _)| ids.contains(&man.id))
+                .count();
+            assert_eq!(
+                declared, entries,
+                "{m}: {declared} with terms, {entries} listed"
+            );
+            total += declared;
+        }
+        assert_eq!(total, super::TERMS.len());
+        assert!(total >= 12, "only {total} plugins with terms found");
+        assert_eq!(super::terms("tmdb"), Some(&crate::tmdb::TERMS));
+        assert_eq!(super::terms("wikidata"), Some(&crate::wikidata::TERMS));
+        assert_eq!(super::terms("dht"), None);
+        assert_eq!(super::terms("nyaa"), None);
+    }
+
+    /// An attribution is the service's credit as its terms prescribe it:
+    /// short plain text, an `https` link with nothing but printable ASCII
+    /// that needs no quoting in HTML, and a logo id that names a bundled
+    /// asset, never an address.
+    #[test]
+    fn every_attribution_is_plain_text_and_an_https_link() {
+        let safe = |b: u8| b.is_ascii_graphic() && !b"\"'<>\\^`{|}".contains(&b);
+        for (m, t) in super::TERMS {
+            let Some(a) = t.attribution else { continue };
+            let text = a.text;
+            assert!(
+                !text.trim().is_empty() && text.chars().count() <= 200,
+                "{}: {text:?}",
+                m.id
+            );
+            assert!(!text.chars().any(char::is_control), "{}: {text:?}", m.id);
+            assert_eq!(text, text.trim(), "{}: {text:?}", m.id);
+            let link = a.link;
+            assert!(
+                link.starts_with("https://") && link.len() <= 256,
+                "{}: {link}",
+                m.id
+            );
+            assert!(link.bytes().all(safe), "{}: {link}", m.id);
+            let host = link["https://".len()..].split('/').next().unwrap();
+            assert!(
+                !host.is_empty() && !host.contains('@') && !host.contains(':'),
+                "{}: {link}",
+                m.id
+            );
+            if let Some(logo) = a.logo {
+                assert!(
+                    !logo.is_empty()
+                        && logo.len() <= 64
+                        && logo
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+                    "{}: logo {logo:?}",
+                    m.id
+                );
+            }
         }
     }
 }

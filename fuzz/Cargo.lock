@@ -1599,12 +1599,17 @@ dependencies = [
 name = "lodestar-sources"
 version = "0.5.0"
 dependencies = [
+ "futures-util",
  "lodestar-integrations",
  "lodestar-metainfo",
  "lodestar-network-policy",
  "lodestar-peer-wire",
  "lodestar-store",
+ "rustls",
+ "rustls-platform-verifier",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
  "url",
 ]
 
@@ -1643,6 +1648,7 @@ name = "lodestar-sources-irc"
 version = "0.5.0"
 dependencies = [
  "lodestar-integrations",
+ "regex",
  "rustls",
  "rustls-platform-verifier",
  "tokio",

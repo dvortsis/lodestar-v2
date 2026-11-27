@@ -1,0 +1,36 @@
+/* The Related section's own layout (GS-4). Plain CSS on tokens (ramp spacing only), in the section's
+   own chunk, so the drawer's first load carries none of it (§10.1). */
+.ls-related-h {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: calc(var(--spacing) * 2);
+	font-size: var(--text-body);
+	line-height: var(--text-body--line-height);
+	font-weight: var(--font-weight-semibold);
+}
+.ls-related-list {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+}
+.ls-related-row {
+	display: flex;
+	align-items: flex-start;
+	gap: calc(var(--spacing) * 3);
+	min-width: 0;
+}
+.ls-related-row > input {
+	flex: none;
+	margin-block-start: calc(var(--spacing) * 0.5);
+}
+.ls-related-body {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 1);
+	min-width: 0;
+}
+.ls-related-name {
+	font-size: var(--text-body);
+	overflow-wrap: anywhere;
+}

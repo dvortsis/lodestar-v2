@@ -16,6 +16,9 @@
 //!   torrent, an unverified item, or anything Adult: stored as adult,
 //!   found by an always-adult source, made adult by your correction or
 //!   rule, or detected as adult now. Adult goes only to ENR-1's services.
+//!   Each of the plugin's requests asks the same gate again, for the same
+//!   item and query, after the client's waits and just before it's handed
+//!   to egress ([`crate::presend`]).
 //! - **What is sent** is a [`Query`]: the title and year the release
 //!   parser reads from the torrent's name alone, and its kind of work.
 //!   Never the hash, the raw name, files or trackers: a [`Query`] has no
@@ -309,8 +312,7 @@ pub fn check_with(
             .sources()?
             .iter()
             .any(|s| s.id == ctx.source && s.state == SourceState::Enabled);
-        g.consent_met =
-            lodestar_sources::consent::need_in_with(store, ctx.manifest, credentials)?.is_none();
+        g.consent_met = crate::adult_enrich::consent_met(store, ctx.manifest, credentials)?;
     }
     let plugin_wide = Gate { stored: true, ..g };
     if let Err(why) = eligible(&plugin_wide) {
@@ -327,13 +329,7 @@ pub fn check_with(
     g.held =
         store.held_among(&hashes)?.into_iter().any(|h| h) || engine.blocked_hash(&hashes).is_some();
     g.filtered = row.flags & flags::HIDDEN != 0;
-    let own = store
-        .correction(id)?
-        .map(crate::enrich::correction)
-        .unwrap_or_default();
-    // An always-adult source among its finders makes it Is adult, unless
-    // your own correction says Not adult.
-    let own = crate::source_adult::correction(own, row.sources, ctx.adult);
+    let own = own_correction(store, &row, ctx.adult, id)?;
     let stored_type = store.content_type(id)?;
     g.adult = stored_type == Some(ContentType::Adult.code()) || own.adult == Some(true);
     g.pending = store
@@ -344,37 +340,15 @@ pub fn check_with(
     if let Err(why) = eligible(&g) {
         return Ok(Err(why));
     }
-    let Some(tree) = store.files(id)? else {
+    let Some(now_read) = read_now(store, engine, &row, &hashes, own, id, now)? else {
         return Ok(Err(Ineligible::NotStored));
     };
-    let files = crate::enrich::file_infos(&tree.files, tree.encoding);
-    let class = classify_corrected(&row.name, &files, own);
-    let facts = Facts {
-        class: &class,
-        size: row.size,
-        piece_len: row.piece_len,
-        flags: row.flags,
-        discovered_at: row.discovered_at,
-        now,
-    };
-    let item = Item {
-        hashes: &hashes,
-        name: &row.name,
-        files: &files,
-        content_type: class.content_type,
-    };
-    // As it would be judged now: a rule changed since it was stored can't
-    // be outrun, and an Is adult rule makes it adult.
-    let (verdict, fix) = crate::source_adult::judge_maybe(engine, &item, &facts, false, now);
-    g.filtered |= verdict
-        .decision
-        .as_ref()
-        .is_some_and(|d| matches!(d.action, Action::Drop | Action::Quarantine | Action::Hide));
-    g.adult |= class.content_type == ContentType::Adult || fix == Some(true);
+    g.filtered |= now_read.filtered;
+    g.adult |= now_read.adult;
     if let Err(why) = eligible(&g) {
         return Ok(Err(why));
     }
-    let Some(kind) = media_kind(class.content_type).filter(|k| ctx.kinds.contains(k)) else {
+    let Some(kind) = media_kind(now_read.content_type).filter(|k| ctx.kinds.contains(k)) else {
         return Ok(Err(Ineligible::NoQuery));
     };
     // The torrent's name alone, never with its files: with no files, the
@@ -393,6 +367,94 @@ pub fn check_with(
             query,
         })
         .ok_or(Ineligible::NoQuery))
+}
+
+/// Your correction of torrent `id`, with an always-adult source among
+/// its finders making it Is adult unless you said Not adult.
+fn own_correction(
+    store: &Store,
+    row: &lodestar_store::TorrentRow,
+    adult: AdultSources,
+    id: i64,
+) -> Result<Correction, lodestar_store::Error> {
+    let own = store
+        .correction(id)?
+        .map(crate::enrich::correction)
+        .unwrap_or_default();
+    Ok(crate::source_adult::correction(own, row.sources, adult))
+}
+
+/// How a stored torrent reads now, from its files and the filter as it is.
+struct ReadNow {
+    content_type: ContentType,
+    /// A rule would drop, quarantine or hide it now.
+    filtered: bool,
+    /// Detected as adult now, or an Is adult rule makes it so.
+    adult: bool,
+}
+
+fn read_now(
+    store: &mut Store,
+    engine: &Engine,
+    row: &lodestar_store::TorrentRow,
+    hashes: &[[u8; 20]],
+    own: Correction,
+    id: i64,
+    now: i64,
+) -> Result<Option<ReadNow>, lodestar_store::Error> {
+    let Some(tree) = store.files(id)? else {
+        return Ok(None);
+    };
+    let files = crate::enrich::file_infos(&tree.files, tree.encoding);
+    let class = classify_corrected(&row.name, &files, own);
+    let facts = Facts {
+        class: &class,
+        size: row.size,
+        piece_len: row.piece_len,
+        flags: row.flags,
+        discovered_at: row.discovered_at,
+        now,
+    };
+    let item = Item {
+        hashes,
+        name: &row.name,
+        files: &files,
+        content_type: class.content_type,
+    };
+    // As it would be judged now: a rule changed since it was stored can't
+    // be outrun, and an Is adult rule makes it adult.
+    let (verdict, fix) = crate::source_adult::judge_maybe(engine, &item, &facts, false, now);
+    Ok(Some(ReadNow {
+        content_type: class.content_type,
+        filtered: verdict
+            .decision
+            .as_ref()
+            .is_some_and(|d| matches!(d.action, Action::Drop | Action::Quarantine | Action::Hide)),
+        adult: class.content_type == ContentType::Adult || fix == Some(true),
+    }))
+}
+
+/// Whether stored torrent `id` is Adult now by any reading the gate uses:
+/// stored as adult, an always-adult source, your correction or rule, or
+/// detection now. The writer asks it before it stores an identification
+/// ([`crate::unverified::ingest`]), so an item that became Adult after its
+/// lookup keeps no answer from a general service (Q5). An item that's no
+/// longer stored reads as adult (fail closed).
+pub fn adult_now(
+    store: &mut Store,
+    engine: &Engine,
+    adult: AdultSources,
+    id: i64,
+    now: i64,
+) -> Result<bool, lodestar_store::Error> {
+    let (Some(row), Some(hashes)) = (store.torrent(id)?, store.torrent_swarm_hashes(id)?) else {
+        return Ok(true);
+    };
+    let own = own_correction(store, &row, adult, id)?;
+    if store.content_type(id)? == Some(ContentType::Adult.code()) || own.adult == Some(true) {
+        return Ok(true);
+    }
+    Ok(read_now(store, engine, &row, &hashes, own, id, now)?.is_none_or(|r| r.adult))
 }
 
 /// The runtime's limits.
@@ -464,6 +526,9 @@ pub struct IdentifyStats {
     pub unrecorded: AtomicU64,
     /// Items the gate refused.
     pub ineligible: AtomicU64,
+    /// Lookups whose request the gate refused just before it went
+    /// ([`crate::presend`]): nothing was sent, and the answer is dropped.
+    pub withheld: AtomicU64,
     /// Items passed over because a fresh hit or miss is cached.
     pub cached: AtomicU64,
     /// Items the runtime finished with, whatever the outcome.
@@ -787,7 +852,43 @@ impl IdentifySource {
         bg.queue.pop_front()
     }
 
+    /// The gate for this runtime's plugin, as a call that owns what it
+    /// reads: [`check_with`] for torrent `id` at `now`, read then.
+    fn gate(
+        &self,
+        source: SourceId,
+    ) -> impl Fn(i64, i64) -> BoxFuture<'static, Gated> + Send + Sync + 'static {
+        let store = self.store.clone();
+        let filter = self.filter.clone();
+        let plugin = self.plugin.clone();
+        let switches = self.switches.clone();
+        let adult = self.adult;
+        move |id, now| {
+            let (store, plugin, switches) = (store.clone(), plugin.clone(), switches.clone());
+            // The filter as it is now: a rule changed since the last check
+            // can't be outrun.
+            let engine = filter.current();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
+                    let ctx = GateCtx {
+                        manifest: plugin.manifest(),
+                        source,
+                        kinds: plugin.kinds(),
+                        adult,
+                        switches: &*switches,
+                    };
+                    let credentials = plugin.policy().credentials;
+                    check_with(&mut store, &engine, ctx, credentials, id, now)
+                })
+                .await
+            })
+        }
+    }
+
     /// One item: the cache, the gate, the day's count, then the plugin.
+    /// Every request the plugin makes asks the gate again just before it
+    /// goes ([`crate::presend`]).
     /// `rnow` is the retention clock, which never steps back.
     async fn one(
         &self,
@@ -824,36 +925,13 @@ impl IdentifySource {
                 return Step::Skipped;
             }
         }
-        let candidate = {
-            let store = self.store.clone();
-            let engine = self.filter.current();
-            let manifest = self.plugin.manifest().clone();
-            let credentials = self.plugin.policy().credentials;
-            let kinds = self.plugin.kinds().to_vec();
-            let switches = self.switches.clone();
-            let (source, adult) = (ctx.source, self.adult);
-            tokio::task::spawn_blocking(move || {
-                let mut store = store.lock().unwrap_or_else(|e| e.into_inner());
-                let ctx = GateCtx {
-                    manifest: &manifest,
-                    source,
-                    kinds: &kinds,
-                    adult,
-                    switches: &*switches,
-                };
-                check_with(&mut store, &engine, ctx, credentials, id, now)
-            })
-            .await
-        };
+        let gate: crate::presend::Gate<Candidate, Ineligible> = Arc::new(self.gate(ctx.source));
+        let candidate = gate(id, now).await;
         let candidate = match candidate {
             Ok(Ok(Ok(c))) => c,
             Ok(Ok(Err(why))) => {
                 bump(&self.stats.ineligible);
-                return if why.plugin_wide() {
-                    Step::Wait
-                } else {
-                    Step::Skipped
-                };
+                return step_for(why);
             }
             // The store couldn't say: never asked, and tried again later.
             Ok(Err(_)) => {
@@ -873,11 +951,36 @@ impl IdentifySource {
             return Step::Spent;
         }
         bump(&self.stats.looked_up);
+        // Asked again before each request, for the same item and the same
+        // query: anything else (a refusal, an error, a changed query) sends
+        // nothing, and the reason decides what the runtime does next.
+        // Fail closed on a store error or a panic, as a plugin-wide
+        // reason, so the runtime waits before trying again.
+        let (gated, outcome) = crate::presend::for_item(
+            kit,
+            gate,
+            id,
+            candidate.clone(),
+            self.config.clock,
+            Ineligible::NoQuery,
+            Ineligible::KillSwitch,
+        );
         let lookup = tokio::select! {
             biased;
             _ = ctx.shutdown.requested() => return Step::Shutdown,
-            r = tokio::time::timeout(self.config.lookup_timeout, self.plugin.lookup(kit, &candidate.query)) => r,
+            r = tokio::time::timeout(self.config.lookup_timeout, self.plugin.lookup(&gated, &candidate.query)) => r,
         };
+        // A request the gate refused: whatever the plugin made of it, the
+        // answer is dropped, nothing is cached and the host isn't charged.
+        if let Some((why, sent)) = outcome.refused() {
+            bump(&self.stats.withheld);
+            // A request of the lookup went before the refusal: the host was
+            // asked, so the next lookup waits the interval.
+            if sent {
+                return Step::Asked;
+            }
+            return why.map_or(Step::Wait, step_for);
+        }
         // A lookup that took too long failed: dropped, as on shutdown.
         let Ok(lookup) = lookup else {
             // The client never saw an answer, so it recorded nothing: the
@@ -953,6 +1056,19 @@ fn timed_out(kit: &Kit, manifest: &Manifest) {
         }
     }
 }
+
+/// What the runtime does after the gate refused for `why`.
+fn step_for(why: Ineligible) -> Step {
+    if why.plugin_wide() {
+        Step::Wait
+    } else {
+        Step::Skipped
+    }
+}
+
+/// [`check_with`]'s answer, as the gate's call hands it back.
+type Gated =
+    Result<Result<Result<Candidate, Ineligible>, lodestar_store::Error>, tokio::task::JoinError>;
 
 enum Step {
     /// The plugin was called: the next lookup waits the interval.
