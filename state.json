@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T02:55Z",
+    "updated": "2026-11-27T03:10Z",
     "items": [
       {
         "slot": 1,
@@ -11133,7 +11133,7 @@
         "role": "build",
         "model": "opus",
         "agent": "session_01MMjhn9DwpYm2CJ3wEEyQEH",
-        "doing": "building: restart fuzz target reaches the v2 spill snapshot (queued by the stand-in)",
+        "doing": "PR #1127 open; runner review running",
         "since": "2026-11-27T01:35Z"
       },
       {
@@ -11151,7 +11151,7 @@
         "role": "build",
         "model": "opus",
         "agent": "session_01MMjhnCvVhSrDB5e8MDoECq",
-        "doing": "building: S8-26 fix (important, latent; enrichment runtimes); gates ENR-13b; /security-review",
+        "doing": "PR #1128 open; runner review + security review running",
         "since": "2026-11-27T01:35Z"
       }
     ],
