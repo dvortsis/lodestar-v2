@@ -909,11 +909,6 @@ impl Services {
     }
 }
 
-/// The updates stop to send when the shutdown signal fires. Unix only: its
-/// engine switches in-process, which the early stop closes. On Windows the
-/// `Notifier` has no switch to race, and its last look at the settings must
-/// stay after the drain, so a switch to Off saved by a request still being
-/// served withdraws a waiting install (X-win-upd-stop-wait, owner §2.13).
 /// A stored saved search's AST with `verified:yes,no` rewritten, as the
 /// new canonical query text and AST JSON (X-saved-verified-rewrite).
 /// `Ok(None)` keeps it; `Err` is an AST this build can't read.
@@ -926,6 +921,11 @@ pub(crate) fn rewrite_saved_ast(ast: &str) -> Result<Option<(String, String)>, (
     Ok(Some((node.to_query(), json)))
 }
 
+/// The updates stop to send when the shutdown signal fires. Unix only: its
+/// engine switches in-process, which the early stop closes. On Windows the
+/// `Notifier` has no switch to race, and its last look at the settings must
+/// stay after the drain, so a switch to Off saved by a request still being
+/// served withdraws a waiting install (X-win-upd-stop-wait, owner §2.13).
 fn early_updates_stop(updates: Option<&watch::Sender<bool>>) -> Option<watch::Sender<bool>> {
     if cfg!(windows) {
         return None;

@@ -3,16 +3,16 @@
 Saved searches and alerts made with Show unverified keep finding imports. Before X-import-verified-no (#1139), "Show unverified" sent `verified:yes,no`, and imports matched it only because they were indexed `yes`. Now they're `imported`, so a stored `verified:yes,no` would leave them out without notice (`2026-11-27-X-import-verified-no.md`, "Follow-up, a release blocker"). This slice rewrites those once, at start. Nothing released was affected. The runner decides it as a release blocker.
 
 ## What's rewritten
-- **A `verified:` node whose values are exactly {yes, no}** (any order, repeats allowed) **becomes `verified:yes,imported,no`**, at any depth under `and`, `or` and `file:`. It meant "verified and unverified", and both then included imports.
+- **A `verified:` node whose values are exactly {yes, no}** (any order, repeats allowed) **becomes `verified:yes,imported,no`**, at any depth, under a negation (`-…`) too. The rule keeps the old meaning: before #1139, {yes, no} meant every stored torrent and unverified item wherever it sat. So `-verified:yes,no`, which matched nothing, becomes `-verified:yes,imported,no` and still matches nothing (runner, 2026-11-27).
 - **Left alone:**
   - **a lone `verified:yes`.** The UI never wrote it: the toggle has only ever written `verified:yes,no` (064fadc45, ee2fb49fa) and now `yes,imported,no`, and its "off" keeps a `verified:yes` only when the user typed it. No server code builds a `verified:` node except the default `verified:yes,imported`. So a stored `verified:yes` was typed, and it now means "hashed here", which is the meaning #1139 intends.
-  - `verified:no`, and any list that already has `imported`.
-  - **anything under a negation (`-…`), as the brief says.** The only negation affected is `-verified:yes,no`. It matched nothing before #1139 and matches imports only now. The UI never wrote it. Asked of the runner (2026-11-27); flipping it is a one-line change.
+  - `verified:no`, `-verified:no` and other negations of lists that aren't {yes, no}, and any list that already has `imported`.
 - **Other stored queries can't hold one.**
   - API keys store scope bits only.
   - Feed tokens point at a saved search's id, so they follow its rewrite.
   - The percolator's promoted queue holds `reindex_log` seqs and ids.
   - Filter, classification and allow rules can't name `verified:` (`Node::mentions_provenance`, `crates/filter/src/load.rs`, `crates/api/src/filters.rs`).
+  - **After the rewrite, a search can still be saved with `verified:yes,no`**, from an old URL or bookmark, or from a tab still running the previous release's page. It's kept as asked (#1139 "kept as asked"), so it leaves imports out until Show unverified is switched off and on again.
   - Old URLs and bookmarks can't be rewritten. The toggle reads `verified:yes,no` as on, and switching it replaces the list with all three values (`toggle.test.ts`, "still reads an older verified:yes,no URL as shown").
 
 ## How

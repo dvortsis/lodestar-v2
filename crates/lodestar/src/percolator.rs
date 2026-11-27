@@ -1308,11 +1308,11 @@ mod tests {
             .rewrite_saved_verified(crate::services::rewrite_saved_ast)
             .unwrap()
             .unwrap();
-        assert_eq!((n.rewritten, n.unparseable, n.too_long), (3, 1, 0));
+        assert_eq!((n.rewritten, n.unparseable, n.too_long), (4, 1, 0));
         for b in &before {
             let a = s.store.saved_search(b.id).unwrap().unwrap();
             let all = "verified:yes,imported,no";
-            if [top, reversed, nested].contains(&b.id) {
+            if [top, reversed, nested, negated].contains(&b.id) {
                 assert!(a.query.contains(all), "{}", a.query);
                 let node: Node = serde_json::from_str(&a.ast).unwrap();
                 assert_eq!(node, parse(&a.query).unwrap(), "{}", a.query);
@@ -1352,11 +1352,11 @@ mod tests {
         }
         // `verified:yes` alone now means hashed here.
         assert_eq!(alert_ids(&s.store, yes), with(&old, &[crawled]));
-        // Matched nothing before #1139 and is left as typed: imports only.
-        assert_eq!(alert_ids(&s.store, negated), vec![import]);
+        // Matched nothing before #1139, and still matches nothing.
+        assert!(alert_ids(&s.store, negated).is_empty());
         // No old hit fired again: two new alerts each for four searches,
-        // one each for the other two.
-        assert_eq!(created, 4 * 2 + 2);
+        // one for `verified:yes`.
+        assert_eq!(created, 4 * 2 + 1);
         assert_eq!(
             s.store.saved_search(bad).unwrap().unwrap().ast,
             before[6].ast
