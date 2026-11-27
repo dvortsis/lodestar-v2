@@ -11193,6 +11193,16 @@
         "collector_expected_sha256": "fa718caa152c7035970d3eef6b3cbc846d2f1b7833934fd7daa42c2db0d0582f (main ac905457)",
         "collector_reported": "a02d71d7... MISMATCH -> owner told to refetch and hash-check before 11:30Z (03:27Z)",
         "checkins": "12:05Z rehearsal passed + db deleted; 13:10Z containers up + status.json"
+      },
+      {
+        "run": "import-magnetico-1",
+        "slice": "G-import-1M",
+        "start": "2026-11-27T06:00:00Z",
+        "window": "2026-11-27T06:00Z to 13:00Z, VM idle and reported by 13:30Z",
+        "booked_by": "runner 05:36Z on X-test-vm's request; owner words relayed by X-test-vm, unverified by the runner",
+        "holds": "ext:import-host for the Magnetico ladder only; bitmagnet restore waits until after CR-AB-LC",
+        "run_by": "a Remote Control session the owner starts on the VM, briefed by X-test-vm",
+        "instructions": "inbox/x-test-vm.md 2026-11-27T05:36Z"
       }
     ],
     "run_sheet": "briefs/CR-AB-COMP-run-sheet.md",
