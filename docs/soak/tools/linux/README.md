@@ -389,8 +389,12 @@ Both are stacked treatments, so they take `--winners` as stage 2 does.
   (`soft_timeout_by_arm`): soft queries and late replies per hour, late ÷ soft and
   soft ÷ peer-lookup queries over sampling minutes, and soft and late over stalled
   minutes (`stalled`). A scrape interval is stalled when the start suppression is
-  above 0 at either end or sampler-full time grew in it. It's reported, never decided
-  on, and other treatments carry no soft report. See `docs/decisions/2026-11-23-X-soft-key.md`.
+  above 0 at either end or sampler-full time grew in it. The figures are reported, never
+  decided on, and other treatments carry no soft report. See `docs/decisions/2026-11-23-X-soft-key.md`.
+  One check does decide (X-soft-absent-void): a B segment with no `dht_soft_timeouts_total`
+  at all ran on an image without the soft timeout, so it's void
+  (`soft_timeout_counter_rendered`), its block is invalid and `effect` refuses the pair;
+  re-run the block on an image that has it. A count of 0 is a result, never a void.
 
 Each treatment's series are required in both arms of its own segments. Every other
 segment reports them under `hint_first` and `sampler_split` and lists the missing

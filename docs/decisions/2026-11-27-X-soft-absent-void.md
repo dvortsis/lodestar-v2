@@ -17,6 +17,7 @@ The runner launched this slice on 2026-11-27 (runner records r17, `docs/decision
 - **`effect` refuses the pair through the existing path.** The void segment makes its block invalid (`segment_void`, rule 6.7), so the run lacks two valid paired blocks and `effect` reads `not_decidable` with no fit. The block's segment view names the reason.
 
 ## Owns
+- **Widened to `docs/soak/tools/linux/README.md`** (the runner's call, 2026-11-27T01:45Z), for the stage-3 sentence that said the soft report is never decided on. It now names the void.
 - **The decisions file X-soft-key wrote is `2026-11-23-X-soft-key.md`**, not `2026-11-24-…` as the brief named it. Its heading now carries "(#1102)", the brief's one-line edit, and nothing else in it changed.
 
 ## Tests
