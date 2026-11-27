@@ -1,6 +1,6 @@
 {
-  "runner_session": "session_01MMjhnCpMMYF4uEW49L9SpF",
-  "updated_at": "2026-11-24T11:26Z",
+  "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
+  "updated_at": "2026-11-27T01:31Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-24T03:39:06Z",
+  "last_heartbeat": "2026-11-27T01:31Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -11116,19 +11116,19 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-25T03:17Z",
+    "updated": "2026-11-27T01:31Z",
     "items": [
       {
         "slot": 1,
         "model": "sonnet",
         "status": "idle",
-        "doing": "empty: runner paused by the owner 2026-11-25T03:17Z"
+        "doing": "empty: runner resumed 2026-11-27T01:31Z, picking per priority"
       },
       {
         "slot": 2,
         "model": "opus",
         "status": "idle",
-        "doing": "empty: runner paused by the owner 2026-11-25T03:17Z"
+        "doing": "empty: runner resumed 2026-11-27T01:31Z, picking per priority"
       },
       {
         "slot": 3,
@@ -11137,12 +11137,12 @@
         "owns_extra": [
           "crates/pipeline/src/control.rs (purge_step only, ~6 lines: pass always-adult sources to the store before each step; coordinator relay 20:39Z)"
         ],
-        "doing": "empty: runner paused by the owner 2026-11-25T03:17Z"
+        "doing": "empty: runner resumed 2026-11-27T01:31Z, picking per priority"
       },
       {
         "slot": 4,
         "status": "idle",
-        "doing": "empty: runner paused by the owner 2026-11-25T03:17Z"
+        "doing": "empty: runner resumed 2026-11-27T01:31Z, picking per priority"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
@@ -11190,6 +11190,12 @@
       "earliest_start": "~13:00Z if Windows stopped by ~01:00Z, else 12:45Z",
       "schedules": "CA Docker auto-update 11-08 11:00Z off for run (auto_update=not_applicable); SSD TRIM 07:00Z paused; others outside window",
       "containers": "sonarr/radarr ok if not restarted; no torrent client; autoheal, qbitmanage, unpackerr, purgarr stay stopped; owner to confirm who stopped 10 containers 00:44-00:46Z; owner confirmed ~00:55Z they stopped them"
+    },
+    "back": {
+      "at": "2026-11-27T00:51Z",
+      "owner_words": "The unraid machine is no longer throttled at 45w.",
+      "runner_reading": "the box is back at full power, which lifts \u00a72.82's experiment-host hold; host changed (power limit) since cr-ab-comp-1, so the comparator runs again first (build-plan \u00a70.5 run rules, runner's call)",
+      "next": "cr-ab-comp-2 (owner-run, prompt from the path-to-100 session, runner corrections sent), then >=12 h, then CR-AB-ADM, CR-AB-4 back to back, Checkpoint 1, CR-AB-LC"
     }
   },
   "owner_answers": [
@@ -11251,48 +11257,18 @@
   "heartbeat": "2026-11-24T03:39:06Z",
   "updated": "2026-11-24T23:10Z",
   "pause": {
-    "build_slices": true,
-    "since": "2026-11-25T00:16Z",
-    "runner": {
-      "paused": true,
-      "since": "2026-11-24T06:30:19Z",
-      "by": "owner",
-      "words": "pause the agent runner until further notice",
-      "effect": "no merges, no reviews, no launches, heartbeat disabled; resumes only on the owner's word"
-    },
-    "by": "owner, Claude Duet chat 2026-11-25T00:16:17Z",
-    "words": "I'm out of usage. Please do not start new slices until I say otherwise.",
-    "scope": "no new slices start; in-flight reviews and merges finish (#1120, #1119, #1122, slot 1 X-web-followups-1124); each slot stays empty when it frees",
-    "resume": "only on the owner's word; then start X-restart-fuzz-v2 (briefs/X-restart-fuzz-v2.md) and X-gs-followups-2 (briefs/X-gs-followups-2.md)",
-    "after_drain": {
-      "at": "2026-11-25T00:17:47Z",
-      "by": "owner, Claude Duet chat",
-      "words": "pause once those four are done.",
-      "four": [
-        "#1120 X-purge-rederive",
-        "#1119 ENR-terms-api",
-        "#1122 X-split-spill-horizon",
-        "slot 1 X-web-followups-1124"
-      ],
-      "effect": "after the last of the four merges: all runner work pauses (no slices, no queued starts, no runner docs PR, no other runner jobs) until the owner says otherwise",
-      "state": "paused",
-      "paused_at": "2026-11-25T03:17Z"
-    },
-    "all_runner_work": {
-      "paused": true,
-      "since": "2026-11-25T03:17Z",
-      "by": "owner",
-      "words": "pause once those four are done.",
-      "effect": "no slices, no queued starts, no reviews, no merges, no runner docs PR, no other runner jobs until the owner says otherwise",
-      "resume": "on the owner's word: start X-restart-fuzz-v2 and X-gs-followups-2 (briefs written); then the metrics.md runner docs PR (runner_todo)"
-    },
+    "state": "resumed",
+    "resumed_at": "2026-11-27T01:31Z",
     "duet_holder": {
       "paused": true,
       "since": "2026-11-27T00:54Z",
       "by": "owner, Claude Duet chat",
       "words": "Keep duet paused. I'll work with runner directly for now.",
       "effect": "the Duet chat (coordinator and bookkeeping thread) takes no runner actions; the owner works with his own runner session directly. A runner reading this should not route runner messages to the Duet bookkeeping thread."
-    }
+    },
+    "lifted": "2026-11-27T01:31Z",
+    "lifted_by": "owner, 2026-11-27T00:51Z, in session_01MMjhnA3S5HWf4ocEbNeBvk (the #970 path-to-100 session; relayed to the runner, which checked the words against that session's events): picked \"Resume all runner work\"; then 01:26Z \"THe runner should prioritize the new plan.\" and 01:27Z \"But it can finish aany paused slices as needed\"",
+    "priority": "path to 100 first (r5/r5.1, build-plan \u00a70.5) for slots, the experiment host and review; paused slices may finish; then the audit fix slices (X-sec-S8-25/26/27 by id), CR-0w tracking, X-restart-fuzz-v2, X-gs-followups-2, the metrics.md runner docs PR"
   },
   "owner_queue_pending": [
     {
@@ -12143,6 +12119,35 @@
       "at": "2026-11-24T06:30:19Z",
       "what": "runner paused",
       "by": "owner"
+    },
+    {
+      "runner": {
+        "paused": true,
+        "since": "2026-11-24T06:30:19Z",
+        "by": "owner",
+        "words": "pause the agent runner until further notice",
+        "effect": "no merges, no reviews, no launches, heartbeat disabled; resumes only on the owner's word",
+        "lifted": "2026-11-27T01:31Z",
+        "lifted_by": "owner, 2026-11-27T00:51Z, in session_01MMjhnA3S5HWf4ocEbNeBvk (the #970 path-to-100 session; relayed to the runner, which checked the words against that session's events): picked \"Resume all runner work\"; then 01:26Z \"THe runner should prioritize the new plan.\" and 01:27Z \"But it can finish aany paused slices as needed\""
+      },
+      "build_slices": {
+        "since": "2026-11-25T00:16Z",
+        "by": "owner, Claude Duet chat 2026-11-25T00:16:17Z",
+        "words": "I'm out of usage. Please do not start new slices until I say otherwise.",
+        "scope": "no new slices start; in-flight reviews and merges finish (#1120, #1119, #1122, slot 1 X-web-followups-1124); each slot stays empty when it frees",
+        "lifted": "2026-11-27T01:31Z",
+        "lifted_by": "owner, 2026-11-27T00:51Z, in session_01MMjhnA3S5HWf4ocEbNeBvk (the #970 path-to-100 session; relayed to the runner, which checked the words against that session's events): picked \"Resume all runner work\"; then 01:26Z \"THe runner should prioritize the new plan.\" and 01:27Z \"But it can finish aany paused slices as needed\""
+      },
+      "all_runner_work": {
+        "paused": true,
+        "since": "2026-11-25T03:17Z",
+        "by": "owner",
+        "words": "pause once those four are done.",
+        "effect": "no slices, no queued starts, no reviews, no merges, no runner docs PR, no other runner jobs until the owner says otherwise",
+        "resume": "on the owner's word: start X-restart-fuzz-v2 and X-gs-followups-2 (briefs written); then the metrics.md runner docs PR (runner_todo)",
+        "lifted": "2026-11-27T01:31Z",
+        "lifted_by": "owner, 2026-11-27T00:51Z, in session_01MMjhnA3S5HWf4ocEbNeBvk (the #970 path-to-100 session; relayed to the runner, which checked the words against that session's events): picked \"Resume all runner work\"; then 01:26Z \"THe runner should prioritize the new plan.\" and 01:27Z \"But it can finish aany paused slices as needed\""
+      }
     }
   ],
   "size_file_holder": {

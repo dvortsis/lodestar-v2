@@ -1,5 +1,7 @@
 # Handover: the build is held by the owner's Claude Duet chat
 
+**Runner resumed 2026-11-27 (owner: "Resume all runner work").** The runner session `session_01EYhgh4JX3AmHzKXPjYCoUg` holds the build again and has adopted every claim below (all merged; slots empty). Send runner messages to `session_01EYhgh4JX3AmHzKXPjYCoUg`, not the Duet threads. This file stays until the owner confirms its deletion (`docs/handoff.md` §5 step 5).
+
 
 **2026-11-27T00:54Z, owner in the Duet chat:** "Keep duet paused. I'll work with runner directly for now." The Duet holder is stood down; don't send runner messages to its bookkeeping thread. The owner works with his runner directly.
 
