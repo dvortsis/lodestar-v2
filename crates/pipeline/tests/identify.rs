@@ -1961,6 +1961,8 @@ enum Change {
 /// (any plugin-wide condition, a rule, a hold, the item becoming Adult),
 /// its request isn't sent and the answer is neither emitted nor cached.
 /// With nothing changed, the one request goes.
+/// The wire is the runtime's own client: a plugin handed that client
+/// rather than the checked one would send in every case.
 #[tokio::test]
 async fn the_gate_is_asked_again_when_the_request_goes() {
     let changes = [
