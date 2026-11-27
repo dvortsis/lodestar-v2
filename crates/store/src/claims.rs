@@ -768,13 +768,24 @@ impl Claims {
     /// confidence: a details section that states one (ENR-10, ENR-11).
     /// Only such a section is ever served
     /// ([`Store::served_identifications`](crate::Store::served_identifications)
-    /// applies this test, then its row, torrent and terms checks), and
+    /// applies this test, through its owning form
+    /// [`Claims::into_identification`], then its row, torrent and terms
+    /// checks; change the two together), and
     /// [`Claims::shapes_the_record`] counts every one, so a purge that
     /// removes a served answer always reindexes its torrent
     /// (X-purge-index-shapes).
     pub fn identification(&self) -> Option<(&Details, u8)> {
         let d = self.details.as_deref()?;
         Some((d, d.match_confidence?))
+    }
+
+    /// [`Claims::identification`], taking the claims: the details section,
+    /// its confidence and the external ids, read once. The same test: keep
+    /// the two in step.
+    pub fn into_identification(self) -> Option<(Details, u8, Vec<ExternalId>)> {
+        let d = *self.details?;
+        let confidence = d.match_confidence?;
+        Some((d, confidence, self.ids))
     }
 
     /// Whether these claims can change a torrent's derived record or what
