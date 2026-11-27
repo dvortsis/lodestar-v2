@@ -17,7 +17,11 @@ use lodestar_sources_irc::announce::{
 };
 use lodestar_sources_irc::line;
 
-const TEMPLATE: &str = include_str!("../data/announce/template.def");
+/// The shipped template, with LF line ends whatever the checkout did: a
+/// Windows checkout may have converted them, and the seeds hold LF bytes.
+fn template() -> String {
+    include_str!("../data/announce/template.def").replace("\r\n", "\n")
+}
 
 /// The target's fixed definition, copied from
 /// `fuzz/fuzz_targets/irc_announce.rs`; `the_fixed_definition_is_the_targets`
@@ -127,13 +131,14 @@ fn seeds() -> Vec<Seed> {
     use Expect::*;
     let caps = at_caps(false);
     let folded = at_caps(true);
-    let crlf_bom = format!("\u{feff}{}", TEMPLATE.replace('\n', "\r\n"));
+    let template = template();
+    let crlf_bom = format!("\u{feff}{}", template.replace('\n', "\r\n"));
     let fixed = |text: &str| format!(":Announcer!a@announce.example.net PRIVMSG #announce :{text}");
     vec![
         // The shipped template, with a line that matches it.
         Seed::new(
             "template-announce",
-            TEMPLATE,
+            &template,
             TEMPLATE_HIT,
             Announce("Some.Show.S01E02.1080p.WEB-DL"),
         ),
@@ -141,7 +146,7 @@ fn seeds() -> Vec<Seed> {
         // ending and mIRC bold and colour, which the matcher strips.
         Seed::new(
             "template-notice-formatted",
-            TEMPLATE,
+            &template,
             ":ExampleBot!bot@services.example-tracker.test NOTICE #EXAMPLE-ANNOUNCE \
              :\u{2}New Torrent:\u{2} \u{3}04,01Some.Film.2026.2160p\u{3} Category: Movies \
              Size: 58.2 GB - https://example-tracker.test/torrents/9\r",
@@ -150,7 +155,7 @@ fn seeds() -> Vec<Seed> {
         // Its announcer and channel, but chatter the pattern doesn't match.
         Seed::new(
             "template-no-match",
-            TEMPLATE,
+            &template,
             ":ExampleBot!bot@services.example-tracker.test PRIVMSG #example-announce \
              :Site maintenance tonight, announces may pause",
             NoMatch,
@@ -158,7 +163,7 @@ fn seeds() -> Vec<Seed> {
         // An announce-shaped line from a nick that isn't the announcer.
         Seed::new(
             "template-other-nick",
-            TEMPLATE,
+            &template,
             &TEMPLATE_HIT.replace(":ExampleBot!bot@", ":SomeUser!user@"),
             Ignored,
         ),
@@ -293,12 +298,18 @@ fn the_caps_seeds_are_at_the_caps() {
 
 #[test]
 fn the_fixed_definition_is_the_targets() {
-    let target = include_str!("../../../fuzz/fuzz_targets/irc_announce.rs");
+    // LF line ends, as a Windows checkout may have converted them.
+    let target = include_str!("../../../fuzz/fuzz_targets/irc_announce.rs").replace("\r\n", "\n");
     let open = "const FIXED: &str = \"\\\n";
     let start = target.find(open).expect("FIXED") + open.len();
     let body = &target[start..start + target[start..].find("\";\n").expect("its end")];
-    // The target's text is a Rust string literal: unescape `\\` as this
-    // file's is.
+    // The target's text is a Rust string literal that uses no escape but
+    // `\\`. Say so if it gains another, rather than fail on a confusing
+    // diff.
+    assert!(
+        !body.replace("\\\\", "").contains('\\'),
+        "the target's FIXED has an escape other than `\\\\`: unescape it here"
+    );
     assert_eq!(body.replace("\\\\", "\\"), FIXED);
 }
 
