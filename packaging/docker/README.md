@@ -150,12 +150,11 @@ starts any work, Lodestar:
 4. hands the restart record folder (`LODESTAR_DHT_WITNESS_DIR`) to
    `PUID:PGID`: only that folder and the `.gen` files directly in it,
    never through a link, and only if it holds nothing else. If it can't,
-   it carries on: v0.5.1 then waits the full six hours before
-   sampling after a restart, and newer builds sample at once without
-   the restored restrictions. The folder is in the container, not a
-   volume, so an image update (which recreates the container) also
-   starts without it: v0.5.1 waits the six hours once, and newer builds
-   lose only that run's restored restrictions and sample at once;
+   it carries on: newer builds then sample at once without the restored
+   restrictions. (v0.5.1 has no restart record and waits six hours after
+   every start.) The folder is in the container, not a volume, so an
+   image update (which recreates the container) also starts without it,
+   and loses only that run's restored restrictions;
 5. drops root, blocks any later way back (`no_new_privs`), and checks it
    can't get root back. If any step fails, it stops instead of running.
 

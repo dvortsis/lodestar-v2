@@ -126,6 +126,7 @@ You can also set the options from the command line, for an unattended install. T
 | After a crash | Windows restarts it up to twice, 60 seconds apart. After that it stays stopped, and the count starts again after a day, so check a service that stays stopped ([section 6.1](06-troubleshooting.md#61-common-problems)). |
 | Program | `C:\Program Files\Lodestar` |
 | Data | `C:\ProgramData\Lodestar`. Only SYSTEM, Administrators and the service can read it. Logs are in its `logs` folder. |
+| [Restart record](glossary.md#restart-record) | **(Newer than v0.5.1)** `C:\ProgramData\Lodestar-witness`, a folder outside the data folder for [safe restart](glossary.md#safe-restart) ([how it works](03-keep-lodestar-safe.md#38-keep-the-safe-restart-check-on-newer-than-v051)). Keep it out of data-folder backups. If Lodestar can't make it private, or you put the data folder under it or beside it, Lodestar logs a warning at start, keeps no record for that run and samples at once. |
 | Firewall | `6881/udp` ([UDP](glossary.md#udp), for the [DHT](glossary.md#dht)) for the Lodestar program on private networks only. `8090/tcp` only if you ticked the web-page option. |
 | Start menu | A **Lodestar** folder with a **Lodestar** shortcut that opens `http://localhost:8090/` in your browser. |
 
@@ -147,7 +148,9 @@ Get-Service Lodestar
 
 Open **Settings → Apps → Installed apps** (**Apps & features** on Windows 10), find **Lodestar**, and select **Uninstall**.
 
-**Result:** The service, program, firewall rules, Start-menu shortcut and any Defender exclusion on the data folder are removed. **Your data stays** in `C:\ProgramData\Lodestar`: your library, password and keys. Reinstalling picks it up again. Small installer log folders named `C:\Windows\Temp\lodestar-secure-*` also stay. Only administrators can read them, and you can delete them.
+**Result:** The service, program, firewall rules, Start-menu shortcut and any Defender exclusion on the data folder are removed. **Your data stays** in `C:\ProgramData\Lodestar`: your library, password and keys. Reinstalling picks it up again.
+
+**(Newer than v0.5.1)** The restart record folder `C:\ProgramData\Lodestar-witness` stays too, even with `REMOVE_DATA=1`; delete it by hand if you want it gone. Small installer log folders named `C:\Windows\Temp\lodestar-secure-*` also stay. Only administrators can read them, and you can delete them.
 
 To delete the data as well, uninstall from an elevated PowerShell with `REMOVE_DATA=1`. Use the same MSI file you installed: Windows ties an uninstall to that exact build, so after an update use the newer file. First go to the folder that holds it:
 
@@ -232,7 +235,7 @@ Day to day:
 | Follow the log as it grows | `sudo journalctl -u lodestar -f` |
 | Restart or stop it | `sudo systemctl restart lodestar` or `sudo systemctl stop lodestar` |
 
-**(Newer than v0.5.1)** The service has a second private folder, `/var/lib/lodestar-witness`, for the restart record. Safe restart is on by default, so Lodestar fills it. The Windows service has the same kind of folder, `C:\ProgramData\Lodestar-witness`. Don't back either up together with the data folder ([section 3.8](03-keep-lodestar-safe.md#38-keep-the-safe-restart-check-on-newer-than-v051)). If Lodestar can't make the folder private, that run keeps no record and samples at once.
+**(Newer than v0.5.1)** The service has a second private folder, `/var/lib/lodestar-witness`, for the restart record. [Safe restart](glossary.md#safe-restart) is on by default, so Lodestar fills it. The Windows service has the same kind of folder, `C:\ProgramData\Lodestar-witness`. Don't back either up together with the data folder ([section 3.8](03-keep-lodestar-safe.md#38-keep-the-safe-restart-check-on-newer-than-v051)). If Lodestar can't make the folder private, that run keeps no record and samples at once.
 
 To try Linux without a service, open a terminal in the extracted folder and run `./lodestar serve` as your normal user. It stores data in `./data`. Stop with **Ctrl+C** and wait for shutdown.
 

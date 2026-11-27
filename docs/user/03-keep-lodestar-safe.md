@@ -9,6 +9,7 @@ This chapter sets up Lodestar so the web page, your password and your logs stay 
 > - Choose whether to forward the [DHT](glossary.md#dht) port or run through a VPN [container](glossary.md#container).
 > - Keep torrent details out of logs you share.
 > - Back up the data folder and restore it.
+> - **(Newer than v0.5.1)** Keep [safe restart](glossary.md#safe-restart) on and its [restart record](glossary.md#restart-record) out of backups.
 
 ## 3.1 Keep the web UI off the internet
 <!-- index: port forwarding; web UI; remote access; VPN -->
@@ -594,11 +595,11 @@ Unraid's appdata backup runs as root, so it can still copy the folder. On Window
 
 **(Newer than v0.5.1)** Everything in this section is for builds after v0.5.1. v0.5.1 has no safe-restart switch and waits six hours after every start ([section 3.5](#35-choose-how-updates-work)).
 
-Lodestar asks each DHT node for a list of torrents, and a node tells Lodestar how long to wait before asking it again. **Safe restart** keeps those waiting times across a restart, so Lodestar doesn't spend its first hours re-asking nodes it already has samples from.
+Lodestar asks each DHT node for a list of torrents, and a node tells Lodestar how long to wait before asking it again. [**Safe restart**](glossary.md#safe-restart) keeps those waiting times across a restart, so Lodestar doesn't spend its first hours re-asking nodes it already has samples from.
 
 What it does:
 
-- When Lodestar stops cleanly, it saves a restart record. At the next start it checks that nothing else changed its data in between. If the check passes, it restores the waiting times and carries on.
+- When Lodestar stops cleanly, it saves a [restart record](glossary.md#restart-record). At the next start it checks that nothing else changed its data in between. If the check passes, it restores the waiting times and carries on.
 - If the check fails, Lodestar restores nothing and **samples at once**. A failed check never delays sampling. A first install, a crash, a restored backup and an image update all start sampling.
 - Sampling starts once Lodestar has found its first DHT nodes. It may hold for up to 10 seconds first, while it loads the restart record.
 - If Lodestar keeps crashing and restarting, it waits about a minute before asking the network again. That stops a restart loop from asking the same nodes over and over.
@@ -612,10 +613,16 @@ Where the restart record is kept, in a folder **outside** the data folder:
 | Linux service | `/var/lib/lodestar-witness` |
 | Windows service | `C:\ProgramData\Lodestar-witness` |
 | Docker and Unraid | `/var/lib/lodestar-witness`, inside the container |
+| Portable copy or `./lodestar serve` by hand | Linux: `~/.local/state/lodestar` (or `$XDG_STATE_HOME/lodestar`). Windows: `%LOCALAPPDATA%\Lodestar\witness` |
 
-On Docker and Unraid the folder is part of the container, not a volume. An image update replaces the container, so the record is lost once. The next start then samples at once and only loses that one run's restored waiting times. You don't need to back it up or map it.
+On Docker and Unraid the folder is part of the container, not a volume.
 
-**Keep that folder out of backups taken with the data folder.** The check works because the record and the data folder must agree. If you restore an old data folder together with its old record, the two agree again. Lodestar can't tell the data went back in time. Back up only the data folder ([section 3.7](#37-back-up-and-restore)). A restored backup then fails the check, and Lodestar samples at once.
+An image update, or editing the template and selecting **Apply**, replaces the container, so the record is lost once. The next start then samples at once and loses only that run's restored waiting times. 
+**Don't map this folder to a volume or to appdata.** Unraid's appdata backup would then copy it together with `/data` and defeat the check.
+
+**Keep that folder out of backups taken with the data folder.** The check works because the record and the data folder must agree.
+
+If you restore an old data folder together with its old record, the two agree again. Lodestar can't tell the data went back in time. A home-folder backup of a portable copy can catch the record too, so leave that folder out. Back up only the data folder ([section 3.7](#37-back-up-and-restore)). A restored backup then fails the check, and Lodestar samples at once.
 
 > [!NOTE]
 > Safe restart saves effort. It doesn't make the index fill faster. The index grows over days and weeks.

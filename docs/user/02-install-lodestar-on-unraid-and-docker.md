@@ -309,7 +309,7 @@ In v0.5.1, setup does not gate all crawler network activity. Claim the instance 
 > [!NOTE]
 > **What to expect in the first hours**
 > - Search works at once, but the index is small. It grows over days, not minutes.
-> - v0.5.1: after every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start. Full speed starts after those 6 hours.
+> - **v0.5.1:** after every start, including restarts and updates, sampling waits 6 hours before it resumes. New discoveries ramp up over the first hours after each start. Full speed starts after those 6 hours.
 > - **(Newer than v0.5.1)** There is no wait. Sampling starts as soon as Lodestar has found its first DHT nodes. The index still grows over days and weeks.
 
 To read the notice again later, open **More** → **About**. The **Legal** section shows it.
