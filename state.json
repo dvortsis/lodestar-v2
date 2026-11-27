@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T19:46:12Z",
+    "updated": "2026-11-27T19:48:22Z",
     "items": [
       {
         "slot": 1,
@@ -11138,12 +11138,12 @@
       },
       {
         "slot": 3,
-        "slice": "X-remote-verified",
+        "slice": "X-legal-safe-restart",
         "role": "build",
-        "agent": "claude",
+        "agent": "session_01MMjhnAbvBbCCnzvfaQ6MRN",
         "session": "session_01MMjhnC8xWNQaf7ssYaxCym",
-        "doing": "#1143 in review",
-        "since": "2026-11-27T15:36Z"
+        "doing": "Legal Notice section 5 safe-restart wording (owner \u00a72.87), NOTICE_VERSION 5 to 6; #1143 merged",
+        "since": "2026-11-27T19:48:22Z"
       },
       {
         "slot": 4,
