@@ -3,7 +3,8 @@ import type { Ast } from '$lib/state/search.svelte';
 import { showsUnverified, withUnverified } from './toggle';
 
 const word: Ast = { op: 'word', field: 'any', word: 'dune' };
-const both: Ast = { op: 'verified', any: ['yes', 'no'] };
+const both: Ast = { op: 'verified', any: ['yes', 'imported', 'no'] };
+const old: Ast = { op: 'verified', any: ['yes', 'no'] };
 
 describe('showsUnverified', () => {
 	it('is false for no query and for a plain query', () => {
@@ -15,6 +16,17 @@ describe('showsUnverified', () => {
 		expect(showsUnverified(both)).toBe(true);
 		expect(showsUnverified({ op: 'verified', any: ['no'] })).toBe(true);
 		expect(showsUnverified({ op: 'and', of: [word, both] })).toBe(true);
+	});
+	it('still reads an older verified:yes,no URL as shown', () => {
+		expect(showsUnverified(old)).toBe(true);
+		expect(withUnverified({ op: 'and', of: [word, old] }, true)).toEqual({
+			op: 'and',
+			of: [word, both]
+		});
+		expect(withUnverified({ op: 'and', of: [word, old] }, false)).toEqual(word);
+	});
+	it('is false for the default verified:yes,imported', () => {
+		expect(showsUnverified({ op: 'verified', any: ['yes', 'imported'] })).toBe(false);
 	});
 	it('is false for verified:yes alone', () => {
 		expect(showsUnverified({ op: 'verified', any: ['yes'] })).toBe(false);

@@ -1509,7 +1509,8 @@ export default [
 	// kept so the cut is the headroom. Keep the rules by `alertOnDemand`.
 	// X-web-followups-1124 (a raise for the runner's §2.26 call): 35.03 → 35.10 KB, measured 35,099 B (+69 B): VirtualList
 	// keeps a focused row active through a new resetKey (the list's side of #1115's table fix).
-	routeEntry('Alert route (own JS + CSS)', alertView, '35.10 KB'),
+	// X-import-verified-no (runner §2.26): 35.10 → 35.39 KB, measured 35,390 B (+290 B): the Imported badge and its help.
+	routeEntry('Alert route (own JS + CSS)', alertView, '35.39 KB'),
 	routeEntry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
@@ -1785,7 +1786,8 @@ export default [
 	// keeps a focused row active through a new resetKey, so j/k carry on from it after a re-sort.
 	// X-gs-followups-2 (runner §2.26): 43.78 → 43.76 KB, measured 43,752 B (−25 B): the Table keeps
 	// the row carried into it (no re-set on mount), less the reset to row 1 for a new query's rows.
-	entry('Search results (lazy)', resultsFirst, '43.76 KB'),
+	// X-import-verified-no (runner §2.26): 43.76 → 44.09 KB, measured 44,089 B (+329 B): the Imported badge and its help.
+	entry('Search results (lazy)', resultsFirst, '44.09 KB'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1827,7 +1829,8 @@ export default [
 	// X-web-build-determinism).
 	// X-web-build-determinism (runner §2.26): 7,998 B with stable names (7,992 B with content hashes).
 	// GS-5 (runner §2.26): 8.01 → 8.15 KB, a grouped card's "+N other versions" fact.
-	entry('Search cards (lazy)', cardsLazy, '8.15 KB'),
+	// X-import-verified-no (runner §2.26): 8.15 → 8.17 KB, measured 8,162 B (+12 B): the Imported badge and its help.
+	entry('Search cards (lazy)', cardsLazy, '8.17 KB'),
 	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
 	// GS-5: measured 3.01 KB (the rows, their logic, styles and messages), rounded up to 0.01 KB.
 	// X-gs-followups (runner §2.26): 3.02 → 3.05 KB, measured 3,044 B (+37 B): Show all's group

@@ -253,9 +253,14 @@ pub struct Provenance {
     /// The sources that found it: the first one first, then by id.
     /// Empty for a torrent stored before provenance was recorded.
     pub sources: Vec<ProvenanceSource>,
-    /// It has verified metadata (§18.5). Always true here: a torrent's
-    /// detail is its BEP 9 info dictionary.
+    /// The info dict was fetched and hashed to the key (§18.5). False for
+    /// an import (`imported`).
     pub verified: bool,
+    /// From another indexer's database; not checked against the hash.
+    /// Present, and true, only for such an import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub imported: Option<bool>,
     /// Sources or claims were left out because this caller isn't the
     /// admin session: they're private, or a claim's source's terms keep
     /// its data inside Lodestar (ENR-terms).

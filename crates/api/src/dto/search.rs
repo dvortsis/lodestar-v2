@@ -584,11 +584,18 @@ pub struct SearchHit {
     /// Of those, trackers that reported anyone; null = never scraped.
     #[schema(required = true)]
     pub trackers_reporting: Option<u32>,
-    /// It has verified metadata (§18.5, the "Unverified" badge when
-    /// false). On `/search` hits only.
+    /// The info dict was fetched and hashed to the key (§18.5). False for
+    /// an unverified item (the "Unverified" badge) and for an import
+    /// (`imported`). On `/search` hits only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub verified: Option<bool>,
+    /// From another indexer's database; not checked against the hash (the
+    /// "Imported" badge, in place of "Unverified"). Shown by default, like
+    /// a verified torrent. On `/search` hits only, and only when true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub imported: Option<bool>,
 }
 
 /// A hit's source: the display name, and the id `source:` takes.
@@ -703,12 +710,18 @@ pub struct CompositionShare {
     pub pct_files: u8,
 }
 
-/// Whether an item has verified metadata.
+/// A `verified:` value (§18.6): `yes`, the info dict was fetched and
+/// hashed to the key; `no`, an unverified item known only from claims;
+/// `imported`, a stored torrent from another indexer's database, not
+/// checked against the hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AstVerified {
     Yes,
     No,
+    /// A stored torrent from another indexer's database, not checked
+    /// against the hash.
+    Imported,
 }
 
 /// A network tier (§18.6).
@@ -958,7 +971,7 @@ mod tests {
         "file:(ext:flac size:>50MB) -file:sample",
         "cat:video>=80% bytes:video=10..50",
         "seeders:>=5 leechers:<10 trackers:3.. dht:>0 seen:<7d time:22:00..02:00",
-        "verified:yes,no source:nyaa,dht network:bt,bt-i2p,ed2k,ipfs,usenet",
+        "verified:yes,no,imported source:nyaa,dht network:bt,bt-i2p,ed2k,ipfs,usenet",
         "sig:7a9f3c12dd0e44b1 sig:38a68a3bbc7cdb158e44c404c52c7d1ea6aa2cff",
     ];
 

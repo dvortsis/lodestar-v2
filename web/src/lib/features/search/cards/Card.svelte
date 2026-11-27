@@ -114,7 +114,7 @@
 			{/if}
 		</span>
 		{#if hit.verified === false}
-			<UnverifiedBadge />
+			<UnverifiedBadge imported={hit.imported === true} />
 		{/if}
 		{#if hit.swarm_suspect}
 			<span class="cd-fact" data-testid="{id}-suspect">

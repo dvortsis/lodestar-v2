@@ -228,7 +228,7 @@ fn shape(kind: FieldKind) -> (ValueType, &'static [Op], Vec<&'static str>) {
             Category::ALL.iter().map(|c| c.as_str()).collect(),
         ),
         FieldKind::File => (ValueType::File, FILE, Vec::new()),
-        FieldKind::Verified => (ValueType::Enum, LIST, vec!["yes", "no"]),
+        FieldKind::Verified => (ValueType::Enum, LIST, vec!["yes", "no", "imported"]),
         FieldKind::Source => (ValueType::Keyword, LIST, Vec::new()),
         FieldKind::Network => (
             ValueType::Enum,

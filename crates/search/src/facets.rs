@@ -559,7 +559,9 @@ pub struct TermCounts {
     pub approx: bool,
     /// The facet's field is still being backfilled (the population
     /// contract): documents it hasn't reached count under no value, so
-    /// the counts are low. Only `source` can be partial.
+    /// the counts are low (`source`), or under the value they had before
+    /// (`verified`, whose `yes` counts high and `imported` low). Only
+    /// those two can be partial.
     pub partial: bool,
     /// A `/…/` clause of the query its pass ran stopped at the search's
     /// regex budget (RX-1): the counts are what was verified in time. Not
@@ -654,8 +656,15 @@ pub fn facets(
         .partition(|f| *f == Facet::Adult || conjuncts(node).iter().any(|c| f.owns(c)));
     let searcher = lease.searcher();
     let policy = params.policy;
+    // The values outside the Verified facet's selection, when the shared
+    // pass can count the rest (see `rest` below).
+    let rest = verified_rest(node).filter(|_| own.contains(&Facet::Verified));
+    let mut counted = shared.clone();
+    if rest.is_some() {
+        counted.push(Facet::Verified);
+    }
     let base = Want {
-        facets: shared,
+        facets: counted,
         histos,
         now: lease.now(),
     };
@@ -685,25 +694,22 @@ pub fn facets(
     if shared_tally.sampled {
         sample_rate = Some(shared_tally.rate);
     }
-    let mut tallies: Vec<(Vec<Facet>, Tally)> = vec![(base.facets.clone(), shared_tally)];
+    // The shared pass's Verified counts, if it took them, are for the
+    // facet's own tally only.
+    let mut tallies: Vec<(Vec<Facet>, Tally)> = vec![(shared, shared_tally)];
     // Per tally: a `/…/` clause of its query stopped (RX-1).
     let mut stopped = vec![crate::regex_verify::stopped(shared_query)];
     for f in own {
         let mut variant = without_facet(node, f).unwrap_or_else(|| node.clone());
-        // `verified:yes` and nothing else on the facet: the clause every
-        // search adds (§18.6: unverified items are hidden unless asked
-        // for). Its `yes` count is the shared pass's, so only the `no`
-        // documents need a pass of their own: a few, where a full pass
-        // would visit every match again on every request.
-        let only_yes = f == Facet::Verified
-            && f.selection(node) == [(Verified::Yes.as_str().to_owned(), false)];
-        if only_yes {
-            variant = with_filters(
-                variant,
-                &[Node::Verified {
-                    any: vec![Verified::No],
-                }],
-            );
+        // `rest`: one `verified:` clause that takes `yes`, such as the
+        // `verified:yes,imported` every search adds (§18.6: unverified
+        // items are hidden unless asked for). Its own values are counted
+        // by the shared pass, so only the values it leaves out need a
+        // pass of their own: for the default that's `no`, a few, where a
+        // full pass would visit every match again on every request.
+        let only_rest = f == Facet::Verified && rest.is_some();
+        if let (true, Some(any)) = (only_rest, &rest) {
+            variant = with_filters(variant, &[Node::Verified { any: any.clone() }]);
         }
         if f == Facet::Adult {
             variant = with_filters(variant, &[adult_class()]);
@@ -734,20 +740,26 @@ pub fn facets(
         if t.sampled {
             sample_rate = Some(t.rate);
         }
-        let t = if only_yes {
-            // Every match of the variant is `no`, which the pass counted
-            // as a term: the facet's documents are those and the shared
-            // pass's (all `yes`).
+        let t = if only_rest {
+            // The variant's matches hold only the values left out and the
+            // shared pass's only the selected ones, each counted as terms
+            // (`yes`, the default, as the rest): the facet's documents
+            // are both.
             let shared = &tallies[0].1;
+            let mut terms = t.terms;
+            for (k, c) in shared.terms.iter().filter(|((g, _), _)| *g == f) {
+                *terms.entry(k.clone()).or_default() += c;
+            }
             Tally {
                 docs: shared.docs + t.docs,
                 sampled: shared.sampled || t.sampled,
+                terms,
                 ..t
             }
         } else {
             t
         };
-        stopped.push(crate::regex_verify::stopped(&compiled) || (only_yes && stopped[0]));
+        stopped.push(crate::regex_verify::stopped(&compiled) || (only_rest && stopped[0]));
         tallies.push((vec![f], t));
     }
 
@@ -772,10 +784,17 @@ pub fn facets(
         }
         // `source` has no complement (`compile.rs`'s `provenance`): while
         // it's backfilled, documents the walk hasn't reached aren't
-        // counted under any source.
+        // counted under any source. `verified` while its generation-2
+        // walk runs: a document not reached yet says `yes` even for an
+        // import, so `yes` counts high and `imported` low
+        // (X-import-verified-no).
         if let Source::Prov {
             field,
             default: None,
+        }
+        | Source::Prov {
+            field: field @ "verified",
+            ..
         } = f.source()
         {
             counts.partial = !index.availability_in(field, lease).complete();
@@ -1256,6 +1275,25 @@ fn segment(
         .map_err(tantivy::TantivyError::from)?;
     t.sampled = sampled;
     Ok((t, visited, u64::from(max)))
+}
+
+/// The `verified:` values `node`'s only Verified clause leaves out, when
+/// that clause is a top-level `verified:` list that takes `yes` and
+/// leaves something out: the shared pass then matches exactly the
+/// selected values, so the facet needs a pass over the rest only.
+/// `None` for any other selection, which takes a full pass.
+fn verified_rest(node: &Node) -> Option<Vec<Verified>> {
+    let mut own = conjuncts(node)
+        .into_iter()
+        .filter(|c| Facet::Verified.owns(c));
+    let (Some(Node::Verified { any }), None) = (own.next(), own.next()) else {
+        return None;
+    };
+    let rest: Vec<Verified> = Verified::ALL
+        .into_iter()
+        .filter(|v| !any.contains(v))
+        .collect();
+    (any.contains(&Verified::Yes) && !rest.is_empty()).then_some(rest)
 }
 
 /// A facet's listed values: the top `limit` by count, then the selected

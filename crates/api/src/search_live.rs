@@ -849,7 +849,7 @@ mod tests {
         let reg = l.register(1, &q("movie"), true, 0, 42).unwrap();
         assert_eq!(reg.since, Some(42));
         // Unverified items stay hidden (§18.6).
-        assert_eq!(*l.due()[0].query, q("movie verified:yes"));
+        assert_eq!(*l.due()[0].query, q("movie verified:yes,imported"));
         // And turning it off again drops that one.
         shown.store(false, Ordering::SeqCst);
         assert!(l.due().is_empty());

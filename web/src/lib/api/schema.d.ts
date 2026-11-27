@@ -3367,10 +3367,13 @@ export interface components {
         /** @enum {string} */
         AstTextField: "any" | "name" | "path" | "title";
         /**
-         * @description Whether an item has verified metadata.
+         * @description A `verified:` value (§18.6): `yes`, the info dict was fetched and
+         *     hashed to the key; `no`, an unverified item known only from claims;
+         *     `imported`, a stored torrent from another indexer's database, not
+         *     checked against the hash.
          * @enum {string}
          */
-        AstVerified: "yes" | "no";
+        AstVerified: "yes" | "no" | "imported";
         /**
          * @description One end of a date range: seconds before the search (`ago`), or a Unix
          *     time (`at`).
@@ -5463,7 +5466,7 @@ export interface components {
              *     `verified`, and `adult` when there are adult subtypes to list.
              *
              *     `verified` counts `no` even while the search hides unverified
-             *     items, since its default `verified:yes` is the facet's own
+             *     items, since its default `verified:yes,imported` is the facet's own
              *     selection; `source` lists plugin ids (names in `source_names`),
              *     and never a private source's to anyone but the admin session
              *     (§18.7).
@@ -7929,6 +7932,11 @@ export interface components {
          *     }
          */
         Provenance: {
+            /**
+             * @description From another indexer's database; not checked against the hash.
+             *     Present, and true, only for such an import.
+             */
+            imported?: boolean;
             /** @description The network tier (§18.6): `bt` for every stored torrent. */
             network: string;
             /**
@@ -7937,8 +7945,8 @@ export interface components {
              */
             sources: components["schemas"]["ProvenanceSource"][];
             /**
-             * @description It has verified metadata (§18.5). Always true here: a torrent's
-             *     detail is its BEP 9 info dictionary.
+             * @description The info dict was fetched and hashed to the key (§18.5). False for
+             *     an import (`imported`).
              */
             verified: boolean;
             /**
@@ -8698,6 +8706,12 @@ export interface components {
             /** Format: int64 */
             id: number;
             /**
+             * @description From another indexer's database; not checked against the hash (the
+             *     "Imported" badge, in place of "Unverified"). Shown by default, like
+             *     a verified torrent. On `/search` hits only, and only when true.
+             */
+            imported?: boolean;
+            /**
              * @description Stable reason keys (`docs/metrics.md` §7.1); empty when there are
              *     none or before classification.
              * @example [
@@ -8792,8 +8806,9 @@ export interface components {
              */
             trackers_reporting: number | null;
             /**
-             * @description It has verified metadata (§18.5, the "Unverified" badge when
-             *     false). On `/search` hits only.
+             * @description The info dict was fetched and hashed to the key (§18.5). False for
+             *     an unverified item (the "Unverified" badge) and for an import
+             *     (`imported`). On `/search` hits only.
              */
             verified?: boolean;
         };
@@ -10689,7 +10704,8 @@ export interface components {
             other: number;
             /**
              * @description The field is still being backfilled after an index upgrade, so the
-             *     counts are low (only `source`): show them as partial.
+             *     counts are off (`source`'s low; `verified`'s `yes` high and
+             *     `imported` low): show them as partial.
              */
             partial: boolean;
             /**

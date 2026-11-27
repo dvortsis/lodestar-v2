@@ -57,7 +57,7 @@ pub struct FacetsResponse {
     /// `verified`, and `adult` when there are adult subtypes to list.
     ///
     /// `verified` counts `no` even while the search hides unverified
-    /// items, since its default `verified:yes` is the facet's own
+    /// items, since its default `verified:yes,imported` is the facet's own
     /// selection; `source` lists plugin ids (names in `source_names`),
     /// and never a private source's to anyone but the admin session
     /// (§18.7).
@@ -108,7 +108,8 @@ pub struct TermFacet {
     /// such values counts twice).
     pub other: u64,
     /// The field is still being backfilled after an index upgrade, so the
-    /// counts are low (only `source`): show them as partial.
+    /// counts are off (`source`'s low; `verified`'s `yes` high and
+    /// `imported` low): show them as partial.
     pub partial: bool,
     /// A `/…/` term of the query ran out of its time budget while this
     /// facet was counted: the counts are what was checked in time. Not

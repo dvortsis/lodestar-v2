@@ -834,11 +834,11 @@ mod tests {
         use lodestar_search::parse;
         assert_eq!(
             super::alert_query(parse("movie").unwrap()),
-            parse("movie verified:yes").unwrap()
+            parse("movie verified:yes,imported").unwrap()
         );
         assert_eq!(
             super::alert_query(Node::All),
-            parse("verified:yes").unwrap()
+            parse("verified:yes,imported").unwrap()
         );
         let asked = parse("movie verified:yes,no").unwrap();
         assert_eq!(super::alert_query(asked.clone()), asked);
