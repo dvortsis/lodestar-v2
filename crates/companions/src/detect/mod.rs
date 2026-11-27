@@ -634,7 +634,7 @@ fn join(base: &EnteredUrl, path: &RequestPath) -> Result<Url, AdapterError> {
 fn net_error(e: NetError) -> AdapterError {
     match e {
         NetError::Blocked(_) => AdapterError::Blocked,
-        NetError::Resolve | NetError::Connect => AdapterError::Unreachable,
+        NetError::Resolve | NetError::Connect | NetError::Certificate => AdapterError::Unreachable,
         NetError::NotReady => AdapterError::NotReady,
         NetError::Timeout => AdapterError::Timeout,
         NetError::TooLarge => AdapterError::TooLarge,

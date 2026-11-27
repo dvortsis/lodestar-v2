@@ -288,6 +288,14 @@ The screen says the same under **If this companion's route uses a SOCKS5 proxy**
 - It doesn't check whether a certificate was revoked (cancelled early by its issuer). A direct route uses your operating system's own check, which can.
 - There is nothing to set.
 
+A source on such a route may report **the server's certificate isn't trusted** for a site that opens normally in your browser. The computer then doesn't have that site's root certificate yet. This mostly happens on Windows. To fix it:
+
+1. Open the site once in Microsoft Edge on the computer that runs Lodestar. Windows adds the root certificate it needs.
+2. If that doesn't help, run Windows Update.
+3. Try the source again.
+
+Result: the source connects. On Docker, update the Lodestar image instead.
+
 **Passwords and keys.** A companion Lodestar installed has a generated password or key. To see it, select **Passwords and keys** on the row, then **Show**, enter **Your Lodestar password** and select **Show it**. Lodestar asks every time and never remembers it. The value stays until you select **Hide**.
 
 **Make a new one** replaces it at once, so anything using the old one needs the new one. Treat it like a password. A password you pasted yourself is never shown back.

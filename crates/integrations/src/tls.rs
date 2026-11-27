@@ -221,6 +221,56 @@ mod tests {
         }
     }
 
+    /// A TLS server on 127.0.0.1 with the email fixtures' certificate,
+    /// which no OS store trusts. Accepts one connection.
+    async fn untrusted_server() -> u16 {
+        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+        let key = std::fs::read(format!(
+            "{}/tests/fixtures/email/server.key.der",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![fixture("server.der")],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)),
+            )
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((tcp, _)) = listener.accept().await {
+                let _ = acceptor.accept(tcp).await;
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn a_routed_client_names_an_untrusted_certificate() {
+        use crate::net::{GuardedClient, NetError, NetPolicy, SystemResolver};
+        let port = untrusted_server().await;
+        let client = GuardedClient::with_route(
+            NetPolicy::download_client(),
+            Duration::from_secs(10),
+            Arc::new(SystemResolver),
+            &Route::BindAddress(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        )
+        .unwrap();
+        let url = format!("https://127.0.0.1:{port}/").parse().unwrap();
+        let req = client.request(reqwest::Method::GET, url).build().unwrap();
+        let err = client.send(req).await.err();
+        assert_eq!(err, Some(NetError::Certificate));
+        assert_eq!(
+            NetError::Certificate.to_string(),
+            "the server's certificate isn't trusted"
+        );
+    }
+
     #[test]
     fn the_roots_are_the_os_stores_once_each() {
         let roots = self_contained_roots();

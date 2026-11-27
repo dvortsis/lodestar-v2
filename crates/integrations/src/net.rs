@@ -255,6 +255,9 @@ pub enum NetError {
     Resolve,
     /// The connection failed.
     Connect,
+    /// The server's TLS certificate wasn't accepted: no trusted root
+    /// signed it, it has expired, or it names another host.
+    Certificate,
     Timeout,
     /// The response was larger than the caller's limit.
     TooLarge,
@@ -277,6 +280,7 @@ impl fmt::Display for NetError {
             }
             NetError::Resolve => f.write_str("the host name didn't resolve"),
             NetError::Connect => f.write_str("couldn't connect"),
+            NetError::Certificate => f.write_str("the server's certificate isn't trusted"),
             NetError::Timeout => f.write_str("timed out"),
             NetError::TooLarge => f.write_str("the response was too large"),
             NetError::Redirect => f.write_str("too many redirects, or an unsafe redirect"),
@@ -1128,6 +1132,9 @@ fn map_reqwest(e: reqwest::Error) -> NetError {
         if let Some(net) = err.downcast_ref::<NetError>() {
             return net.clone();
         }
+        if is_certificate_error(err) {
+            return NetError::Certificate;
+        }
         source = err.source();
     }
     if e.is_timeout() {
@@ -1137,6 +1144,30 @@ fn map_reqwest(e: reqwest::Error) -> NetError {
     } else {
         NetError::Http
     }
+}
+
+/// Whether `err` is rustls refusing the server's certificate, directly or
+/// inside `io::Error`s (whose `source` skips the error each wraps; the
+/// TLS connector nests two).
+fn is_certificate_error(err: &(dyn StdError + 'static)) -> bool {
+    let mut err = err;
+    // A fixed bound: the chain is built by reqwest's own layers.
+    for _ in 0..8 {
+        if let Some(tls) = err.downcast_ref::<rustls::Error>() {
+            return matches!(
+                tls,
+                rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented
+            );
+        }
+        match err
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref())
+        {
+            Some(inner) => err = inner,
+            None => return false,
+        }
+    }
+    false
 }
 
 /// Reads a response body, refusing more than `limit` bytes, so a hostile or
