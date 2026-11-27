@@ -667,12 +667,18 @@ mod tests {
     #[test]
     fn the_load_event_carries_exactly_its_catalogued_fields() {
         use crate::log_events::{TLS_ROOTS_DEGRADED, TLS_ROOTS_LOADED};
+        // The process's own load first, so its record (which other tests
+        // here may trigger at any time) never lands in the capture.
+        let _ = self_contained_roots();
         capture::install();
         let healthy = load(Some((vec![fixture("ca.der")], 0)), Some(Vec::new())).1;
         let degraded = load(Some((vec![fixture("ca.der"), garbage()], 1)), None).1;
+        // Exactly one event per load.
         report(&healthy);
+        let mut lines = capture::take();
+        assert_eq!(lines.len(), 1, "{lines:?}");
         report(&degraded);
-        let lines = capture::take();
+        lines.extend(capture::take());
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert_eq!(
             TLS_ROOTS_LOADED::EVENT.fields,

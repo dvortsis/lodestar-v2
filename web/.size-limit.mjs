@@ -549,7 +549,8 @@ const eventNamesLimits = {
 	workers: '6370 B',
 	api: '650 B',
 	companions: '1160 B',
-	integrations: '1060 B',
+	// runner §2.26, X-tls-root-load-event: measured 1220 B with the two root-load events, + 300 B.
+	integrations: '1520 B',
 	// runner §2.26, X-rejudge-stall: measured 2704 B with the two stall events, + 300 B.
 	pipeline: '3010 B',
 	fetch: '610 B'
