@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T20:20:07Z",
+    "updated": "2026-11-27T20:57:42Z",
     "items": [
       {
         "slot": 1,
@@ -11129,12 +11129,12 @@
       },
       {
         "slot": 2,
-        "slice": "D-start",
+        "slice": "UX-start",
         "role": "build",
-        "agent": "session_01MMjhnBjXMTmQsGpkb6p5AK",
+        "agent": "session_01MMjhnCn4By6e7ABfiZeNct",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "user docs: no start wait, safe restart on by default; guide 3.8 restored (notice pointer); #1146 merged",
-        "since": "2026-11-27T20:20:07Z"
+        "doing": "first-hour progress in the pill, Overview and wizard (owner \u00a72.77); #1148 merged",
+        "since": "2026-11-27T20:57:42Z"
       },
       {
         "slot": 3,
