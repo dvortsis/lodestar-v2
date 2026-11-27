@@ -11116,16 +11116,16 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T08:31Z",
+    "updated": "2026-11-27T08:42Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-torznab-id-caps",
+        "slice": "X-enr11-size-measure",
         "role": "build",
         "agent": "claude",
-        "session": "session_01MMjhnCqPNLBRRadoHZLfQ2",
-        "doing": "building: caps advertise ID params only when answerable",
-        "since": "2026-11-27T05:28Z"
+        "session": "session_01MMjhn922TTVGCHJ21HPGrk",
+        "doing": "building: size budget measured with identification answers",
+        "since": "2026-11-27T08:42Z"
       },
       {
         "slot": 2,
@@ -11226,7 +11226,10 @@
       "recorded": "2026-11-27T04:39Z",
       "rehearsal": "passed 2026-11-27T04:41Z",
       "cr_ab_adm_process_start": "comparator result.json ended + 5 h 30 min (owner-adopted rule 2.2 reading: the window, not the process, must be >= ended + 12 h; analyze_cr spacing() agrees; 30 min runner margin)"
-    }
+    },
+    "notes": [
+      "2026-11-27T08:42Z: CR-0w (#1134) removes the start hold that the stage-1 run sheet's first-segment timing assumes (sampling held 6 h, ws about start + 7 h). Every stage-1 image stays at a commit before CR-0w merges, pinned by digest; the runner doesn't merge CR-0w until the stage-1 images are built and the run sheet is amended or stage 1 ends."
+    ]
   },
   "owner_answers": [
     {
