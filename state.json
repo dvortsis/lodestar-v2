@@ -11324,9 +11324,9 @@
     {
       "id": "license-cdla-permissive-2",
       "at": "2026-11-27T02:42Z",
-      "ask": "FYI/veto (\u00a72.19): runner widened web/licenses/allow.json with CDLA-Permissive-2.0 (Mozilla root list via webpki-root-certs) in X-sec-S8-25; \u00a72.12's allowlist is settings-session detail and allow.json permits widening with a flagged decisions entry",
+      "ask": "Owner decision (legal): may web/licenses/allow.json add CDLA-Permissive-2.0 so routed TLS can bundle Mozilla's root list (webpki-root-certs)? Without it, routed connections on Windows rely on the machine's ROOT store only. Runner withdrew its earlier \u00a72.19 call.",
       "sent": "2026-11-27 runner chat",
-      "state": "runner decided; flag to owner"
+      "state": "asked owner"
     }
   ],
   "review_queue": [
@@ -12234,9 +12234,7 @@
       "Cargo.lock (dep edges)",
       "fuzz/Cargo.lock (edges)",
       "web/licenses/rust.json (generated)",
-      "crates/tracker-scrape/**",
-      "web/licenses/allow.json",
-      "docs/architecture.md (\u00a710.10.13 example line)"
+      "crates/tracker-scrape/**"
     ],
     "X-sec-S8-26": [
       "crates/pipeline/**"
