@@ -292,6 +292,60 @@ fn only_served_answers_are_indexed() {
     assert_eq!(found(&index, "imdb:tt9999999"), NONE);
 }
 
+/// X-purge-index-shapes: purging a source takes what it answered out of
+/// the index at the next pass, through the purge's own `reindex_log`
+/// entries. A torrent only it identified serves no ids or titles; one two
+/// sources identified keeps the survivor's answer and loses the purged
+/// one's. The answer on torrent 0 has no canonical title, the shape the
+/// purge used to skip, so its ids stayed served after the purge.
+#[test]
+fn a_purge_takes_its_answers_out_of_the_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut f = fixture(tmp.path());
+    let (matrix, seven) = (f.ids[0], f.ids[8]);
+    let mut c = f.store.torrent_claims(matrix).unwrap()[0]
+        .claims
+        .clone()
+        .unwrap();
+    c.details.as_mut().unwrap().canonical_title = None;
+    let open = f.open;
+    f.put(0, open, &c, false);
+    let index = f.index(tmp.path());
+    for q in ["imdb:tt0133093", "title:\"the matrix ja\""] {
+        assert_eq!(found(&index, q), [matrix as u64], "{q}");
+    }
+    for q in ["imdb:tt0114369", "title:se7en", "title:\"seven two\""] {
+        assert_eq!(found(&index, q), [seven as u64], "{q}");
+    }
+    drop(index);
+
+    f.store
+        .set_source_state(open, lodestar_store::SourceState::Disabled)
+        .unwrap();
+    let mut cursor = lodestar_store::unverified::PurgeCursor::START;
+    while let Some(next) = f.store.purge_source(open, cursor, 2).unwrap().next {
+        cursor = next;
+    }
+    assert!(f.store.served_identifications(matrix).unwrap().is_empty());
+    let index = f.index(tmp.path());
+    for q in [
+        "imdb:tt0133093",
+        "tmdb:603",
+        "wikidata:Q83495",
+        "title:\"the matrix ja\"",
+        "title:se7en",
+        "title:\"se7en ja\"",
+    ] {
+        assert_eq!(found(&index, q), NONE, "{q}");
+    }
+    // The survivor's answer: its shared id, its own id and its titles.
+    assert_eq!(found(&index, "imdb:tt0114369"), [seven as u64]);
+    assert_eq!(found(&index, &format!("mbid:{MBID}")), [seven as u64]);
+    assert_eq!(found(&index, "title:\"seven two\""), [seven as u64]);
+    // The record's own name still finds both.
+    assert_eq!(found(&index, "matrix"), [matrix as u64]);
+}
+
 #[test]
 fn at_most_eight_titles_are_indexed_ranked() {
     let tmp = tempfile::tempdir().unwrap();
