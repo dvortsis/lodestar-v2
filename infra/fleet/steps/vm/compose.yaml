@@ -14,11 +14,16 @@
 #   committed rules (start-block, OP-3b), validated there; it starts only with
 #   the "block" profile.
 # - No host port except the UI on the host's loopback, reached over `ssh -L`.
+# - One stack per arm (round 1, X-cr-round1-collect): each arm has its own stack
+#   directory (secrets, data, witness), runs as Compose project lodestar-<arm>
+#   (`-p`, so its own bridge) and sets LODESTAR_ARM_SUFFIX=-<arm> and
+#   LODESTAR_UI_PORT for distinct container names and port. Unset, the names and
+#   port are the single stack's, as the cloud lane uses them.
 name: lodestar
 services:
   gluetun:
     image: qmcgaw/gluetun@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
-    container_name: gluetun
+    container_name: gluetun${LODESTAR_ARM_SUFFIX:-}
     cap_add:
       - NET_ADMIN
     devices:
@@ -43,12 +48,12 @@ services:
       - source: gluetun-post-rules
         target: /iptables/post-rules.txt
     ports:
-      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:${LODESTAR_UI_PORT:-8090}:8090"
     oom_score_adj: -500
     restart: unless-stopped
   lodestar:
     image: ${LODESTAR_IMAGE:?start-block sets it from the screen rules}
-    container_name: lodestar
+    container_name: lodestar${LODESTAR_ARM_SUFFIX:-}
     network_mode: service:gluetun
     # Compose restarts it when it restarts gluetun: a container in another's
     # network stays in the old, dead one (X-gluetun-restart-recover).
@@ -109,7 +114,7 @@ services:
   # index digest (docs/decisions/2026-11-11-OP-3b.md).
   docker-proxy:
     image: haproxy@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be
-    container_name: lodestar-docker-proxy
+    container_name: lodestar-docker-proxy${LODESTAR_ARM_SUFFIX:-}
     network_mode: none
     profiles:
       - block

@@ -456,7 +456,10 @@ class Compose(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(shown.stdout).hexdigest(), digest, f"{doc}: {pin}")
 
     def test_only_the_ui_on_the_hosts_loopback(self):
-        ports = [p for s in self.svc.values() for p in s.get("ports", [])]
+        # Round 1 (X-cr-round1-collect) gives each arm its own port; with no arm set,
+        # Compose's default is the single stack's (runner's grant, 2026-11-27).
+        ports = [re.sub(r"\$\{LODESTAR_UI_PORT:-([0-9]+)\}", r"\1", p)
+                 for s in self.svc.values() for p in s.get("ports", [])]
         self.assertEqual(ports, ["127.0.0.1:8090:8090"])
         self.assertNotIn("network_mode", self.svc["gluetun"])
 
