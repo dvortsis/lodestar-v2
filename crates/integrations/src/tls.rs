@@ -613,6 +613,24 @@ mod tests {
         assert!(!t.healthy(), "an empty store warns");
     }
 
+    /// `s` without ANSI escape sequences (`ESC [ ... letter`).
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                for d in chars.by_ref() {
+                    if d.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
     /// The load event, as written through the `tracing` fallback that
     /// `test_support::capture_logs` reads (no sink is installed here, so
     /// other tests' captures keep working): exactly one line per load, at
@@ -635,9 +653,18 @@ mod tests {
             ..Tally::default()
         };
         assert!(healthy.healthy() && !degraded.healthy());
+        // A coloured line, as CI's workspace build writes it.
+        assert_eq!(
+            strip_ansi(
+                "\u{1b}[32m INFO\u{1b}[0m m found=1 \u{1b}[3mevent\u{1b}[0m\u{1b}[2m=\u{1b}[0m\"x\""
+            ),
+            " INFO m found=1 event=\"x\""
+        );
         report(&healthy);
         report(&degraded);
-        let contents = logs.contents();
+        // The subscriber may colour its output (CI sets
+        // `CARGO_TERM_COLOR=always`): drop ANSI escapes before reading.
+        let contents = strip_ansi(&logs.contents());
         assert_eq!(
             TLS_ROOTS_LOADED::EVENT.fields,
             TLS_ROOTS_DEGRADED::EVENT.fields
