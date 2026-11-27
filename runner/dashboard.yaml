@@ -662,6 +662,7 @@ placement:
   - X-sampler-streak-metrics
   - X-capacity-rejection-source
   - CR-0w
+  - X-cr-round1-gate
 - ws: ws-cr-live
   match:
   - CR-AB-*
