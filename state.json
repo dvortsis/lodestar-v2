@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T03:39Z",
+  "updated_at": "2026-11-27T04:32Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T03:39Z",
+    "updated": "2026-11-27T04:32Z",
     "items": [
       {
         "slot": 1,
@@ -11129,12 +11129,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-restart-fuzz-v2",
-        "role": "build",
+        "slice": "X-sec-S8-27",
+        "role": "opus",
         "model": "opus",
-        "agent": "session_01MMjhn9DwpYm2CJ3wEEyQEH",
-        "doing": "#1127 fixes pushed 6dfa0473, delta checked; waiting CI",
-        "since": "2026-11-27T01:35Z"
+        "agent": "session_01MMjhnAwa8TWKLvTTYshnWo",
+        "doing": "building (held fix; brief briefs/X-sec-S8-27.md)",
+        "since": "2026-11-27T04:32Z"
       },
       {
         "slot": 3,
@@ -12222,11 +12222,6 @@
     "metrics docs PR (held by owner pause): also docs/metrics.md:677 and crates/lodestar/src/metrics.rs:1643 help text: dht_sample_spill_slots now counts live cooldowns only (rv-1122)"
   ],
   "owns_locks": {
-    "X-restart-fuzz-v2": [
-      "fuzz/fuzz_targets/dht_restart.rs",
-      "fuzz/corpus/dht_restart/**",
-      "crates/dht/src/restart.rs"
-    ],
     "X-sec-S8-25": [
       "crates/sources/**",
       "crates/sources-irc/**",
@@ -12249,6 +12244,12 @@
       "web/.size-limit.mjs (three entry lines: collapse rows, drawer, Related; shared with UP-2, disjoint hunks)",
       "web/src/lib/features/search/results/ResultsPanel.svelte ($effect.pre empty\u2192rows reset)",
       "web/.size-limit.mjs (Search results lazy line)"
+    ],
+    "X-sec-S8-27": [
+      "crates/dht/**",
+      "fuzz/fuzz_targets/dht_restart.rs",
+      "fuzz/seeds/dht_restart/**",
+      "docs/decisions/2026-11-27-X-sec-S8-27.md"
     ]
   },
   "next_pick": {
