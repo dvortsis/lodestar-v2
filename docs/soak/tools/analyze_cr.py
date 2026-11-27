@@ -688,8 +688,16 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treat
     # reported in every segment, their series listed absent where the binary lacks them.
     out["hint_first"] = hint_first(checks, window, switches, treatment == "hint")
     out["sampler_split"] = sampler_split(checks, window, switches, hourly, treatment == "split")
-    if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair over sampling minutes; reported, never decided on
-        out["soft_timeout"] = soft_timeout(window, switches)
+    if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair over sampling minutes, reported
+        out["soft_timeout"] = soft = soft_timeout(window, switches)
+        # X-soft-absent-void: with the switch on, a binary without CR-SOFT-TIMEOUT (#1091)
+        # renders no soft counter at all, and the arm ran as the control (rule 5). A count
+        # of 0 is a result, never a void.
+        if soft["on"]:
+            rendered = "soft" not in soft["absent"]
+            checks.add("5", "soft_timeout_counter_rendered", rendered, "void",
+                       None if rendered else {"series": SOFT["soft"],
+                                              "note": "absent with the switch on: the binary predates the soft timeout"})
     # CR-LEDGER's W, q and y; absent series are reported absent (older binaries).
     out["ledger"] = {"window": ledger(t_s, end),
                      "hourly": [ledger(a, b) for a, b in zip(bounds, bounds[1:])]}
@@ -866,8 +874,9 @@ def soft_timeout(window, switches):
     """X-soft-key: CR-SOFT-TIMEOUT's pair (docs/metrics.md) in a soft segment, split into
     sampling and stalled minutes (interval_stall), each interval whole. The headline figures
     (soft and late per hour, late ÷ soft, soft ÷ peer-lookup queries) are over sampling minutes
-    only; `stalled` gives the same soft and late figures over the stalled minutes. Reported,
-    never decided on; an absent series reads absent, and a part with no minutes reads null."""
+    only; `stalled` gives the same soft and late figures over the stalled minutes. The figures
+    are reported, never decided on; an absent series reads absent, and a part with no minutes
+    reads null. Only the soft counter's absence with the switch on voids (X-soft-absent-void)."""
     names = {"soft": (SOFT["soft"], {}), "late": (SOFT["late"], {}),
              "peer_lookup_queries": (LEDGER["queries"], {"purpose": collect.LEDGER_PEER_PURPOSE})}
     sums = {part: {k: 0 for k in names} for part in ("sampling", "stalled")}

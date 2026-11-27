@@ -1,6 +1,8 @@
 """X-soft-key: the `soft` treatment (CR-SOFT-TIMEOUT's switch, `soft_timeout`) and its report,
 CR-SOFT-TIMEOUT's pair per hour, late ÷ soft and soft ÷ peer-lookup queries over sampling
-minutes only (docs/decisions/2026-11-23-X-soft-key.md). Reported, never decided on.
+minutes only (docs/decisions/2026-11-23-X-soft-key.md). Reported, never decided on, except
+that a treatment arm with no soft counter at all is void (X-soft-absent-void,
+docs/decisions/2026-11-27-X-soft-absent-void.md).
 
 Segments are written as the Linux collector writes them, by test_analyze_cr's Sim.
 """
@@ -173,17 +175,80 @@ class SoftReportTests(Base):
         self.assertIsNone(soft["late_per_soft"])  # no soft queries: no ratio, never a division by 0
         self.assertEqual(soft["soft_per_peer_query"], 0.0)
 
-    def test_absent_series_read_absent_and_never_change_the_verdict(self):
+    def test_absent_late_and_sampler_full_read_absent_and_never_change_the_verdict(self):
         sim = SoftSim()
-        sim.drop_series = {SOFT["soft"], SOFT["late"], SPLIT["full_seconds"]}
+        sim.drop_series = {SOFT["late"], SPLIT["full_seconds"]}
         report = self.run_sim(sim)
         self.assertValid(report)
         soft = report["soft_timeout"]
-        self.assertEqual(soft["absent"], ["late", "sampler_full_seconds", "soft"])
-        self.assertIsNone(soft["soft_per_hour"])
+        self.assertEqual(soft["absent"], ["late", "sampler_full_seconds"])
         self.assertIsNone(soft["late_per_soft"])
-        self.assertIsNotNone(soft["peer_lookup_queries"])
-        self.assertFalse(any("soft" in c["check"] for c in report["checks"]))  # nothing decided on it
+        self.assertIsNotNone(soft["soft_per_hour"])
+        rendered = [c for c in report["checks"] if c["check"] == "soft_timeout_counter_rendered"]
+        self.assertEqual([c["ok"] for c in rendered], [True])  # the only soft check, and it holds
+
+
+class AbsentCounterTests(Base):
+    """X-soft-absent-void: a soft B arm whose binary renders no `dht_soft_timeouts_total` ran
+    as the control (an image without #1091), so the segment is void (rule 5)."""
+
+    def test_missing_in_the_treatment_arm_voids_with_its_own_reason(self):
+        sim = SoftSim()
+        sim.drop_series = {SOFT["soft"], SOFT["late"]}  # a binary from before #1091 has neither
+        report = self.run_sim(sim)
+        self.assertEqual((report["verdict"], report["verdict_reasons"]), ("void", ["soft_timeout_counter_rendered"]))
+        check = next(c for c in report["checks"] if c["check"] == "soft_timeout_counter_rendered")
+        self.assertEqual((check["rule"], check["effect"], check["detail"]["series"]),
+                         ("5", "void", SOFT["soft"]))
+        self.assertIsNone(report["soft_timeout"]["soft_per_hour"])  # the report still reads absent
+
+    def test_missing_soft_alone_voids_too(self):
+        sim = SoftSim(winners=())
+        sim.drop_series = {SOFT["soft"]}
+        report = self.run_sim(sim, winners=[])
+        self.assertEqual(report["verdict_reasons"], ["soft_timeout_counter_rendered"])
+
+    def test_zero_in_the_treatment_arm_is_a_result_never_a_void(self):
+        sim = SoftSim()
+        sim.snapshot = lambda e, row, base=sim.snapshot: [
+            f"lodestar_{SOFT['soft']} 0" if x.startswith(f"lodestar_{SOFT['soft']} ") else x for x in base(e, row)]
+        report = self.run_sim(sim)
+        self.assertValid(report)
+        self.assertEqual(report["soft_timeout"]["soft"], 0)
+        self.assertEqual(report["soft_timeout"]["soft_per_hour"], 0.0)
+
+    def test_missing_in_the_control_arm_is_valid(self):
+        sim = SoftSim(on=False)
+        sim.drop_series = {SOFT["soft"], SOFT["late"]}
+        report = self.run_sim(sim)
+        self.assertValid(report)
+        self.assertEqual(report["soft_timeout"]["absent"], ["late", "soft"])
+        self.assertFalse(any(c["check"] == "soft_timeout_counter_rendered" for c in report["checks"]))
+
+    def test_other_treatments_never_check_it(self):
+        for treatment, winners in (("hint", [ADM]), ("split", [ADM]), ("utp", None)):
+            with self.subTest(treatment=treatment):
+                sim = SoftSim(treatment=treatment, on=True, winners=tuple(winners or ()))
+                sim.drop_series = {SOFT["soft"], SOFT["late"]}
+                report = self.run_sim(sim, winners=winners)
+                self.assertFalse(any(c["check"] == "soft_timeout_counter_rendered" for c in report["checks"]))
+
+    def test_effect_refuses_a_pair_with_a_void_treatment_segment(self):
+        sim = SoftSim()
+        sim.drop_series = {SOFT["soft"], SOFT["late"]}
+        voided = self.run_sim(sim)
+        effect = SoftEffectTests()
+        for block, segment in ((0, 1), (1, 0)):  # a B segment of the ABBA block, then of the BAAB block
+            with self.subTest(block=block):
+                blocks = effect.blocks()
+                self.assertEqual(blocks[block][segment]["identity"]["switches"]["soft_timeout"], True)
+                blocks[block][segment].update(verdict=voided["verdict"], verdict_reasons=voided["verdict_reasons"])
+                out = analyze_cr.analyze_effect("soft", blocks, [ADM])
+                self.assertEqual(out["blocks"][block]["problems"], ["segment_void"])
+                self.assertEqual(out["blocks"][block]["segments"][segment]["reasons"], ["soft_timeout_counter_rendered"])
+                self.assertEqual((out["valid_blocks"], out["outcome"], out["decided"]), (1, "not_decidable", False))
+                self.assertNotIn("fit", out)
+        self.assertEqual(analyze_cr.analyze_effect("soft", effect.blocks(), [ADM])["outcome"], "win")  # untouched
 
     def test_other_treatments_have_no_soft_report(self):
         for treatment, winners in (("hint", [ADM]), ("split", [ADM]), ("utp", None)):
@@ -196,11 +261,13 @@ class SoftReportTests(Base):
 class SoftEffectTests(unittest.TestCase):
     WIN = ([100, 112, 111, 101], [110, 99, 100, 111])
 
-    def effect(self, treatment, **kw):
+    def blocks(self, treatment="soft", **kw):
         winners = (ADM,)
-        blocks = [col6.s3_block(treatment, "ABBA", self.WIN[0], winners=winners, **kw),
-                  col6.s3_block(treatment, "BAAB", self.WIN[1], start=12, winners=winners, **kw)]
-        return analyze_cr.analyze_effect(treatment, blocks, sorted(winners))
+        return [col6.s3_block(treatment, "ABBA", self.WIN[0], winners=winners, **kw),
+                col6.s3_block(treatment, "BAAB", self.WIN[1], start=12, winners=winners, **kw)]
+
+    def effect(self, treatment, **kw):
+        return analyze_cr.analyze_effect(treatment, self.blocks(treatment, **kw), [ADM])
 
     def test_soft_reports_the_pair_per_arm_and_decides_on_the_numerator(self):
         stalled = {"soft": 72000, "late": 60, "soft_per_hour": 72000.0, "late_per_hour": 60.0,
