@@ -378,8 +378,31 @@ fn run(
     state: Arc<MemoryState>,
     opened: &[i64],
 ) -> Running {
-    let (src, interest) =
+    run_rearming(
+        plugin, store, filter, adult, switches, source, config, state, opened, None,
+    )
+}
+
+/// [`run`], the runtime raising `reenrich` (the writer's backfill flag)
+/// when recording its terms marks torrents.
+#[allow(clippy::too_many_arguments)]
+fn run_rearming(
+    plugin: Arc<Recorder>,
+    store: Arc<Mutex<Store>>,
+    filter: Arc<Handle>,
+    adult: AdultSources,
+    switches: Arc<Flags>,
+    source: SourceId,
+    config: Config,
+    state: Arc<MemoryState>,
+    opened: &[i64],
+    reenrich: Option<Arc<AtomicBool>>,
+) -> Running {
+    let (mut src, interest) =
         IdentifySource::new(plugin, store, filter, adult, switches, config).unwrap();
+    if let Some(flag) = reenrich {
+        src = src.with_reenrich(flag);
+    }
     // Opened before the runtime starts, so they're first in line.
     for &id in opened {
         assert!(interest.opened(id));
@@ -1623,7 +1646,8 @@ async fn a_stale_claim_is_refreshed_and_a_miss_drops_it() {
     claim_at(&mut s, id, dht, noon() - 900 * DAY);
     let store = Arc::new(Mutex::new(s));
     let plugin = Recorder::new(Some(answer("The Film")));
-    let r = run(
+    let flag = Arc::new(AtomicBool::new(false));
+    let r = run_rearming(
         plugin.clone(),
         store.clone(),
         stand_in(),
@@ -1633,18 +1657,22 @@ async fn a_stale_claim_is_refreshed_and_a_miss_drops_it() {
         interest_only(),
         Arc::new(MemoryState::new()),
         &[id],
+        Some(flag.clone()),
     );
     until("the hit", || n(&r.stats.matched) == 1).await;
     // The writer would store it; stamped now, it's young and cached.
     claim_at(&mut store.lock().unwrap(), id, src, noon());
     assert!(r.interest.opened(id));
     until("the cache", || n(&r.stats.cached) == 1).await;
+    assert!(!flag.load(Ordering::Acquire), "nothing marked yet");
     // 160 days old: past the 150-day refresh age.
     claim_at(&mut store.lock().unwrap(), id, src, noon() - 160 * DAY);
     *plugin.answer.lock().unwrap() = None;
     assert!(r.interest.opened(id));
     until("the refresh", || n(&r.stats.refresh_dropped) == 1).await;
     r.stop().await;
+    // X-claims-refile-rearm: the drop starts the writer's backfill pass.
+    assert!(flag.load(Ordering::Acquire), "the backfill starts");
     assert_eq!(plugin.titles().len(), 2);
     let s = store.lock().unwrap();
     assert_eq!(s.claims_stored_at(id, src).unwrap(), None);
@@ -1678,7 +1706,8 @@ async fn the_runtime_sweeps_its_expired_claims() {
     }
     let due = identify::SWEEP_BATCH as u64 + 3;
     let store = Arc::new(Mutex::new(s));
-    let r = run(
+    let flag = Arc::new(AtomicBool::new(false));
+    let r = run_rearming(
         Recorder::new(None),
         store.clone(),
         stand_in(),
@@ -1688,9 +1717,12 @@ async fn the_runtime_sweeps_its_expired_claims() {
         interest_only(),
         Arc::new(MemoryState::new()),
         &[],
+        Some(flag.clone()),
     );
     until("the sweeps", || n(&r.stats.expired) == due).await;
     r.stop().await;
+    // X-claims-refile-rearm: the expiry starts the writer's backfill pass.
+    assert!(flag.load(Ordering::Acquire), "the backfill starts");
     let s = store.lock().unwrap();
     assert_eq!(s.claims_stored_at(old, src).unwrap(), None);
     assert_eq!(
@@ -1821,6 +1853,33 @@ async fn the_runtime_records_its_terms() {
     assert_eq!(Terms::from_record(&got), Some(Terms::STRICT));
 }
 
+/// X-claims-refile-rearm: a runtime whose plugin's terms no longer allow
+/// its answers to be passed on raises the writer's backfill flag when it
+/// records them and marks torrents, so the titles leave the record now.
+#[tokio::test]
+async fn tightened_terms_start_the_backfill() {
+    let (mut s, dht, src) = store();
+    let (id, _) = put(&mut s, "New Folder", dht, 0, false);
+    claim_at(&mut s, id, src, noon());
+    let store = Arc::new(Mutex::new(s));
+    let flag = Arc::new(AtomicBool::new(false));
+    let r = run_rearming(
+        Recorder::with_terms(None, Terms::STRICT),
+        store.clone(),
+        stand_in(),
+        AdultSources::default(),
+        Arc::default(),
+        src,
+        interest_only(),
+        Arc::new(MemoryState::new()),
+        &[],
+        Some(flag.clone()),
+    );
+    until("the backfill flag", || flag.load(Ordering::Acquire)).await;
+    r.stop().await;
+    assert!(!identify::may_redistribute(&store.lock().unwrap(), src).unwrap());
+}
+
 /// A build that stops a plugin's answers from being passed on marks every
 /// torrent holding them for the backfill, so the title they resolved
 /// leaves the served record; recording the same terms again marks nothing.
@@ -1836,7 +1895,7 @@ fn tightened_terms_take_the_title_back() {
             .unwrap()
             .is_none_or(|e| e.version != lodestar_classify::ENRICHMENT_VERSION)
     };
-    identify::record_terms(&mut s, src, &OPEN, noon()).unwrap();
+    assert!(!identify::record_terms(&mut s, src, &OPEN, noon()).unwrap());
     assert!(!pending(&s, id), "unchanged terms mark nothing");
     let tight = Terms {
         redistribute: false,
@@ -1858,7 +1917,10 @@ fn tightened_terms_take_the_title_back() {
     s.connection()
         .execute_batch("DROP TRIGGER temp.no_mark;")
         .unwrap();
-    identify::record_terms(&mut s, src, &tight, noon()).unwrap();
+    assert!(
+        identify::record_terms(&mut s, src, &tight, noon()).unwrap(),
+        "the caller starts the backfill"
+    );
     assert!(pending(&s, id), "marked for the backfill");
     assert!(!pending(&s, other), "another source's torrent isn't");
     assert!(!identify::may_redistribute(&s, src).unwrap());

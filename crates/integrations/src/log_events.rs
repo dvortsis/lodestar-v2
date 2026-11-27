@@ -50,6 +50,27 @@ lodestar_log::catalogue! {
         message: "A request to a companion Lodestar runs was held back: it isn't ready yet",
         fields: { port: Label },
     }
+    /// The OS store's roots, read once per process for routed TLS
+    /// connections (`tls`): nothing failed and roots were kept. Counts
+    /// and fixed words only, never a certificate, path or error text.
+    TLS_ROOTS_LOADED {
+        id: "integrations.tls_roots_loaded",
+        component: Integrations,
+        level: Info,
+        message: "Loaded the certificate roots for routed connections",
+        fields: { found: Size, load_errors: Size, unusable: Size, duplicates: Size, disallowed: Size, kept: Size, store: Label, disallowed_list: Label },
+    }
+    /// The same read, when a certificate or list couldn't be read or
+    /// used, or no usable root was kept (an empty store included) (routed connections then stay down, or
+    /// fail with "the server's certificate isn't trusted"). The same
+    /// fields as `integrations.tls_roots_loaded`.
+    TLS_ROOTS_DEGRADED {
+        id: "integrations.tls_roots_degraded",
+        component: Integrations,
+        level: Warn,
+        message: "Some certificate roots for routed connections couldn't be read or used, or none is usable",
+        fields: { found: Size, load_errors: Size, unusable: Size, duplicates: Size, disallowed: Size, kept: Size, store: Label, disallowed_list: Label },
+    }
     /// One delivery attempt of a notification.
     NOTIFY_ATTEMPT {
         id: "integrations.notify_attempt",

@@ -1,4 +1,4 @@
-# X-purge-index-shapes decisions
+# X-purge-index-shapes decisions (#1135)
 
 Slice session, 2026-11-27. Spec: architecture §20.5 and §20.9; `docs/decisions/2026-11-24-ENR-G.md`, `2026-11-24-ENR-11.md` and `2026-11-24-X-purge-rederive.md`; the runner's brief `briefs/X-purge-index-shapes.md` (2026-11-27T08:30Z), from its audit of #1117. Baseline: `main` at 1b46c223.
 

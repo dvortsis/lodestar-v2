@@ -9,22 +9,31 @@ gates on (architecture §3, §8, §17). Run each in release:
 | `search-bench` | Search latency p95 per query class, count estimates | `search latency (§3)` |
 | `relevance` | Ranking quality: NDCG@10, MRR, recall@50 | `relevance (§8)` |
 | `size-report --dataset` | Every §3 size figure at 10M, with a JSON report ([10M mode](#10m-mode)) | none yet (M8-PERF-3) |
+| `search-bench --dataset` | Every §3 latency row at 10M, steady-state RSS, new torrent → searchable under ingest, cold start, with a JSON report | none yet (M8-PERF-3) |
 | `reporting-overhead` (an example: it needs the API crate, a dev-dependency) | Insights' cost: search p95 and ingest with Insights open and the digest running, rollup bytes per year | `reporting overhead (§3)`, nightly |
 
 ## 10M mode
 
 The §3 budgets are set "on a synthetic 10M-torrent / 300M-file dataset, 4
-cores, NVMe". `--dataset DIR` runs `size-report` there; `search-bench`'s
-10M rows follow in M8-PERF-1b. It can't run in a pull request's CI
-(M8-PERF-3 adds the dedicated runner's workflow). The CI gates above don't
-change: without `--dataset` the bins run exactly as before.
+cores, NVMe". `--dataset DIR` runs `size-report` and `search-bench` there.
+It can't run in a pull request's CI (M8-PERF-3 adds the dedicated runner's
+workflow). The CI gates above don't change: without `--dataset` both bins
+run exactly as before, with the same output.
 
 ```sh
 # Builds the dataset once (hours at 10M; about 25 GB), then measures it.
+# Run search-bench in a fresh process: cold start and steady-state RSS
+# aren't measured in the process that built the dataset.
 cargo run --release -p lodestar-bench --bin size-report -- \
     --dataset /bench/10m --torrents 10000000 --json size.json
 cargo run --release -p lodestar-bench --bin size-report -- \
     --dataset /bench/10m --torrents 10000000 --json size-low.json --low-resource
+# Root is needed only to drop the page cache. With --drop-caches the
+# dataset must already exist (built above, without root): it never builds.
+sudo target/release/search-bench \
+    --dataset /bench/10m --torrents 10000000 --json search.json --drop-caches
+target/release/search-bench \
+    --dataset /bench/10m --torrents 10000000 --json search-low.json --low-resource
 ```
 
 ### The dataset
@@ -54,8 +63,8 @@ reuses it after that:
   SQLite bumps at each checkpoint (`bench/tests/dataset.rs`).
   Tantivy names its segments at random, so the indexes match by their
   documents, not their bytes.
-- **Read-only once built.** Measurements that write (M8-PERF-1b's new
-  torrent → searchable) run on `DIR/scratch`, a copy `dataset::scratch`
+- **Read-only once built.** Measurements that write (steady-state RSS
+  and new torrent → searchable, which store torrents) run on `DIR/scratch`, a copy `dataset::scratch`
   makes and `dataset::drop_scratch` removes. Leave room for it: as much
   again as the dataset.
 
@@ -69,6 +78,27 @@ populated, which keeps the verdict `incomplete` until every 1.0 field has
 a producer. `--low-resource` drops the file index's budget (`off`) and
 reports the switches this build lacks for that mode as `unavailable`.
 
+### What search-bench adds
+
+`search-bench --dataset` runs every table the CI gate runs (keyword,
+browse, regex, `/search`'s lease and count estimates, collapse, zero-result
+recovery, broad file clauses, facets, suggest) on the dataset, with swarm
+data loaded from the store as the server loads it, and each p95 becomes a
+row against its §3 budget. `--no-hot` and `--only` are refused with it, so
+no row is left out. Then:
+
+| Row | How |
+|---|---|
+| Cold start (`cold_start.*`) | First, before anything else opens the dataset: open the store and index, load the hot columns from SQLite, answer the UI's first page with its rows. Reported (§3 sets no number). `--drop-caches` (root, needed only for this) drops the OS page cache first and opens only an existing dataset, never building one; the row id says whether it did (`page-cache-dropped` or `page-cache-as-found`). `unmeasured` when this process built the dataset. |
+| Insights (`insights.*`) | The overview's and the stage pages' store reads for the UI's ranges (24h, 7d, 30d, all: the year of rollups), uncached, as a range's first open makes them. Gated at 50 ms. |
+| Steady-state RSS (`rss.steady.*`) | On the scratch copy, as a server holds memory: hot columns, the title set, and a live indexer at its production settings following a trickle ingest (4 a second). One pass of a mixed keyword, browse and facet load warms it, then it runs for `--steady-secs` (60), sampled every 250 ms. The highest `VmRSS` sample is gated: < 1 GB, or < 512 MB with `--low-resource` (decimal). The highest `RssAnon` (without the index's mapped pages) is reported beside it as `rss.steady.anon`, not gated. `unmeasured` when this process built the dataset. |
+| New torrent → searchable (`nrt.*`) | The CI's idle check (`nrt.idle.max`), then `--nrt-rounds` (50) probe torrents stored among a background ingest of `--ingest-rate` (100 a second), each timed from its insert until a hash lookup finds it. The slowest is gated at 5 s; the p95 and the rate reached are reported. If the ingest reached less than 90% of the rate asked, the latency rows are `unmeasured`. |
+
+`--low-resource` runs the plan's RQ8 subset: no file-clause or regex rows
+(`off`) and the 512 MB RSS budget. This build has no switch to turn the
+trigram field, the file index or the caches down, so those rows are
+`unavailable` and the verdict stays `incomplete` until it does.
+
 ### The JSON report
 
 `--json PATH` writes one object:
@@ -76,7 +106,7 @@ reports the switches this build lacks for that mode as `unavailable`.
 | Field | What |
 |---|---|
 | `report_format` | 1. Raised when a field changes meaning. |
-| `tool`, `mode` | `size-report` (or `search-bench`, M8-PERF-1b); `default` or `low-resource`. |
+| `tool`, `mode` | `size-report` or `search-bench`; `default` or `low-resource`. |
 | `verdict` | `fail` if a row failed; else `incomplete` if one is `unavailable` or `unmeasured`; else `pass`. |
 | `machine` | `cores`, `memory_bytes`, `cpu`, `os`, `arch`, `kernel`, and `disk` (`nvme`, `ssd`, `hdd` or `unknown`) for the dataset's folder. Anything unreadable is `null`. |
 | `dataset` | The key: `format`, `generator`, `seed`, `torrents` (`null` without `--dataset`). |

@@ -1028,7 +1028,7 @@ pub fn ingest(
             // dropped and nothing is held (runner, #383). A torrent under
             // the hash is judged on its own verified metadata, whichever
             // arrives first.
-            drop_source_claims(store, d.found.key.0, d.source)?;
+            drop_source_claims(store, d.found.key.0, d.source, ctx.reenrich)?;
             UnverifiedStats::add(&stats.dropped, 1);
             continue;
         }
@@ -1207,11 +1207,15 @@ fn enrich_failed(stats: &UnverifiedStats, e: &lodestar_store::Error) {
 /// Removes what `source` claimed about `key`, holding nothing: the
 /// unverified item when its claims are this source's, and this source's
 /// claims on a torrent stored under the key. Each removal is SRC-1's
-/// refile write with no decision.
+/// refile write with no decision. A torrent that lost a claim shaping its
+/// record starts a backfill pass at once (`reenrich`), so a held-back
+/// answer's title leaves the record without waiting for a restart
+/// (X-claims-refile-rearm).
 fn drop_source_claims(
     store: &mut Store,
     key: [u8; 20],
     source: SourceId,
+    reenrich: Option<&AtomicBool>,
 ) -> Result<(), lodestar_store::Error> {
     if let Some(item) = store.unverified(Network::Bt, &key)?
         && item.source == source
@@ -1228,7 +1232,9 @@ fn drop_source_claims(
             source,
             filtered: None,
         };
-        store.refile_claims(&[r], || true)?;
+        if let Some(done) = store.refile_claims(&[r], || true)? {
+            rearm(done.rederive, reenrich);
+        }
     }
     Ok(())
 }
@@ -1290,6 +1296,20 @@ pub struct Step {
     pub removed: usize,
     /// Torrents a held decision deleted, for the search index.
     pub deleted: Vec<i64>,
+    /// A removed claim shaped its torrent's record
+    /// ([`lodestar_store::unverified::ClaimsRefiled::rederive`]): the
+    /// backfill should start a pass. `ctx.reenrich` is raised already
+    /// when it's set.
+    pub rederive: bool,
+}
+
+/// Starts a backfill pass when a refile marked a torrent to be derived
+/// again: a held-back answer's canonical title must leave the record
+/// (ENR-10) now, not at the writer's next start, purge or version change.
+fn rearm(rederive: bool, reenrich: Option<&AtomicBool>) {
+    if rederive && let Some(flag) = reenrich {
+        flag.store(true, Ordering::Release);
+    }
 }
 
 /// One step of the refile sweep: judges one page of items (or claims)
@@ -1462,6 +1482,8 @@ pub fn refile_step(
             let Some(done) = store.refile_claims(&refiled, current)? else {
                 return Ok(rejected);
             };
+            rearm(done.rederive, ctx.reenrich);
+            step.rederive = done.rederive;
             step.removed = done.claims;
             step.deleted = done.torrents_deleted;
             step.held = held;

@@ -24,6 +24,14 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_integrations_companion_not_ready_n,
 		m.settings_logging_ev_integrations_companion_not_ready_h
 	],
+	'integrations.tls_roots_loaded': [
+		m.settings_logging_ev_integrations_tls_roots_loaded_n,
+		m.settings_logging_ev_integrations_tls_roots_loaded_h
+	],
+	'integrations.tls_roots_degraded': [
+		m.settings_logging_ev_integrations_tls_roots_degraded_n,
+		m.settings_logging_ev_integrations_tls_roots_degraded_h
+	],
 	'integrations.notify_attempt': [
 		m.settings_logging_ev_integrations_notify_attempt_n,
 		m.settings_logging_ev_integrations_notify_attempt_h
