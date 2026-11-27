@@ -1205,9 +1205,9 @@ pub enum Work {
     Game,
 }
 
-/// The default share of identifiable torrents that hold a served answer,
+/// The realistic share of identifiable torrents that hold a served answer,
 /// in percent (`docs/decisions/2026-11-27-X-enr11-size-measure.md`).
-pub const DEFAULT_IDENTIFIED_PERCENT: u32 = 60;
+pub const REALISTIC_IDENTIFIED_PERCENT: u32 = 60;
 
 /// The `unit` stream that picks identified torrents; the answer itself
 /// draws from its own generator, so neither shifts the torrent stream or
@@ -1692,7 +1692,7 @@ mod tests {
         let count = |p| (1..=n).filter(|&id| identified(5, id, p)).count() as f64 / n as f64;
         assert_eq!(count(0), 0.0);
         assert_eq!(count(100), 1.0);
-        let at = count(DEFAULT_IDENTIFIED_PERCENT);
+        let at = count(REALISTIC_IDENTIFIED_PERCENT);
         assert!((at - 0.6).abs() < 0.01, "{at}");
         for id in 1..=n {
             if identified(5, id, 30) {

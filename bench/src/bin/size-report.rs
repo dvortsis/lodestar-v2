@@ -25,7 +25,7 @@
 //! index is built, `--identified P` of the torrents a plugin can identify
 //! (by stored kind, ENR-10) get a served answer (`synth::answer`): a
 //! version 3 claims row with a match confidence, from a source whose terms
-//! let it be served. [`synth::DEFAULT_IDENTIFIED_PERCENT`] is the
+//! let it be served. [`synth::REALISTIC_IDENTIFIED_PERCENT`] is the
 //! realistic share; the default, 0, is the report as it was before, line
 //! for line, until the runner decides the budgets at that share. A list
 //! (`0,60,100`) builds one corpus per share and ends with a table of every
@@ -946,6 +946,9 @@ fn main() -> ExitCode {
         if i > 0 {
             println!();
         }
+        if args.identified.len() > 1 {
+            println!("== identified share {share} % ==");
+        }
         let mut one = args.clone();
         one.share = share;
         results.push(run(&one, ds.as_ref()));
@@ -971,7 +974,7 @@ fn main() -> ExitCode {
         text.push_str(&md);
     }
     // `--json` and `--dataset` take one share (`parse_args`).
-    let result = results.swap_remove(0);
+    let result = results.remove(0);
     let written = write_summary(args.summary.as_deref(), &text);
     if let Err(e) = &written {
         eprintln!("error: writing the summary: {e}");
@@ -988,14 +991,15 @@ fn main() -> ExitCode {
                 Status::Unmeasured(format!("size-report could not measure: {e}")),
             )],
         };
-        let mode = if args.low_resource {
-            "low-resource"
-        } else {
-            "default"
+        let mode = match (args.low_resource, args.identified[0]) {
+            (true, _) => "low-resource".to_owned(),
+            (false, 0) => "default".to_owned(),
+            // An identified run's figures aren't the 0 % gate's.
+            (false, share) => format!("default+identified-{share}"),
         };
         let report = dataset::report(
             "size-report",
-            mode,
+            &mode,
             ds.as_ref().map(|d| d.key),
             ds.as_ref().map(|d| d.dir.as_path()),
             &rows,
@@ -1048,12 +1052,14 @@ fn compare(reports: &[&Report]) -> (String, String) {
                 format!("{got:.1} ({:+.1})", got - c.got)
             };
             let over = if got > c.budget { " **over**" } else { "" };
-            let _ = write!(plain, " {cell:>16}");
+            let mark = if over.is_empty() { ' ' } else { '*' };
+            let _ = write!(plain, " {cell:>15}{mark}");
             let _ = write!(md, " {cell}{over} |");
         }
         let _ = writeln!(plain, " {:>7.0}", c.budget);
         let _ = writeln!(md, " {:.0} |", c.budget);
     }
+    plain.push_str("    (* over budget)\n");
     (plain, md)
 }
 
@@ -1212,5 +1218,105 @@ mod tests {
         let row =
             format!("| torrent index | 391.0 | 600.0 (+209.0) **over** | {INDEX_BUDGET:.0} |");
         assert!(md.contains(&row), "{md}");
+    }
+
+    /// A small corpus stored and enriched as `build` does, then given
+    /// answers at `share`.
+    fn corpus(dir: &Path, share: u32) -> (Store, u64, u64) {
+        let mut store = Store::open(dir.join("s.db"), StoreConfig::default()).unwrap();
+        let mut generator = Generator::new(3);
+        let mut totals = Totals::default();
+        load(&mut store, &mut generator, 400, &mut totals).unwrap();
+        let mut after = 0;
+        while let Some((last, _)) =
+            lodestar_pipeline::enrich::enrich_stored(&mut store, after, 5000).unwrap()
+        {
+            after = last;
+        }
+        let (identifiable, identified) = identify(&mut store, 3, share).unwrap();
+        (store, identifiable, identified)
+    }
+
+    fn count(store: &Store, sql: &str) -> i64 {
+        store.connection().query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn no_answers_at_zero_percent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, identifiable, identified) = corpus(dir.path(), 0);
+        assert_eq!((identifiable, identified), (0, 0));
+        for table in ["sources", "torrent_claims", "source_state"] {
+            assert_eq!(
+                count(&store, &format!("SELECT count(*) FROM {table}")),
+                0,
+                "{table}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_answer_is_served_and_indexed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, identifiable, identified) = corpus(dir.path(), 100);
+        let eligible = count(
+            &store,
+            &format!(
+                "SELECT count(*) FROM torrents WHERE content_type BETWEEN 0 AND 7 AND flags & {} = 0",
+                lodestar_store::flags::PRIVACY
+            ),
+        );
+        assert!(eligible > 300, "{eligible}");
+        assert_eq!(
+            (identifiable, identified),
+            (eligible as u64, eligible as u64)
+        );
+        assert_eq!(served(&store).unwrap().0, identified);
+        let private = count(
+            &store,
+            &format!(
+                "SELECT count(*) FROM torrents WHERE flags & {} != 0",
+                lodestar_store::flags::PRIVACY
+            ),
+        );
+        let private_answered = count(
+            &store,
+            &format!(
+                "SELECT count(*) FROM torrent_claims c JOIN torrents t ON t.id = c.torrent_id \
+                 WHERE t.flags & {} != 0",
+                lodestar_store::flags::PRIVACY
+            ),
+        );
+        assert_eq!(private_answered, 0, "of {private} private torrents");
+
+        // The index reads them: id terms land in the tag field.
+        let index_path = lodestar_search::index_dir(&dir.path().join("index"));
+        let index = lodestar_search::SearchIndex::open(&index_path).unwrap();
+        let mut indexer = index.writer(32 << 20).unwrap();
+        while indexer.catch_up(&mut store, 5000).unwrap() > 0 {
+            indexer.commit().unwrap();
+        }
+        indexer.finish().unwrap();
+        let index = lodestar_search::SearchIndex::open(&index_path).unwrap();
+        // Every answer's ids find its torrent through the query language.
+        let mut checked = 0;
+        for id in [1i64, 2, 3, 50, 200] {
+            let Some(a) = store.served_identifications(id).unwrap().pop() else {
+                continue;
+            };
+            for x in &a.ids {
+                let q = format!("{}:{}", x.scheme, x.value);
+                let hits = index
+                    .search(&index.query(&lodestar_search::parse(&q).unwrap(), 0), 1000)
+                    .unwrap()
+                    .hits;
+                assert!(
+                    hits.iter().any(|h| h.id == id as u64),
+                    "{q} misses torrent {id}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 3, "only {checked} ids checked");
     }
 }
