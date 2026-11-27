@@ -7,11 +7,18 @@ These are the runner's instructions, within the limits the owner set. They aren'
 **Standing limits** (owner, 2026-11-27):
 - at most 2 instances at a time;
 - ExpiresAt no more than 24 h;
-- the $117.50 AWS stop from 2026-11-23T00:31Z;
+- the AWS stop: $295, measured as the AWS Budget "Lodestar Path to 100" measures it (gross, from 2026-11-26) (owner, 2026-11-27T18:00Z, replacing $117.50);
 - tear down every machine when its step ends;
 - cloud results are provisional (§2.82).
 
 Anything beyond these goes to the owner.
+
+## 2026-11-27T18:00Z: the AWS stop is now $295
+The owner decided this in the runner session ("OK to change stop to 295"). No reply needed.
+
+1. **The hard stop is $295,** measured as the AWS Budget "Lodestar Path to 100" measures it (gross spend, from 2026-11-26). It replaces the $117.50 stop. The standing limits above are updated.
+2. **Nothing else changes:** at most 2 instances at a time, ExpiresAt no more than 24 h, teardown at each step's end, and cloud results stay provisional (§2.82).
+3. **The Aggressive cloud screen is still blocked** while SSM is denied (entry above).
 
 ## 2026-11-27T17:57Z: the owner approved the revised path to 100; this updates the 17:4xZ entry
 The owner decided this (O1–O4, 2026-11-27, `docs/plan/2026-11-27-revised-path-to-100.md` revision 6). No reply needed.
