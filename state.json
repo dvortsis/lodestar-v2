@@ -11123,7 +11123,7 @@
         "slice": "X-gs-followups-2",
         "role": "build",
         "model": "sonnet",
-        "agent": "pending",
+        "agent": "session_01MMjhnBzN5tameBegsXYN5E",
         "doing": "starting: Related and Parsed follow-ups (queued by the stand-in)",
         "since": "2026-11-27T02:00Z"
       },
@@ -12231,6 +12231,11 @@
     ],
     "UP-2 (#1106, API lane)": [
       "web/.size-limit.mjs"
+    ],
+    "X-gs-followups-2": [
+      "web/src/lib/features/detail/**",
+      "web/src/lib/features/search/table/ResultsTable.svelte",
+      "web/src/lib/features/search/results/ResultsPanel.svelte (carried re-set)"
     ]
   },
   "next_pick": {
