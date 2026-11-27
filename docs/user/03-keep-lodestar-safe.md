@@ -180,7 +180,7 @@ To run it:
 
 **(Newer than v0.5.1)** When gluetun restarts, Lodestar notices it has lost its network within about half a minute and restarts itself. The web UI comes back as soon as Lodestar has started again. If Lodestar shows as stopped after gluetun was down for a while, start Lodestar again. Docker doesn't retry a start that fails because gluetun isn't running.
 
-In v0.5.1, Lodestar ignores `LODESTAR_EXIT_ON_NETWORK_LOSS`. Compose still restarts Lodestar when Compose restarts gluetun. After any other gluetun restart, run `docker compose restart lodestar`. That restart costs the six-hour sampling wait. Search keeps working meanwhile.
+In v0.5.1, Lodestar ignores `LODESTAR_EXIT_ON_NETWORK_LOSS`. Compose still restarts Lodestar when Compose restarts gluetun. After any other gluetun restart, run `docker compose restart lodestar`. On v0.5.1 that restart costs the six-hour sampling wait; search keeps working meanwhile. **(Newer than v0.5.1)** There is no wait: sampling starts as soon as Lodestar has found its first DHT nodes.
 
 An automatic updater or any other tool that updates gluetun outside Compose makes a new gluetun container. Lodestar can't rejoin that one by itself, in any version.
 
@@ -318,12 +318,14 @@ To update by hand:
    **Result:** Compose starts the selected image with the existing data volume. A pinned `0.5.1` tag stays on v0.5.1 until you change it.
 
 > [!NOTE]
-> After every start, sampling waits 6 hours before it resumes, so new discoveries slow down after an update or restart. Full speed starts after those 6 hours. Search still works. The index grows over days.
+> **v0.5.1:** after every start, sampling waits 6 hours before it resumes, so new discoveries slow down after an update or restart. Full speed starts after those 6 hours. Search still works. The index grows over days.
+>
+> **(Newer than v0.5.1)** There is no wait after any start, an update included. Sampling begins as soon as Lodestar has found its first DHT nodes. See [section 3.8](#38-keep-the-safe-restart-check-on-newer-than-v051).
 
 > [!WARNING]
 > v0.5.1 uses schema V12 and can upgrade older compatible data. Back up first. A newer nightly can create a store v0.5.1 cannot read. Restore a compatible backup or choose a fresh data folder when returning from newer development builds.
 
-The safe-restart switch documented for development builds is not available in v0.5.1. Native installations also need manual updates: stop the service, install the verified release package, then restart.
+The safe-restart switch is not available in v0.5.1. **(Newer than v0.5.1)** Safe restart is on by default: [section 3.8](#38-keep-the-safe-restart-check-on-newer-than-v051). Native installations also need manual updates: stop the service, install the verified release package, then restart.
 
 ## 3.6 Know what protects the content filters and API keys
 <!-- index: API keys; content filters; child-safety core -->
@@ -587,7 +589,37 @@ If you see that warning, give the folder to Lodestar's user. Don't run `chmod 70
 
 Unraid's appdata backup runs as root, so it can still copy the folder. On Windows, the installed service's folder `C:\ProgramData\Lodestar` is already limited to SYSTEM, Administrators and the service ([chapter 4](04-install-on-windows-and-linux.md)). A portable copy's `data` folder, or a folder you chose yourself, keeps the permissions of the folder it's in.
 
-## 3.8 Check your understanding
+## 3.8 Keep the safe restart check on (newer than v0.5.1)
+<!-- index: safe restart; restart record; witness folder -->
+
+**(Newer than v0.5.1)** Everything in this section is for builds after v0.5.1. v0.5.1 has no safe-restart switch and waits six hours after every start ([section 3.5](#35-choose-how-updates-work)).
+
+Lodestar asks each DHT node for a list of torrents, and a node tells Lodestar how long to wait before asking it again. **Safe restart** keeps those waiting times across a restart, so Lodestar doesn't spend its first hours re-asking nodes it already has samples from.
+
+What it does:
+
+- When Lodestar stops cleanly, it saves a restart record. At the next start it checks that nothing else changed its data in between. If the check passes, it restores the waiting times and carries on.
+- If the check fails, Lodestar restores nothing and **samples at once**. A failed check never delays sampling. A first install, a crash, a restored backup and an image update all start sampling.
+- If Lodestar crashes again within a minute of starting, it holds sampling for up to a minute. That stops a restart loop from asking the same nodes over and over.
+
+**Recommended:** leave it on. It is on by default, and there is nothing to set up. To turn it off, set `safe_restart = false` under `[dht]` in `config.toml`, or the variable `LODESTAR_DHT_SAFE_RESTART=false`. Off, Lodestar still samples at once after every start; it re-asks some nodes early.
+
+Where the restart record is kept, in a folder **outside** the data folder:
+
+| Install | Restart record folder |
+|---|---|
+| Linux service | `/var/lib/lodestar-witness` |
+| Windows service | `C:\ProgramData\Lodestar-witness` |
+| Docker and Unraid | `/var/lib/lodestar-witness`, inside the container |
+
+On Docker and Unraid the folder is part of the container, not a volume. An image update replaces the container, so the record is lost once. The next start then samples at once and only loses that one run's restored waiting times. You don't need to back it up or map it.
+
+**Keep that folder out of backups taken with the data folder.** The check works because the record and the data folder must agree. If you restore an old data folder together with its old record, the two agree again. Lodestar can't tell the data went back in time. Back up only the data folder ([section 3.7](#37-back-up-and-restore)). A restored backup then fails the check, and Lodestar samples at once.
+
+> [!NOTE]
+> Safe restart saves effort. It doesn't make the index fill faster. The index grows over days and weeks.
+
+## 3.9 Check your understanding
 
 1. A friend wants to open Lodestar from work. What do you set up, and what do you not do?
 2. What does forwarding UDP `6881` tell DHT peers?
@@ -598,6 +630,7 @@ Unraid's appdata backup runs as root, so it can still copy the folder. On Window
 > - Never forward port `8090`. Use a VPN for remote access.
 > - Forwarding `6881` over UDP is optional and shows your IP to DHT peers.
 > - Run `lodestar backup`, keep the result private and copy it off the cache pool.
+> - **(Newer than v0.5.1)** Safe restart is on by default. A failed check only means sampling starts at once. Keep its folder out of data-folder backups.
 
 <!-- nav:start -->
 ---

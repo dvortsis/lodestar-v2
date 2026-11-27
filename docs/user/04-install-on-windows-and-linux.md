@@ -232,7 +232,7 @@ Day to day:
 | Follow the log as it grows | `sudo journalctl -u lodestar -f` |
 | Restart or stop it | `sudo systemctl restart lodestar` or `sudo systemctl stop lodestar` |
 
-**(Newer than v0.5.1)** The service has a second private folder, `/var/lib/lodestar-witness`, for the restart record. It stays empty unless safe restart is on. Don't back it up together with the data folder.
+**(Newer than v0.5.1)** The service has a second private folder, `/var/lib/lodestar-witness`, for the restart record. Safe restart is on by default, so Lodestar fills it. The Windows service has the same kind of folder, `C:\ProgramData\Lodestar-witness`. Don't back either up together with the data folder ([section 3.8](03-keep-lodestar-safe.md#38-keep-the-safe-restart-check-on-newer-than-v051)). If Lodestar can't make the folder private, that run keeps no record and samples at once.
 
 To try Linux without a service, open a terminal in the extracted folder and run `./lodestar serve` as your normal user. It stores data in `./data`. Stop with **Ctrl+C** and wait for shutdown.
 
