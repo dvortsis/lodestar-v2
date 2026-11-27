@@ -423,8 +423,8 @@ fn the_fuzz_seeds_are_current() {
             .expect("the section");
         let cut = pos + "5:spill".len();
         let template = [&body[..cut], &body[cut + key.len() - 7 + sp.raw.len()..]].concat();
-        let mut expanded = (cut as u16).to_le_bytes().to_vec();
-        expanded.extend_from_slice(&(sparse.len() as u16).to_le_bytes());
+        let mut expanded = u16::try_from(cut).unwrap().to_le_bytes().to_vec();
+        expanded.extend_from_slice(&u16::try_from(sparse.len()).unwrap().to_le_bytes());
         expanded.extend_from_slice(&sparse);
         expanded.extend_from_slice(&template);
         assert_eq!(expand(&expanded), body, "the target rebuilds the body");
@@ -481,20 +481,14 @@ fn the_fuzz_seeds_are_current() {
     ];
     // Each decodes to what it was built from, and seeding keeps the slots
     // its clock hasn't ended.
-    for (s, live) in [(&minimal, 1), (&caps, 2 * 56)] {
+    for (s, clock_ms, live) in [(&minimal, 0, 1), (&caps, caps_clock / 1_000_000, 2 * 56)] {
         let (back, _) = Snapshot::decode(&s.encode()).unwrap();
         assert_eq!(&back, s);
         let here = Here {
             horizon_s: s.horizon_s,
             ..resumable().1
         };
-        let now = s.at_ms
-            + if s.horizon_s == h {
-                caps_clock / 1_000_000
-            } else {
-                0
-            };
-        let seeded = seed(s, now, &here).unwrap();
+        let seeded = seed(s, s.at_ms + clock_ms, &here).unwrap();
         assert_eq!(seeded.spill.unwrap().slots().count(), live);
     }
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/seeds/dht_restart");

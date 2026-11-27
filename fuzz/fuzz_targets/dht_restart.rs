@@ -150,8 +150,12 @@ fn snapshot(body: &[u8], version: u32, clock: u64) {
             // Without its section it's written as version 1, and the rest
             // is unchanged.
             let v1 = Snapshot {
+                run: s.run,
+                at_ms: s.at_ms,
+                horizon_s: s.horizon_s,
+                gate_s: s.gate_s,
+                entries: s.entries.clone(),
                 spill: None,
-                ..s.clone()
             };
             let bytes = v1.encode();
             assert_eq!(&bytes[8..12], &restart::VERSION.to_le_bytes());
@@ -232,7 +236,8 @@ fn snapshot(body: &[u8], version: u32, clock: u64) {
     }
 }
 
-/// A checked section's slots, as (block, word).
+/// A checked section's slots, as (block, word). Its own reader on purpose
+/// (`Spilled::words` is crate-private), so the check doesn't trust it.
 fn words(raw: &[u8]) -> Vec<(usize, u32)> {
     let mut out = Vec::new();
     let mut at = 0;
