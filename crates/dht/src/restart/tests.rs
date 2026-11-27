@@ -365,6 +365,157 @@ fn the_largest_spill_section_decodes() {
     assert_eq!(back.spill.map(|s| s.raw.len()), Some(MAX_SPILL_RAW));
 }
 
+/// The `dht_restart` fuzz target's snapshot seeds (X-restart-fuzz-v2),
+/// built here rather than by hand, in the input layout the target's header
+/// describes: kind `2` ‖ form ‖ clock (8 bytes LE, ns after `at`) ‖ body,
+/// form 0 a version 1 body, form 3 a version 2 one expanded from a sparse
+/// list. `LODESTAR_BLESS=1` rewrites them.
+#[test]
+fn the_fuzz_seeds_are_current() {
+    // The target's expansion, mirrored: `cut` ‖ `n` ‖ `n` bytes of records
+    // (a block, 3 bytes LE; a count; its words) ‖ the template.
+    fn expand(input: &[u8]) -> Vec<u8> {
+        let cut = usize::from(u16::from_le_bytes([input[0], input[1]]));
+        let n = usize::from(u16::from_le_bytes([input[2], input[3]]));
+        let (mut sparse, template) = input[4..].split_at(n);
+        let mut blocks = std::collections::BTreeMap::new();
+        while !sparse.is_empty() {
+            let b = u32::from_le_bytes([sparse[0], sparse[1], sparse[2], 0]) as usize;
+            let len = 4 * usize::from(sparse[3]);
+            blocks.insert(b % SPILL_BLOCKS, &sparse[3..4 + len]);
+            sparse = &sparse[4 + len..];
+        }
+        let raw: Vec<u8> = (0..SPILL_BLOCKS)
+            .flat_map(|b| blocks.get(&b).copied().unwrap_or(&[0]).to_vec())
+            .collect();
+        let cut = cut % (template.len() + 1);
+        [
+            &template[..cut],
+            format!("{}:", raw.len()).as_bytes(),
+            &raw,
+            &template[cut..],
+        ]
+        .concat()
+    }
+    let input = |form: u8, clock_ns: u64, s: &Snapshot| -> Vec<u8> {
+        let file = s.encode();
+        let body = &file[HEADER..file.len() - TRAILER];
+        let mut out = vec![2, form];
+        out.extend_from_slice(&clock_ns.to_le_bytes());
+        let Some(sp) = &s.spill else {
+            out.extend_from_slice(body);
+            return out;
+        };
+        let mut sparse = Vec::new();
+        let mut at = 0;
+        for b in 0..SPILL_BLOCKS {
+            let len = 1 + 4 * usize::from(sp.raw[at]);
+            if sp.raw[at] != 0 {
+                sparse.extend_from_slice(&(b as u32).to_le_bytes()[..3]);
+                sparse.extend_from_slice(&sp.raw[at..at + len]);
+            }
+            at += len;
+        }
+        let key = format!("5:spill{}:", sp.raw.len());
+        let pos = body
+            .windows(key.len())
+            .position(|w| w == key.as_bytes())
+            .expect("the section");
+        let cut = pos + "5:spill".len();
+        let template = [&body[..cut], &body[cut + key.len() - 7 + sp.raw.len()..]].concat();
+        let mut expanded = (cut as u16).to_le_bytes().to_vec();
+        expanded.extend_from_slice(&(sparse.len() as u16).to_le_bytes());
+        expanded.extend_from_slice(&sparse);
+        expanded.extend_from_slice(&template);
+        assert_eq!(expand(&expanded), body, "the target rebuilds the body");
+        out.extend_from_slice(&expanded);
+        out
+    };
+    let minute = |tag: u32, minutes: u32| tag << SPILL_MINUTE_BITS | minutes;
+    // The smallest: one slot with the lowest tag, at a horizon that isn't
+    // whole minutes, so its rounded-up end is clamped to the horizon.
+    let minimal = Snapshot {
+        horizon_s: 61,
+        gate_s: 0,
+        entries: vec![],
+        spill: Some(spilled(&[(0, minute(0x0_1000, 2))])),
+        ..snapshot()
+    };
+    // At the caps: the longest horizon and gate, entries at the horizon,
+    // the first and last blocks full with tags from the lowest to the
+    // highest, most at the horizon's minutes and some that have ended at
+    // the clock (a minute short of stale). The section can't be at its
+    // 32 MiB size: libFuzzer would mutate a 32 MiB input.
+    let h = MAX_HORIZON_S;
+    let slots: Vec<(usize, u32)> = [0, SPILL_BLOCKS - 1]
+        .into_iter()
+        .flat_map(|b| {
+            (0..SPILL_BLOCK as u32).map(move |i| {
+                let tag = 0x0_1000 + i * ((0xF_FFFF - 0x0_1000) / 63);
+                let minutes = if i % 8 == 7 { 1 } else { spill_max_minutes(h) };
+                (b, minute(tag, minutes))
+            })
+        })
+        .collect();
+    let caps = Snapshot {
+        horizon_s: h,
+        gate_s: h,
+        entries: vec![
+            Entry {
+                addr: addr("198.51.100.1:65535"),
+                remaining_s: h,
+            },
+            Entry {
+                addr: addr("[2001:db8::1]:1"),
+                remaining_s: h,
+            },
+        ],
+        spill: Some(spilled(&slots)),
+        ..snapshot()
+    };
+    let caps_clock = (u64::from(h) * 1000 - 60_000) * 1_000_000;
+    let seeds = [
+        ("v1.bin", input(0, 30_000_000_000, &snapshot())),
+        ("v2_minimal.bin", input(3, 0, &minimal)),
+        ("v2_caps.bin", input(3, caps_clock, &caps)),
+    ];
+    // Each decodes to what it was built from, and seeding keeps the slots
+    // its clock hasn't ended.
+    for (s, live) in [(&minimal, 1), (&caps, 2 * 56)] {
+        let (back, _) = Snapshot::decode(&s.encode()).unwrap();
+        assert_eq!(&back, s);
+        let here = Here {
+            horizon_s: s.horizon_s,
+            ..resumable().1
+        };
+        let now = s.at_ms
+            + if s.horizon_s == h {
+                caps_clock / 1_000_000
+            } else {
+                0
+            };
+        let seeded = seed(s, now, &here).unwrap();
+        assert_eq!(seeded.spill.unwrap().slots().count(), live);
+    }
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/seeds/dht_restart");
+    let bless = std::env::var_os("LODESTAR_BLESS").is_some();
+    if bless {
+        fs::create_dir_all(&dir).unwrap();
+    }
+    for (name, bytes) in seeds {
+        let path = dir.join(name);
+        if bless {
+            fs::write(&path, &bytes).unwrap();
+        }
+        let on_disk = fs::read(&path)
+            .unwrap_or_else(|e| panic!("{}: {e} (bless with LODESTAR_BLESS=1)", path.display()));
+        assert!(
+            on_disk == bytes,
+            "{name} is stale (bless with LODESTAR_BLESS=1)"
+        );
+    }
+}
+
 /// Seeding a section: each slot's end on this run's clock is at or after
 /// the one it records, ended ones are dropped, and an `at` so large the
 /// largest deadline overflows is corrupt.

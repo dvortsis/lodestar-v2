@@ -764,6 +764,7 @@ placement:
   - X-snapshot-claims-retention
   - X-snapshot-followups-2
   - X-purge-rederive
+  - X-restart-fuzz-v2
 - ws: ws-m7-w5
   match:
   - ENR-11
