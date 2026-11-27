@@ -82,6 +82,14 @@ The check Lodestar runs on a new version right after an update. A service must k
 
 The user ID and group ID a container runs as. They decide who owns the files in the data folder.
 
+## Restart record
+
+**(Newer than v0.5.1)** What Lodestar saves at a clean stop so safe restart can restore each node's waiting time. Most of it is in the data folder. The part kept in a folder outside it stays out of data-folder backups.
+
+## Safe restart
+
+**(Newer than v0.5.1)** On by default. After a clean restart, Lodestar restores each node's waiting time so it doesn't re-ask nodes it already has samples from. A failed check only means sampling starts at once.
+
 ## Setup token
 
 A one-time key printed in the log on first run. You enter it to create the admin password.

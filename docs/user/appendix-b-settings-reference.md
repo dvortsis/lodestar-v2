@@ -35,6 +35,8 @@ These are in **Settings → Updates**. Each can also be set in `config.toml` or 
 
 This reference covers v0.5.1. The Sources screen, pack-version controls and safe-restart switch described in development notes are not available in this release.
 
+**(Newer than v0.5.1)** Safe restart is a setting in `config.toml`, `[dht] safe_restart` (`LODESTAR_DHT_SAFE_RESTART`). It is on by default, and **on is recommended**. Turn it off with `false`; Lodestar then samples at once after every start and re-asks some nodes early. Its restart record folder (`LODESTAR_DHT_WITNESS_DIR`, `/var/lib/lodestar-witness` in Docker and the Linux service) is set for you: leave it as it is ([section 3.8](03-keep-lodestar-safe.md#38-keep-the-safe-restart-check-on-newer-than-v051)).
+
 The templates do not include a Log level field. You can optionally add a custom
 container variable with key `LODESTAR_LOG` to set how much Lodestar logs on every output
 (`error`, `warn`, `info` or `debug`). In v0.5.1, change this variable in the container configuration and restart to apply it.
