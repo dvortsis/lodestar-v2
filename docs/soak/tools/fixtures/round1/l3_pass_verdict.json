@@ -1,0 +1,427 @@
+{
+ "attempt_ends": {},
+ "candidates": {
+  "A": {
+   "arm": "A",
+   "attempt": "r1-a1",
+   "attempt_ends": {},
+   "comparator_problems": [],
+   "crawler": "pass",
+   "days": [
+    {
+     "attempt": "r1-a1",
+     "contention": {
+      "coverage": {
+       "cpu": 1.0,
+       "disk": 1.0,
+       "steal": 1.0,
+       "tunnel": 1.0,
+       "uplink": 1.0
+      },
+      "cpu_p95": 0.4,
+      "disk_write_p99_ms": 4.0,
+      "intervals": 8640,
+      "network_hours_breached": [],
+      "reasons": [],
+      "steal_p95": 0.01,
+      "verdict": "ok"
+     },
+     "day": 1,
+     "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+     "layout": "L3",
+     "memory": {
+      "ci95_mib_per_hour": [
+       0.1,
+       0.7
+      ],
+      "refused": null,
+      "slope_mib_per_hour": 0.4,
+      "verdict": "pass",
+      "window_complete": true
+     },
+     "product_failure": false,
+     "reasons": [],
+     "repeat": 0,
+     "run_id": "r1-a1-d1-A",
+     "solo_confirmation_required": false,
+     "status": "pass",
+     "tests": {
+      "coverage": 0.995,
+      "every_hour_passes": true,
+      "mean_net_per_min": 120.0,
+      "mean_passes": true,
+      "p95": "pass",
+      "p95_seconds": 60,
+      "passes": true,
+      "worst_hour_net_per_min": 120.0
+     },
+     "window": {
+      "end_utc": "2026-11-29T19:04:00Z",
+      "start_utc": "2026-11-28T19:04:00Z"
+     }
+    },
+    {
+     "attempt": "r1-a1",
+     "contention": {
+      "coverage": {
+       "cpu": 1.0,
+       "disk": 1.0,
+       "steal": 1.0,
+       "tunnel": 1.0,
+       "uplink": 1.0
+      },
+      "cpu_p95": 0.4,
+      "disk_write_p99_ms": 4.0,
+      "intervals": 8640,
+      "network_hours_breached": [],
+      "reasons": [],
+      "steal_p95": 0.01,
+      "verdict": "ok"
+     },
+     "day": 2,
+     "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+     "layout": "L3",
+     "memory": {
+      "ci95_mib_per_hour": [
+       0.1,
+       0.7
+      ],
+      "refused": null,
+      "slope_mib_per_hour": 0.4,
+      "verdict": "pass",
+      "window_complete": true
+     },
+     "product_failure": false,
+     "reasons": [],
+     "repeat": 0,
+     "run_id": "r1-a1-d2-A",
+     "solo_confirmation_required": false,
+     "status": "pass",
+     "tests": {
+      "coverage": 0.995,
+      "every_hour_passes": true,
+      "mean_net_per_min": 120.0,
+      "mean_passes": true,
+      "p95": "pass",
+      "p95_seconds": 60,
+      "passes": true,
+      "worst_hour_net_per_min": 120.0
+     },
+     "window": {
+      "end_utc": "2026-11-30T21:04:00Z",
+      "start_utc": "2026-11-29T21:04:00Z"
+     }
+    }
+   ],
+   "earlier_attempts": [],
+   "layout": "L3",
+   "memory": "pass",
+   "product_failure": false,
+   "reasons": [],
+   "replaced_days": [],
+   "retry_budget_exhausted": false,
+   "role": "candidate",
+   "shipping_eligible": true,
+   "solo_confirmation_failed": false,
+   "solo_confirmation_required": false,
+   "spacing_problems": [],
+   "valid_misses": []
+  },
+  "B": {
+   "arm": "B",
+   "attempt": "r1-a1",
+   "attempt_ends": {},
+   "comparator_problems": [],
+   "crawler": "pass",
+   "days": [
+    {
+     "attempt": "r1-a1",
+     "contention": {
+      "coverage": {
+       "cpu": 1.0,
+       "disk": 1.0,
+       "steal": 1.0,
+       "tunnel": 1.0,
+       "uplink": 1.0
+      },
+      "cpu_p95": 0.4,
+      "disk_write_p99_ms": 4.0,
+      "intervals": 8640,
+      "network_hours_breached": [],
+      "reasons": [],
+      "steal_p95": 0.01,
+      "verdict": "ok"
+     },
+     "day": 1,
+     "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+     "layout": "L3",
+     "memory": {
+      "ci95_mib_per_hour": [
+       0.1,
+       0.7
+      ],
+      "refused": null,
+      "slope_mib_per_hour": 0.4,
+      "verdict": "pass",
+      "window_complete": true
+     },
+     "product_failure": false,
+     "reasons": [],
+     "repeat": 0,
+     "run_id": "r1-a1-d1-B",
+     "solo_confirmation_required": false,
+     "status": "pass",
+     "tests": {
+      "coverage": 0.995,
+      "every_hour_passes": true,
+      "mean_net_per_min": 120.0,
+      "mean_passes": true,
+      "p95": "pass",
+      "p95_seconds": 60,
+      "passes": true,
+      "worst_hour_net_per_min": 120.0
+     },
+     "window": {
+      "end_utc": "2026-11-29T19:01:00Z",
+      "start_utc": "2026-11-28T19:01:00Z"
+     }
+    },
+    {
+     "attempt": "r1-a1",
+     "contention": {
+      "coverage": {
+       "cpu": 1.0,
+       "disk": 1.0,
+       "steal": 1.0,
+       "tunnel": 1.0,
+       "uplink": 1.0
+      },
+      "cpu_p95": 0.4,
+      "disk_write_p99_ms": 4.0,
+      "intervals": 8640,
+      "network_hours_breached": [],
+      "reasons": [],
+      "steal_p95": 0.01,
+      "verdict": "ok"
+     },
+     "day": 2,
+     "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+     "layout": "L3",
+     "memory": {
+      "ci95_mib_per_hour": [
+       0.1,
+       0.7
+      ],
+      "refused": null,
+      "slope_mib_per_hour": 0.4,
+      "verdict": "pass",
+      "window_complete": true
+     },
+     "product_failure": false,
+     "reasons": [],
+     "repeat": 0,
+     "run_id": "r1-a1-d2-B",
+     "solo_confirmation_required": false,
+     "status": "pass",
+     "tests": {
+      "coverage": 0.995,
+      "every_hour_passes": true,
+      "mean_net_per_min": 120.0,
+      "mean_passes": true,
+      "p95": "pass",
+      "p95_seconds": 60,
+      "passes": true,
+      "worst_hour_net_per_min": 120.0
+     },
+     "window": {
+      "end_utc": "2026-11-30T21:01:00Z",
+      "start_utc": "2026-11-29T21:01:00Z"
+     }
+    }
+   ],
+   "earlier_attempts": [],
+   "layout": "L3",
+   "memory": "pass",
+   "product_failure": false,
+   "reasons": [],
+   "replaced_days": [],
+   "retry_budget_exhausted": false,
+   "role": "candidate",
+   "shipping_eligible": true,
+   "solo_confirmation_failed": false,
+   "solo_confirmation_required": false,
+   "spacing_problems": [],
+   "valid_misses": []
+  }
+ },
+ "contention_thresholds": {
+  "coverage_min": 0.98,
+  "cpu_p95_max": 0.8,
+  "disk_write_p99_ms_max": 50.0,
+  "interval_seconds": 10,
+  "steal_p95_max": 0.05,
+  "tunnel_loss_max": 0.01,
+  "tunnel_rtt_p95_over_rehearsal_max": 2.0,
+  "uplink_drops_max": 0
+ },
+ "diagnostics": {
+  "C": {
+   "arm": "C",
+   "attempt": "r1-a1",
+   "attempt_ends": {},
+   "comparator_problems": [],
+   "crawler": "not_judged",
+   "days": [
+    {
+     "attempt": "r1-a1",
+     "contention": {
+      "coverage": {
+       "cpu": 1.0,
+       "disk": 1.0,
+       "steal": 1.0,
+       "tunnel": 1.0,
+       "uplink": 1.0
+      },
+      "cpu_p95": 0.4,
+      "disk_write_p99_ms": 4.0,
+      "intervals": 8640,
+      "network_hours_breached": [],
+      "reasons": [],
+      "steal_p95": 0.01,
+      "verdict": "ok"
+     },
+     "day": 1,
+     "digest": null,
+     "layout": "L3",
+     "memory": {
+      "ci95_mib_per_hour": [
+       0.1,
+       0.7
+      ],
+      "refused": null,
+      "slope_mib_per_hour": 0.4,
+      "verdict": "pass",
+      "window_complete": true
+     },
+     "product_failure": false,
+     "reasons": [],
+     "repeat": 0,
+     "run_id": "r1-a1-d1-C",
+     "solo_confirmation_required": false,
+     "status": "pass",
+     "tests": {
+      "coverage": 0.995,
+      "every_hour_passes": true,
+      "mean_net_per_min": 120.0,
+      "mean_passes": true,
+      "p95": "pass",
+      "p95_seconds": 60,
+      "passes": true,
+      "worst_hour_net_per_min": 120.0
+     },
+     "window": {
+      "end_utc": "2026-11-29T19:07:00Z",
+      "start_utc": "2026-11-28T19:07:00Z"
+     }
+    },
+    {
+     "attempt": "r1-a1",
+     "contention": {
+      "coverage": {
+       "cpu": 1.0,
+       "disk": 1.0,
+       "steal": 1.0,
+       "tunnel": 1.0,
+       "uplink": 1.0
+      },
+      "cpu_p95": 0.4,
+      "disk_write_p99_ms": 4.0,
+      "intervals": 8640,
+      "network_hours_breached": [],
+      "reasons": [],
+      "steal_p95": 0.01,
+      "verdict": "ok"
+     },
+     "day": 2,
+     "digest": null,
+     "layout": "L3",
+     "memory": {
+      "ci95_mib_per_hour": [
+       0.1,
+       0.7
+      ],
+      "refused": null,
+      "slope_mib_per_hour": 0.4,
+      "verdict": "pass",
+      "window_complete": true
+     },
+     "product_failure": false,
+     "reasons": [],
+     "repeat": 0,
+     "run_id": "r1-a1-d2-C",
+     "solo_confirmation_required": false,
+     "status": "pass",
+     "tests": {
+      "coverage": 0.995,
+      "every_hour_passes": true,
+      "mean_net_per_min": 120.0,
+      "mean_passes": true,
+      "p95": "pass",
+      "p95_seconds": 60,
+      "passes": true,
+      "worst_hour_net_per_min": 120.0
+     },
+     "window": {
+      "end_utc": "2026-11-30T21:07:00Z",
+      "start_utc": "2026-11-29T21:07:00Z"
+     }
+    }
+   ],
+   "earlier_attempts": [],
+   "layout": "L3",
+   "memory": "pass",
+   "product_failure": false,
+   "reasons": [
+    "not_authorized"
+   ],
+   "replaced_days": [],
+   "retry_budget_exhausted": false,
+   "role": "diagnostic",
+   "shipping_eligible": false,
+   "solo_confirmation_failed": false,
+   "solo_confirmation_required": false,
+   "spacing_problems": [],
+   "valid_misses": []
+  }
+ },
+ "inputs": {
+  "comparator.json": "f588338ab59146afc4b30afe0111e1e8ea07fd9a401dee2d7e0e6022517efadf",
+  "declaration.json": "8e59d318e3774cee4291ab7c47360ae2b35ac9f0c52fd8902be3301d3635dd41",
+  "r1-a1/day1/A.json": "657b7830339cab957bf5febe4f74cc84dfa56214053a6fd2d934adb6f807c32f",
+  "r1-a1/day1/B.json": "334d3253965fdc1f65ea2091a6d0386a15569b542cb94d5f4609ade09a5cf556",
+  "r1-a1/day1/C.json": "45224520b79595fa5fc7a5d0af3f2b8293eefd3aefbedb2678457db1ec500d76",
+  "r1-a1/day1/archive.json": "f24f5e72406bc8538cd5a5dafcf7e27c467745a25c8522995957dac6df9459b2",
+  "r1-a1/day1/host-samples.json": "2283c0db5925ca4d329739a0174cc1f81aa9ed1fd578daca8d2e9a51046e0d82",
+  "r1-a1/day2/A.json": "2bb8f482b9cee09212e53cf202dadc4e2d6f61ec10e5182650e2f3bad883e4c1",
+  "r1-a1/day2/B.json": "bf8d48f93347f0f8cff2f2d5756cd3ea634ef964a8cbcf88f1e5db392f5b2002",
+  "r1-a1/day2/C.json": "5e9814ed4dc0798b81c6b36ee048dacbae5b1936ab078cc9749924b0326c1188",
+  "r1-a1/day2/archive.json": "183931e0d429d476930af45922a3c2f8897db4e6d16072c34cae2a23db2de7eb",
+  "r1-a1/day2/host-samples.json": "1d15a57467cc6b98feb1acbc4ab3ac231ff2d8cc61a075520e3929f09d023942"
+ },
+ "kind": "cr_round1_verdict",
+ "plan": "docs/plan/2026-11-27-revised-path-to-100.md",
+ "round": 1,
+ "schema": 1,
+ "selection": {
+  "ships": "B",
+  "state": "ships",
+  "trail": [
+   {
+    "arm": "B",
+    "authorized": true,
+    "disposition": "shipping_eligible"
+   }
+  ]
+ },
+ "spec": "docs/decisions/2026-11-02-CR-SPEC.md"
+}

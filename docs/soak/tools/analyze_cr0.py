@@ -618,10 +618,17 @@ def memory_fit(rows):
         fit["refused"] = "identity_change"
         return fit
     xy = [(h, r[f["field"]] / 2**20) for h, r in window if number(r.get(f["field"]))]
+    return ols_fit(fit, xy, f["from_hour"], f["to_hour"])
+
+
+def ols_fit(fit, xy, from_hour, to_hour):
+    """The memory gate's OLS slope and 95% CI over (hour, MiB) points in from..to, into `fit`.
+    `meets_bar` is set only for a window covered end to end, never for a refused fit."""
+    f = MEMORY_FIT
     fit["samples"] = n = len(xy)
     # Covered end to end: no gap longer than the report's gap limit between
     # fitted samples, nor between either end of the window and its nearest sample.
-    edges = [f["from_hour"]] + [x for x, _ in xy] + [f["to_hour"]]
+    edges = [from_hour] + [x for x, _ in xy] + [to_hour]
     fit["max_gap_seconds"] = max((b - a) * 3600 for a, b in zip(edges, edges[1:]))
     fit["window_complete"] = bool(xy) and fit["max_gap_seconds"] <= f["max_gap_seconds"]
     if n < f["min_samples"]:
@@ -644,6 +651,30 @@ def memory_fit(rows):
     else:
         fit["provisional"] = True  # a fit over an incomplete window is never a verdict
     return fit
+
+
+def measured_window_fit(points, ws_seconds, hours=24, hour_seconds=3600.0):
+    """Round 1's memory statistic (revised path to 100, §5.2 item 6 and §6.4): the `anon`
+    slope over measured-window hours 12-24, `ws + 12 h` to `ws + 24 h`, not from the first
+    baseline sample. `points` are (elapsed seconds, anon bytes or None) from one process;
+    a missing `anon` anywhere in the fitted span refuses the fit, so `meets_bar` stays unset
+    (not judged, never a pass). A rehearsal's shorter window fits its second half."""
+    f = MEMORY_FIT
+    # Real hours from ws, so the slope is per hour and the gap limit in seconds holds
+    # for a rehearsal's shorter hour too.
+    lo, hi = hours / 2 * hour_seconds / 3600, hours * hour_seconds / 3600
+    fit = {"series": "anon", "from_hour": lo, "to_hour": hi, "clock": "ws",
+           "bar_upper_ci_mib_per_hour": f["bar_mib_per_hour"], "samples": 0,
+           "slope_mib_per_hour": None, "standard_error": None, "ci95_mib_per_hour": None,
+           "window_complete": False, "meets_bar": None, "refused": None}
+    span = [((e - ws_seconds) / 3600, v) for e, v in points if lo <= (e - ws_seconds) / 3600 <= hi]
+    if not span:
+        fit["refused"] = "no_samples_in_window"
+        return fit
+    if any(not number(v) for _, v in span):
+        fit["refused"] = "anon_missing"
+        return fit
+    return ols_fit(fit, [(h, v / 2**20) for h, v in span], lo, hi)
 
 
 def commit_slope(window):
