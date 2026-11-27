@@ -11,7 +11,7 @@ The runner's records PR after r18 (#1130). It records:
 The runner checked each owner message against the source session's own events. Everything else here is the runner's, under §2.82, §2.84 and §2.26 (performance and UX). Each call is flagged to the owner, who can veto it (§2.19). The refinements of earlier decisions are marked **(§2.19)**.
 
 ## What the owner decided
-- **§2.85 (2026-11-26):** performance first and politeness second, with the safety rules unchanged; WireGuard with leak protection on every test crawl; an optional VPN in the product that works with any provider; the AWS Budget "Lodestar Path to 100" ($295 gross, alerts only); D13 B; D1 to D12 as recommended. Not approved: cloud results as evidence of record, and 44 h cloud instances.
+- **§2.85 (2026-11-26):** performance first and politeness second, with the safety rules unchanged; WireGuard with leak protection on every test crawl; an optional VPN in the product that works with any provider; the AWS Budget "Lodestar Path to 100" ($295 gross, alerts only); D13 B; D1 to D12 as recommended, including D6 (four build and two test sessions).
 - **§2.86 (2026-11-27):** O1 to O4 yes. Round 1 (CR-R1) replaces CR-AB-ADM, CR-AB-4, CR-CP1, CR-AB-LC, CR-AB-1 and CR-5 before CR-COMB. Per-switch attribution moves to 1.1. The round-1 report replaces Checkpoint 1.
 - **§2.87 (2026-11-27):** the AWS stop is $295, as the AWS Budget measures it, replacing $117.50. The Legal Notice's safe-restart line is corrected, with a NOTICE_VERSION bump.
 
@@ -46,3 +46,7 @@ The runner checked each owner message against the source session's own events. E
 - **Closed:** items 27 and 30 (§2.85, D7 and D11), and items 35 and 36 (D12).
 - **Changed:** item 26 is now an action for the owner (D7).
 - **Item 41:** the calls above, open to the owner's veto.
+
+## Follow-ups (the runner's r6 follow-up PR)
+- **Not yet in `runner/slices.yaml`:** G-v1-vs-bitmagnet (D13 B, the RC scorecard on its own paired window) and X-vpn-bind (D8), with the rest of D1 to D13's build-plan changes.
+- **Runner's reading, not an owner decision:** cloud results stay provisional (§2.82), and the 44 h instances of item 35 aren't adopted (D12 closes the item as moot), so the 24 h expiry stands.

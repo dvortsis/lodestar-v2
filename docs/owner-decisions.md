@@ -770,6 +770,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 
 81. **Four build sessions, and as many testing sessions as needed** (owner, in the runner session, 2026-11-20 about 06:25Z): "I'm going to bed. Keep 4 running sessions, with as many additional sessions for testing as needed."
     - **Build:** four slices at a time, as before (`limits.phase_total` 4).
+    - *Superseded by §2.85 (D6, 2026-11-26): four build sessions and two test sessions.*
     - **Testing:** no fixed number. Cloud testing, Unraid testing and other test lanes get a session each as the work needs one. This replaces §2.64's cap of four cloud-testing sessions; `limits.extra_shared` is now a reference number only; it limits nothing.
     - **Unchanged (runner's reading):** the cloud spending caps (§2.74), the host-safety rules (§2.68), at most three reviewers at a time, and every other bound.
 
@@ -825,9 +826,10 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Every other recommendation** (21:42:45Z): "yes to all recommendations", for D1 to D12 of the plan, each as its Recommendation column says. The plan is build-plan r6. Its §4 crawler sequence is replaced by §2.86.
       - **D2 and D10:** `lodestar-host`, the VM on the owner's new Unraid server, is the experiment host of record for G-v06-crawler, G-v1-crawler and G-v1-soak-linux. It was resized to 8 vCPU (cores 4–7) and 32 GiB, as the owner's root agent reported. That report gave the CPU package as capped at 45 W until a new cooler is fitted; §2.84 records "no longer throttled at 45w".
       - **D3 and D4 change rules the owner set:** CR-SPEC's host design (parallel arms on separate VPN exits, swapped daily; mover runs and parity checks don't void a VM segment), and the politeness part of G-v1-audits (a bounded-load check for 1.0, the full audit in 1.1). The blanket yes approved both, and the owner then confirmed both explicitly in the runner session (2026-11-27T18:11Z): "I'm OK with changing those rules".
-      - **D12 closes owner-queue items 35 and 36 as moot.** The 44 h cloud instances of item 35 are not approved.
+      - **D6, sessions:** four build sessions and two test sessions at once. This replaces §2.81's "as many additional sessions for testing as needed" (`limits.extra_shared` 2).
+      - **D12 closes owner-queue items 35 and 36 as moot.** Runner's reading: the 44 h cloud instances of item 35 aren't adopted, so the 24 h expiry stands.
       - **Runner's reading:** D7 answers owner-queue item 27 (emulation is accepted for the screen-reader and phone checks) and makes item 26's walkthrough the owner's own. D11 answers item 30: crawler slices may run in parallel when they only add switch lines to shared files.
-    - **Not approved:** counting cloud results as evidence of record. §2.82's rule stands: cloud results are provisional.
+    - **Unchanged (runner's reading):** §2.82, cloud results stay provisional and never count as evidence of record. Nothing here asked to change it.
 
 86. **Round 1 replaces the serial live stages and Checkpoint 1** (owner, 2026-11-27, in the "Testing summary last 24 hours" session; relayed to the runner, which checked each message against that session's events). At 17:51:34Z: "What are your recommendations for the four decisions?" At 17:52:16Z, after the recommendations: "I approve. Pass all the necessary info to the runner and archive session". So O1 to O4 of `docs/plan/2026-11-27-revised-path-to-100.md` (revision 6, plan §10) are yes, as recommended. The plan amends §2.85's plan, §4 only.
     - **O1, the sequence:** round 1 on the box replaces the serial live stages and Checkpoint 1 (plan §3.2).
@@ -847,7 +849,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 
 87. **The AWS stop is $295, and the Legal Notice's safe-restart line is corrected** (owner, 2026-11-27 about 18:00Z, in the runner session, answering two questions from the runner).
     - **"1. OK to change stop to 295"**
-      - The runner's AWS hard stop becomes $295, measured as the AWS Budget "Lodestar Path to 100" measures it: gross spend from 2026-11-26 to 2027-11-25 (§2.85). It replaces the $117.50 stop (§2.83).
+      - The runner's AWS hard stop becomes $295. Runner's reading of the approved budget: it's measured as the AWS Budget "Lodestar Path to 100" measures it, gross spend from 2026-11-26 to 2027-11-25 (§2.85). It replaces the $117.50 stop (§2.83).
       - **Unchanged:** the instance limits (at most 2 at a time, `ExpiresAt` at most 24 h, teardown at the end of each step), and §2.82 (cloud results are provisional).
     - **"2. Go with your recommendation"**
       - The Legal Notice's §5 says "the optional safe-restart switch". Since CR-0w (#1134), safe restart is on by default. The line becomes: "the safe-restart check, on by default, keeps its restart record in a folder outside the data folder (user guide, section 3.8)".
