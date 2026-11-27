@@ -39,3 +39,33 @@ describe('Card: Unverified badge', () => {
 		expect(screen.queryByTestId('unverified-badge')).toBeNull();
 	});
 });
+
+describe('Imported badge', () => {
+	const imported = { verified: false, imported: true };
+	it('shows Imported in place of Unverified on a row', () => {
+		render(ResultRow, { hit: hit(1, imported), density: 'comfortable', testid: 'r' });
+		const badge = screen.getByTestId('imported-badge');
+		expect(badge.textContent).toContain('Imported');
+		expect(badge.querySelector('svg')).toBeTruthy();
+		expect(badge.getAttribute('title')).toContain("another indexer's database");
+		// Read with the label, for keyboard and screen-reader users too.
+		expect(badge.querySelector('.sr-only')?.textContent).toContain("another indexer's database");
+		expect(screen.queryByTestId('unverified-badge')).toBeNull();
+	});
+	it('shows Imported in place of Unverified on a card', () => {
+		render(Card, { hit: hit(1, imported), testid: 'c', onopen: () => {} });
+		expect(screen.getByTestId('imported-badge').textContent).toContain('Imported');
+		expect(screen.queryByTestId('unverified-badge')).toBeNull();
+	});
+	it('is not shown for an unverified or a verified hit', () => {
+		const { unmount } = render(ResultRow, {
+			hit: hit(1, { verified: false }),
+			density: 'compact',
+			testid: 'r'
+		});
+		expect(screen.queryByTestId('imported-badge')).toBeNull();
+		unmount();
+		render(ResultRow, { hit: hit(2, { verified: true }), density: 'compact', testid: 'r' });
+		expect(screen.queryByTestId('imported-badge')).toBeNull();
+	});
+});

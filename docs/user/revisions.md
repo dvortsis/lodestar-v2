@@ -2,6 +2,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| 3.7 | 2026-11-27T14:00:00Z | Section 5.1: `verified:imported` finds torrents from another indexer's database, which are shown by default and left out of `verified:yes`, and how to include them in a saved search made with Show unverified before this version (newer than v0.5.1). |
 | 3.6 | 2026-11-27T13:00:00Z | Section 8.6: when every routed source says a certificate isn't trusted, the log line to look for (newer than v0.5.1). |
 | 3.5 | 2026-11-27T12:00:00Z | Section 8.6: how Lodestar checks server certificates when a source's or companion's route isn't direct, and what to do when it reports a certificate it doesn't trust (newer than v0.5.1). |
 | 3.4 | 2026-11-22T13:00:00Z | Section 4.8: a variable set on the Lodestar service is lost on every install or update, including Install now. Use the setting in Settings → Updates instead, or set the variable again, with the steps and how to undo it. |

@@ -49,7 +49,7 @@ pub use cursor::{Cursor, LeaseId, Position};
 pub use disk::{DiskStats, space_by_field_at};
 pub use doc::{
     DocEnrichment, DocProvenance, TRIGRAM_PREFIX_BYTES, TitleIdentityParts, TorrentDoc, extension,
-    flag_names, title_identity_parts,
+    flag_names, stored_verified, title_identity_parts,
 };
 pub use explain::{EXPLAIN_MAX, Explained, Explanation, Parts, Priors, WEIGHTS, Weights, explain};
 pub use facets::{

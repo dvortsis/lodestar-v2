@@ -168,7 +168,7 @@
 					</span>
 				{/if}
 				{#if hit.verified === false}
-					<UnverifiedBadge />
+					<UnverifiedBadge imported={hit.imported === true} />
 				{/if}
 				{#if hit.swarm_suspect}
 					<span class="rr-fact" title={m.swarm_suspect()}>

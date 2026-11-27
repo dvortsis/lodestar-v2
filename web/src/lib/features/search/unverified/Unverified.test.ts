@@ -16,13 +16,13 @@ describe('UnverifiedBadge', () => {
 });
 
 describe('UnverifiedToggle', () => {
-	it('is off by default and asks for verified:yes,no when checked', async () => {
+	it('is off by default and asks for verified:yes,imported,no when checked', async () => {
 		const onchange = vi.fn();
 		render(UnverifiedToggle, { ast: { op: 'all' }, onchange });
 		const box = screen.getByRole('checkbox', { name: 'Show unverified' }) as HTMLInputElement;
 		expect(box.checked).toBe(false);
 		await fireEvent.click(box);
-		expect(onchange).toHaveBeenCalledWith({ op: 'verified', any: ['yes', 'no'] });
+		expect(onchange).toHaveBeenCalledWith({ op: 'verified', any: ['yes', 'imported', 'no'] });
 	});
 	it('is on when the query already shows them, and drops the clause when unchecked', async () => {
 		const onchange = vi.fn();
