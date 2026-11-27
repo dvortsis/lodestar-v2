@@ -71,6 +71,9 @@ use rand::seq::IndexedRandom;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
+/// The clock every table ranks against, cold start's first page included.
+const NOW: i64 = 2_000_000_000;
+
 /// §3: keyword search top 50, p95.
 const KEYWORD_P95: Duration = Duration::from_millis(30);
 /// §3: file-level query joined to torrents, p95.
@@ -709,7 +712,7 @@ fn run(
         index = index.with_hot(hot);
     }
     let docs = index.num_docs();
-    let now = 2_000_000_000;
+    let now = NOW;
     println!("Lodestar search benchmark");
     println!(
         "  corpus      {docs} torrents, {} index segments",
@@ -838,6 +841,33 @@ fn run(
                 class.target.map(ms_f),
                 Status::Off("low-resource mode has no file index".into()),
             ));
+        }
+        // And the `/search` and recovery rows of every class it drops.
+        for class in classes(a.seed, 1, a.hot)
+            .into_iter()
+            .filter(|c| !offered(a, c))
+        {
+            let why = if class.name == "regex" {
+                "low-resource mode has no trigram field"
+            } else {
+                "low-resource mode has no file index"
+            };
+            rows.push(Row::without(
+                format!("search.api.{}.p95", slug(class.name)),
+                budget_row(class.target),
+                "ms",
+                class.target.map(ms_f),
+                Status::Off(why.into()),
+            ));
+            if class.name != "regex" {
+                rows.push(Row::without(
+                    format!("search.recovery.{}.p95", slug(class.name)),
+                    "Zero-result recovery pass (decision B-search-recovery)",
+                    "ms",
+                    Some(ms_f(RECOVERY_P95)),
+                    Status::Off(why.into()),
+                ));
+            }
         }
     } else {
         ok &= file_sets_path(a, &index, &reader, &db, now, rows)?;
@@ -1853,7 +1883,7 @@ fn cold_start(
     }];
     let (results, _) = index.search_with_fallback(
         &with_filters(parse("")?.without_hidden(), &no_adult),
-        2_000_000_000,
+        NOW,
         Sort::Discovered { desc: true },
         50,
         0,
@@ -2091,6 +2121,16 @@ impl Ingested {
     }
 }
 
+/// Sets its flag when dropped, on return or unwind alike: what stops a
+/// scoped helper thread that loops until the flag is set.
+struct SetOnDrop<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for SetOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Runs `f` while a live indexer at its production settings follows the
 /// store at `db` and a second thread inserts `rate` new torrents a
 /// second through `store`, paced by elapsed time (every 100 ms, as many
@@ -2139,8 +2179,12 @@ fn under_ingest<T>(
             }
             Ok(())
         });
-        let out = f();
-        stop.store(true, Ordering::Relaxed);
+        let out = {
+            // Set on unwind too, so a panic in `f` can't leave the
+            // ingest thread looping and the scope waiting for it.
+            let _stop = SetOnDrop(&stop);
+            f()
+        };
         let bg = background
             .join()
             .map_err(|_| "the ingest thread panicked".to_string())
@@ -2183,7 +2227,9 @@ fn insert(store: &mut Store, t: &synth::SynthTorrent) -> Result<Info, Box<dyn st
 /// mixed load of keyword, browse and facet queries. One pass of the mix
 /// warms the caches; then the load runs for `--steady-secs` while a
 /// sampler reads the resident set every 250 ms. Gated on the highest
-/// sample; the median is reported. The process's own earlier tables
+/// `VmRSS` sample, the owner's figure as written, and its median
+/// reported; the highest `RssAnon` (the heap without the index's
+/// mapped pages) is reported beside it, ungated. The process's own earlier tables
 /// stay in it, so the figure errs high. A dataset built by this process
 /// is no steady state (the build's memory stays mapped): unmeasured.
 fn steady_rss(
@@ -2271,16 +2317,15 @@ fn steady_rss(
                         std::thread::sleep(Duration::from_millis(250));
                     }
                 });
+                // Set on unwind too, so a panicking query can't leave
+                // the sampler looping and the scope waiting for it.
+                let _done = SetOnDrop(&done);
                 let mut n = 0;
-                let result = (|| {
-                    while Instant::now() < deadline {
-                        one(n)?;
-                        n += 1;
-                    }
-                    Ok::<_, Box<dyn std::error::Error>>(n)
-                })();
-                done.store(true, std::sync::atomic::Ordering::Relaxed);
-                result.map(|n| (n, ()))
+                while Instant::now() < deadline {
+                    one(n)?;
+                    n += 1;
+                }
+                Ok((n, ()))
             })
         },
     )?;
@@ -2288,19 +2333,20 @@ fn steady_rss(
     let (mut anon, mut resident): (Vec<u64>, Vec<u64>) = samples.into_iter().unzip();
     anon.sort();
     resident.sort();
-    let (Some(&top), Some(&top_resident)) = (anon.last(), resident.last()) else {
+    let (Some(&top), Some(&top_anon)) = (resident.last(), anon.last()) else {
         rows.push(without(Status::Unmeasured("no sample was taken".into())));
         return Ok(true);
     };
-    let median = anon[anon.len() / 2];
+    let median = resident[resident.len() / 2];
     let pass = top < max;
     println!(
-        "\n  steady-state RSS over {} s ({queries} queries, live indexer and {:.1} torrents/s ingest, {} samples): median {:.0} MB, max {:.0} MB  max < {:.0} MB {}",
+        "\n  steady-state RSS over {} s ({queries} queries, live indexer and {:.1} torrents/s ingest, {} samples): VmRSS median {:.0} MB, max {:.0} MB (RssAnon max {:.0} MB)  max < {:.0} MB {}",
         a.steady_secs,
         ingest.rate,
-        anon.len(),
+        resident.len(),
         mb(median),
         mb(top),
+        mb(top_anon),
         mb(max),
         if pass { "PASS" } else { "FAIL" }
     );
@@ -2312,11 +2358,11 @@ fn steady_rss(
         "MB",
         None,
     ));
-    // The index's memory-mapped pages count here, not against the budget.
+    // Without the index's memory-mapped pages: informational, not a gate.
     rows.push(Row::measured(
-        "rss.steady.resident",
+        "rss.steady.anon",
         row,
-        mb(top_resident),
+        mb(top_anon),
         "MB",
         None,
     ));
@@ -2422,7 +2468,14 @@ fn main() -> ExitCode {
         Some(dir) => {
             let key = dataset::Key::new(a.seed, a.torrents as u64);
             eprintln!("dataset {} ({key})", dir.display());
-            match dataset::open_or_build(dir, key, &mut |l| eprintln!("  {l}")) {
+            // As root (`--drop-caches`), only an existing dataset: a build
+            // would leave root-owned files the later runs can't replace.
+            let opened = if a.drop_caches {
+                dataset::open_built(dir, key)
+            } else {
+                dataset::open_or_build(dir, key, &mut |l| eprintln!("  {l}"))
+            };
+            match opened {
                 Ok(ds) => Some(ds),
                 Err(e) => {
                     eprintln!("error: {e}");
@@ -2512,6 +2565,26 @@ mod tests {
 
     fn by_id<'a>(rows: &'a [Row], id: &str) -> &'a Row {
         rows.iter().find(|r| r.id == id).expect(id)
+    }
+
+    /// Without the guard, the scope would wait forever on the helper.
+    #[test]
+    fn a_panic_in_the_work_still_stops_the_helper_thread() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let stop = AtomicBool::new(false);
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::thread::yield_now();
+                    }
+                });
+                let _stop = SetOnDrop(&stop);
+                panic!("a query panicked");
+            })
+        }));
+        assert!(run.is_err());
+        assert!(stop.load(Ordering::Relaxed));
     }
 
     #[test]

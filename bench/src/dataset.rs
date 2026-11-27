@@ -366,6 +366,29 @@ pub fn open_or_build(
     build_until(dir, key, log, None)
 }
 
+/// Opens a finished dataset whose key matches, and never builds or
+/// writes one: for a run as root (`--drop-caches`), so it can't leave
+/// root-owned files that later runs without root can't replace.
+pub fn open_built(dir: &Path, key: Key) -> Result<Dataset, Box<dyn std::error::Error>> {
+    let first = "build it first without root (the same command without --drop-caches)";
+    let (phase, totals) = match check(dir, key) {
+        Ok(Some(found)) => found,
+        Ok(None) => return Err(format!("no dataset at {}: {first}", dir.display()).into()),
+        Err(e) => return Err(format!("{e}: {first}").into()),
+    };
+    let index_path = lodestar_search::index_dir(&dir.join("index"));
+    if phase != "complete" || !index_path.is_dir() {
+        return Err(format!("the dataset at {} isn't finished: {first}", dir.display()).into());
+    }
+    verify_index(&index_path, key)?;
+    Ok(Dataset {
+        dir: dir.into(),
+        key,
+        totals,
+        built_now: false,
+    })
+}
+
 /// [`open_or_build`], stopping once `stop_after` is done (tests: an
 /// interrupted build).
 #[doc(hidden)]

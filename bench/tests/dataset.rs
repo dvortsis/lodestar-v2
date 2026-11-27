@@ -299,6 +299,33 @@ fn an_index_rebuild_cut_short_resumes() {
     assert_eq!(docs, N);
 }
 
+/// A run as root never builds: no dataset, or an unfinished one, is an
+/// error naming the fix, and nothing is written.
+#[test]
+fn open_built_refuses_to_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("10m");
+    let err = dataset::open_built(&missing, Key::new(7, N)).unwrap_err();
+    assert!(
+        err.to_string().contains("build it first without root"),
+        "{err}"
+    );
+    assert!(!missing.exists());
+    dataset::build_until(dir.path(), Key::new(7, N), &mut |_| {}, Some("stored")).unwrap();
+    let before = dataset::digest(&dir.path().join(dataset::DB)).unwrap();
+    let err = dataset::open_built(dir.path(), Key::new(7, N)).unwrap_err();
+    assert!(err.to_string().contains("isn't finished"), "{err}");
+    let err = dataset::open_built(dir.path(), Key::new(8, N)).unwrap_err();
+    assert!(
+        err.to_string().contains("build it first without root"),
+        "{err}"
+    );
+    assert_eq!(
+        dataset::digest(&dir.path().join(dataset::DB)).unwrap(),
+        before
+    );
+}
+
 #[test]
 fn another_store_schema_is_refused_naming_both() {
     let dir = tempfile::tempdir().unwrap();
@@ -574,6 +601,12 @@ fn search_bench_reports_every_row_and_leaves_the_dataset_as_built() {
     let out = tempfile::tempdir().unwrap();
     let ds = build(dir.path(), Key::new(7, N));
     let digest = dataset::digest(&ds.db()).unwrap();
+    // What a `--drop-caches` run opens: the finished dataset.
+    assert!(
+        !dataset::open_built(dir.path(), Key::new(7, N))
+            .unwrap()
+            .built_now
+    );
 
     // Flags that only mean something on a dataset are refused without
     // one, so the CI gate's command can't change by accident; and a
@@ -647,7 +680,7 @@ fn search_bench_reports_every_row_and_leaves_the_dataset_as_built() {
     assert!(["pass", "fail", "unavailable"].contains(&rss), "{rss}");
     if rss != "unavailable" {
         // Mapped index pages are reported beside the gated figure.
-        assert_eq!(row(&r, "rss.steady.resident")["status"], "reported");
+        assert_eq!(row(&r, "rss.steady.anon")["status"], "reported");
     }
     // The trickle is measured, or named as starved; never a silent pass.
     let ingest = row(&r, "nrt.ingest.max")["status"].as_str().unwrap();
@@ -678,7 +711,13 @@ fn search_bench_reports_every_row_and_leaves_the_dataset_as_built() {
     assert_eq!(row(&r, "search.broad-file-cold.p95")["status"], "off");
     assert_eq!(row(&r, "search.regex.p95")["status"], "off");
     assert_eq!(row(&r, "search.word-file-clause.p95")["status"], "off");
-    assert_eq!(ids_starting(&r, "search.api.regex"), 0);
+    // None goes missing: `/search`'s and recovery's rows are off too.
+    assert_eq!(row(&r, "search.api.regex.p95")["status"], "off");
+    assert_eq!(row(&r, "search.api.word-file-clause.p95")["status"], "off");
+    assert_eq!(
+        row(&r, "search.recovery.word-file-clause.p95")["status"],
+        "off"
+    );
     assert_eq!(
         row(&r, "low_resource.switch.file_index_off")["status"],
         "unavailable"

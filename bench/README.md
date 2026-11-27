@@ -28,6 +28,8 @@ cargo run --release -p lodestar-bench --bin size-report -- \
     --dataset /bench/10m --torrents 10000000 --json size.json
 cargo run --release -p lodestar-bench --bin size-report -- \
     --dataset /bench/10m --torrents 10000000 --json size-low.json --low-resource
+# Root is needed only to drop the page cache. With --drop-caches the
+# dataset must already exist (built above, without root): it never builds.
 sudo target/release/search-bench \
     --dataset /bench/10m --torrents 10000000 --json search.json --drop-caches
 target/release/search-bench \
@@ -87,9 +89,9 @@ no row is left out. Then:
 
 | Row | How |
 |---|---|
-| Cold start (`cold_start.*`) | First, before anything else opens the dataset: open the store and index, load the hot columns from SQLite, answer the UI's first page with its rows. Reported (§3 sets no number). `--drop-caches` (root) drops the OS page cache first; the row id says whether it did (`page-cache-dropped` or `page-cache-as-found`). `unmeasured` when this process built the dataset. |
+| Cold start (`cold_start.*`) | First, before anything else opens the dataset: open the store and index, load the hot columns from SQLite, answer the UI's first page with its rows. Reported (§3 sets no number). `--drop-caches` (root, needed only for this) drops the OS page cache first and opens only an existing dataset, never building one; the row id says whether it did (`page-cache-dropped` or `page-cache-as-found`). `unmeasured` when this process built the dataset. |
 | Insights (`insights.*`) | The overview's and the stage pages' store reads for the UI's ranges (24h, 7d, 30d, all: the year of rollups), uncached, as a range's first open makes them. Gated at 50 ms. |
-| Steady-state RSS (`rss.steady.*`) | On the scratch copy, as a server holds memory: hot columns, the title set, and a live indexer at its production settings following a trickle ingest (4 a second). One pass of a mixed keyword, browse and facet load warms it, then it runs for `--steady-secs` (60), sampled every 250 ms. The highest sample is gated: < 1 GB, or < 512 MB with `--low-resource` (decimal). `unmeasured` when this process built the dataset. |
+| Steady-state RSS (`rss.steady.*`) | On the scratch copy, as a server holds memory: hot columns, the title set, and a live indexer at its production settings following a trickle ingest (4 a second). One pass of a mixed keyword, browse and facet load warms it, then it runs for `--steady-secs` (60), sampled every 250 ms. The highest `VmRSS` sample is gated: < 1 GB, or < 512 MB with `--low-resource` (decimal). The highest `RssAnon` (without the index's mapped pages) is reported beside it as `rss.steady.anon`, not gated. `unmeasured` when this process built the dataset. |
 | New torrent → searchable (`nrt.*`) | The CI's idle check (`nrt.idle.max`), then `--nrt-rounds` (50) probe torrents stored among a background ingest of `--ingest-rate` (100 a second), each timed from its insert until a hash lookup finds it. The slowest is gated at 5 s; the p95 and the rate reached are reported. If the ingest reached less than 90% of the rate asked, the latency rows are `unmeasured`. |
 
 `--low-resource` runs the plan's RQ8 subset: no file-clause or regex rows
