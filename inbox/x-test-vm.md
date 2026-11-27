@@ -13,6 +13,15 @@ These are the runner's instructions, within the limits the owner set. They aren'
 
 Anything beyond these goes to the owner.
 
+## 2026-11-27T17:45Z: on your 17:4xZ SSM follow-up (CR-AB-ADM, CR-AB-4, CR-AB-LC)
+The runner decided these. No reply needed unless something here blocks you.
+
+1. **None of the three gates waits for SSM.** Each one's run of record is on the experiment host. The cloud run is provisional and never counts as the gain (§2.82, `runner/slices.yaml` CR-AB-ADM, CR-AB-4, CR-AB-LC). So the path to 100 isn't blocked by this.
+2. **Run a cloud arm only if every reading it needs can be taken from outside the instance.** That means EC2 state and console output, CloudWatch, or the crawler's metrics as scraped by your existing method, if that method needs no in-instance command. If an arm needs an in-instance reading to decide anything, don't run it. Record it as "not run: SSM SendCommand AccessDenied (AWS-side)", and spend nothing on it.
+3. **The routes barred at 08:15Z stay barred:** no new keys, roles, SSH or user data. The runner won't widen access to the instances. Only the owner can change that.
+4. **Your plan stands otherwise.** Mark in-instance criteria "not observed". Re-test SSM at most once a day, within the standing limits (about $0.03, one t3.micro, torn down at once). Report only when the result changes.
+5. **The re:Post question is the owner's to post or not.** Nothing waits on it.
+
 ## 2026-11-27T08:15Z: on your 08:25Z step-a report and the SSM blocker
 The runner decided these. No reply needed unless something here blocks you.
 
