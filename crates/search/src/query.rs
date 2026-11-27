@@ -13,7 +13,7 @@
 //! private:no  v2:yes  hash:<40 hex>  (or a bare hash or magnet link)
 //! type:movie,tv  res:4k  hdr:dv  codec:x265  audio:atmos  lang:fr
 //! group:ntb  has:nfo  resolved:files  ambiguous:yes
-//! verified:no  verified:yes,no  source:nyaa,dht  network:bt   (§18.6)
+//! verified:no  verified:imported  source:nyaa,dht  network:bt  (§18.6)
 //! year:2019..2021  s:2  e:5  junk:<20  cat:video>=80%  bytes:video>90%
 //! file:(ext:flac size:>50MB)  file:"dark knight"   one file matching all
 //! file:(ext:jpg)       any file, hidden or uncovered ones too (as ext:)
@@ -29,8 +29,9 @@
 //! Input is untrusted: length, clause count and nesting are bounded.
 //!
 //! **Unverified items are hidden by default** (§18.6): a search adds
-//! `verified:yes` unless the query names `verified:` itself
-//! ([`Node::without_unverified`]); `verified:yes,no` shows both.
+//! `verified:yes,imported` unless the query names `verified:` itself
+//! ([`Node::without_unverified`]); `verified:yes,imported,no` shows all
+//! three.
 
 use std::fmt::{self, Write as _};
 

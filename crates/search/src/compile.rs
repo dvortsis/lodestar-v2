@@ -1163,7 +1163,9 @@ pub(crate) struct SamePayload {
 fn visibility_clause(n: &Node) -> bool {
     match n {
         Node::Flag { name, value: false } => name == "hidden",
-        Node::Verified { any } => any == &Verified::SHOWN,
+        Node::Verified { any } => {
+            any.len() == Verified::SHOWN.len() && Verified::SHOWN.iter().all(|v| any.contains(v))
+        }
         Node::Not { of } => matches!(
             &**of,
             Node::Tag { key: TagKey::Type, any } if any.len() == 1 && any[0] == "adult"

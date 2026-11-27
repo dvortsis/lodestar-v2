@@ -128,7 +128,7 @@ impl BaseQuery {
 /// database and was never hashed here, read as the index reads it
 /// ([`lodestar_search::stored_verified`]): its import record, for an
 /// imported row only.
-fn is_import(
+pub(crate) fn is_import(
     store: &lodestar_store::Store,
     row: &lodestar_store::TorrentRow,
 ) -> lodestar_store::Result<bool> {

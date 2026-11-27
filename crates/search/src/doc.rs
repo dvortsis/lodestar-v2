@@ -113,7 +113,9 @@ impl DocProvenance {
 ///   refetch's, hashed when stored) is `yes`, one without (another
 ///   indexer's database: Magnetico, bitmagnet) `imported`.
 ///
-/// A stored torrent is never `no`: that's the unverified tier's.
+/// A stored torrent is never `no`: that's the unverified tier's. The
+/// no-record branch is IMP-1's read rule as `lodestar_store::import`
+/// applies it without a quality row; the two must change together.
 pub fn stored_verified(
     row_flags: i64,
     info_size: u64,

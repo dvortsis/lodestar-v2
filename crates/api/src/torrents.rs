@@ -411,13 +411,17 @@ impl Catalogue {
     /// The detail view's provenance of `row`, from its stored claims.
     /// `closed` is what this caller may not be given under the sources'
     /// terms ([`TermsClosed`]): a public caller gets those claims left
-    /// out, with `withheld` set, as for a private claim.
+    /// out, with `withheld` set, as for a private claim. `imported` is
+    /// whether its metadata came from another indexer's database and was
+    /// never hashed here (`search::is_import`, X-import-verified-no):
+    /// such a torrent isn't `verified`.
     pub(crate) fn provenance(
         &self,
         row: &TorrentRow,
         claims: &[StoredClaims],
         viewer: Viewer,
         closed: TermsClosed,
+        imported: bool,
     ) -> Provenance {
         let claim_of = |id: u8| claims.iter().find(|c| c.source.get() == id);
         let (shown, mut withheld) = self.visible(row, viewer);
@@ -456,7 +460,8 @@ impl Catalogue {
         Provenance {
             network: Network::Bt.as_str().to_owned(),
             sources,
-            verified: true,
+            verified: !imported,
+            imported: imported.then_some(true),
             withheld,
         }
     }
@@ -791,7 +796,8 @@ pub(crate) async fn detail(
         // Only a caller other than the admin is held to the terms: the
         // admin's own UI may show every answer (ENR-terms).
         let closed = TermsClosed::read(viewer, &store, &claims).map_err(internal)?;
-        let provenance = catalogue.provenance(&row, &claims, viewer, closed);
+        let imported = crate::search::is_import(&store, &row).map_err(internal)?;
+        let provenance = catalogue.provenance(&row, &claims, viewer, closed, imported);
         // Only for the admin with "Show adult content" on (§20.9), only
         // for a torrent that could be adult, and never for one a filter or
         // the core holds back.
@@ -1502,20 +1508,27 @@ pub(crate) mod tests {
         let c = catalogue();
         // dht, nyaa and an unregistered bit 9; nyaa found it first.
         let r = row(0b101 | 1 << 9, Some(2), 0);
-        let p = c.provenance(&r, &[], Viewer::Admin, closing(Viewer::Admin, 0));
+        let p = c.provenance(&r, &[], Viewer::Admin, closing(Viewer::Admin, 0), false);
         assert_eq!(plugins(&p), ["nyaa", "dht"]);
         assert!(p.sources[0].first && !p.sources[1].first);
         assert_eq!(p.sources[0].first_seen_at, Some(r.discovered_at));
         assert_eq!(p.sources[1].first_seen_at, None);
         assert_eq!(p.sources[0].name, "Nyaa");
-        assert!(p.verified && !p.withheld && p.network == "bt");
+        assert!(p.verified && p.imported.is_none() && !p.withheld && p.network == "bt");
+        // An import from another indexer's database isn't verified
+        // (X-import-verified-no), whoever asks.
+        for v in [Viewer::Admin, Viewer::Public] {
+            let p = c.provenance(&r, &[], v, closing(v, 0), true);
+            assert!(!p.verified && p.imported == Some(true), "{v:?}");
+        }
         // A torrent stored before provenance has none.
         assert!(
             c.provenance(
                 &row(0, None, 0),
                 &[],
                 Viewer::Admin,
-                closing(Viewer::Admin, 0)
+                closing(Viewer::Admin, 0),
+                false
             )
             .sources
             .is_empty()
@@ -1538,7 +1551,7 @@ pub(crate) mod tests {
                 },
             ),
         ];
-        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, 0));
+        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, 0), false);
         assert_eq!(plugins(&admin), ["prowlarr", "dht", "nyaa", "gone"]);
         let private: Vec<bool> = admin.sources.iter().map(|s| s.private).collect();
         // Unknown isn't known to be private, but stays from the public.
@@ -1548,7 +1561,13 @@ pub(crate) mod tests {
 
         // Nyaa is a public source: its name stays, its private claim
         // doesn't.
-        let public = c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, 0));
+        let public = c.provenance(
+            &r,
+            &stored,
+            Viewer::Public,
+            closing(Viewer::Public, 0),
+            false,
+        );
         assert_eq!(plugins(&public), ["dht", "nyaa"]);
         assert!(public.withheld);
         assert!(
@@ -1581,11 +1600,17 @@ pub(crate) mod tests {
             },
         )];
         let hit = c.hit_source(&r, Viewer::Public).unwrap();
-        let detail = c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, 0));
+        let detail = c.provenance(
+            &r,
+            &stored,
+            Viewer::Public,
+            closing(Viewer::Public, 0),
+            false,
+        );
         assert_eq!(plugins(&detail), [hit.plugin.as_str()]);
         assert_eq!(hit.plugin, "nyaa");
         assert!(detail.withheld && detail.sources[0].claim.is_none());
-        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, 0));
+        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, 0), false);
         assert!(admin.sources[1].private && admin.sources[1].claim.is_some());
     }
 
@@ -1595,10 +1620,10 @@ pub(crate) mod tests {
         // Even public sources' bits: the flag says it was found only
         // through private ones (§18.7).
         let r = row(0b101, Some(0), store_flags::PRIVATE_SOURCE);
-        let public = c.provenance(&r, &[], Viewer::Public, closing(Viewer::Public, 0));
+        let public = c.provenance(&r, &[], Viewer::Public, closing(Viewer::Public, 0), false);
         assert!(public.sources.is_empty() && public.withheld);
         assert_eq!(c.hit_source(&r, Viewer::Public), None);
-        let admin = c.provenance(&r, &[], Viewer::Admin, closing(Viewer::Admin, 0));
+        let admin = c.provenance(&r, &[], Viewer::Admin, closing(Viewer::Admin, 0), false);
         assert!(admin.sources.iter().all(|s| s.private));
         assert_eq!(c.hit_source(&r, Viewer::Admin).unwrap().plugin, "dht");
     }
@@ -1625,10 +1650,16 @@ pub(crate) mod tests {
         let r = row(0b1, Some(0), 0);
         let stored = [claims(2, true, Claims::default())];
         assert!(
-            c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, 0))
-                .withheld
+            c.provenance(
+                &r,
+                &stored,
+                Viewer::Public,
+                closing(Viewer::Public, 0),
+                false
+            )
+            .withheld
         );
-        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, 0));
+        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, 0), false);
         assert_eq!(plugins(&admin), ["dht"]);
     }
 
@@ -1872,27 +1903,51 @@ pub(crate) mod tests {
         let r = row(0b101, Some(0), 0);
         // No records: nothing closed, and the public sees both claims.
         assert_eq!(terms_closed(&store, &stored).unwrap(), 0);
-        let public = c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, 0));
+        let public = c.provenance(
+            &r,
+            &stored,
+            Viewer::Public,
+            closing(Viewer::Public, 0),
+            false,
+        );
         assert!(!public.withheld);
         assert!(public.sources.iter().all(|s| s.claim.is_some()));
         // Nyaa as a lookup plugin whose terms keep its data inside.
         record(&mut store, ids[2], false);
         let closed = terms_closed(&store, &stored).unwrap();
         assert_eq!(closed, bit(2));
-        let public = c.provenance(&r, &stored, Viewer::Public, closing(Viewer::Public, closed));
+        let public = c.provenance(
+            &r,
+            &stored,
+            Viewer::Public,
+            closing(Viewer::Public, closed),
+            false,
+        );
         assert_eq!(plugins(&public), ["dht", "nyaa"]);
         assert!(public.withheld);
         assert!(public.sources[0].claim.is_some());
         assert_eq!(public.sources[1].claim, None);
         assert!(!format!("{public:?}").contains("Nyaa Name"));
-        let admin = c.provenance(&r, &stored, Viewer::Admin, closing(Viewer::Admin, closed));
+        let admin = c.provenance(
+            &r,
+            &stored,
+            Viewer::Admin,
+            closing(Viewer::Admin, closed),
+            false,
+        );
         assert!(!admin.withheld);
         assert!(admin.sources[1].claim.is_some());
         // Terms that allow it: shown again.
         record(&mut store, ids[2], true);
         assert_eq!(terms_closed(&store, &stored).unwrap(), 0);
         // A source's closed bit with no claim of its withholds nothing.
-        let public = c.provenance(&r, &[], Viewer::Public, closing(Viewer::Public, bit(2)));
+        let public = c.provenance(
+            &r,
+            &[],
+            Viewer::Public,
+            closing(Viewer::Public, bit(2)),
+            false,
+        );
         assert!(!public.withheld);
     }
 
@@ -1928,10 +1983,10 @@ pub(crate) mod tests {
         assert!(admin.keeps(Viewer::Public, 0) && admin.keeps(Viewer::Public, 2));
         let c = catalogue();
         let r = row(0b101, Some(0), 0);
-        let mixed = c.provenance(&r, &stored, Viewer::Public, admin);
+        let mixed = c.provenance(&r, &stored, Viewer::Public, admin, false);
         assert!(mixed.withheld);
         assert!(mixed.sources.iter().all(|s| s.claim.is_none()));
-        let fine = c.provenance(&r, &stored, Viewer::Public, public);
+        let fine = c.provenance(&r, &stored, Viewer::Public, public, false);
         assert!(fine.sources[0].claim.is_some() && fine.sources[1].claim.is_none());
     }
 
@@ -2652,11 +2707,11 @@ pub(crate) mod tests {
         // Stored publicly: found by the DHT and by the webhook, no
         // private-source flag.
         let r = row(0b11, Some(0), 0);
-        let public = c.provenance(&r, &[], Viewer::Public, closing(Viewer::Public, 0));
+        let public = c.provenance(&r, &[], Viewer::Public, closing(Viewer::Public, 0), false);
         assert_eq!(plugins(&public), ["dht"]);
         assert_eq!(c.hit_source(&r, Viewer::Public).unwrap().plugin, "dht");
         assert!(!c.shows_plugin("arr_webhooks", Viewer::Public));
-        let admin = c.provenance(&r, &[], Viewer::Admin, closing(Viewer::Admin, 0));
+        let admin = c.provenance(&r, &[], Viewer::Admin, closing(Viewer::Admin, 0), false);
         let mut seen = plugins(&admin);
         seen.sort_unstable();
         assert_eq!(seen, ["arr_webhooks", "dht"]);

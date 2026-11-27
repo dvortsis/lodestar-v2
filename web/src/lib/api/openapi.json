@@ -21097,6 +21097,10 @@
           "withheld"
         ],
         "properties": {
+          "imported": {
+            "type": "boolean",
+            "description": "From another indexer's database; not checked against the hash.\nPresent, and true, only for such an import."
+          },
           "network": {
             "type": "string",
             "description": "The network tier (§18.6): `bt` for every stored torrent."
@@ -21110,7 +21114,7 @@
           },
           "verified": {
             "type": "boolean",
-            "description": "It has verified metadata (§18.5). Always true here: a torrent's\ndetail is its BEP 9 info dictionary."
+            "description": "The info dict was fetched and hashed to the key (§18.5). False for\nan import (`imported`)."
           },
           "withheld": {
             "type": "boolean",
@@ -26011,7 +26015,7 @@
           },
           "partial": {
             "type": "boolean",
-            "description": "The field is still being backfilled after an index upgrade, so the\ncounts are low (only `source`): show them as partial."
+            "description": "The field is still being backfilled after an index upgrade, so the\ncounts are off (`source`'s low; `verified`'s `yes` high and\n`imported` low): show them as partial."
           },
           "stopped": {
             "type": "boolean",

@@ -559,7 +559,9 @@ pub struct TermCounts {
     pub approx: bool,
     /// The facet's field is still being backfilled (the population
     /// contract): documents it hasn't reached count under no value, so
-    /// the counts are low. Only `source` can be partial.
+    /// the counts are low (`source`), or under the value they had before
+    /// (`verified`, whose `yes` counts high and `imported` low). Only
+    /// those two can be partial.
     pub partial: bool,
     /// A `/…/` clause of the query its pass ran stopped at the search's
     /// regex budget (RX-1): the counts are what was verified in time. Not
@@ -702,9 +704,9 @@ pub fn facets(
         // `rest`: one `verified:` clause that takes `yes`, such as the
         // `verified:yes,imported` every search adds (§18.6: unverified
         // items are hidden unless asked for). Its own values are counted
-        // by the shared pass, so only the values it leaves out (`no`, a
-        // few) need a pass of their own, where a full pass would visit
-        // every match again on every request.
+        // by the shared pass, so only the values it leaves out need a
+        // pass of their own: for the default that's `no`, a few, where a
+        // full pass would visit every match again on every request.
         let only_rest = f == Facet::Verified && rest.is_some();
         if let (true, Some(any)) = (only_rest, &rest) {
             variant = with_filters(variant, &[Node::Verified { any: any.clone() }]);
@@ -782,10 +784,17 @@ pub fn facets(
         }
         // `source` has no complement (`compile.rs`'s `provenance`): while
         // it's backfilled, documents the walk hasn't reached aren't
-        // counted under any source.
+        // counted under any source. `verified` while its generation-2
+        // walk runs: a document not reached yet says `yes` even for an
+        // import, so `yes` counts high and `imported` low
+        // (X-import-verified-no).
         if let Source::Prov {
             field,
             default: None,
+        }
+        | Source::Prov {
+            field: field @ "verified",
+            ..
         } = f.source()
         {
             counts.partial = !index.availability_in(field, lease).complete();

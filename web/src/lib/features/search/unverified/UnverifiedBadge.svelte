@@ -10,15 +10,18 @@
 	import { m } from '$lib/paraglide/messages.js';
 
 	let { imported = false }: { imported?: boolean } = $props();
+	// The help reaches a pointer as the tooltip and everyone else as text read with the label.
+	const help = $derived(imported ? m.search_unverified_imported_title() : undefined);
 </script>
 
 <span
 	class="inline-flex items-center gap-1 rounded-selector border px-1.5 text-caption text-base-content {imported
 		? 'border-base-300'
 		: 'border-warning'}"
-	title={imported ? m.search_unverified_imported_title() : undefined}
+	title={help}
 	data-testid={imported ? 'imported-badge' : 'unverified-badge'}
 >
 	<Warning class="size-4 shrink-0 {imported ? '' : 'text-warning'}" aria-hidden="true" />
 	{imported ? m.search_unverified_imported() : m.search_unverified_badge()}
+	{#if help}<span class="sr-only">{help}</span>{/if}
 </span>

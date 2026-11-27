@@ -7929,6 +7929,11 @@ export interface components {
          *     }
          */
         Provenance: {
+            /**
+             * @description From another indexer's database; not checked against the hash.
+             *     Present, and true, only for such an import.
+             */
+            imported?: boolean;
             /** @description The network tier (§18.6): `bt` for every stored torrent. */
             network: string;
             /**
@@ -7937,8 +7942,8 @@ export interface components {
              */
             sources: components["schemas"]["ProvenanceSource"][];
             /**
-             * @description It has verified metadata (§18.5). Always true here: a torrent's
-             *     detail is its BEP 9 info dictionary.
+             * @description The info dict was fetched and hashed to the key (§18.5). False for
+             *     an import (`imported`).
              */
             verified: boolean;
             /**
@@ -10696,7 +10701,8 @@ export interface components {
             other: number;
             /**
              * @description The field is still being backfilled after an index upgrade, so the
-             *     counts are low (only `source`): show them as partial.
+             *     counts are off (`source`'s low; `verified`'s `yes` high and
+             *     `imported` low): show them as partial.
              */
             partial: boolean;
             /**

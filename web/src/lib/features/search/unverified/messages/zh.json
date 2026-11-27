@@ -6,6 +6,6 @@
 	"search_unverified_badge_title": "来源报告了此条目，Lodestar 尚未确认其元数据。",
 	"search_unverified_source": "来源",
 	"search_unverified_partial": "索引建立期间，来源计数不完整。",
-	"search_unverified_imported": "已导入",
+	"search_unverified_imported": "导入",
 	"search_unverified_imported_title": "来自另一个索引器的数据库；文件列表未与种子的哈希核对。"
 }

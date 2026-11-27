@@ -108,7 +108,8 @@ pub struct TermFacet {
     /// such values counts twice).
     pub other: u64,
     /// The field is still being backfilled after an index upgrade, so the
-    /// counts are low (only `source`): show them as partial.
+    /// counts are off (`source`'s low; `verified`'s `yes` high and
+    /// `imported` low): show them as partial.
     pub partial: bool,
     /// A `/…/` term of the query ran out of its time budget while this
     /// facet was counted: the counts are what was checked in time. Not

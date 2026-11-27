@@ -8,12 +8,14 @@ use std::path::Path;
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::Info;
 use lodestar_search::query::Verified;
-use lodestar_search::{SearchIndex, index_dir, parse, stored_verified};
+use lodestar_search::tokenizer::{NAME_TOKENIZER, NameTokenizer};
+use lodestar_search::{Availability, SearchIndex, TorrentDoc, index_dir, parse, stored_verified};
 use lodestar_store::import::{
     BatchCommitted, Completeness, Decision, ImportBatch, ImportRecord, ImportTorrent, NewImportJob,
     Phase, Privacy, Verification,
 };
 use lodestar_store::{Prepared, PreparedTorrent, Store, StoreConfig, WriteBatch, flags};
+use tantivy::TantivyDocument;
 
 const HEAP: usize = 15 << 20;
 const NOW: i64 = 1_700_000_100;
@@ -166,7 +168,56 @@ fn library(root: &Path) -> (Store, SearchIndex) {
     import(&mut store, "bitmagnet", &[(b, Completeness::Partial)]);
     let index = SearchIndex::open(&index_dir(root)).unwrap();
     catch_up(&index, &mut store);
-    (store, index)
+    drop(index);
+    // No producer indexes unverified items yet (SRC-3's decisions), so
+    // play one beside the torrents.
+    rewrite(&index_dir(root), &mut store, None);
+    (store, SearchIndex::open(&index_dir(root)).unwrap())
+}
+
+/// Rewrites the torrent index under `dir` from `store`, plus one
+/// unverified item named `unverified`. With `old_verified`, every
+/// torrent's `verified` is that value and the payload records the field
+/// at generation 1, as the build before this slice left an index;
+/// otherwise each document is what `TorrentDoc::new` gives (its row's
+/// read rule) and the payload is kept.
+fn rewrite(dir: &Path, store: &mut Store, old_verified: Option<Verified>) {
+    let index = tantivy::Index::open_in_dir(dir).unwrap();
+    index
+        .tokenizers()
+        .register(NAME_TOKENIZER, NameTokenizer::default());
+    index.tokenizers().register(
+        lodestar_search::schema::TRIGRAM_TOKENIZER,
+        lodestar_search::schema::trigram_analyzer(),
+    );
+    let payload = index.load_metas().unwrap().payload.unwrap();
+    let payload = match old_verified {
+        Some(_) => payload.replace("verified=2", "verified=1"),
+        None => payload,
+    };
+    let (_, f) = lodestar_search::schema::build();
+    let mut w = index.writer::<TantivyDocument>(HEAP).unwrap();
+    w.delete_all_documents().unwrap();
+    let ids = store.ids_after(0, 1000).unwrap();
+    for id in &ids {
+        let row = store.torrent(*id).unwrap().unwrap();
+        let tree = store.files(*id).unwrap().unwrap();
+        let mut doc = TorrentDoc::new(&row, &tree);
+        if let Some(v) = old_verified {
+            doc.provenance.verified = v;
+        }
+        w.add_document(doc.to_document(&f)).unwrap();
+    }
+    let row = store.torrent(ids[0]).unwrap().unwrap();
+    let tree = store.files(ids[0]).unwrap().unwrap();
+    let mut doc = TorrentDoc::new(&row, &tree);
+    doc.id = 9_999;
+    doc.name = "unverified".into();
+    doc.provenance.verified = Verified::No;
+    w.add_document(doc.to_document(&f)).unwrap();
+    let mut prepared = w.prepare_commit().unwrap();
+    prepared.set_payload(&payload);
+    prepared.commit().unwrap();
 }
 
 const IMPORTS: [&str; 3] = ["bitmagnet", "bitmagnet-legacy", "magnetico"];
@@ -179,17 +230,66 @@ const ALL: [&str; 5] = [
     "torrent-file",
 ];
 
+/// Every kind, the unverified item too.
+const EVERYTHING: [&str; 6] = [
+    "bitmagnet",
+    "bitmagnet-legacy",
+    "magnetico",
+    "network",
+    "torrent-file",
+    "unverified",
+];
+
 #[test]
 fn each_kind_of_stored_torrent_indexes_its_own_value() {
     let tmp = tempfile::tempdir().unwrap();
-    let (_store, index) = library(tmp.path());
+    let (mut store, index) = library(tmp.path());
+    // The loader reads the same as the row's read rule here: a fresh
+    // catch-up over the store changes nothing.
+    catch_up(&index, &mut store);
     assert_eq!(names(&index, "verified:yes"), VERIFIED);
     assert_eq!(names(&index, "verified:imported"), IMPORTS);
-    assert_eq!(names(&index, "verified:no"), Vec::<String>::new());
-    assert_eq!(names(&index, "-verified:imported"), VERIFIED);
-    assert_eq!(names(&index, "-verified:yes"), IMPORTS);
+    assert_eq!(names(&index, "verified:no"), ["unverified"]);
+    assert_eq!(
+        names(&index, "-verified:imported"),
+        ["network", "torrent-file", "unverified"]
+    );
     assert_eq!(names(&index, "verified:yes,imported"), ALL);
     assert_eq!(names(&index, "verified:imported size:5"), IMPORTS);
+}
+
+/// Every list of values, plain and negated, against every kind: a list
+/// matches exactly the documents holding one of its values.
+#[test]
+fn every_list_of_values_matches_exactly_its_kinds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_store, index) = library(tmp.path());
+    let kind = |name: &str| match name {
+        "network" | "torrent-file" => Verified::Yes,
+        "unverified" => Verified::No,
+        _ => Verified::Imported,
+    };
+    for mask in 1..8u8 {
+        let any: Vec<Verified> = Verified::ALL
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| mask >> i & 1 == 1)
+            .map(|(_, v)| v)
+            .collect();
+        let list: Vec<&str> = any.iter().map(|v| v.as_str()).collect();
+        let q = format!("verified:{}", list.join(","));
+        let want: Vec<&str> = EVERYTHING
+            .into_iter()
+            .filter(|n| any.contains(&kind(n)))
+            .collect();
+        let not: Vec<&str> = EVERYTHING
+            .into_iter()
+            .filter(|n| !any.contains(&kind(n)))
+            .collect();
+        assert_eq!(names(&index, &q), want, "{q}");
+        assert_eq!(names(&index, &format!("-{q}")), not, "-{q}");
+        assert_eq!(names(&index, &format!("item | {q}")), want, "under |");
+    }
 }
 
 #[test]
@@ -198,12 +298,18 @@ fn imports_are_shown_by_default_and_with_unverified() {
     let (_store, index) = library(tmp.path());
     // The default clause hides only `verified:no`.
     assert_eq!(shown(&index, ""), ALL);
+    assert_eq!(shown(&index, "verified:no"), ["unverified"], "asked for");
     assert_eq!(
         parse("x").unwrap().without_unverified().to_query(),
         "x verified:yes,imported"
     );
     // "Show unverified" shows all three.
-    assert_eq!(shown(&index, "verified:yes,imported,no"), ALL);
+    assert_eq!(shown(&index, "verified:yes,imported,no"), EVERYTHING);
+    // An older "Show unverified" query, as typed, leaves imports out.
+    assert_eq!(
+        shown(&index, "verified:yes,no"),
+        ["network", "torrent-file", "unverified"]
+    );
     // Asking for one value is left as asked.
     assert_eq!(shown(&index, "verified:yes"), VERIFIED);
     assert_eq!(shown(&index, "verified:imported"), IMPORTS);
@@ -269,4 +375,84 @@ fn stored_verified_over_every_combination() {
             }
         }
     }
+}
+
+/// An index the build before this slice made says `yes` for every
+/// torrent, imports included. Opening it with this build walks the
+/// `verified` field: meanwhile the default search and lists that take
+/// `yes` and `imported` together stay exact, a list with one of them is
+/// reported partial, and a restart resumes from the last commit.
+#[test]
+fn an_older_index_rewrites_imports_to_imported_across_a_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = index_dir(tmp.path());
+    let (mut store, index) = library(tmp.path());
+    drop(index);
+    rewrite(&dir, &mut store, Some(Verified::Yes));
+    let old = lodestar_search::Generations::current().with("verified", 1);
+    let index = SearchIndex::open(&dir)
+        .unwrap()
+        .with_generations(old)
+        .unwrap();
+    assert_eq!(index.availability("verified"), Availability::Ready);
+    assert_eq!(names(&index, "verified:yes"), ALL, "the old claim");
+    drop(index);
+
+    let index = SearchIndex::open(&dir).unwrap();
+    assert!(
+        matches!(
+            index.availability("verified"),
+            Availability::Backfilling { done: 0, .. }
+        ),
+        "{:?}",
+        index.availability("verified")
+    );
+    let exact = |index: &SearchIndex| {
+        assert_eq!(shown(index, ""), ALL);
+        assert_eq!(names(index, "verified:yes,imported"), ALL);
+        assert_eq!(names(index, "verified:no"), ["unverified"]);
+        assert_eq!(shown(index, "verified:yes,imported,no"), EVERYTHING);
+    };
+    exact(&index);
+    for (q, partial) in [
+        ("verified:yes", true),
+        ("verified:imported", true),
+        ("verified:yes,imported", false),
+        ("verified:no", false),
+    ] {
+        let fields = parse(q).unwrap().population_fields();
+        assert_eq!(fields.contains(&"verified"), partial, "{q}");
+    }
+
+    let mut w = index.writer(HEAP).unwrap();
+    assert_eq!(w.catch_up_counted(&mut store, 2).unwrap().backfilled, 2);
+    w.commit().unwrap();
+    exact(&index);
+    // More, lost to a crash before its commit.
+    assert_eq!(w.catch_up_counted(&mut store, 2).unwrap().backfilled, 2);
+    drop(w);
+    drop(index);
+
+    let index = SearchIndex::open(&dir).unwrap();
+    assert!(
+        matches!(
+            index.availability("verified"),
+            Availability::Backfilling { done: 2, .. }
+        ),
+        "resumed from the commit: {:?}",
+        index.availability("verified")
+    );
+    exact(&index);
+    let mut w = index.writer(HEAP).unwrap();
+    let mut steps = 0;
+    while index.availability("verified") != Availability::Ready {
+        assert!(steps < 10, "the backfill never finished");
+        w.catch_up(&mut store, 2).unwrap();
+        w.commit().unwrap();
+        exact(&index);
+        steps += 1;
+    }
+    w.finish().unwrap();
+    assert_eq!(names(&index, "verified:yes"), VERIFIED);
+    assert_eq!(names(&index, "verified:imported"), IMPORTS);
 }
