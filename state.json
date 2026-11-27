@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T04:39Z",
+  "updated_at": "2026-11-27T04:56Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T04:34Z",
+    "updated": "2026-11-27T04:56Z",
     "items": [
       {
         "slot": 1,
@@ -11148,12 +11148,13 @@
       },
       {
         "slot": 4,
-        "slice": "X-sec-S8-26",
+        "slice": "",
         "role": "build",
         "model": "opus",
-        "agent": "session_01MMjhnCvVhSrDB5e8MDoECq",
-        "doing": "#1128 rv+sec MERGE; re-landing as one neutral commit on slice/X-sec-S8-26-b",
-        "since": "2026-11-27T01:35Z"
+        "agent": "",
+        "doing": "",
+        "since": "2026-11-27T04:56Z",
+        "status": "idle"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
@@ -12238,9 +12239,6 @@
       "fuzz/Cargo.lock (edges)",
       "web/licenses/rust.json (generated)",
       "crates/tracker-scrape/**"
-    ],
-    "X-sec-S8-26": [
-      "crates/pipeline/**"
     ],
     "UP-2 (#1106, API lane)": [
       "web/.size-limit.mjs"
