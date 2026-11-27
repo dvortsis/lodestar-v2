@@ -288,7 +288,7 @@ The screen says the same under **If this companion's route uses a SOCKS5 proxy**
 - It doesn't check whether a certificate was revoked (cancelled early by its issuer). A direct route uses your operating system's own check, which can.
 - There is nothing to set.
 
-A source on such a route may report **the server's certificate isn't trusted** for a site that opens normally in your browser. The computer then doesn't have that site's root certificate yet. This mostly happens on Windows. To fix it:
+On Windows, a source on such a route can fail to verify a site whose root certificate isn't on the computer yet. It then reports **the server's certificate isn't trusted**, even though the site opens normally in your browser. To fix it:
 
 1. Open the site once in Microsoft Edge on the computer that runs Lodestar. Windows adds the root certificate it needs.
 2. If that doesn't help, run Windows Update.
