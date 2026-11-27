@@ -1406,3 +1406,30 @@ async fn a_crash_loop_samples_at_most_once_a_minute() {
         assert!(r.proof.may_sample(end + Duration::from_secs(1)));
     }
 }
+
+/// CR-0w: the crash-loop guard is capped at a minute. A dirty marker
+/// stamped an hour ahead (the clock stepped back an hour, as after an NTP
+/// correction) still holds for at most CRASH_LOOP.
+#[tokio::test(start_paused = true)]
+async fn a_stepped_back_clock_cant_stretch_the_crash_loop_guard() {
+    let d = Dirs::new("crashloop-step");
+    let c = clock();
+    Run::boot(&d, &c, true).commit(&d);
+    drop(Run::boot(&d, &c, true)); // kill -9: a dirty marker
+    let Found::Ok(mut m) = restart::read_marker(&d.data) else {
+        panic!("a marker")
+    };
+    assert_eq!(m.state, MarkerState::Dirty);
+    m.at_ms = restart::floor_ms(c.wall()) + 3_600_000;
+    std::fs::write(d.data.join(restart::MARKER_FILE), m.encode()).unwrap();
+    let start = Instant::now();
+    let r = Run::boot(&d, &c, true);
+    assert_eq!(r.proof.reason(), Reason::Dirty);
+    let left = r.proof.suppression_seconds(start);
+    assert!(
+        (1..=CRASH_LOOP.as_secs()).contains(&left),
+        "held {left} s, more than the guard's minute"
+    );
+    assert!(!r.proof.may_sample(start));
+    assert!(r.proof.may_sample(start + CRASH_LOOP));
+}

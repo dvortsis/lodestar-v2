@@ -445,8 +445,8 @@ pub struct Stats {
     pub sample_suppression_seconds: AtomicU64,
     /// Gauge: the restart proof's outcome (why the last run's restrictions
     /// were or weren't restored), as an index into
-    /// [`crate::restart::Reason::ALL`]. Only `dirty` can hold sampling, for
-    /// at most a minute in a crash loop (CR-0w).
+    /// [`crate::restart::Reason::ALL`]. Only `dirty` can hold sampling past
+    /// the start hold, for at most a minute in a crash loop (CR-0w).
     pub sample_suppression_reason: AtomicU64,
     /// Gauges: restrictions restored at start, and those still cooling.
     pub restart_obligations_restored: AtomicU64,
