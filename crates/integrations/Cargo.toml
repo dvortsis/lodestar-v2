@@ -22,6 +22,13 @@ quick-xml = { version = "=0.42.0", default-features = false }
 # (§16): aws-lc, reqwest's default provider, is a C/CMake build.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "multipart", "form", "query", "socks"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Certificate verification by route (`tls`): the OS verifier on a direct
+# route, webpki over the bundled Mozilla roots and the OS store's roots on
+# every other. All three are already in the lock file (through
+# rustls-platform-verifier), at these versions.
+rustls-native-certs = "=0.8.5"
+rustls-platform-verifier = "=0.7.1"
+webpki-root-certs = "=1.0.10"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["rt", "net", "sync", "time"] }

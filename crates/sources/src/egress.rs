@@ -511,8 +511,8 @@ impl EgressFactory {
         }
     }
 
-    /// The certificates WebSocket sessions trust: the platform's by
-    /// default; tests name their own CA.
+    /// The certificates WebSocket sessions trust: by default chosen by
+    /// the plugin's route ([`Roots::Platform`]); tests name their own CA.
     pub fn with_roots(mut self, roots: Roots) -> EgressFactory {
         self.roots = roots;
         self
@@ -1320,14 +1320,14 @@ impl Fetch for PluginEgress {
 }
 
 impl PluginEgress {
-    /// The WebSocket TLS connector for this plugin's roots.
+    /// The WebSocket TLS connector for this plugin's roots and route.
     fn tls(&self, tcp: &TcpEgress) -> Result<tokio_rustls::TlsConnector, WsError> {
-        // Only a connector that built is kept: a failure (the platform's
-        // roots not loading) is tried again next time.
+        // Only a connector that built is kept: a failure (the verifier
+        // not starting) is tried again next time.
         if let Some(c) = self.tls.get() {
             return Ok(c.clone());
         }
-        let c = ws::tls_connector(&tcp.roots)?;
+        let c = ws::tls_connector(&tcp.roots, &tcp.route)?;
         Ok(self.tls.get_or_init(|| c).clone())
     }
 

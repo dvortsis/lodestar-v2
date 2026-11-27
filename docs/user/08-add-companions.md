@@ -282,6 +282,12 @@ A companion's route (direct or through a VPN) is copied from the source that nee
 
 The screen says the same under **If this companion's route uses a SOCKS5 proxy**.
 
+**Certificates on a VPN route (newer than v0.5.1).** A route that isn't direct goes through a SOCKS5 proxy, a VPN address or a VPN interface. On such a route, Lodestar checks each server's certificate itself, and the check sends nothing over the network.
+
+- It trusts the certificate authorities it ships with and the ones installed on your computer.
+- It doesn't check whether a certificate was revoked. A direct route uses your operating system's own check, which can.
+- There is nothing to set.
+
 **Passwords and keys.** A companion Lodestar installed has a generated password or key. To see it, select **Passwords and keys** on the row, then **Show**, enter **Your Lodestar password** and select **Show it**. Lodestar asks every time and never remembers it. The value stays until you select **Hide**.
 
 **Make a new one** replaces it at once, so anything using the old one needs the new one. Treat it like a password. A password you pasted yourself is never shown back.

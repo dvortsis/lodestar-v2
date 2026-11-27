@@ -87,7 +87,10 @@ pub enum Transport {
 /// Which certificates the TLS connection trusts.
 #[derive(Clone, Default)]
 pub enum Roots {
-    /// The operating system's (rustls-platform-verifier).
+    /// The default trust, chosen by the egress route as the plugin HTTP
+    /// client's is ([`lodestar_integrations::tls::verification_for`]):
+    /// the operating system's verifier on a direct route, and on every
+    /// other route webpki in this process over the bundled and OS roots.
     #[default]
     Platform,
     /// Only these (a server with its own CA, and the tests).
@@ -530,7 +533,7 @@ fn server_name(host: &str) -> Result<ServerName<'static>, ConfigError> {
     ServerName::try_from(host.to_owned()).map_err(|_| ConfigError::Invalid("host"))
 }
 
-fn tls_connector(roots: &Roots) -> Result<tokio_rustls::TlsConnector, ConfigError> {
+fn tls_connector(roots: &Roots, route: &Route) -> Result<tokio_rustls::TlsConnector, ConfigError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
@@ -545,9 +548,10 @@ fn tls_connector(roots: &Roots) -> Result<tokio_rustls::TlsConnector, ConfigErro
         }
         Roots::Platform => builder
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(
-                rustls_platform_verifier::Verifier::new(provider).map_err(|_| ConfigError::Tls)?,
-            ))
+            .with_custom_certificate_verifier(
+                lodestar_integrations::tls::verifier_for(route, provider)
+                    .map_err(|_| ConfigError::Tls)?,
+            )
             .with_no_client_auth(),
     };
     Ok(tokio_rustls::TlsConnector::from(Arc::new(config)))
@@ -887,7 +891,10 @@ impl Handle {
 pub fn spawn(config: Config, egress: Egress) -> Result<(Handle, Events), ConfigError> {
     config.validate()?;
     let tls = match config.transport {
-        Transport::Tls => Some((tls_connector(&config.roots)?, server_name(&config.host)?)),
+        Transport::Tls => Some((
+            tls_connector(&config.roots, &egress.route)?,
+            server_name(&config.host)?,
+        )),
         Transport::Plaintext => None,
     };
     let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE);

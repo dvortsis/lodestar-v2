@@ -641,6 +641,8 @@ pub struct Exchange {
 #[derive(Clone)]
 pub struct GuardedClient {
     http: reqwest::Client,
+    /// How the server's certificate is verified, by route.
+    verification: crate::tls::Verification,
     policy: NetPolicy,
     /// Names are resolved by a SOCKS5 proxy, out of the guard's sight.
     remote_dns: bool,
@@ -680,6 +682,8 @@ impl GuardedClient {
     }
 
     /// A client whose every connection takes `route`, and nothing else.
+    /// The route also picks how certificates are verified
+    /// ([`crate::tls::verification_for`]).
     pub fn with_route(
         policy: NetPolicy,
         timeout: Duration,
@@ -744,9 +748,22 @@ impl GuardedClient {
                 builder = builder.proxy(proxy);
             }
         }
+        // Off the direct route, certificates are verified in-process
+        // (`crate::tls`): reqwest's `tls_certs_only` is webpki over these
+        // roots alone, with no revocation lists.
+        let verification = crate::tls::verification_for(route);
+        if verification == crate::tls::Verification::SelfContained {
+            let roots = crate::tls::self_contained_roots()
+                .iter()
+                .map(|c| reqwest::Certificate::from_der(c.as_ref()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| RouteError::Build)?;
+            builder = builder.tls_certs_only(roots);
+        }
         let http = builder.build().map_err(|_| RouteError::Build)?;
         Ok(GuardedClient {
             http,
+            verification,
             policy,
             remote_dns,
             family,
@@ -804,6 +821,12 @@ impl GuardedClient {
             }
         }
         Ok(Some(self.pending.enter(host, port)))
+    }
+
+    /// How this client verifies servers' certificates, which its route
+    /// decided ([`crate::tls::verification_for`]).
+    pub fn verification(&self) -> crate::tls::Verification {
+        self.verification
     }
 
     pub fn policy(&self) -> NetPolicy {

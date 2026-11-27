@@ -29,6 +29,8 @@ use std::fmt;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use lodestar_integrations::net::Route;
+use lodestar_integrations::tls;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
@@ -269,8 +271,10 @@ impl WsConnect for NoWs {
 /// Which certificates a session's TLS trusts.
 #[derive(Clone, Default)]
 pub enum Roots {
-    /// The operating system's (rustls-platform-verifier), as the plugin
-    /// HTTP client.
+    /// The default trust, chosen by the route as the plugin HTTP client's
+    /// is ([`lodestar_integrations::tls::verification_for`]): the
+    /// operating system's verifier on a direct route, and on every other
+    /// route webpki in this process over the bundled and OS roots.
     #[default]
     Platform,
     /// Only these (the tests' own CA).
@@ -286,9 +290,12 @@ impl fmt::Debug for Roots {
     }
 }
 
-/// The TLS connector for `roots`: rustls on ring, TLS 1.2 and 1.3, no
-/// client certificate, no ALPN.
-pub(crate) fn tls_connector(roots: &Roots) -> Result<tokio_rustls::TlsConnector, WsError> {
+/// The TLS connector for `roots` over `route`: rustls on ring, TLS 1.2
+/// and 1.3, no client certificate, no ALPN.
+pub(crate) fn tls_connector(
+    roots: &Roots,
+    route: &Route,
+) -> Result<tokio_rustls::TlsConnector, WsError> {
     let unusable = || WsError::Connect(HttpError::Transport("TLS couldn't be set up".into()));
     let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
@@ -307,9 +314,9 @@ pub(crate) fn tls_connector(roots: &Roots) -> Result<tokio_rustls::TlsConnector,
         }
         Roots::Platform => builder
             .dangerous()
-            .with_custom_certificate_verifier(std::sync::Arc::new(
-                rustls_platform_verifier::Verifier::new(provider).map_err(|_| unusable())?,
-            ))
+            .with_custom_certificate_verifier(
+                tls::verifier_for(route, provider).map_err(|_| unusable())?,
+            )
             .with_no_client_auth(),
     };
     Ok(tokio_rustls::TlsConnector::from(std::sync::Arc::new(
@@ -1167,9 +1174,33 @@ mod tests {
         let other = std::io::Error::other(rustls::Error::General("evil.example said no".into()));
         assert!(!tls_failed(&other).to_string().contains("evil"));
         assert!(matches!(
-            tls_connector(&Roots::Only(Vec::new())),
+            tls_connector(&Roots::Only(Vec::new()), &Route::Direct),
             Err(WsError::Connect(_))
         ));
-        assert!(tls_connector(&Roots::Platform).is_ok());
+        assert!(tls_connector(&Roots::Platform, &Route::Direct).is_ok());
+    }
+
+    #[test]
+    fn the_default_roots_verify_by_route() {
+        // `Roots::Platform` takes the verifier `tls::verifier_for` picks,
+        // which is self-contained on every route but the direct one
+        // (tested in lodestar-integrations).
+        let routed = [
+            Route::Direct,
+            Route::BindAddress(std::net::Ipv4Addr::LOCALHOST.into()),
+            Route::Interface("wg0".into()),
+            Route::Socks5(lodestar_integrations::Socks5Route {
+                proxy: (std::net::Ipv4Addr::LOCALHOST, 1080).into(),
+                dns: lodestar_integrations::SocksDns::Proxy,
+                auth: None,
+            }),
+        ];
+        for r in &routed {
+            assert!(tls_connector(&Roots::Platform, r).is_ok(), "{r:?}");
+        }
+        assert_eq!(
+            tls::verification_for(&routed[3]),
+            tls::Verification::SelfContained
+        );
     }
 }

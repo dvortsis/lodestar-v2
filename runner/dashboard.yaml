@@ -948,6 +948,7 @@ placement:
   - X-store02-pipe02-fix
   - X-cmp01-fix
   - X-sec-S6-02-03
+  - X-sec-S8-25
   - X-floor-renew-metrics-nits
   - X-import-progress-visible
   - X-import-status-lock

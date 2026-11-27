@@ -1912,6 +1912,8 @@ dependencies = [
  "quick-xml",
  "reqwest",
  "rustls",
+ "rustls-native-certs",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "tempfile",
@@ -1919,6 +1921,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
+ "webpki-root-certs",
  "zeroize",
 ]
 
@@ -2034,7 +2037,6 @@ dependencies = [
  "lodestar-store",
  "proptest",
  "rustls",
- "rustls-platform-verifier",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
@@ -2084,7 +2086,6 @@ dependencies = [
  "proptest",
  "regex",
  "rustls",
- "rustls-platform-verifier",
  "tokio",
  "tokio-rustls",
  "zeroize",
