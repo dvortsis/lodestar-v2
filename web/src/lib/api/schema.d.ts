@@ -3367,7 +3367,10 @@ export interface components {
         /** @enum {string} */
         AstTextField: "any" | "name" | "path" | "title";
         /**
-         * @description Whether an item has verified metadata.
+         * @description A `verified:` value (§18.6): `yes`, the info dict was fetched and
+         *     hashed to the key; `no`, an unverified item known only from claims;
+         *     `imported`, a stored torrent from another indexer's database, not
+         *     checked against the hash.
          * @enum {string}
          */
         AstVerified: "yes" | "no" | "imported";

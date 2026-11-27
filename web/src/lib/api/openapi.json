@@ -11417,7 +11417,7 @@
       },
       "AstVerified": {
         "type": "string",
-        "description": "Whether an item has verified metadata.",
+        "description": "A `verified:` value (§18.6): `yes`, the info dict was fetched and\nhashed to the key; `no`, an unverified item known only from claims;\n`imported`, a stored torrent from another indexer's database, not\nchecked against the hash.",
         "enum": [
           "yes",
           "no",
