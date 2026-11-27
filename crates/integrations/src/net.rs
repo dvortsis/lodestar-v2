@@ -632,22 +632,6 @@ fn local_name_class(host: &str) -> Option<AddrClass> {
     local.then_some(AddrClass::Private)
 }
 
-/// The only roots a client over `route` trusts, or `None` for the OS
-/// verifier ([`crate::tls::verification_for`]). Given to reqwest's
-/// `tls_certs_only`, which is webpki over these roots alone, with no
-/// revocation lists.
-pub(crate) fn routed_roots(route: &Route) -> Result<Option<Vec<reqwest::Certificate>>, RouteError> {
-    match crate::tls::verification_for(route) {
-        crate::tls::Verification::Platform => Ok(None),
-        crate::tls::Verification::SelfContained => crate::tls::self_contained_roots()
-            .iter()
-            .map(|c| reqwest::Certificate::from_der(c.as_ref()))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Some)
-            .map_err(|_| RouteError::Build),
-    }
-}
-
 /// One HTTP answer, read whole within a size limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exchange {
@@ -710,6 +694,19 @@ impl GuardedClient {
         resolver: Arc<dyn Resolve>,
         route: &Route,
     ) -> Result<GuardedClient, RouteError> {
+        GuardedClient::with_route_trusting(policy, timeout, resolver, route, None)
+    }
+
+    /// [`with_route`](Self::with_route), with `roots` in place of the
+    /// OS-store roots on a route other than direct (tests
+    /// pass their own CA, or none).
+    pub(crate) fn with_route_trusting(
+        policy: NetPolicy,
+        timeout: Duration,
+        resolver: Arc<dyn Resolve>,
+        route: &Route,
+        roots: Option<Arc<rustls::RootCertStore>>,
+    ) -> Result<GuardedClient, RouteError> {
         // The workspace's TLS provider (§16). Only the first install wins,
         // and one installed by the host process is fine too.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -768,13 +765,17 @@ impl GuardedClient {
                 builder = builder.proxy(proxy);
             }
         }
-        let verification = match routed_roots(route)? {
-            Some(roots) => {
-                builder = builder.tls_certs_only(roots);
-                crate::tls::Verification::SelfContained
+        // Off the direct route the TLS configuration is `crate::tls`'s,
+        // handed to reqwest whole; on it, reqwest's own (the OS verifier).
+        let verification = crate::tls::verification_for(route);
+        if verification == crate::tls::Verification::SelfContained {
+            let config = match roots {
+                Some(roots) => crate::tls::http_client_config_over(route, roots),
+                None => crate::tls::http_client_config(route),
             }
-            None => crate::tls::Verification::Platform,
-        };
+            .map_err(|_| RouteError::Build)?;
+            builder = builder.tls_backend_preconfigured(config);
+        }
         let http = builder.build().map_err(|_| RouteError::Build)?;
         Ok(GuardedClient {
             http,

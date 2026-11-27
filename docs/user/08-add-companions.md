@@ -282,7 +282,7 @@ A companion's route (direct or through a VPN) is copied from the source that nee
 
 The screen says the same under **If this companion's route uses a SOCKS5 proxy**.
 
-**Certificates on a VPN route (newer than v0.5.1).** A route that isn't direct goes through a SOCKS5 proxy, a VPN address or a VPN interface. On such a route, Lodestar checks each server's certificate itself. A certificate is what proves a site is the one you meant to reach.
+**Certificates on a VPN or proxy route (newer than v0.5.1).** Such a route goes through a SOCKS5 proxy, a VPN address or a VPN interface. On such a route, Lodestar checks each server's certificate itself. A certificate is what proves a site is the one you meant to reach.
 
 - It trusts the certificate authorities (the companies that issue certificates) installed on your computer or in the container.
 - It doesn't check whether a certificate was revoked (cancelled early by its issuer). A direct route uses your operating system's own check, which can.

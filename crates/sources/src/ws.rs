@@ -297,12 +297,12 @@ pub(crate) fn tls_connector(
     route: &Route,
 ) -> Result<tokio_rustls::TlsConnector, WsError> {
     let unusable = || WsError::Connect(HttpError::Transport("TLS couldn't be set up".into()));
-    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
-        .with_safe_default_protocol_versions()
-        .map_err(|_| unusable())?;
     let config = match roots {
         Roots::Only(certs) => {
+            let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+            let builder = rustls::ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|_| unusable())?;
             let mut store = rustls::RootCertStore::empty();
             for c in certs {
                 store.add(c.clone()).map_err(|_| unusable())?;
@@ -312,12 +312,7 @@ pub(crate) fn tls_connector(
             }
             builder.with_root_certificates(store).with_no_client_auth()
         }
-        Roots::Platform => builder
-            .dangerous()
-            .with_custom_certificate_verifier(
-                tls::verifier_for(route, provider).map_err(|_| unusable())?,
-            )
-            .with_no_client_auth(),
+        Roots::Platform => tls::client_config(route).map_err(|_| unusable())?,
     };
     Ok(tokio_rustls::TlsConnector::from(std::sync::Arc::new(
         config,
@@ -1182,9 +1177,7 @@ mod tests {
 
     #[test]
     fn the_default_roots_verify_by_route() {
-        // `Roots::Platform` takes the verifier `tls::verifier_for` picks,
-        // which is self-contained on every route but the direct one
-        // (tested in lodestar-integrations).
+        // `Roots::Platform` takes `tls::client_config` for the route.
         let routed = [
             Route::Direct,
             Route::BindAddress(std::net::Ipv4Addr::LOCALHOST.into()),
@@ -1195,13 +1188,12 @@ mod tests {
                 auth: None,
             }),
         ];
-        for r in &routed {
-            assert!(tls_connector(&Roots::Platform, r).is_ok(), "{r:?}");
-        }
-        for r in &routed[1..] {
+        for (i, r) in routed.iter().enumerate() {
+            let connector = tls_connector(&Roots::Platform, r).unwrap();
+            // Every route but the first (direct) verifies self-contained.
             assert_eq!(
-                tls::verification_for(r),
-                tls::Verification::SelfContained,
+                tls::verifies_self_contained(connector.config()),
+                i > 0,
                 "{r:?}"
             );
         }

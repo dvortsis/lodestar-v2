@@ -533,26 +533,37 @@ fn server_name(host: &str) -> Result<ServerName<'static>, ConfigError> {
     ServerName::try_from(host.to_owned()).map_err(|_| ConfigError::Invalid("host"))
 }
 
+/// The TLS connector and server name `spawn` connects with: `None` on a
+/// plaintext config.
+fn tls_for(
+    config: &Config,
+    egress: &Egress,
+) -> Result<Option<(tokio_rustls::TlsConnector, ServerName<'static>)>, ConfigError> {
+    Ok(match config.transport {
+        Transport::Tls => Some((
+            tls_connector(&config.roots, &egress.route)?,
+            server_name(&config.host)?,
+        )),
+        Transport::Plaintext => None,
+    })
+}
+
 fn tls_connector(roots: &Roots, route: &Route) -> Result<tokio_rustls::TlsConnector, ConfigError> {
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
-        .with_safe_default_protocol_versions()
-        .map_err(|_| ConfigError::Tls)?;
     let config = match roots {
         Roots::Only(certs) => {
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            let builder = rustls::ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|_| ConfigError::Tls)?;
             let mut store = rustls::RootCertStore::empty();
             for c in certs {
                 store.add(c.clone()).map_err(|_| ConfigError::Tls)?;
             }
             builder.with_root_certificates(store).with_no_client_auth()
         }
-        Roots::Platform => builder
-            .dangerous()
-            .with_custom_certificate_verifier(
-                lodestar_integrations::tls::verifier_for(route, provider)
-                    .map_err(|_| ConfigError::Tls)?,
-            )
-            .with_no_client_auth(),
+        Roots::Platform => {
+            lodestar_integrations::tls::client_config(route).map_err(|_| ConfigError::Tls)?
+        }
     };
     Ok(tokio_rustls::TlsConnector::from(Arc::new(config)))
 }
@@ -890,13 +901,7 @@ impl Handle {
 /// A key given to [`Handle::join`] is refused on a plaintext config.
 pub fn spawn(config: Config, egress: Egress) -> Result<(Handle, Events), ConfigError> {
     config.validate()?;
-    let tls = match config.transport {
-        Transport::Tls => Some((
-            tls_connector(&config.roots, &egress.route)?,
-            server_name(&config.host)?,
-        )),
-        Transport::Plaintext => None,
-    };
+    let tls = tls_for(&config, &egress)?;
     let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE);
     let (ev_tx, ev_rx) = mpsc::channel(EVENT_QUEUE);
     let (state_tx, state_rx) = watch::channel(State::Connecting { attempt: 1 });
@@ -1859,6 +1864,33 @@ fn base64(data: &[u8]) -> Zeroizing<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_routed_tls_config_verifies_self_contained() {
+        use lodestar_integrations::net::SystemResolver;
+        use lodestar_integrations::tls::verifies_self_contained;
+        let egress = |route| {
+            Egress::new(
+                Arc::new(SystemResolver),
+                NetPolicy::download_client(),
+                route,
+                None,
+            )
+        };
+        let config = Config::new("irc.example.test", "lode");
+        let bound = Route::BindAddress(std::net::Ipv4Addr::LOCALHOST.into());
+        for (route, routed) in [(Route::Direct, false), (bound, true)] {
+            let (connector, _) = tls_for(&config, &egress(route.clone())).unwrap().unwrap();
+            assert_eq!(
+                verifies_self_contained(connector.config()),
+                routed,
+                "{route:?}"
+            );
+        }
+        let mut plain = config.clone();
+        plain.transport = Transport::Plaintext;
+        assert!(tls_for(&plain, &egress(Route::Direct)).unwrap().is_none());
+    }
 
     fn cfg(f: impl FnOnce(&mut Config)) -> Arc<Config> {
         let mut c = Config::new("irc.example.test", "lode");

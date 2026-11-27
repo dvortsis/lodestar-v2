@@ -63,6 +63,9 @@ impl Default for HttpConfig {
 ///
 /// With `deny`, host names resolve to their allowed addresses only, and a
 /// redirect to a blocklisted literal IP is refused.
+///
+/// Bound to `local`, it verifies certificates as every routed client does
+/// (`lodestar_integrations::tls`); unbound, with the OS verifier.
 pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwest::Client> {
     // Several clients may be built; only the first install wins, and any
     // provider installed by the host process is fine too.
@@ -72,6 +75,9 @@ pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwe
         .local_address(local)
         .user_agent(concat!("Lodestar/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10));
+    if let Some(tls) = tls_for(local)? {
+        builder = builder.tls_backend_preconfigured(tls);
+    }
     builder = match deny {
         None => builder.redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS)),
         Some(deny) => {
@@ -93,6 +99,17 @@ pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwe
 }
 
 const MAX_REDIRECTS: usize = 2;
+
+/// The TLS configuration [`client`] is given: the bound route's when
+/// `local` is set, and reqwest's own (`None`) when it isn't.
+fn tls_for(local: Option<IpAddr>) -> Result<Option<rustls::ClientConfig>> {
+    let Some(ip) = local else {
+        return Ok(None);
+    };
+    lodestar_integrations::tls::http_client_config(&lodestar_integrations::Route::BindAddress(ip))
+        .map(Some)
+        .map_err(|e| Error::Http(e.to_string()))
+}
 
 /// The host of `url` when it's an IP address rather than a name: the
 /// resolver never sees those.
@@ -275,6 +292,18 @@ fn http_error(e: reqwest::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_bound_client_verifies_as_routed_clients_do() {
+        use lodestar_integrations::tls::verifies_self_contained;
+        assert!(super::tls_for(None).unwrap().is_none());
+        let bound = super::tls_for(Some("127.0.0.1".parse().unwrap()))
+            .unwrap()
+            .expect("a bound client gets the routed TLS configuration");
+        assert!(verifies_self_contained(&bound));
+        assert_eq!(bound.alpn_protocols, vec![b"http/1.1".to_vec()]);
+        assert!(super::client(Some("127.0.0.1".parse().unwrap()), None).is_ok());
+    }
+
     use super::*;
 
     const A: InfoHash = InfoHash([0xaa; 20]);

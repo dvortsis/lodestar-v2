@@ -2135,6 +2135,7 @@ name = "lodestar-tracker-scrape"
 version = "0.5.0"
 dependencies = [
  "lodestar-bencode",
+ "lodestar-integrations",
  "lodestar-metainfo",
  "lodestar-tracker-scrape",
  "proptest",

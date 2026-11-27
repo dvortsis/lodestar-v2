@@ -528,6 +528,11 @@ impl EgressFactory {
     /// gives a client whose kill switch is down for good, so the reason is
     /// visible in its status and every request is refused.
     pub async fn build(&self, plugin: &str, egress: &Egress, endpoints: Endpoints) -> PluginEgress {
+        if !matches!(egress, Egress::Direct) {
+            // A routed client's roots are read from the OS store once, on a
+            // blocking thread rather than this one.
+            lodestar_integrations::tls::load_roots().await;
+        }
         let probe = match egress {
             Egress::Direct => Probe::Direct,
             Egress::BindAddress(ip) => Probe::Bind(*ip),
