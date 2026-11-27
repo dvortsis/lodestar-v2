@@ -2055,6 +2055,12 @@ fn torrent_doc(store: &mut Store, t: &Loaded, sources: &mut SourceNames) -> Resu
     doc.enriched
         .identify(&store.served_identifications(t.row.id)?);
     doc.provenance.sources = sources.of(store, t.row.sources)?;
+    // An imported row's verification is its import record's (IMP-1), read
+    // only for imports: the crawler's rows cost nothing extra.
+    if t.row.flags & lodestar_store::flags::IMPORTED != 0 {
+        let record = store.import_quality(t.row.id)?.map(|q| q.verification);
+        doc.provenance.verified = crate::doc::stored_verified(t.row.flags, t.row.info_size, record);
+    }
     Ok(doc)
 }
 

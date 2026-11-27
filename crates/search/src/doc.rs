@@ -86,15 +86,48 @@ pub struct DocProvenance {
 }
 
 impl DocProvenance {
-    /// A stored torrent's: verified clearnet BitTorrent metadata
-    /// (`torrents` holds nothing else, §18.5), its sources filled in by
-    /// the indexer.
-    pub fn stored_torrent() -> DocProvenance {
+    /// A stored torrent's: clearnet BitTorrent metadata (`torrents` holds
+    /// nothing else, §18.5), `verified` as [`stored_verified`] reads it
+    /// from the row, its sources filled in by the indexer.
+    pub fn stored_torrent(row: &TorrentRow) -> DocProvenance {
         DocProvenance {
-            verified: Verified::Yes,
+            verified: stored_verified(row.flags, row.info_size, None),
             network: Network::Bt,
             sources: Vec::new(),
         }
+    }
+}
+
+/// Whether a stored torrent's metadata is verified, from its row and,
+/// when the indexer has read it, its import record's verification
+/// ([`lodestar_store::Store::import_quality`], IMP-1):
+///
+/// - a row that isn't [`flags::IMPORTED`] was fetched from the network
+///   and hashed to its key: `yes`;
+/// - an imported row whose import record says `verified` (a network
+///   fetch upgraded it): `yes`;
+/// - one whose record says anything else (`unknown`, `unverified`,
+///   `conflicting`): `imported`, never `yes` by omission;
+/// - with no record read, IMP-1's read rule: an imported row with an info
+///   dict (`info_size` > 0: a full `.torrent`, a torrent cache's or a
+///   refetch's, hashed when stored) is `yes`, one without (another
+///   indexer's database: Magnetico, bitmagnet) `imported`.
+///
+/// A stored torrent is never `no`: that's the unverified tier's.
+pub fn stored_verified(
+    row_flags: i64,
+    info_size: u64,
+    record: Option<lodestar_store::import::Verification>,
+) -> Verified {
+    use lodestar_store::import::Verification;
+    if row_flags & flags::IMPORTED == 0 {
+        return Verified::Yes;
+    }
+    match record {
+        Some(Verification::Verified) => Verified::Yes,
+        Some(_) => Verified::Imported,
+        None if info_size > 0 => Verified::Yes,
+        None => Verified::Imported,
     }
 }
 
@@ -364,7 +397,7 @@ impl TorrentDoc {
             discovered_at: row.discovered_at,
             metadata_at: row.metadata_at,
             enriched: DocEnrichment::default(),
-            provenance: DocProvenance::stored_torrent(),
+            provenance: DocProvenance::stored_torrent(row),
             file_buckets,
             file_ext_buckets,
             payload_sig: lodestar_classify::payload::payload_sig_of_sizes(sizes),

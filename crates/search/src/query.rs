@@ -224,19 +224,31 @@ impl TagKey {
 }
 
 /// Whether an item has verified metadata (§18.5, §18.6): a stored
-/// torrent is `yes`, an item known only from a source's claims `no`.
+/// torrent whose info dict was hashed to its key is `yes`, an item known
+/// only from a source's claims `no`, and a stored torrent whose metadata
+/// came from another indexer's database and was never hashed here
+/// `imported` (X-import-verified-no). `yes` and `imported` are shown by
+/// default ([`Verified::SHOWN`]); `no` is hidden unless asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verified {
     Yes,
     No,
+    Imported,
 }
 
 impl Verified {
+    /// Every value, in the order a document's field can hold one.
+    pub const ALL: [Verified; 3] = [Verified::Yes, Verified::No, Verified::Imported];
+    /// What a search shows unless the query names `verified:`
+    /// ([`Node::without_unverified`]): everything but the unverified tier.
+    pub const SHOWN: [Verified; 2] = [Verified::Yes, Verified::Imported];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Verified::Yes => "yes",
             Verified::No => "no",
+            Verified::Imported => "imported",
         }
     }
 
@@ -244,6 +256,7 @@ impl Verified {
         match s {
             "yes" | "true" | "1" => Some(Verified::Yes),
             "no" | "false" | "0" => Some(Verified::No),
+            "imported" => Some(Verified::Imported),
             _ => None,
         }
     }
@@ -1244,7 +1257,7 @@ fn field_value(
         FieldKind::Verified => {
             let any = any_of(value, Verified::from_name).ok_or_else(|| ParseError {
                 reason: None,
-                message: format!("{name}: expects yes or no"),
+                message: format!("{name}: expects yes, no or imported"),
                 start,
                 end,
             })?;
@@ -1870,14 +1883,15 @@ impl Node {
     }
 
     /// The query with unverified items left out (§18.6: hidden unless
-    /// asked for), unless it names `verified:` itself. A search applies
-    /// it to the user's query, as [`Node::without_hidden`].
+    /// asked for), unless it names `verified:` itself: `verified:yes,imported`
+    /// ([`Verified::SHOWN`]), so imported torrents stay visible (§18.5). A
+    /// search applies it to the user's query, as [`Node::without_hidden`].
     pub fn without_unverified(self) -> Node {
         if self.mentions_verified() {
             return self;
         }
         let verified = Node::Verified {
-            any: vec![Verified::Yes],
+            any: Verified::SHOWN.to_vec(),
         };
         match self {
             Node::All => verified,
@@ -1894,12 +1908,22 @@ impl Node {
     /// The tracked fields ([`crate::population`]) whose clauses in this
     /// query match only the documents that carry them, in first-seen
     /// order: while one is being backfilled, some matches are missing,
-    /// and the search says so. `verified:` and `network:` aren't among
-    /// them: they're complete on a partly backfilled index by
-    /// construction (see `compile.rs`).
+    /// and the search says so. `network:` isn't among them, nor is a
+    /// `verified:` clause that takes `yes` and `imported` together or
+    /// neither: they're complete on a partly backfilled index by
+    /// construction (see `compile.rs`). One that takes only one of the
+    /// two is: a document written before `imported` existed says `yes`
+    /// until the walk rewrites it (X-import-verified-no).
     pub fn population_fields(&self) -> Vec<&'static str> {
         fn walk(n: &Node, out: &mut Vec<&'static str>) {
             match n {
+                Node::Verified { any }
+                    if any.contains(&Verified::Yes) != any.contains(&Verified::Imported) =>
+                {
+                    if !out.contains(&"verified") {
+                        out.push("verified");
+                    }
+                }
                 Node::Source { .. } => {
                     if !out.contains(&"source") {
                         out.push("source");
@@ -2911,6 +2935,22 @@ mod tests {
             "repeats dropped, aliases read"
         );
         assert_eq!(
+            parse("verified:imported,yes").unwrap(),
+            Node::Verified {
+                any: vec![Verified::Imported, Verified::Yes]
+            }
+        );
+        assert_eq!(
+            parse("verified:imported").unwrap().to_query(),
+            "verified:imported"
+        );
+        assert!(
+            parse("verified:maybe")
+                .unwrap_err()
+                .message
+                .contains("yes, no or imported")
+        );
+        assert_eq!(
             parse("source:Nyaa,dht,nyaa").unwrap(),
             Node::Source {
                 any: vec!["nyaa".into(), "dht".into()]
@@ -2931,6 +2971,8 @@ mod tests {
             "verified:maybe",
             "verified:",
             "verified:yes,",
+            "verified:Imported,",
+            "verified:import",
             "source:",
             "source:-x",
             "source:.x",
@@ -2957,20 +2999,20 @@ mod tests {
 
     #[test]
     fn unverified_items_are_hidden_unless_asked_for() {
-        let yes = || Node::Verified {
-            any: vec![Verified::Yes],
+        let shown = || Node::Verified {
+            any: vec![Verified::Yes, Verified::Imported],
         };
-        assert_eq!(Node::All.without_unverified(), yes());
+        assert_eq!(Node::All.without_unverified(), shown());
         assert_eq!(
             parse("dark knight")
                 .unwrap()
                 .without_unverified()
                 .to_query(),
-            "dark knight verified:yes"
+            "dark knight verified:yes,imported"
         );
         assert_eq!(
             parse("a | b").unwrap().without_unverified().to_query(),
-            "(a | b) verified:yes"
+            "(a | b) verified:yes,imported"
         );
         // Named anywhere, even negated or under `|`: left as asked.
         for asked in [
@@ -2978,6 +3020,7 @@ mod tests {
             "x -verified:yes",
             "(x | verified:no) y",
             "verified:yes,no",
+            "verified:imported",
         ] {
             let ast = parse(asked).unwrap();
             assert_eq!(ast.clone().without_unverified(), ast, "{asked}");
@@ -2992,7 +3035,7 @@ mod tests {
                 .without_hidden()
                 .without_unverified()
                 .to_query(),
-            "x hidden:no verified:yes"
+            "x hidden:no verified:yes,imported"
         );
     }
 
@@ -3001,6 +3044,13 @@ mod tests {
         let fields = |q: &str| parse(q).unwrap().population_fields();
         assert_eq!(fields("x"), Vec::<&str>::new());
         assert_eq!(fields("verified:no network:bt"), Vec::<&str>::new());
+        // `yes` and `imported` together, or neither, are complete while
+        // the walk rewrites older `yes` documents; one alone isn't.
+        assert_eq!(fields("verified:yes,imported"), Vec::<&str>::new());
+        assert_eq!(fields("verified:yes,no,imported"), Vec::<&str>::new());
+        assert_eq!(fields("verified:yes"), ["verified"]);
+        assert_eq!(fields("x -verified:imported"), ["verified"]);
+        assert_eq!(fields("verified:yes,no | verified:imported"), ["verified"]);
         assert_eq!(fields("source:nyaa"), ["source"]);
         assert_eq!(fields("x (y | -source:a) source:b"), ["source"]);
         assert_eq!(

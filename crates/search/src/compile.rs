@@ -786,9 +786,11 @@ fn excludes_only(n: &Node) -> bool {
 /// everything without them.
 fn excluded(n: &Node, f: &Cx<'_>) -> Vec<(Field, &'static str)> {
     match n {
-        Node::Verified { any } if !any.contains(&Verified::No) => {
-            vec![(f.verified, Verified::No.as_str())]
-        }
+        Node::Verified { any } => Verified::ALL
+            .into_iter()
+            .filter(|v| !any.contains(v))
+            .map(|v| (f.verified, v.as_str()))
+            .collect(),
         Node::Network { any } => Network::ALL
             .into_iter()
             .filter(|t| !any.contains(t))
@@ -831,8 +833,13 @@ fn any_term<'t>(field: Field, terms: impl Iterator<Item = &'t str>) -> Q {
 /// stored, verified clearnet torrent: unverified and other-network items
 /// are only ever indexed with their fields. So the values a backfill
 /// would write are compiled as "not any other value": `verified:yes` is
-/// everything but `verified:no`, `network:bt` everything but the other
-/// tiers. They're complete on a partly backfilled index, and hiding
+/// everything but `verified:no` and `verified:imported`, `network:bt`
+/// everything but the other tiers. `verified:imported` and `verified:no`
+/// match their own terms. A document indexed before `imported` existed
+/// says `yes` even for an import until the population walk rewrites it
+/// (the `verified` generation 2, X-import-verified-no); the search says
+/// so for a clause that takes one of `yes` and `imported` without the
+/// other ([`Node::population_fields`]). They're complete on a partly backfilled index, and hiding
 /// unverified items by default never hides a torrent the walk hasn't
 /// reached. `source:` has no such complement: it matches only documents
 /// that carry it, and the search reports the field while it's partial
@@ -840,10 +847,7 @@ fn any_term<'t>(field: Field, terms: impl Iterator<Item = &'t str>) -> Q {
 fn provenance(node: &Node, f: &Cx<'_>) -> Q {
     match node {
         n if excludes_only(n) => all_but(excluded(n, f)),
-        Node::Verified { any } if any.contains(&Verified::No) => {
-            term(f.verified, Verified::No.as_str(), IndexRecordOption::Basic)
-        }
-        Node::Verified { .. } => Box::new(EmptyQuery),
+        Node::Verified { any } => any_term(f.verified, any.iter().map(|v| v.as_str())),
         Node::Network { any } => any_term(f.network, any.iter().map(|n| n.as_str())),
         Node::Source { any } => any_term(f.source, any.iter().map(String::as_str)),
         _ => unreachable!("provenance clauses only"),
@@ -1153,13 +1157,13 @@ pub(crate) struct SamePayload {
 
 /// A clause the search adds for the request's visibility, in the shape
 /// it adds it (`api::search::base_query`): `hidden:no`
-/// ([`Node::without_hidden`]), `verified:yes`
+/// ([`Node::without_hidden`]), `verified:yes,imported`
 /// ([`Node::without_unverified`]) and `-type:adult` (Adult hidden). The
 /// user writing the same clause asks for the same thing.
 fn visibility_clause(n: &Node) -> bool {
     match n {
         Node::Flag { name, value: false } => name == "hidden",
-        Node::Verified { any } => any == &[Verified::Yes],
+        Node::Verified { any } => any == &Verified::SHOWN,
         Node::Not { of } => matches!(
             &**of,
             Node::Tag { key: TagKey::Type, any } if any.len() == 1 && any[0] == "adult"

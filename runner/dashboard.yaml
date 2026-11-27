@@ -967,6 +967,7 @@ placement:
   - X-import-progress-visible
   - X-import-status-lock
   - X-import-rate-1m
+  - X-import-verified-no
   - X-store-load-busy-map
   - X-store-busy-nits
   - X-routing-table-metric

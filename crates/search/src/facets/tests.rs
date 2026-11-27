@@ -114,12 +114,24 @@ fn doc(i: u64) -> TorrentDoc {
     }
 }
 
+/// A verified clearnet torrent's provenance, with no sources yet.
+fn verified_bt() -> crate::doc::DocProvenance {
+    crate::doc::DocProvenance {
+        verified: Verified::Yes,
+        network: Network::Bt,
+        sources: Vec::new(),
+    }
+}
+
 /// Torrent `i`'s provenance: mostly verified clearnet torrents the DHT
-/// found, with some unverified, other-tier and source-less ones.
+/// found, with some unverified, imported, other-tier and source-less
+/// ones.
 fn provenance(i: u64) -> crate::doc::DocProvenance {
-    let mut p = crate::doc::DocProvenance::stored_torrent();
+    let mut p = verified_bt();
     if i % 11 == 5 {
         p.verified = Verified::No;
+    } else if i % 11 == 8 {
+        p.verified = Verified::Imported;
     }
     if i.is_multiple_of(13) {
         p.network = Network::Ipfs;
@@ -264,11 +276,12 @@ fn leaf(f: Facet, v: &str) -> Node {
         },
         Source::Prov { field, .. } => match field {
             "verified" => Node::Verified {
-                any: vec![if v == "yes" {
-                    Verified::Yes
-                } else {
-                    Verified::No
-                }],
+                any: vec![
+                    Verified::ALL
+                        .into_iter()
+                        .find(|x| x.as_str() == v)
+                        .unwrap(),
+                ],
             },
             "network" => Node::Network {
                 any: vec![Network::from_name(v).unwrap()],
@@ -1036,7 +1049,7 @@ fn documents_without_provenance_fields_count_as_the_defaults() {
             continue;
         }
         // The shape a pre-SRC-3 build wrote.
-        d.provenance = crate::doc::DocProvenance::stored_torrent();
+        d.provenance = verified_bt();
         let mut old = tantivy::TantivyDocument::new();
         for (field, v) in doc.field_values() {
             if ![f.verified, f.network, f.source].contains(&field) {
@@ -1052,6 +1065,10 @@ fn documents_without_provenance_fields_count_as_the_defaults() {
         "",
         "verified:yes",
         "verified:no",
+        "verified:imported",
+        "verified:yes,imported",
+        "verified:yes,no",
+        "verified:yes,imported common",
         "network:bt common",
         "-network:bt",
         "source:dht",
@@ -1074,8 +1091,10 @@ fn provenance_facets_count_the_default_as_the_rest() {
             .map_or(0, |x| x.count)
     };
     let no = (0..200u64).filter(|i| i % 11 == 5).count() as u64;
+    let imported = (0..200u64).filter(|i| i % 11 == 8).count() as u64;
     assert_eq!(count(Facet::Verified, "no"), no);
-    assert_eq!(count(Facet::Verified, "yes"), 200 - no);
+    assert_eq!(count(Facet::Verified, "imported"), imported);
+    assert_eq!(count(Facet::Verified, "yes"), 200 - no - imported);
     let other = (0..200u64)
         .filter(|i| i.is_multiple_of(13) || i % 13 == 7)
         .count() as u64;
@@ -1086,13 +1105,29 @@ fn provenance_facets_count_the_default_as_the_rest() {
     assert_eq!(count(Facet::Source, "dht"), dht);
     assert_eq!(count(Facet::Source, "nyaa"), 67);
     assert!(!got.term(Facet::Source).unwrap().partial);
-    // The default clause is the facet's selection, and `no` still counts.
-    let (_, _, got) = run(&index, "verified:yes", &all_values());
+    // The default clause is the facet's selection: imports are shown
+    // and counted, and `no` still counts.
+    let value = |v: &TermCounts, x: &str| v.values.iter().find(|y| y.value == x).cloned();
+    let (_, _, got) = run(&index, "verified:yes,imported", &all_values());
     let v = got.term(Facet::Verified).unwrap();
-    let yes = v.values.iter().find(|x| x.value == "yes").unwrap();
-    assert!(yes.selected && yes.count == 200 - no);
-    assert_eq!(v.values.iter().find(|x| x.value == "no").unwrap().count, no);
+    let yes = value(v, "yes").unwrap();
+    assert!(yes.selected && yes.count == 200 - no - imported);
+    let imp = value(v, "imported").unwrap();
+    assert!(imp.selected && imp.count == imported);
+    let unverified = value(v, "no").unwrap();
+    assert!(!unverified.selected && unverified.count == no);
     assert_eq!(got.matches, 200 - no);
+    // Every other selection that takes `yes` counts the same three.
+    for q in ["verified:yes", "verified:yes,no", "verified:imported"] {
+        let (_, _, got) = run(&index, q, &all_values());
+        let v = got.term(Facet::Verified).unwrap();
+        for (x, c) in [("yes", 200 - no - imported), ("imported", imported), ("no", no)] {
+            assert_eq!(value(v, x).map_or(0, |y| y.count), c, "{q}: {x}");
+        }
+    }
+    // `verified:yes` alone leaves imports out.
+    let (_, _, got) = run(&index, "verified:yes", &all_values());
+    assert_eq!(got.matches, 200 - no - imported);
 }
 
 mod rebuild {

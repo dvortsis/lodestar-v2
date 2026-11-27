@@ -63,7 +63,9 @@ const FILE_PREFIX: &str = "file.";
 /// restart mid-backfill.
 pub const GENERATIONS: [(&str, u32); 13] = [
     // SRC-3 (§18.6): every torrent's provenance.
-    ("verified", 1),
+    // X-import-verified-no: generation 2 writes `imported` for a stored
+    // torrent whose metadata was never hashed here, where 1 wrote `yes`.
+    ("verified", 2),
     ("source", 1),
     ("network", 1),
     // GS-0: `lodestar_classify::payload::payload_sig`, the hash CS-8a reads.
