@@ -23,6 +23,7 @@
 	import KpiRow from './KpiRow.svelte';
 	import Lazy from './Lazy.svelte';
 	import { csvHref } from './links';
+	import { isFirstHour } from './model';
 	import { needsCanonical, parseQuery, searchFor, type InsightsQuery } from './query';
 	import Skeleton from './Skeleton.svelte';
 	import StageStrip from './StageStrip.svelte';
@@ -164,8 +165,7 @@
 					m.insights_overview_stale_other({ reason: overview.stale.reason }))
 			: ''
 	);
-	/** Nothing has been through the whole pipeline yet: show it instead of empty charts. */
-	const firstHour = $derived(!paused && insights.startup === 'yes');
+	const firstHour = $derived(!!overview && isFirstHour(insights.startup, paused, overview));
 	const health = $derived(
 		healthSentence({
 			phase: insights.phase,

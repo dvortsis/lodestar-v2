@@ -41,6 +41,18 @@ export function startupState(
 	return all.funnel_total.final_cohorts > 0 ? 'no' : 'yes';
 }
 
+/**
+ * The first-hour scene replaces the charts only while nothing is searchable and nothing needs
+ * attention. `startup` alone can last days (cohorts finalize late), so data ends it at once.
+ */
+export function isFirstHour(
+	startup: Startup,
+	paused: boolean,
+	o: Pick<Overview, 'exceptions'> & { kpi: Pick<Overview['kpi'], 'searchable'> }
+): boolean {
+	return startup === 'yes' && !paused && !o.kpi.searchable && o.exceptions.length === 0;
+}
+
 export const FUNNEL_STAGES = [
 	'harvested',
 	'peer_found',

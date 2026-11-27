@@ -146,7 +146,7 @@
 	"wizard_cmp_err_profile": "Lodestar can't run qBittorrent on this system yet. Install it yourself and add it above.",
 	"wizard_storage_fs_note": "You can continue, but moving the folder now is easier than later.",
 	"wizard_live_title": "Found so far",
-	"wizard_live_nodes": "Nodes found",
+	"wizard_live_nodes": "DHT nodes",
 	"wizard_live_fetched": "Metadata fetched",
 	"wizard_live_stored": "Stored",
 	"wizard_live_note": "Counts since this start. They update while you set up."

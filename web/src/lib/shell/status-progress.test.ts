@@ -149,6 +149,16 @@ describe('pill progress states', () => {
 		});
 	});
 
+	it('zero routing nodes is "Starting" only in the start grace, never a day in', () => {
+		const lost = crawler({ dht_nodes: 0, stored: 0 });
+		const p = (uptimeS: number, over: Partial<ProgressSnapshot> = {}) =>
+			progress({ uptimeS, ingestPerHour: 5, fetchedPerHour: 5, ...over });
+		expect(pill(p(START_GRACE_S - 1), lost).kind).toBe('starting');
+		expect(pill(p(DAY), lost).kind).not.toBe('starting');
+		// No progress facts at all (/stats failed): not a start either.
+		expect(pill(null, lost).kind).not.toBe('starting');
+	});
+
 	it('warming up ends at the first stored torrent', () => {
 		const p = progress({ uptimeS: 120, ingestPerHour: null, fetchedPerHour: null });
 		expect(pill(p, crawler({ stored: 0 })).kind).toBe('warming');
@@ -260,18 +270,20 @@ describe('StatusPill progress states', () => {
 		expect(screen.getByTestId('status-pill-announce').textContent).toContain('Open Insights');
 	});
 
-	it('starting: says sampling begins once the DHT has joined, with no wait named', () => {
+	it('starting: says it is joining the DHT, with no wait named', () => {
 		render(StatusPill, { state: { kind: 'starting', ...none } });
 		expect(screen.getByTestId('status-pill-text').textContent).toBe('Starting');
 		const help = screen.getByTestId('status-pill-announce').textContent;
-		expect(help).toContain('as soon as Lodestar has joined the DHT');
+		expect(help).toContain('Lodestar is joining the DHT');
 		expect(help).not.toMatch(/\d\s*h\b/);
 	});
 
 	it('warming up: live counts found and stored, and no promise of speed', () => {
 		render(StatusPill, { state: { kind: 'warming', ...none, found: 1200, stored: 0 } });
 		expect(screen.getByTestId('status-pill-text').textContent).toBe('Warming up');
-		expect(screen.getByTestId('status-pill-count').textContent).toContain('1.2K found · 0 stored');
+		expect(screen.getByTestId('status-pill-count').textContent).toContain(
+			'1.2K harvested · 0 stored'
+		);
 		const help = screen.getByTestId('status-pill-announce').textContent;
 		expect(help).toContain('days and weeks');
 		expect(screen.getByTestId('status-pill').querySelector('svg[aria-hidden="true"]')).toBeTruthy();
@@ -279,7 +291,7 @@ describe('StatusPill progress states', () => {
 
 	it('warming up with unknown counts shows "—", never 0', () => {
 		render(StatusPill, { state: { kind: 'warming', ...none, found: null, stored: null } });
-		expect(screen.getByTestId('status-pill-count').textContent).toContain('— found · — stored');
+		expect(screen.getByTestId('status-pill-count').textContent).toContain('— harvested · — stored');
 	});
 
 	it('the other states announce nothing extra', () => {

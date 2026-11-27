@@ -216,7 +216,11 @@ test.describe('states', () => {
 
 	test('starting up: 24 h has no final cohort, all has none either', async ({ page, mock, go }) => {
 		const none = overviewFixture();
-		serve(mock, { funnel_total: { ...none.funnel_total, final_cohorts: 0 } });
+		serve(mock, {
+			funnel_total: { ...none.funnel_total, final_cohorts: 0 },
+			kpi: { ...none.kpi, searchable: 0 },
+			exceptions: []
+		});
 		await liveEvents(page, crawlerEvent({ harvested: 1234, fetched: 56, stored: 7 }));
 		await go('/insights?range=24h');
 		await expect(page.getByTestId('insights-starting')).toContainText(

@@ -67,10 +67,11 @@ export function pillState(input: {
 	if (!crawler) return { kind: 'unknown', ...none };
 	if (crawler.paused && !restartNeeded)
 		return { kind: 'paused', torrents: crawler.torrents, done: null, total: null };
-	// Starting: the DHT has no routing nodes yet (null is "off" or "not reported", not this), or the
+	// Starting: a start inside its grace and the DHT has no routing nodes yet (null is "off" or "not
+	// reported", not this; later it is a stall to report, not a start), or the
 	// server holds sampling back. Warming up: a start with nothing stored yet, showing what's found.
 	const start =
-		(crawler.dht_nodes === 0 && progress?.kind !== 'stalled') || progress?.kind === 'starting'
+		(crawler.dht_nodes === 0 && progress?.kind === 'warming') || progress?.kind === 'starting'
 			? 'starting'
 			: progress?.kind === 'warming' && crawler.stored === 0
 				? 'warming'
@@ -80,8 +81,7 @@ export function pillState(input: {
 			...none,
 			kind: start,
 			torrents: crawler.torrents,
-			found: crawler.harvested,
-			stored: crawler.stored
+			...(start === 'warming' && { found: crawler.harvested, stored: crawler.stored })
 		};
 	const working = crawler.fetch_active > 0 || crawler.fetch_pending > 0;
 	// An idle crawler has no writer to be stuck on. A starved pipeline is idle too, though, so the

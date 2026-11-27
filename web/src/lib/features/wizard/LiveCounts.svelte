@@ -9,6 +9,12 @@
 
 	let live = $state.raw<EventData<'crawler'>>();
 	const locale = $derived(currentLocale());
+	const items = $derived([
+		{ label: m.wizard_live_nodes(), value: live?.dht_nodes, id: 'nodes' },
+		{ label: m.harvested(), value: live?.harvested, id: 'harvested' },
+		{ label: m.wizard_live_fetched(), value: live?.fetched, id: 'fetched' },
+		{ label: m.wizard_live_stored(), value: live?.stored, id: 'stored' }
+	]);
 	onMount(() => events.on('crawler', (d) => (live = d)));
 </script>
 
@@ -19,7 +25,7 @@
 >
 	<h3 id="wizard-live-heading" class="text-body font-semibold">{m.wizard_live_title()}</h3>
 	<dl class="flex flex-wrap gap-6">
-		{#each [{ label: m.wizard_live_nodes(), value: live?.dht_nodes, id: 'nodes' }, { label: m.harvested(), value: live?.harvested, id: 'harvested' }, { label: m.wizard_live_fetched(), value: live?.fetched, id: 'fetched' }, { label: m.wizard_live_stored(), value: live?.stored, id: 'stored' }] as item (item.id)}
+		{#each items as item (item.id)}
 			<div>
 				<dt class="text-small text-muted-text">{item.label}</dt>
 				<dd class="text-title font-semibold tabular-nums" data-testid="wizard-live-{item.id}">

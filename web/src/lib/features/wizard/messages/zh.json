@@ -146,7 +146,7 @@
 	"wizard_cmp_err_profile": "Lodestar 目前无法在此系统上运行 qBittorrent。请自行安装并在上方添加。",
 	"wizard_storage_fs_note": "你可以继续，但现在移动该文件夹比以后更容易。",
 	"wizard_live_title": "目前已发现",
-	"wizard_live_nodes": "已发现节点",
+	"wizard_live_nodes": "DHT 节点",
 	"wizard_live_fetched": "已获取元数据",
 	"wizard_live_stored": "已存储",
 	"wizard_live_note": "自本次启动以来的计数，设置期间会持续更新。"

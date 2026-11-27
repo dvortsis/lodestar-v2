@@ -65,8 +65,8 @@ Terms the core terms depend on, and the truthful-state strings from §10.14.
 | `in_library` | In library | Already in your download client or library. | 已在库中 (TBD) |
 | `safe_restart` | Safe restart | The switch (`[dht] safe_restart`, on by default) that lets a clean restart keep each node's waiting time, so Lodestar doesn't re-ask nodes it already has samples from (CR-0d). No start waits to sample; v0.5.1 waits six hours. | 安全重启 (TBD) |
 | `restart_record` | Restart record | What Lodestar writes at a clean stop so the next start can restore per-node restrictions: most of it in the data folder, and the part kept in a restart record folder outside it, which is never backed up with the data. | 重启记录 (TBD) |
-| `warming_up` | Warming up | The status pill's word for a start that has stored nothing yet. Lodestar is searching and counts what it found; it ends with the first stored torrent. Never a promise of how long. | 预热中 (TBD) |
-| `routing_nodes` | Nodes found | Nodes in the DHT routing table now: the first thing a start finds, before any samples. | 已发现节点 (TBD) |
+| `warming_up` | Warming up | The status pill's word for a start that has stored nothing yet. Lodestar is searching and counts what it has harvested and stored; it ends with the first stored torrent. Never a promise of how long. | 预热中 (TBD) |
+| `routing_nodes` | DHT nodes | Nodes in the DHT routing table now (a snapshot, not a running total): the first thing a start finds, before any samples. | DHT 节点 (TBD) |
 | `worker` | Worker | A machine that crawls for this server over the cluster port. "This server" is the built-in crawler (worker 0); others show as "Worker 3", or by name for an admin. | 工作节点 (TBD) |
 | `marginal_gain` | Marginal gain ≈ | Keys a worker found that no other worker claimed while they were in flight. Always shown as an estimate ("≈"); it mostly under-counts, and the latest hours fill in as leases end. | 边际增益 (TBD) |
 
