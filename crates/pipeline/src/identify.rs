@@ -52,7 +52,7 @@
 //! Nothing here logs a name, a query or a hash.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -584,6 +584,8 @@ pub struct IdentifySource {
     interest: tokio::sync::Mutex<mpsc::Receiver<i64>>,
     config: Config,
     stats: Arc<IdentifyStats>,
+    /// The writer's backfill flag ([`IdentifySource::with_reenrich`]).
+    reenrich: Option<Arc<AtomicBool>>,
 }
 
 impl std::fmt::Debug for IdentifySource {
@@ -647,8 +649,30 @@ impl IdentifySource {
                 ..config
             },
             stats: Arc::default(),
+            reenrich: None,
         };
         Ok((source, Interest(tx)))
+    }
+
+    /// Raises `flag`, the writer's backfill flag (the host passes
+    /// `PipelineConfig::reenrich`, as the writer's other jobs get it), when
+    /// the runtime marks torrents to be derived again: recording the
+    /// plugin's terms ([`record_terms`]), a refresh that no longer matches,
+    /// or the retention sweep. A title they no longer allow leaves the
+    /// record at once. Without it, the marks wait for the writer's next
+    /// backfill pass.
+    pub fn with_reenrich(mut self, flag: Arc<AtomicBool>) -> IdentifySource {
+        self.reenrich = Some(flag);
+        self
+    }
+
+    /// Starts the writer's backfill pass ([`IdentifySource::with_reenrich`]):
+    /// this runtime marked torrents to be derived again, by a terms
+    /// change, a refresh's drop or the retention sweep.
+    fn rearm(&self) {
+        if let Some(flag) = &self.reenrich {
+            flag.store(true, Ordering::Release);
+        }
     }
 
     pub fn stats(&self) -> Arc<IdentifyStats> {
@@ -687,8 +711,13 @@ impl IdentifySource {
             })
             .await
         };
-        if !matches!(recorded, Ok(Ok(()))) {
-            bump(&self.stats.unrecorded);
+        match recorded {
+            Ok(Ok(marked)) => {
+                if marked {
+                    self.rearm();
+                }
+            }
+            _ => bump(&self.stats.unrecorded),
         }
         let mut background = Background::load(&*state).await;
         let mut last: Option<Instant> = None;
@@ -725,6 +754,10 @@ impl IdentifySource {
                     }
                     let n = swept.dropped.len();
                     self.stats.expired.fetch_add(n as u64, Ordering::Relaxed);
+                    // Each expired row marked its torrent: their titles go now.
+                    if n > 0 {
+                        self.rearm();
+                    }
                     if n >= SWEEP_BATCH {
                         sweep_at = Instant::now();
                     }
@@ -1023,6 +1056,8 @@ impl IdentifySource {
                     .await;
                     if matches!(dropped, Ok(Ok(true))) {
                         bump(&self.stats.refresh_dropped);
+                        // The drop marked the torrent: its title goes now.
+                        self.rearm();
                     }
                 }
                 Cache::remember(state, id, now.saturating_add(MISS_TTL_SECS), now).await;
@@ -1258,27 +1293,48 @@ pub fn sweep_expired(
 ///
 /// When the record goes from redistributable to not, every torrent holding
 /// the source's claims is marked for the backfill, so a title they
-/// resolved leaves the record that search, Torznab and export serve.
+/// resolved leaves the record that search, Torznab and export serve. The
+/// record, the marks, their `reindex_log` entries and the classification
+/// generation are one transaction ([`Store::mark_claims_unenriched`]), so
+/// a backfill batch reads either the old terms under the old generation,
+/// and is refused, or the new terms (X-claims-refile-rearm). True when it
+/// marked any: the caller raises the writer's backfill flag
+/// (`PipelineConfig::reenrich`), as [`IdentifySource`] does, so the title
+/// goes now, not at the writer's next start.
 pub fn record_terms(
     store: &mut Store,
     source: SourceId,
     terms: &Terms,
     now: i64,
-) -> Result<(), lodestar_store::Error> {
-    // Mark first, then write the record: if the mark fails, the old record
-    // still reads as redistributable, so the next call marks again. The
-    // mark is safe to repeat.
-    if !terms.redistribute && may_redistribute(store, source)? {
-        store.mark_claims_unenriched(source)?;
-    }
+) -> Result<bool, lodestar_store::Error> {
     let record = terms.record();
-    if store.plugin_state(source, TERMS_KEY)?.as_deref() != Some(record.as_slice()) {
+    let mut marked = false;
+    if !terms.redistribute && may_redistribute(store, source)? {
+        // A failure writes nothing: the old record still reads as
+        // redistributable, so the next call marks again.
+        marked = store.mark_claims_unenriched(source, &record)? > 0;
+        #[cfg(test)]
+        AFTER_MARK.with_borrow_mut(|f| {
+            if let Some(f) = f {
+                f();
+            }
+        });
+    } else if store.plugin_state(source, TERMS_KEY)?.as_deref() != Some(record.as_slice()) {
         store.set_plugin_state(source, TERMS_KEY, Some(&record))?;
     }
     if store.plugin_state(source, CLOCK_KEY)?.is_none() {
         store.set_plugin_state(source, CLOCK_KEY, Some(&now.to_be_bytes()))?;
     }
-    Ok(())
+    Ok(marked)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs in [`record_terms`] once the marks are written: a test's
+    /// backfill batch on another connection, in the window that a record
+    /// write outside the marks' transaction would leave open.
+    static AFTER_MARK: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// One [`sweep_expired`] step for every source with a terms record, with
@@ -1976,5 +2032,108 @@ mod tests {
         );
         g.set("own", b"x".to_vec()).await.unwrap();
         assert_eq!(inner.get("own").await, Ok(Some(b"x".to_vec())));
+    }
+
+    /// X-claims-refile-rearm: a terms change writes the new record in the
+    /// transaction that marks, logs and moves the generation, so a
+    /// backfill batch on another connection that runs once the marks are
+    /// in reads the new terms and can't write the title back. Were the
+    /// record written after the marks, the batch would read the moved
+    /// generation and the old terms there, store the title under a current
+    /// version, and never derive the torrent again. The batch thread and
+    /// the hook meet on channels, each wait bounded at 30 s.
+    #[test]
+    fn a_batch_between_the_marks_and_the_record_cant_write_the_title_back() {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        use lodestar_store::{NewTorrent, StoreConfig};
+        use std::sync::mpsc;
+        use std::time::Duration;
+        const WAIT: Duration = Duration::from_secs(30);
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("s.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let dht = store.register_source("dht", "1", 0).unwrap();
+        let src = store.register_source("wikidata", "1", 0).unwrap();
+        let open = Terms {
+            redistribute: true,
+            ..Terms::STRICT
+        };
+        record_terms(&mut store, src, &open, 0).unwrap();
+        // An ambiguous name over one video file: the answer names it.
+        let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
+        let dict = |e: Vec<(&str, OwnedValue)>| {
+            OwnedValue::Dict(
+                e.into_iter()
+                    .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                    .collect(),
+            )
+        };
+        let file = dict(vec![
+            ("length", OwnedValue::Int(900 << 20)),
+            ("path", OwnedValue::List(vec![b("New.Folder.mkv")])),
+        ]);
+        let raw = to_vec(&dict(vec![
+            ("files", OwnedValue::List(vec![file])),
+            ("name", b("New Folder")),
+            ("piece length", OwnedValue::Int(1 << 18)),
+            ("pieces", OwnedValue::Bytes(vec![0; 20 * 3600])),
+        ]));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let id = store
+            .insert(&[NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 0,
+                metadata_at: 0,
+                extra_flags: 0,
+                source: dht,
+            }])
+            .unwrap()[0]
+            .id();
+        let answer = lodestar_store::claims::Claims {
+            details: Some(Box::new(lodestar_store::claims::Details {
+                canonical_title: Some("Zyzzyva Show".into()),
+                match_confidence: Some(90),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(store.put_claims(id, src, &answer, false).unwrap());
+        crate::enrich::enrich_stored(&mut store, 0, 100).unwrap();
+        let title = |store: &Store| {
+            let e = store.enrichment(id).unwrap().unwrap();
+            lodestar_classify::Record::decode(&e.data)
+                .unwrap()
+                .release("title")
+                .map(str::to_owned)
+        };
+        assert_eq!(title(&store).as_deref(), Some("Zyzzyva Show"));
+
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let batch = std::thread::spawn(move || {
+            let mut other = Store::open(&db, StoreConfig::default()).unwrap();
+            go_rx.recv_timeout(WAIT).expect("the marks never came");
+            crate::enrich::enrich_stored(&mut other, 0, 100).unwrap();
+            done_tx.send(()).unwrap();
+        });
+        AFTER_MARK.with_borrow_mut(|f| {
+            *f = Some(Box::new(move || {
+                go_tx.send(()).unwrap();
+                done_rx.recv_timeout(WAIT).expect("the batch never ran");
+            }));
+        });
+        let closed = Terms {
+            redistribute: false,
+            ..open
+        };
+        let marked = record_terms(&mut store, src, &closed, 0);
+        AFTER_MARK.with_borrow_mut(|f| *f = None);
+        batch.join().unwrap();
+        assert!(marked.unwrap(), "the writer is asked for a pass");
+        assert!(!may_redistribute(&store, src).unwrap());
+        // Derived again, under the new terms, whatever ran in between.
+        crate::enrich::enrich_stored(&mut store, 0, 100).unwrap();
+        assert_ne!(title(&store).as_deref(), Some("Zyzzyva Show"));
     }
 }

@@ -2030,6 +2030,14 @@ fn redistributing() -> Vec<u8> {
     v
 }
 
+/// [`redistributing`] with the redistribute flag off: the record a terms
+/// change writes.
+fn closed() -> Vec<u8> {
+    let mut v = redistributing();
+    v[1] = 0;
+    v
+}
+
 /// Every claims shape the two predicates read: no section, an adult
 /// section with and without a kind, and a details section with each of
 /// a canonical title, a match confidence and an alternative title on or
@@ -2241,4 +2249,202 @@ fn a_purge_deletes_claims_and_logs_them_together_or_not_at_all() {
     assert!(claims_of(&store, id).is_empty());
     assert_eq!(logged(&store, id), before + 1);
     assert!(store.served_identifications(id).unwrap().is_empty());
+}
+
+/// An identification answer with a canonical title: the shape whose title
+/// the backfill writes into the record (ENR-10).
+fn titled_answer() -> Claims {
+    Claims {
+        details: Some(Box::new(Details {
+            canonical_title: Some("The Matrix".into()),
+            match_confidence: Some(90),
+            ..Details::default()
+        })),
+        ..Claims::default()
+    }
+}
+
+/// What the enrichment backfill writes once it has derived a torrent.
+fn derived_at_7(store: &Store, id: i64) {
+    store
+        .connection()
+        .execute(
+            "INSERT INTO torrent_parsed (torrent_id, parser_ver, data) VALUES (?1, 7, x'00')
+             ON CONFLICT (torrent_id) DO UPDATE SET parser_ver = 7",
+            [id],
+        )
+        .unwrap();
+}
+
+fn ver_of(store: &Store, id: i64) -> i64 {
+    store
+        .connection()
+        .query_row(
+            "SELECT parser_ver FROM torrent_parsed WHERE torrent_id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+/// The three paths that take a source's answers out of a record without
+/// a purge: a refresh's drop, the retention sweep and a terms change.
+#[derive(Debug, Clone, Copy)]
+enum Unshape {
+    Drop,
+    Expire,
+    Terms,
+}
+
+impl Unshape {
+    fn run(self, store: &mut Store, id: i64, source: SourceId) {
+        match self {
+            Unshape::Drop => assert!(store.drop_claims(id, source).unwrap()),
+            Unshape::Expire => {
+                let gone = store
+                    .drop_claims_outside(source, i64::MAX, i64::MAX, 100)
+                    .unwrap();
+                assert_eq!(gone, [id]);
+            }
+            // Every torrent holding the source's claims: counted in
+            // `a_terms_change_logs_and_marks_together_or_not_at_all`.
+            Unshape::Terms => assert!(store.mark_claims_unenriched(source, &closed()).unwrap() > 0),
+        }
+    }
+}
+
+/// X-claims-refile-rearm: a backfill batch on another connection that read
+/// an answer before a drop, an expiry or a terms change is refused by the
+/// classification generation, so it can't write the answer's title back
+/// over the mark. The two connections interleave on channels, each wait
+/// bounded at 30 s. A plain feed claim leaves the generation.
+#[test]
+fn a_backfill_batch_that_read_an_answer_is_refused_after_it_leaves() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    const WAIT: Duration = Duration::from_secs(30);
+    for how in [Unshape::Drop, Unshape::Expire, Unshape::Terms] {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("s.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let (dht, enr, feed) = sources(&mut store);
+        store
+            .set_plugin_state(enr, TERMS_KEY, Some(&redistributing()))
+            .unwrap();
+        let p = prepared(&store, "matrix");
+        let id = store_torrent(&mut store, &p, dht);
+        assert!(store.put_claims(id, enr, &titled_answer(), false).unwrap());
+        derived_at_7(&store, id);
+
+        let (read_tx, read_rx) = mpsc::channel();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let batch = std::thread::spawn(move || {
+            // The backfill's own connection: the generation first, then
+            // the claims, as `enrich_stored_marking` reads them.
+            let mut other = Store::open(&db, StoreConfig::default()).unwrap();
+            let read_at = other.class_gen().unwrap();
+            let seen = other.torrent_claims(id).unwrap();
+            read_tx.send(seen.len()).unwrap();
+            go_rx.recv_timeout(WAIT).expect("the change never came");
+            let stale = lodestar_store::Enriched {
+                version: 7,
+                content_type: 0,
+                junk_score: 0,
+                comp: Vec::new(),
+                data: vec![0],
+            };
+            other
+                .set_enrichments_at(read_at, &[(id, stale)], &[])
+                .unwrap()
+        });
+        assert_eq!(read_rx.recv_timeout(WAIT).expect("the batch never read"), 1);
+        how.run(&mut store, id, enr);
+        go_tx.send(()).unwrap();
+        assert_eq!(batch.join().unwrap(), None, "{how:?}: the batch is refused");
+        assert_eq!(ver_of(&store, id), 0, "{how:?}: the mark stays");
+
+        // Plain feed claims shape nothing: the generation stays. Another
+        // source, so they're the only claims the path reaches.
+        let q = prepared(&store, "plain");
+        let plain = store_torrent(&mut store, &q, dht);
+        assert!(
+            store
+                .put_claims(plain, feed, &named("plain"), false)
+                .unwrap()
+        );
+        derived_at_7(&store, plain);
+        let before = store.class_gen().unwrap();
+        how.run(&mut store, plain, feed);
+        assert_eq!(store.class_gen().unwrap(), before, "{how:?}");
+    }
+}
+
+/// X-claims-refile-rearm: a terms change logs for the index each torrent
+/// whose claims could have supplied a served answer, in the transaction
+/// that marks them and writes the new record; a failed log rolls the
+/// marks, the record and the generation back.
+#[test]
+fn a_terms_change_logs_and_marks_together_or_not_at_all() {
+    let mut store = mem();
+    let (dht, enr, other) = sources(&mut store);
+    let ids: Vec<i64> = ["answer", "plain", "other"]
+        .iter()
+        .map(|name| {
+            let p = prepared(&store, name);
+            let id = store_torrent(&mut store, &p, dht);
+            derived_at_7(&store, id);
+            id
+        })
+        .collect();
+    assert!(
+        store
+            .put_claims(ids[0], enr, &titled_answer(), false)
+            .unwrap()
+    );
+    assert!(
+        store
+            .put_claims(ids[1], enr, &named("plain"), false)
+            .unwrap()
+    );
+    assert!(
+        store
+            .put_claims(ids[2], other, &titled_answer(), false)
+            .unwrap()
+    );
+    store
+        .set_plugin_state(enr, TERMS_KEY, Some(&redistributing()))
+        .unwrap();
+    let before: Vec<i64> = ids.iter().map(|&id| logged(&store, id)).collect();
+    let gen_before = store.class_gen().unwrap();
+    let terms = |store: &Store| store.plugin_state(enr, TERMS_KEY).unwrap();
+
+    store
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER fail_terms_reindex BEFORE INSERT ON reindex_log BEGIN
+             SELECT RAISE(ABORT, 'injected reindex failure'); END;",
+        )
+        .unwrap();
+    assert!(store.mark_claims_unenriched(enr, &closed()).is_err());
+    for &id in &ids {
+        assert_eq!(ver_of(&store, id), 7, "torrent {id}: the mark rolled back");
+    }
+    assert_eq!(store.class_gen().unwrap(), gen_before);
+    assert_eq!(terms(&store), Some(redistributing()), "the record too");
+    store
+        .connection()
+        .execute_batch("DROP TRIGGER fail_terms_reindex")
+        .unwrap();
+
+    assert_eq!(store.mark_claims_unenriched(enr, &closed()).unwrap(), 2);
+    let after: Vec<i64> = ids.iter().map(|&id| logged(&store, id)).collect();
+    assert_eq!(after[0] - before[0], 1, "the answer's torrent is logged");
+    assert_eq!(after[1], before[1], "a plain claim serves nothing");
+    assert_eq!(after[2], before[2], "another source's");
+    assert_eq!(
+        ids.iter().map(|&id| ver_of(&store, id)).collect::<Vec<_>>(),
+        [0, 0, 7]
+    );
+    assert_ne!(store.class_gen().unwrap(), gen_before);
+    assert_eq!(terms(&store), Some(closed()), "the record with them");
 }

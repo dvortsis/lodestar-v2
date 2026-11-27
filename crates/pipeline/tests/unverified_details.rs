@@ -174,9 +174,14 @@ fn info_bytes(name: &str) -> Vec<u8> {
 
 /// Stores a crawled torrent; its id and swarm hash.
 fn crawled(store: &mut Store, name: &str, source: SourceId) -> (i64, [u8; 20]) {
+    crawled_raw(store, &info_bytes(name), source)
+}
+
+/// [`crawled`] from a raw info dict.
+fn crawled_raw(store: &mut Store, raw: &[u8], source: SourceId) -> (i64, [u8; 20]) {
     let p = store
         .preparer()
-        .prepare(&Info::parse(&info_bytes(name)).unwrap(), None)
+        .prepare(&Info::parse(raw).unwrap(), None)
         .unwrap();
     let id = store
         .write(&WriteBatch {
@@ -1223,5 +1228,156 @@ mod promotion {
         let id = store.find(&keys[1]).unwrap().expect("promoted");
         let on = store.torrent_claims(id).unwrap();
         assert_eq!(on[0].claims.as_ref().unwrap().details.as_deref(), Some(&d));
+    }
+}
+
+/// X-claims-refile-rearm: a refile that holds back an answer whose
+/// canonical title named the record raises the writer's backfill flag at
+/// once, at both refile sites: the sweep when the rules change, and
+/// ingest when the same source's next find hits your rule. The record
+/// keeps the title until the backfill runs, so without the flag it would
+/// stay until the next start, purge or version change.
+#[test]
+fn a_refile_that_holds_back_an_answer_rearms_the_backfill() {
+    use lodestar_classify::Record;
+    use std::sync::atomic::AtomicBool;
+    let title = |store: &Store, id: i64| -> Option<String> {
+        let e = store.enrichment(id).unwrap().unwrap();
+        Record::decode(&e.data)
+            .unwrap()
+            .release("title")
+            .map(str::to_owned)
+    };
+    for at_ingest in [false, true] {
+        let (mut store, dht, src) = mem();
+        let mut terms = vec![1, 0b10];
+        terms.extend((180u64 * 86_400).to_be_bytes());
+        store
+            .set_plugin_state(src, lodestar_store::identify_sweep::TERMS_KEY, Some(&terms))
+            .unwrap();
+        // An ambiguous name over one video file, so the answer names the
+        // record (ENR-10).
+        let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
+        let file = OwnedValue::Dict(
+            [
+                (b"length".to_vec(), OwnedValue::Int(900 << 20)),
+                (
+                    b"path".to_vec(),
+                    OwnedValue::List(vec![b("New.Folder.mkv")]),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let info = OwnedValue::Dict(
+            [
+                (b"files".to_vec(), OwnedValue::List(vec![file])),
+                (b"name".to_vec(), b("New Folder")),
+                (b"piece length".to_vec(), OwnedValue::Int(1 << 18)),
+                (b"pieces".to_vec(), OwnedValue::Bytes(vec![0; 20 * 3600])),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let (id, h) = crawled_raw(&mut store, &to_vec(&info), dht);
+        let filter = stand_in();
+        let flag = AtomicBool::new(false);
+        // An identify plugin's answer, as its runtime hands it on: stored
+        // through the match path, which never sets the plugin's bit.
+        let answer = lodestar_sources::identify::Identification {
+            canonical_title: Some("Zyzzyva Show".into()),
+            year: Some(2011),
+            confidence: 90,
+            adult: Some(false),
+            ..Default::default()
+        };
+        let mut found = Found::key(InfoHash(h), lodestar_pipeline::identify::STRATEGY)
+            .with_claims(answer.into_claims());
+        found.clamp();
+        let batch = [Discovery {
+            source: src,
+            found,
+            at: T,
+            reply: false,
+        }];
+        let ctx = Ctx {
+            quarantine_secs: 86_400,
+            enrichers: lodestar_pipeline::adult_enrich::EnrichSources {
+                listed: 0,
+                kind: 1 << src.get(),
+            },
+            reenrich: Some(&flag),
+            ..Ctx::default()
+        };
+        let stats = UnverifiedStats::default();
+        unverified::ingest(
+            &mut store,
+            &filter.current(),
+            ctx,
+            &batch,
+            &stats,
+            T,
+            &|_, _| {},
+        )
+        .unwrap();
+        lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100).unwrap();
+        assert_eq!(title(&store, id).as_deref(), Some("Zyzzyva Show"));
+        assert!(!store.served_identifications(id).unwrap().is_empty());
+
+        flag.store(false, Ordering::Release);
+        rule(&filter, "zyzzyva", Action::Drop);
+        if at_ingest {
+            // The source's next find hits the rule: its earlier answer on
+            // the torrent goes with it (`drop_source_claims`).
+            unverified::ingest(
+                &mut store,
+                &filter.current(),
+                ctx,
+                &batch,
+                &stats,
+                T,
+                &|_, _| {},
+            )
+            .unwrap();
+            assert_eq!(n(&stats.dropped), 1);
+        } else {
+            let version = filter.current().version;
+            let (mut phase, mut after_item, mut after_claims) = (Phase::Items, 0, (0, 0));
+            let mut rederive = false;
+            loop {
+                let s = unverified::refile_step(
+                    &mut store,
+                    &filter,
+                    version,
+                    phase,
+                    after_item,
+                    after_claims,
+                    ctx,
+                    T,
+                    &|_, _| {},
+                )
+                .unwrap();
+                assert!(!s.rejected);
+                rederive |= s.rederive;
+                (after_item, after_claims) = (s.after_item, s.after_claims);
+                if s.end {
+                    if phase == Phase::Claims {
+                        break;
+                    }
+                    phase = Phase::Claims;
+                }
+            }
+            assert!(rederive, "the step reports it");
+        }
+        assert!(store.torrent_claims(id).unwrap().is_empty());
+        assert!(store.served_identifications(id).unwrap().is_empty());
+        assert!(
+            flag.load(Ordering::Acquire),
+            "at_ingest {at_ingest}: re-armed"
+        );
+        // The title stays until the backfill the flag starts runs.
+        assert_eq!(title(&store, id).as_deref(), Some("Zyzzyva Show"));
+        lodestar_pipeline::enrich::enrich_stored(&mut store, 0, 100).unwrap();
+        assert_ne!(title(&store, id).as_deref(), Some("Zyzzyva Show"));
     }
 }
