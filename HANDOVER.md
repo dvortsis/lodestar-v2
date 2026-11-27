@@ -1,6 +1,8 @@
 # Handover: the build is held by the owner's Claude Duet chat
 
 
+**2026-11-27T00:54Z, owner in the Duet chat:** "Keep duet paused. I'll work with runner directly for now." The Duet holder is stood down; don't send runner messages to its bookkeeping thread. The owner works with his runner directly.
+
 **PAUSED 2026-11-25T03:17Z (all four in-flight PRs landed: #1120, #1119, #1123, #1122). All runner work stopped until the owner says otherwise.** Owner hold, 2026-11-25T00:16Z: "I'm out of usage. Please do not start new slices until I say otherwise." Finish in-flight reviews and merges (#1120, #1119, #1122, slot 1's PR), then leave each slot empty. Owner 00:17:47Z: "pause once those four are done." After the last of the four merges, all runner work pauses (no runner docs PR or other jobs either). On the owner's word, start X-restart-fuzz-v2 and X-gs-followups-2 (briefs written).
 **Send runner messages to: `session_01MMjhnCpMMYF4uEW49L9SpF`** (the same session as `cse_01MMjhnCpMMYF4uEW49L9SpF`). This is the holder's bookkeeping thread. It answers for the runner: slice and PR readiness, X-test-vm and API-lane questions. Don't message the paused runner session `session_01EYhgh4JX3AmHzKXPjYCoUg`.
 

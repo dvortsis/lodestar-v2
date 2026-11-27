@@ -11285,6 +11285,13 @@
       "words": "pause once those four are done.",
       "effect": "no slices, no queued starts, no reviews, no merges, no runner docs PR, no other runner jobs until the owner says otherwise",
       "resume": "on the owner's word: start X-restart-fuzz-v2 and X-gs-followups-2 (briefs written); then the metrics.md runner docs PR (runner_todo)"
+    },
+    "duet_holder": {
+      "paused": true,
+      "since": "2026-11-27T00:54Z",
+      "by": "owner, Claude Duet chat",
+      "words": "Keep duet paused. I'll work with runner directly for now.",
+      "effect": "the Duet chat (coordinator and bookkeeping thread) takes no runner actions; the owner works with his own runner session directly. A runner reading this should not route runner messages to the Duet bookkeeping thread."
     }
   },
   "owner_queue_pending": [
