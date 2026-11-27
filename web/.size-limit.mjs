@@ -1657,7 +1657,8 @@ export default [
 	// Insights 45.56 → 45.67 (45,663 B), Language 45.33 → 45.43 (45,430 B), Logging 45 → 45.06
 	// (45,059 B), Integrations 45 → 45.04 (45,038 B). Add torrent files' own first view: 27.42 KB
 	// (27,415 B), its watch part on demand (below). Also Settings section 32.44 → 32.55, Settings
-	// messages 4.26 → 4.8 and Settings find 5.87 → 6 KB (the `import` navigation icon).
+	// messages 4.26 → 4.8 and Settings find 5.87 → 6 KB (the `import` navigation icon). After
+	// main came in (runner, 2026-11-27): Companions 33 → 33.08 (33,074 B).
 	...settingsHandBuilt.map(({ name, files }) =>
 		entry(
 			`Settings ${name} (first view)`,
@@ -1669,7 +1670,7 @@ export default [
 					: name === 'BlocklistsScreen'
 						? '30.4 KB'
 						: name === 'CompanionsScreen'
-							? '33 KB'
+							? '33.08 KB'
 							: name === 'SourcesScreen'
 								? '34.23 KB'
 								: name === 'NotificationsScreen'
