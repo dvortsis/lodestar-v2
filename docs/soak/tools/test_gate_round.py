@@ -1118,8 +1118,9 @@ class DropCTests(unittest.TestCase):
 
 
 class D3ExemptionTests(SegmentBase):
-    """Item B (plan §8 item 6; owner §2.85 D3): a mover run or parity check on the array
-    doesn't void a window whose /data is on ssd_apps; everything else still does."""
+    """Item B (plan §8 item 6; owner §2.85 D3; runner, 2026-11-27): a mover run or parity check
+    spares the window only when none of the pools it touches holds the arm's /data device."""
+    POOLS = {"ssd_apps": [mk.DEVICE], "cache": ["sdc"], "array": ["md1", "md2"]}
 
     def decl(self, pools):
         d = mk.archive("L3")["declaration"]
@@ -1127,41 +1128,45 @@ class D3ExemptionTests(SegmentBase):
             d["pools"] = pools
         return analyze_cr.check_declaration(d)
 
-    def segment_with(self, kind, pool, pools={"ssd_apps": [mk.DEVICE], "array": ["md1"]}):
+    def segment_with(self, kind, touched, pools=POOLS):
         sim = Round1Sim()
         entry = {"category": "array_operation", "elapsed_seconds": 4000.0, "same_boot": True,
                  "collector_finished": False, "text": ""}
         if kind:
-            entry.update(kind=kind, pool=pool)
+            entry.update(kind=kind, pools=touched)
         sim.activity = [entry]
         return self.judge(sim, self.decl(pools))
 
-    def test_mover_and_parity_on_the_array_spare_an_ssd_apps_window(self):
-        for kind in ("mover", "parity"):
-            report = self.segment_with(kind, "array")
+    def test_mover_and_parity_off_the_arms_pool_spare_the_window(self):
+        for kind, touched in (("mover", ["cache", "array"]), ("parity", ["array"])):
+            report = self.segment_with(kind, touched)
             self.assertValid(report)
-            self.assertEqual(report["activity_exempt_d3"][0]["kind"], kind)
+            self.assertEqual(report["activity_exempt_d3"][0]["pools"], touched)
 
     def test_everything_else_still_counts(self):
-        for kind, pool, pools in (("other", "array", {"ssd_apps": [mk.DEVICE]}), ("mover", "ssd_apps", {"ssd_apps": [mk.DEVICE]}),
-                                  ("mover", "array", {"ssd_apps": ["sdz"]}), ("mover", "array", None), (None, None, {"ssd_apps": [mk.DEVICE]})):
-            with self.subTest(kind=kind, pool=pool, pools=pools):
-                report = self.segment_with(kind, pool, pools)
+        for kind, touched, pools in (("mover", ["ssd_apps", "array"], self.POOLS),  # touches the arm's own pool
+                                     ("other", ["array"], self.POOLS),
+                                     ("mover", ["array", "unmapped"], self.POOLS),
+                                     ("mover", ["array"], None),
+                                     (None, None, self.POOLS)):
+            with self.subTest(kind=kind, touched=touched, pools=pools is not None):
+                report = self.segment_with(kind, touched, pools)
                 self.assertFalse(self.check(report, "no_host_activity")[0]["ok"])
 
-    def test_the_note_command_records_kind_and_pool(self):
+    def test_the_note_command_records_kind_and_pools(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             (root / "run.json").write_text(json.dumps({"clock": {"monotonic_origin": 0.0, "boot_id": "b"}}))
             boot = root / "boot_id"
             boot.write_text("b\n")
-            rc = collect.note_command(["--root", d, "--category", "array_operation", "--kind", "mover", "--pool", "array"],
-                                      clock=lambda: 10.0, boot_id_path=boot)
+            rc = collect.note_command(["--root", d, "--category", "array_operation", "--kind", "mover",
+                                       "--pool", "cache", "--pool", "array"], clock=lambda: 10.0, boot_id_path=boot)
             self.assertEqual(rc, 0)
             entry = json.loads((root / "activity.jsonl").read_text())
-            self.assertEqual((entry["kind"], entry["pool"]), ("mover", "array"))
+            self.assertEqual((entry["kind"], entry["pools"]), ("mover", ["array", "cache"]))
             with self.assertRaises(SystemExit):
-                collect.note_command(["--root", d, "--category", "array_operation"], boot_id_path=boot)
+                collect.note_command(["--root", d, "--category", "array_operation", "--kind", "mover"],
+                                     boot_id_path=boot)
 
 
 class RoundSpecAndVcpuTests(RoundBase):

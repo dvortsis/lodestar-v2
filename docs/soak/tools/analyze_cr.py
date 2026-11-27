@@ -515,14 +515,21 @@ def analyze_segment(root, winners=None, declaration=None):
     activity = load_activity(root)
     counted = [a for a in activity if a.get("category") in collect.ACTIVITY_CATEGORIES and a.get("same_boot") is True
                and not a.get("collector_finished") and p_e <= a["elapsed_seconds"] <= end_e]
-    # Round 1, D3 (plan §8 item 6; owner §2.85): a mover run or parity check on the array
-    # doesn't void a window whose /data is on ssd_apps (the declaration maps pools to devices).
+    # Round 1, D3 (plan §8 item 6; owner §2.85; runner, 2026-11-27): a mover run or parity
+    # check spares the window only when none of the pools it touches holds the arm's /data
+    # device (the declaration maps pools to devices; an unmapped pool can't be cleared).
     # Every other entry still counts.
-    if declaration is not None and declaration.get("backing_device") in (declaration.get("pools") or {}).get("ssd_apps", ()):
-        exempt = [a for a in counted if a.get("category") == "array_operation" and a.get("kind") in D3_KINDS
-                  and a.get("pool") == "array"]
+    if declaration is not None:
+        pools, device = declaration.get("pools") or {}, declaration.get("backing_device")
+
+        def spares(a):
+            touched = a.get("pools")
+            return (a.get("category") == "array_operation" and a.get("kind") in D3_KINDS
+                    and isinstance(touched, list) and touched
+                    and all(p in pools and device not in pools[p] for p in touched))
+        exempt = [a for a in counted if spares(a)]
         counted = [a for a in counted if a not in exempt]
-        report["activity_exempt_d3"] = [{"kind": a["kind"], "pool": a["pool"], "elapsed_seconds": a["elapsed_seconds"]}
+        report["activity_exempt_d3"] = [{"kind": a["kind"], "pools": a["pools"], "elapsed_seconds": a["elapsed_seconds"]}
                                         for a in exempt]
     notes = [a for a in activity if a not in counted]
     checks.add("6.11", "no_host_activity", not counted,

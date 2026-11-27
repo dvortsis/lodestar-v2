@@ -1850,12 +1850,15 @@ def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sy
     parser.add_argument("--text", default="", help="Private detail (at most 200 characters); never published")
     parser.add_argument("--kind", choices=ARRAY_KINDS,
                         help="array_operation only: what ran (D3: mover and parity on the array spare an ssd_apps window)")
-    parser.add_argument("--pool", help="array_operation only: the pool it ran on (`array`, or the pool's name)")
+    parser.add_argument("--pool", action="append", default=[],
+                        help="array_operation only: a pool it touches (`array`, or a pool's name); repeat for each "
+                             "(the mover touches a cache pool and the array)")
     args = parser.parse_args(argv)
     if len(args.text) > 200 or any(ord(c) < 32 for c in args.text):
         parser.error("--text must be one line of at most 200 characters")
-    if args.category == "array_operation" and (args.kind is None or not re.fullmatch(r"[a-z0-9_]{1,32}", args.pool or "")):
-        parser.error("array_operation needs --kind mover|parity|other and --pool <name> (e.g. array)")
+    if args.category == "array_operation" and (args.kind is None or not args.pool
+                                               or not all(re.fullmatch(r"[a-z0-9_]{1,32}", p) for p in args.pool)):
+        parser.error("array_operation needs --kind mover|parity|other and a --pool for every pool it touches")
     if args.category != "array_operation" and (args.kind or args.pool):
         parser.error("--kind and --pool are for array_operation only")
     root = Path(args.root)
@@ -1870,7 +1873,7 @@ def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sy
              "same_boot": bool(boot) and boot == run["clock"].get("boot_id"),
              "collector_finished": (root / "result.json").exists(), "text": args.text}
     if args.kind:
-        entry.update(kind=args.kind, pool=args.pool)
+        entry.update(kind=args.kind, pools=sorted(set(args.pool)))
     append_line(root / "activity.jsonl", dumps(entry))
     print(f"Recorded {args.category} at elapsed {entry['elapsed_seconds']:.1f} s ({entry['time']}).")
     return 0
