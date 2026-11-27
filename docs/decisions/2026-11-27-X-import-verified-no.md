@@ -38,6 +38,15 @@ Imported torrents are never indexed as verified. The Magnetico import test (10M 
   - A clause with one of the two and not the other (`verified:yes`, `verified:imported`) can be off until the walk finishes. `Node::population_fields` now names `verified` for such a clause, so the search's "fields incomplete" notice says so.
   - The Verified facet's `partial` flag stays for `source` only. During the walk its `imported` count is low and its `yes` count high by the same amount.
 
+## The API and the UI (runner's grant, 2026-11-27)
+- **A search hit is honest too.** An import returns `verified: false` and `imported: true`; a hashed row `verified: true` with no `imported`. Both come from the same rule as the index (`api/search.rs` `is_import`, through `stored_verified` and `Store::import_quality`), so an API client never reads `verified: true` for an import.
+- **`AstVerified` gains `imported`,** and the OpenAPI document and `schema.d.ts` are regenerated.
+- **Consumers of the hit's `verified`:** only the web result row and card read it. Torznab, saved-search alerts (the percolator), live search and Discover use the default clause, `verified:yes,imported`, so imports behave there exactly as before.
+- **The badge:** `hit.imported` shows "Imported" in place of "Unverified", never both, with the help text "From another indexer's database; the file list wasn't checked against the torrent's hash." It's a variant of the Unverified badge with the same icon in the neutral colour, so no new icon enters the size-limited chunks.
+- **"Show unverified" sends `verified:yes,imported,no`,** so imports stay visible beside unverified items. An older `verified:yes,no` URL still reads as shown, and switching the toggle replaces it with all three values.
+- **Facet golden responses** (`api/tests/golden/facets_*.txt`) now list `imported` as selected, with its count, because it's part of the default selection.
+- **Not changed here:** the torrent detail's `provenance.verified` (`api/dto/torrents.rs`) is still always `true`. The UI doesn't show it. It's left to a follow-up slice the runner places.
+
 ## The query language and its docs
 - `verified:imported` parses, `imported` joins the catalogue's enum values, and the parse error names all three values.
 - `docs/user/05-use-lodestar.md` §5.1 gains one line for `verified:imported`.

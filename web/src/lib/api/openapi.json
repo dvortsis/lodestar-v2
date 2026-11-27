@@ -11420,7 +11420,8 @@
         "description": "Whether an item has verified metadata.",
         "enum": [
           "yes",
-          "no"
+          "no",
+          "imported"
         ]
       },
       "AstWhen": {
@@ -16063,7 +16064,7 @@
           },
           "facets": {
             "type": "object",
-            "description": "Term facets by name: `type`, `ext`, `res`, `category`, `lang`,\n`group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,\n`ambiguous`, `imported`, `backfill`, `network`, `source`,\n`verified`, and `adult` when there are adult subtypes to list.\n\n`verified` counts `no` even while the search hides unverified\nitems, since its default `verified:yes` is the facet's own\nselection; `source` lists plugin ids (names in `source_names`),\nand never a private source's to anyone but the admin session\n(§18.7).",
+            "description": "Term facets by name: `type`, `ext`, `res`, `category`, `lang`,\n`group`, `codec`, `audio`, `hdr`, `private`, `v2`, `has`,\n`ambiguous`, `imported`, `backfill`, `network`, `source`,\n`verified`, and `adult` when there are adult subtypes to list.\n\n`verified` counts `no` even while the search hides unverified\nitems, since its default `verified:yes,imported` is the facet's own\nselection; `source` lists plugin ids (names in `source_names`),\nand never a private source's to anyone but the admin session\n(§18.7).",
             "additionalProperties": {
               "$ref": "#/components/schemas/TermFacet"
             },
@@ -22550,6 +22551,10 @@
             "type": "integer",
             "format": "int64"
           },
+          "imported": {
+            "type": "boolean",
+            "description": "From another indexer's database; not checked against the hash (the\n\"Imported\" badge, in place of \"Unverified\"). Shown by default, like\na verified torrent. On `/search` hits only, and only when true."
+          },
           "junk_reasons": {
             "type": "array",
             "items": {
@@ -22702,7 +22707,7 @@
           },
           "verified": {
             "type": "boolean",
-            "description": "It has verified metadata (§18.5, the \"Unverified\" badge when\nfalse). On `/search` hits only."
+            "description": "The info dict was fetched and hashed to the key (§18.5). False for\nan unverified item (the \"Unverified\" badge) and for an import\n(`imported`). On `/search` hits only."
           }
         }
       },
