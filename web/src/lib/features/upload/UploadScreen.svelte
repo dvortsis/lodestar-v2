@@ -4,7 +4,7 @@
 	// result per file with Retry where the server or the connection failed, and the watch folder's
 	// settings below. Files go one at a time, in the order picked, so a pick never races itself
 	// past the server's rate limit; leaving the screen stops what hasn't been sent.
-	import { onDestroy, onMount, type Component } from 'svelte';
+	import { onDestroy, onMount, tick, type Component } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { formatBytes, formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
@@ -47,9 +47,11 @@
 	let nextId = 0;
 	let running = false;
 	let ctl: AbortController | undefined = new AbortController();
+	const holds: ReturnType<typeof setTimeout>[] = [];
 	onDestroy(() => {
 		ctl?.abort();
 		ctl = undefined;
+		for (const t of holds) clearTimeout(t);
 	});
 
 	const ORDER: State[] = [
@@ -58,6 +60,7 @@
 		'held',
 		'refused',
 		'too_large',
+		'turned_away',
 		'rate_limited',
 		'unavailable',
 		'failed',
@@ -73,6 +76,8 @@
 		held: 'warning',
 		refused: 'error',
 		too_large: 'error',
+		proxy_too_large: 'error',
+		turned_away: 'error',
 		rate_limited: 'warning',
 		unavailable: 'warning',
 		failed: 'error',
@@ -95,6 +100,8 @@
 					malformed: m.upload_state_malformed,
 					held: m.upload_state_held,
 					refused: m.upload_state_refused,
+					proxy_too_large: m.upload_state_proxy_too_large,
+					turned_away: m.upload_state_turned_away,
 					unavailable: m.upload_state_unavailable,
 					failed: m.upload_state_failed,
 					stopped: m.upload_state_stopped
@@ -109,24 +116,30 @@
 		held: m.upload_count_held,
 		refused: m.upload_count_refused,
 		too_large: m.upload_count_too_large,
+		proxy_too_large: m.upload_count_too_large,
+		turned_away: m.upload_count_turned_away,
 		rate_limited: m.upload_count_retry,
 		unavailable: m.upload_count_retry,
 		failed: m.upload_count_retry,
 		stopped: m.upload_count_retry
 	};
 
-	/** Counts in the header; the four retryable states share one line. */
+	/** Counts in the header; the four retryable states share one line, and both too-large ones. */
 	const summary = $derived.by(() => {
-		const t = tally(items);
-		const retry = [...RETRYABLE].reduce((n, s) => n + (t[s] ?? 0), 0);
-		const out: { state: State; n: number }[] = [];
-		for (const s of ORDER) {
-			const n = s === 'failed' ? retry : RETRYABLE.has(s) ? 0 : (t[s] ?? 0);
-			if (n) out.push({ state: s, n });
-		}
-		return out;
+		const t = tally(
+			items.map((i) => ({
+				state: RETRYABLE.has(i.state)
+					? 'failed'
+					: i.state === 'proxy_too_large'
+						? 'too_large'
+						: i.state
+			}))
+		);
+		return ORDER.filter((s) => t[s]).map((s) => ({ state: s, n: t[s]! }));
 	});
 	const anyRetry = $derived(items.some((i) => RETRYABLE.has(i.state)));
+	// While a rate limit's wait runs, Retry would only earn another 429.
+	const holding = $derived(items.some((i) => i.hold));
 	const busy = $derived(items.some((i) => i.state === 'queued' || i.state === 'sending'));
 
 	function apply(item: Item, o: Outcome) {
@@ -134,6 +147,10 @@
 		item.hash = o.state === 'added' ? o.hash : undefined;
 		item.private = o.state === 'added' ? o.private : undefined;
 		item.wait = o.state === 'rate_limited' ? o.wait : undefined;
+		item.hold = !!item.wait;
+		if (item.wait) {
+			holds.push(setTimeout(() => (item.hold = false), item.wait * 1000));
+		}
 	}
 
 	/** Adds a pick: refused whole, with the limit named, when it holds more than `MAX_FILES`. */
@@ -177,6 +194,9 @@
 		} finally {
 			running = false;
 		}
+		// Cleared first, so a second pick with the same counts is announced again.
+		announcement = '';
+		await tick();
 		if (ctl) announcement = summary.map((s) => countText[s.state]({ n: count(s.n) })).join(', ');
 	}
 
@@ -261,8 +281,11 @@
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<h3 class="text-body font-semibold">{m.upload_results_heading()}</h3>
 			<div class="flex flex-wrap gap-2">
-				{#if anyRetry && !busy}<Button dense onclick={() => retry()} data-testid="upload-retry-all"
-						>{m.upload_retry_all()}</Button
+				{#if anyRetry && !busy}<Button
+						dense
+						disabled={holding}
+						onclick={() => retry()}
+						data-testid="upload-retry-all">{m.upload_retry_all()}</Button
 					>{/if}
 				{#if !busy}<Button dense variant="quiet" onclick={clear} data-testid="upload-clear"
 						>{m.upload_clear()}</Button
@@ -302,6 +325,7 @@
 						{:else if RETRYABLE.has(item.state) && !busy}
 							<Button
 								dense
+								disabled={holding}
 								onclick={() => retry(item)}
 								aria-label={m.upload_retry_label({ name: item.file.name })}
 								data-testid="upload-retry">{m.upload_retry()}</Button

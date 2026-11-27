@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '$lib/api/client';
-import { CONTENT_TYPE, MAX_BYTES, accepted, precheck, refused, send, tally } from './upload';
+import {
+	CONTENT_TYPE,
+	MAX_BYTES,
+	RETRYABLE,
+	accepted,
+	precheck,
+	refused,
+	send,
+	tally
+} from './upload';
 import { dataDirProblem } from './data-dir';
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
@@ -51,8 +60,30 @@ describe('answers', () => {
 		expect(refused(e('body_too_large'))).toEqual({ state: 'too_large' });
 		expect(refused(e('rate_limited', 7))).toEqual({ state: 'rate_limited', wait: 7 });
 		expect(refused(e('uploads_unavailable'))).toEqual({ state: 'unavailable' });
-		for (const code of ['body_timeout', 'cross_origin', 'bad_body', 'http_502', 'network'])
+		for (const code of ['body_timeout', 'bad_body', 'http_502', 'network'])
 			expect(refused(e(code))).toEqual({ state: 'failed' });
+	});
+
+	it('a 413 from a proxy is final, and names no limit', () => {
+		const o = refused(new ApiError(413, 'http_413', '<html>413</html>'));
+		expect(o).toEqual({ state: 'proxy_too_large' });
+		expect(RETRYABLE.has(o.state)).toBe(false);
+	});
+
+	it('a 403 cross_origin is final, with or without the code', () => {
+		for (const code of ['cross_origin', 'http_403']) {
+			const o = refused(new ApiError(403, code, 'whatever'));
+			expect(o).toEqual({ state: 'turned_away' });
+			expect(RETRYABLE.has(o.state)).toBe(false);
+		}
+	});
+
+	it('a 415 unsupported_media_type is final, with or without the code', () => {
+		for (const code of ['unsupported_media_type', 'http_415']) {
+			const o = refused(new ApiError(415, code, 'whatever'));
+			expect(o).toEqual({ state: 'turned_away' });
+			expect(RETRYABLE.has(o.state)).toBe(false);
+		}
 	});
 
 	it('tallies by state', () => {
@@ -91,6 +122,11 @@ describe('send', () => {
 			vi.fn(async () => json(422, envelope('held')))
 		);
 		expect(await send(new Blob(['x']))).toEqual({ state: 'held' });
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response('<html>413 Request Entity Too Large</html>', { status: 413 }))
+		);
+		expect(await send(new Blob(['x']))).toEqual({ state: 'proxy_too_large' });
 	});
 
 	it('a network failure or a proxy page is a failure to retry', async () => {

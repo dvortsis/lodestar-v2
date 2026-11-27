@@ -30,6 +30,8 @@ export type State =
 	| 'held'
 	| 'refused'
 	| 'too_large'
+	| 'proxy_too_large'
+	| 'turned_away'
 	| 'rate_limited'
 	| 'unavailable'
 	| 'failed'
@@ -46,6 +48,8 @@ export interface Item {
 	private?: boolean;
 	/** On `rate_limited`: seconds the server asked to wait. */
 	wait?: number;
+	/** On `rate_limited`: true until `wait` has passed, so Retry can't earn another 429 at once. */
+	hold?: boolean;
 }
 
 /** States a press of Retry can change: the server or the connection failed, never the file. */
@@ -97,6 +101,19 @@ export function refused(e: ApiError): Outcome {
 			return { state: 'rate_limited', wait: e.retryAfter };
 		case 'uploads_unavailable':
 			return { state: 'unavailable' };
+		case 'cross_origin':
+		case 'unsupported_media_type':
+			return { state: 'turned_away' };
+	}
+	// Answers a retry can't change. A proxy in front of Lodestar may cap bodies below 8 MiB
+	// (nginx's default is 1 MiB) and answer 413 with its own page, so no limit is named. A 403 or
+	// 415 without our code is a proxy's refusal too.
+	switch (e.status) {
+		case 413:
+			return { state: 'proxy_too_large' };
+		case 403:
+		case 415:
+			return { state: 'turned_away' };
 		default:
 			return { state: 'failed' };
 	}

@@ -138,18 +138,23 @@ describe('UploadScreen', () => {
 	it('a rate limit stops the rest; Retry sends them again', async () => {
 		fetch
 			.mockResolvedValueOnce(json(202, { info_hash: 'a'.repeat(40), private: false }))
-			.mockResolvedValueOnce(refusal(429, 'rate_limited', { 'Retry-After': '5' }));
+			.mockResolvedValueOnce(refusal(429, 'rate_limited', { 'Retry-After': '1' }));
 		render(UploadScreen);
 		await pick(torrent('a.torrent'), torrent('b.torrent'), torrent('c.torrent'));
 		await wait(() => expect(states()).toEqual(['added', 'rate_limited', 'stopped']));
 		expect(fetch).toHaveBeenCalledTimes(2);
-		expect(rows()[1]!.textContent).toContain('Too many uploads. Retry in 5 s');
+		expect(rows()[1]!.textContent).toContain('Too many uploads. Retry in 1 s');
 		expect(screen.getByTestId('upload-count-failed').textContent).toBe('2 to retry');
 		const retry = screen.getAllByTestId('upload-retry');
 		expect(retry.map((b) => b.getAttribute('aria-label'))).toEqual([
 			'Retry b.torrent',
 			'Retry c.torrent'
 		]);
+
+		// Retry waits out the server's Retry-After, so it can't earn another 429 at once.
+		for (const b of [...retry, screen.getByTestId('upload-retry-all')])
+			expect((b as HTMLButtonElement).disabled).toBe(true);
+		await wait(() => expect((retry[1] as HTMLButtonElement).disabled).toBe(false));
 
 		fetch.mockResolvedValueOnce(refusal(503, 'uploads_unavailable'));
 		await fireEvent.click(retry[1]!);
