@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-27T01:31Z",
+  "updated_at": "2026-11-27T01:35Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,33 +11116,43 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T01:31Z",
+    "updated": "2026-11-27T01:35Z",
     "items": [
       {
         "slot": 1,
-        "model": "sonnet",
-        "status": "idle",
-        "doing": "empty: runner resumed 2026-11-27T01:31Z, picking per priority"
+        "slice": "X-soft-absent-void",
+        "role": "build",
+        "model": "opus",
+        "agent": "session_01MMjhnBE6Jp9HvVjaX94y7c",
+        "doing": "building: analyzer voids a soft B-arm segment without the soft-timeout counter (path to 100)",
+        "since": "2026-11-27T01:35Z"
       },
       {
         "slot": 2,
+        "slice": "X-restart-fuzz-v2",
+        "role": "build",
         "model": "opus",
-        "status": "idle",
-        "doing": "empty: runner resumed 2026-11-27T01:31Z, picking per priority"
+        "agent": "session_01MMjhn9DwpYm2CJ3wEEyQEH",
+        "doing": "building: restart fuzz target reaches the v2 spill snapshot (queued by the stand-in)",
+        "since": "2026-11-27T01:35Z"
       },
       {
         "slot": 3,
+        "slice": "X-sec-S8-25",
+        "role": "build",
         "model": "opus",
-        "status": "idle",
-        "owns_extra": [
-          "crates/pipeline/src/control.rs (purge_step only, ~6 lines: pass always-adult sources to the store before each step; coordinator relay 20:39Z)"
-        ],
-        "doing": "empty: runner resumed 2026-11-27T01:31Z, picking per priority"
+        "agent": "session_01MMjhnB535p3uDi7tqDaWvq",
+        "doing": "building: S8-25 fix (important; plugin TLS); /security-review",
+        "since": "2026-11-27T01:35Z"
       },
       {
         "slot": 4,
-        "status": "idle",
-        "doing": "empty: runner resumed 2026-11-27T01:31Z, picking per priority"
+        "slice": "X-sec-S8-26",
+        "role": "build",
+        "model": "opus",
+        "agent": "session_01MMjhnCvVhSrDB5e8MDoECq",
+        "doing": "building: S8-26 fix (important, latent; enrichment runtimes); gates ENR-13b; /security-review",
+        "since": "2026-11-27T01:35Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
@@ -12185,7 +12195,28 @@
     "Runner records PR: X-gs-followups slices.yaml owns gains web/e2e/search-results.fixtures.ts and web/e2e/search-results-adaptive.routes.test.ts-snapshots/search-drawer-1440-linux.png (rv-1121).",
     "metrics docs PR (held by owner pause): also docs/metrics.md:677 and crates/lodestar/src/metrics.rs:1643 help text: dht_sample_spill_slots now counts live cooldowns only (rv-1122)"
   ],
-  "owns_locks": [],
+  "owns_locks": {
+    "X-soft-absent-void": [
+      "docs/soak/tools/analyze_cr.py",
+      "docs/soak/tools/test_analyze_cr_soft.py",
+      "infra/fleet/tests/test_block.py"
+    ],
+    "X-restart-fuzz-v2": [
+      "fuzz/fuzz_targets/dht_restart.rs",
+      "fuzz/corpus/dht_restart/**",
+      "crates/dht/src/restart.rs"
+    ],
+    "X-sec-S8-25": [
+      "crates/sources/**",
+      "crates/sources-irc/**"
+    ],
+    "X-sec-S8-26": [
+      "crates/pipeline/**"
+    ],
+    "UP-2 (#1106, API lane)": [
+      "web/.size-limit.mjs"
+    ]
+  },
   "next_pick": {
     "held": true,
     "note": "owner hold 2026-11-25T00:16Z: no new slices. Queued for when it lifts: slot 3 X-restart-fuzz-v2, slot 2 X-gs-followups-2."
