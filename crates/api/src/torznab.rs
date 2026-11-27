@@ -193,10 +193,11 @@ async fn api(
 /// back to a title search only when it finds nothing. Identification is
 /// partial for a DHT index and stays so, as new finds keep arriving
 /// unidentified, so an ID answer would hide every release no source has
-/// identified. Caps doesn't follow coverage either: Prowlarr keeps the
-/// caps it synced. A title search loses nothing: catalogue titles are
-/// indexed too (ENR-11). The parameters are still read when a client
-/// sends them anyway ([`query`]).
+/// identified. Caps doesn't follow coverage either: Prowlarr and the
+/// apps refresh caps only now and then, so it would lag. A title search
+/// loses nothing: catalogue titles are indexed too (ENR-11). The
+/// parameters are still read when a client sends them anyway, and used
+/// only when `q` has no words ([`query`]).
 pub fn caps() -> String {
     let mut x = Xml::new();
     x.open("caps", &[]);

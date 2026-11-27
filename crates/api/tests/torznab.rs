@@ -4,8 +4,9 @@
 //! `torznab_adult` off and on), hostile names written as well-formed XML
 //! (parsed back strictly below), parameter refusals, and every auth
 //! refusal as a Torznab error document that never carries the key; caps
-//! without ID parameters at any coverage, and ID searches that still find
-//! unidentified releases (X-torznab-id-caps).
+//! without ID parameters at any coverage, ID searches with a title
+//! answered as the title search, and ID searches' exclusions
+//! (X-torznab-id-caps).
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -799,51 +800,109 @@ async fn caps_do_not_follow_identification() {
     }
 }
 
-/// An ID search with a title, as a client that ignores caps may send:
-/// the identified releases and the unidentified ones the title finds.
-/// Without a title there's nothing to find the unidentified ones by.
+/// The titles a search finds, sorted.
+async fn sorted_titles(f: &Fixture, key: &str, query: &str) -> Vec<String> {
+    let mut v = f.titles(key, query).await;
+    v.sort();
+    v
+}
+
+/// An ID search with a title, as a client that ignores caps may send, is
+/// answered exactly as the title search alone: the IDs are ignored, so
+/// nothing the title finds is hidden. Only without a title do the IDs
+/// search, and they find the identified releases alone.
 #[tokio::test]
-async fn an_id_search_with_words_finds_unidentified_releases_too() {
+async fn an_id_search_with_words_is_the_title_search() {
     let f = fixture(&shelf([true, false, true, false]), Opts::default());
     let key = f.torznab_key();
-    let sorted = |mut v: Vec<String>| {
-        v.sort();
-        v
-    };
-    assert_eq!(
-        sorted(
-            f.titles(&key, "t=tvsearch&tvdbid=81189&q=breaking+bad&season=1&ep=1")
-                .await
+    for (with, without) in [
+        (
+            "t=tvsearch&tvdbid=81189&q=breaking+bad&season=1&ep=1",
+            "t=tvsearch&q=breaking+bad&season=1&ep=1",
         ),
-        [SHOW_A, SHOW_B]
-    );
-    assert_eq!(
-        sorted(
-            f.titles(&key, "t=movie&imdbid=tt0133093&tmdbid=603&q=matrix")
-                .await
+        (
+            "t=movie&imdbid=tt0133093&tmdbid=603&q=matrix",
+            "t=movie&q=matrix",
         ),
+        // Words that don't name the work: the ID doesn't add it back.
+        (
+            "t=movie&imdbid=tt0133093&q=nothing+like+it",
+            "t=movie&q=nothing+like+it",
+        ),
+    ] {
+        assert_eq!(
+            sorted_titles(&f, &key, with).await,
+            sorted_titles(&f, &key, without).await,
+            "{with}"
+        );
+    }
+    assert_eq!(
+        sorted_titles(&f, &key, "t=movie&imdbid=tt0133093&q=matrix").await,
         [FILM_A, FILM_B]
     );
-    // The rest of the request still applies: season, episode, category.
     assert!(
-        f.titles(&key, "t=tvsearch&tvdbid=81189&q=breaking+bad&season=2")
-            .await
-            .is_empty()
-    );
-    assert!(
-        f.titles(&key, "t=movie&tvdbid=81189&q=breaking+bad")
-            .await
-            .is_empty()
-    );
-    // An identified release is found by its ID whatever the words.
-    assert_eq!(
         f.titles(&key, "t=movie&imdbid=tt0133093&q=nothing+like+it")
-            .await,
-        [FILM_A]
+            .await
+            .is_empty()
     );
     // Only the ID: the identified releases alone.
     assert_eq!(f.titles(&key, "t=tvsearch&tvdbid=81189").await, [SHOW_A]);
     assert_eq!(f.titles(&key, "t=movie&tmdbid=603").await, [FILM_A]);
+}
+
+/// Two ways an ID clause beside the words would find less than the words
+/// alone (runner review of #1132), both answered as the title search:
+/// search's stem fallback, which runs only when the exact query finds
+/// fewer than 10 and would count the ID's matches; and a word with no
+/// tokens, which matches everything on its own.
+#[tokio::test]
+async fn ids_never_narrow_a_title_search() {
+    const DEXTER: &[(&str, &str)] = &[("tvdb", "79349")];
+    let names: Vec<String> = (2..=13)
+        .map(|e| format!("Dexter.S01E{e:02}.1080p.WEB.x264-GRP.mkv"))
+        .collect();
+    let mut ts: Vec<T> = names.iter().map(|n| identified(n, DEXTER)).collect();
+    let unidentified = "Dexter.S01E01.720p.HDTV.x264-OTHER.mkv";
+    ts.push(t(unidentified));
+    let f = fixture(&ts, Opts::default());
+    let key = f.torznab_key();
+    // The identified twelve: enough to skip the stem fallback.
+    assert_eq!(f.titles(&key, "t=tvsearch&tvdbid=79349").await.len(), 12);
+    let stems = sorted_titles(&f, &key, "t=tvsearch&q=dexters").await;
+    assert!(stems.iter().any(|n| n == unidentified), "{stems:?}");
+    assert_eq!(
+        sorted_titles(&f, &key, "t=tvsearch&tvdbid=79349&q=dexters").await,
+        stems
+    );
+    let dash = sorted_titles(&f, &key, "t=tvsearch&q=-").await;
+    assert_eq!(dash.len(), 13, "{dash:?}");
+    assert_eq!(
+        sorted_titles(&f, &key, "t=tvsearch&tvdbid=79349&q=-").await,
+        dash
+    );
+}
+
+/// The ID clause is search's own path: a private source's release and an
+/// Adult one (with `torznab_adult` off) are left out, even when an answer
+/// names the ID asked for.
+#[tokio::test]
+async fn an_id_search_keeps_every_exclusion() {
+    let mut private = identified("The.Matrix.1999.720p.Private.x264-GRP.mkv", FILM_IDS);
+    private.flags = flags::PRIVATE_SOURCE;
+    let mut adult = identified("The.Matrix.XXX.Parody.1080p.mp4", FILM_IDS);
+    adult.adult = true;
+    let f = fixture(
+        &[identified(FILM_A, FILM_IDS), private, adult],
+        Opts::default(),
+    );
+    let key = f.torznab_key();
+    for q in [
+        "t=movie&imdbid=tt0133093",
+        "t=search&imdbid=tt0133093",
+        "t=search&cat=2000,6000&tmdbid=603",
+    ] {
+        assert_eq!(f.titles(&key, q).await, [FILM_A], "{q}");
+    }
 }
 
 // ── Searching ─────────────────────────────────────────────────────────
