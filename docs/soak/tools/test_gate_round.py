@@ -104,7 +104,7 @@ class Round1Sim(col6.Stage3Sim):
         run = json.loads((root / "run.json").read_text())
         run.update(run_id=f"r1-a1-d1-{self.arm}", host_identity=mk.HOST, network_identity=mk.NETWORK,
                    round1={"round": 1, "attempt": "r1-a1", "day": 1, "arm": self.arm})
-        run["image_digest"] = mk.DIGEST
+        run["image_digest"] = getattr(self, "digest", mk.DIGEST)
         (root / "run.json").write_text(json.dumps(run))
         return root
 
@@ -183,11 +183,9 @@ class DeclarationTests(SegmentBase):
         self.assertIn("effective_switches_recorded", report["verdict_reasons"])
 
     def test_another_image_digest_voids(self):
-        decl = mk.archive("L3")["declaration"]
-        for e in decl["arms"]:
-            e["image_digest"] = "sha256:" + "9" * 64
-        report = self.judge(Round1Sim(), analyze_cr.check_declaration(decl))
-        self.assertIn("declared_image_digest", report["verdict_reasons"])
+        sim = Round1Sim()
+        sim.digest = "sha256:" + "9" * 64  # the arm ran another image than the round's
+        self.assertIn("declared_image_digest", self.judge(sim)["verdict_reasons"])
 
     def test_safe_restart_off_voids(self):
         sim = Round1Sim()
@@ -927,14 +925,72 @@ class HistoryTests(RoundBase):
                 self.assertEqual(v["selection"]["trail"][0]["disposition"], "product_failure")
                 self.assertNotEqual(v["selection"]["ships"], "B")
 
-    def test_a_product_failure_on_another_digest_does_not_carry_over(self):
+    def test_another_digest_for_an_earlier_attempt_is_refused(self):
+        # Re-review of 970a6556: a wrong digest declared for a1 once wiped out its valid miss
+        # (or its product failure), so B shipped from a2. One image for the round (§6.3).
+        for variant in ("miss", "product"):
+            a = mk.archive("L3")
+            if variant == "miss":
+                self.day(a, 2)["reports"]["B"]["numerator"]["hourly"][3]["net_per_min"] = 60.0
+            else:
+                self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"], "diagnosis": "product"}]
+            a["declaration"]["attempts"][0]["candidate_digests"]["B"] = "sha256:" + "0" * 64
+            add_attempt(a, "L2", "r1-a2")
+            with self.assertRaises(ValueError):
+                self.gate(a)
+
+    def test_an_entry_with_another_image_digest_is_refused(self):
+        a = mk.archive("L3")
+        a["declaration"]["arms"][0]["image_digest"] = "sha256:" + "0" * 64
+        with self.assertRaises(ValueError):
+            self.gate(a)
+
+    def ended_short(self, a, days_run):
+        path = mk.write(self.root / f"ended{self.n}", a)
+        self.n += 1
+        man = json.loads(path.read_text())
+        man["attempt_ends"] = {"r1-a1": {"reason": "x", "days_run": days_run}}
+        path.write_text(json.dumps(man))
+        return path
+
+    def test_an_ended_attempt_that_hides_its_history_does_not_let_b_ship(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"], "diagnosis": "pending"}]
+        add_attempt(a, "L2", "r1-a2")
+        a["days"] = [d for d in a["days"] if d["attempt"] != "r1-a1"]
+        v = analyze_cr.gate_round(analyze_cr.load_manifest(self.ended_short(a, [])))
+        self.assertNotJudged(v, "earlier_attempt_history_unseen")
+        self.assertIsNone(v["selection"]["ships"])
+        self.assertEqual(v["attempt_ends"], {"r1-a1": {"reason": "x", "days_run": []}})
+        self.assertEqual(self.cand(v)["attempt_ends"], v["attempt_ends"])
+
+    def test_an_ended_attempt_whose_seen_day_is_flagged_is_not_judged(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "infrastructure", "arms": []}]
+        add_attempt(a, "L2", "r1-a2")
+        a["days"] = [d for d in a["days"] if not (d["attempt"] == "r1-a1" and d["day"] == 2)]
+        v = analyze_cr.gate_round(analyze_cr.load_manifest(self.ended_short(a, [1])))
+        self.assertNotJudged(v, "earlier_attempt_history_unseen")
+
+    def test_attempt_ends_days_run_must_be_a_plain_prefix(self):
+        a = mk.archive("L3")
+        add_attempt(a, "L2", "r1-a2")
+        for bad in ([[1]], [True], [2], [1, 1], [2, 1]):
+            with self.assertRaises(ValueError):
+                analyze_cr.load_manifest(self.ended_short(a, bad))
+        b = mk.archive("L3")
+        add_attempt(b, "L2", "r1-a2")
+        b["days"] = [d for d in b["days"] if not (d["attempt"] == "r1-a1" and d["day"] == 1)]
+        with self.assertRaises(ValueError):  # it says day 1 ran, but day 1 isn't listed
+            analyze_cr.load_manifest(self.ended_short(b, [1]))
+
+    def test_a_product_failure_outranks_a_valid_miss_in_the_disposition(self):
         a = mk.archive("L3")
         self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["B"], "diagnosis": "product"}]
-        a["declaration"]["attempts"][0]["candidate_digests"]["B"] = "sha256:" + "0" * 64
-        add_attempt(a, "L2", "r1-a2")
-        c = self.cand(self.gate(a))
-        self.assertNotIn("product_failure_on_this_digest", c["reasons"])
-        self.assertFalse(c["product_failure"])
+        self.day(a, 2)["reports"]["B"]["numerator"]["hourly"][3]["net_per_min"] = 60.0
+        v = self.gate(a)
+        self.assertEqual(self.cand(v)["crawler"], "fail")
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "product_failure")
 
     def test_a_failed_solo_confirmation_has_no_further_retry_and_a_is_read(self):
         a = mk.archive("L3")

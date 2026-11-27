@@ -1841,10 +1841,13 @@ def check_declaration(decl):
     for e in arms:  # a role is the arm's for the whole round
         require(all(o["role"] == e["role"] for o in arms if o["arm"] == e["arm"]),
                 f"declaration: arm {e['arm']} has one role")
+        # §6.3: one pinned image, the same digest for every arm and day.
+        require(e["image_digest"] == decl["image_digest"],
+                f"declaration: entry {e['arm']} day {e['day']} of {e['attempt']} names another image digest")
         if e["role"] == "candidate":  # each attempt records its candidates' digests (§6.3)
             att = next(a for a in attempts if a["id"] == e["attempt"])
-            require(isinstance(att["candidate_digests"].get(e["arm"]), str),
-                    f"declaration: attempt {att['id']} records candidate {e['arm']}'s digest")
+            require(att["candidate_digests"].get(e["arm"]) == decl["image_digest"],
+                    f"declaration: attempt {att['id']} records candidate {e['arm']}'s digest as the round's image")
     # Runner, 2026-11-27: layouts only shrink (L3 → L2 or L2b → S), so each later attempt that
     # isn't a solo confirmation drops an arm, and the round can't loop through fresh attempts.
     # A solo confirmation (S) is one arm from the attempt before it, outside that chain.
@@ -1889,8 +1892,9 @@ def load_manifest(path):
     ends = man.get("attempt_ends") or {}
     require(isinstance(ends, dict) and all(k in declared and isinstance(v, dict) and isinstance(v.get("reason"), str)
                                            and isinstance(v.get("days_run"), list)
-                                           and set(v["days_run"]) <= {1, 2} for k, v in ends.items()),
-            "manifest: attempt_ends maps a declared attempt to {reason, days_run}")
+                                           and all(type(x) is int for x in v["days_run"])
+                                           and v["days_run"] in ([], [1], [1, 2]) for k, v in ends.items()),
+            "manifest: attempt_ends maps a declared attempt to {reason, days_run: [], [1] or [1, 2]}")
     out["attempt_ends"] = ends
     for d in man.get("days") or []:
         require(isinstance(d, dict) and d.get("day") in (1, 2) and isinstance(d.get("attempt"), str)
@@ -1902,6 +1906,10 @@ def load_manifest(path):
             "reports": {arm: load(ref) for arm, ref in sorted((d.get("reports") or {}).items())},
             "archive": load(d["archive"]) if d.get("archive") is not None else None,
             "contention": load(d["contention"]) if d.get("contention") is not None else None})
+    listed = {(d["attempt"], d["day"]) for d in out["days"]}
+    for k, v in ends.items():
+        require(all((k, day) in listed for day in v["days_run"]),
+                f"manifest: attempt_ends says {k} ran days {v['days_run']}, but not all are listed")
     out["inputs"] = hashes
     out["manifest_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     return out
@@ -2236,6 +2244,7 @@ def candidate_days(inputs, decl, attempt, cand):
 # Problems that keep any day from counting, a valid miss included: the arm can't qualify, or
 # the comparator or spacing that every window of the round depends on isn't there.
 UNJUDGEABLE = ("not_authorized", "spacing", "retry_budget_exhausted", "earlier_attempt_incomplete",
+               "earlier_attempt_history_unseen",
                "repeats_not_contiguous", "run_id_reused")
 
 
@@ -2269,9 +2278,16 @@ def judge_candidate(cand, inputs):
         if a is attempt:
             continue
         end = inputs.get("attempt_ends", {}).get(a["id"])
-        need = set(end["days_run"]) if end else {e["day"] for e in entries if e["attempt"] == a["id"]}
+        declared_here = {e["day"] for e in entries if e["attempt"] == a["id"]}
+        need = set(end["days_run"]) if end else declared_here
         if not need <= set(listed):
             reasons.append("earlier_attempt_incomplete")
+        elif end and set(end["days_run"]) < declared_here:
+            # Runner's ruling (2026-11-27): an attempt ended short hides history, so it lets a
+            # later attempt count only if it has days to see and every one is clean.
+            seen = [judge_day(cand, a, decl, d, ok_comp) for vs in listed.values() for d in vs]
+            if not seen or any(j["status"] != "pass" or j["reasons"] for j in seen):
+                reasons.append("earlier_attempt_history_unseen")
     # Earlier attempts: reported, and a valid miss in one still counts.
     earlier = []
     for a in attempts[:-1]:
@@ -2280,6 +2296,8 @@ def judge_candidate(cand, inputs):
                              digest=a["candidate_digests"].get(cand)) for d in versions]
     out["earlier_attempts"] = [{"attempt": j["attempt"], "day": j["day"], "repeat": j["repeat"],
                                 "status": j["status"], "reasons": j["reasons"]} for j in earlier]
+    out["attempt_ends"] = {a["id"]: inputs["attempt_ends"][a["id"]] for a in attempts
+                           if a["id"] in inputs.get("attempt_ends", {})}
     # This attempt: a repeated day replaces the one it repeats only if that one wasn't judged
     # (§6.3 repeats a day after an evidenced fault); a judged miss stays a miss.
     versions = candidate_days(inputs, decl, attempt, cand)
@@ -2429,6 +2447,7 @@ def gate_round(inputs):
     out = {"schema": 1, "kind": "cr_round1_verdict", "spec": SPEC, "plan": "docs/plan/2026-11-27-revised-path-to-100.md",
            "round": decl["round"], "manifest_sha256": inputs["manifest_sha256"], "analyzer_sha256": ANALYZER_SHA256,
            "inputs": dict(sorted(inputs["inputs"].items())), "contention_thresholds": CONTENTION,
+           "attempt_ends": dict(sorted(inputs.get("attempt_ends", {}).items())),
            "candidates": {a: j for a, j in judged.items() if j["role"] == "candidate"},
            "diagnostics": {a: j for a, j in judged.items() if j["role"] != "candidate"}}
     out["selection"] = select(judged, SELECTION_ORDER)

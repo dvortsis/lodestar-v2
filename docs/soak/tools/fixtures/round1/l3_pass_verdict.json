@@ -1,8 +1,10 @@
 {
+ "attempt_ends": {},
  "candidates": {
   "A": {
    "arm": "A",
    "attempt": "r1-a1",
+   "attempt_ends": {},
    "comparator_problems": [],
    "crawler": "pass",
    "days": [
@@ -128,6 +130,7 @@
   "B": {
    "arm": "B",
    "attempt": "r1-a1",
+   "attempt_ends": {},
    "comparator_problems": [],
    "crawler": "pass",
    "days": [
@@ -265,6 +268,7 @@
   "C": {
    "arm": "C",
    "attempt": "r1-a1",
+   "attempt_ends": {},
    "comparator_problems": [],
    "crawler": "not_judged",
    "days": [
