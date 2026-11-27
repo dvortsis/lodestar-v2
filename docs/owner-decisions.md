@@ -787,6 +787,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
     - **Runner's reading:** slices already running finish and merge as usual. A freed build slot stays empty. A queued follow-up waits. A new slice starts only when the cloud-testing session (X-test-vm) or the API lane needs one, and the runner records why. This pauses §2.81's four build sessions; testing sessions are unchanged. *Superseded by §2.84 (2026-11-27): the owner resumed all runner work, so new slices start again.*
     - **Balances** (owner, the same session, about 06:30Z): "$154.86", then "I gave you the claude api balance. The AWS balance is $130.56".
     - **Spend (runner's reading):** §2.82's AWS stop is 90% of the lower of $130.56 and $133.72, so **$117.50 of new AWS spend from 2026-11-23T00:31Z**. Linode's cap and the fleet's are unchanged.
+      - *Superseded by §2.87 (2026-11-27): the AWS stop is $295, as the AWS Budget measures it.*
 
 84. **The runner's pause, an audit of the stand-in's merges, and the resume with the path to 100 first** (owner, 2026-11-24 and 2026-11-27).
     - **Pause** (owner, in the runner session, 2026-11-24T06:30Z): "pause the agent runner until further notice". The runner disabled its heartbeat and recorded the pause in runner-state. While it was paused, a stand-in session ("Claude Duet") merged 16 PRs, #1108 to #1123. The stand-in's own records (`docs/decisions/2026-11-24-IRC-1.md`) cite the owner at 2026-11-24T06:19Z: "behave as the runner does". The runner has not checked that quote against the owner's session.
@@ -807,6 +808,51 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       2. The audit's fix slices.
       3. The stand-in's queue: X-restart-fuzz-v2, X-gs-followups-2 and the `docs/metrics.md` runner docs PR.
       4. Tracking CR-0w (§2.77).
+      - *Item 1 is superseded by §2.86 (2026-11-27): after cr-ab-comp-2, round 1 (CR-R1) replaces CR-AB-ADM, CR-AB-4, Checkpoint 1 and CR-AB-LC.*
+
+85. **The fastest reliable route to 1.0: performance first, a VPN on every test crawl, an AWS budget, and build-plan r6** (owner, 2026-11-26, in the "Path to 100" session; relayed to the runner, which checked each message against that session's events). The plan is `docs/plan/2026-11-26-fastest-1.0-proposal.md`.
+    - **Performance first, politeness second** (19:28:05Z): "We must prioritize overall performance. You have permission to break politeness standards if that improves throughput. I would like politeness as a second priority, if we can find a way to do it without sacrificing throughput. I also need the quickest, most sure route to version 1.0 with lowest cost. We can test and modify politeness constraints after release."
+      - **The safety rules stay (runner's reading, as the plan's §5 says):** private hashes never reach `get_peers`, VPN leak protection, the content filters, and no fake node identities.
+    - **A VPN on every test crawl** (19:42:32Z): "Ensure a wireguard VPN with leak protection is always used for DHT crawling." Every test crawl, on any host or cloud, runs inside WireGuard (gluetun) and starts only after its leak test passes (plan §4.7).
+    - **An optional VPN in the product** (19:44:35Z): "The VPN should be optional and work with any VPN provider, along with system-wide VPNs or in other containers." Built as X-vpn-bind, with the guide's VPN section rewritten (plan §4.6, D8).
+    - **An AWS budget** (18:54:58Z, "Estimate the spend cap needed?"; 19:04:10Z, "Ok. set a budget for estimated amount used"; 19:12:26Z, after the session proposed it, "I approve. Don't start any sessions yet.").
+      - **The budget:** the AWS Budget "Lodestar Path to 100", $295 of gross spend from 2026-11-26 to 2027-11-25, with alerts at 50, 80 and 100% of actual spend and at 100% of forecast.
+      - **It alerts only.** That session said raising the cap is the owner's decision, and that the runner's own hard limits ($117.50 of new AWS spend from 2026-11-23T00:31Z, §2.83; 24 h instance expiry) were separate and unchanged. The runner kept the $117.50 stop until §2.87 replaced it.
+    - **Better than bitmagnet** (21:36:40Z): "This is a modern re-build so I want performance to be better than bitmagnet." Then 21:39:41Z: "Let's go with B" (plan D13 B):
+      - 100/min stays the 1.0 crawl gate;
+      - search, storage, memory and latency must beat bitmagnet at 1.0, measured side by side (a new 1.0 gate, G-v1-vs-bitmagnet, on the RC);
+      - crawl-rate parity with bitmagnet is the 1.1 target.
+    - **Every other recommendation** (21:42:45Z): "yes to all recommendations", for D1 to D12 of the plan, each as its Recommendation column says. The plan is build-plan r6. Its §4 crawler sequence is replaced by §2.86.
+      - **D2 and D10:** `lodestar-host`, the VM on the owner's new Unraid server, is the experiment host of record for G-v06-crawler, G-v1-crawler and G-v1-soak-linux. It was resized to 8 vCPU (cores 4–7) and 32 GiB, as the owner's root agent reported. That report gave the CPU package as capped at 45 W until a new cooler is fitted; §2.84 records "no longer throttled at 45w".
+      - **D3 and D4 change rules the owner set:** CR-SPEC's host design (parallel arms on separate VPN exits, swapped daily; mover runs and parity checks don't void a VM segment), and the politeness part of G-v1-audits (a bounded-load check for 1.0, the full audit in 1.1). The blanket yes approved both. The runner flags them (§2.19, `docs/decisions/2026-11-27-runner-records-r19.md`).
+      - **D12 closes owner-queue items 35 and 36 as moot.** The 44 h cloud instances of item 35 are not approved.
+      - **Runner's reading:** D7 answers owner-queue item 27 (emulation is accepted for the screen-reader and phone checks) and makes item 26's walkthrough the owner's own. D11 answers item 30: crawler slices may run in parallel when they only add switch lines to shared files.
+    - **Not approved:** counting cloud results as evidence of record. §2.82's rule stands: cloud results are provisional.
+
+86. **Round 1 replaces the serial live stages and Checkpoint 1** (owner, 2026-11-27, in the "Testing summary last 24 hours" session; relayed to the runner, which checked each message against that session's events). At 17:51:34Z: "What are your recommendations for the four decisions?" At 17:52:16Z, after the recommendations: "I approve. Pass all the necessary info to the runner and archive session". So O1 to O4 of `docs/plan/2026-11-27-revised-path-to-100.md` (revision 6, plan §10) are yes, as recommended. The plan amends §2.85's plan, §4 only.
+    - **O1, the sequence:** round 1 on the box replaces the serial live stages and Checkpoint 1 (plan §3.2).
+      - CR-AB-ADM, CR-AB-4, CR-CP1, CR-AB-LC, CR-AB-1 and CR-5 don't run before the gate. Attribution per switch moves to 1.1.
+      - The round-1 report replaces Checkpoint 1 (plan §3.4).
+      - CR-COMB's acceptance can be a qualified round-1 candidate's two days, transferred to the shipping image by the defaults-only rule (plan §6.5).
+    - **O2, Aggressive as the authorized fallback:** Balanced (B) first. Aggressive (A) may ship if B isn't shipping-eligible and A is, on two valid days (plan §3.3, §6.2).
+    - **O3, the CR-SPEC changes (plan §8):** confirmed. These include:
+      - rule 5.5's declarations in place of "every Lodestar segment on Balanced";
+      - running `preset_slots` despite CR-1c's failed simulation screen;
+      - §6.1's per-switch evidence table, with `route_backoff` off in both candidates;
+      - rule 6.8's network identity.
+      - They go in one decisions file, CR-SPEC-R1, merged before the rehearsal.
+    - **O4, single-node performance:** a miss under demonstrated network contention gets a solo confirmation instead of ending the claim (plan §6.3).
+    - **Unchanged:** G-v06-crawler's three tests, rule 2.2's comparator spacing, the carry-in rules, one crawler per public IP, and §2.27 (the runner never loosens the gate).
+    - **The runner's calls (plan §10):** the recording, the harness slices, merging CR-0w, pinning the image, box prep, the rehearsal and whether C runs. They're in `docs/decisions/2026-11-27-runner-records-r19.md`.
+
+87. **The AWS stop is $295, and the Legal Notice's safe-restart line is corrected** (owner, 2026-11-27 about 18:00Z, in the runner session, answering two questions from the runner).
+    - **"1. OK to change stop to 295"**
+      - The runner's AWS hard stop becomes $295, measured as the AWS Budget "Lodestar Path to 100" measures it: gross spend from 2026-11-26 to 2027-11-25 (§2.85). It replaces the $117.50 stop (§2.83).
+      - **Unchanged:** the instance limits (at most 2 at a time, `ExpiresAt` at most 24 h, teardown at the end of each step), and §2.82 (cloud results are provisional).
+    - **"2. Go with your recommendation"**
+      - The Legal Notice's §5 says "the optional safe-restart switch". Since CR-0w (#1134), safe restart is on by default. The line becomes: "the safe-restart check, on by default, keeps its restart record in a folder outside the data folder (user guide, section 3.8)".
+      - NOTICE_VERSION goes up, so every admin sees the corrected notice once, as `docs/decisions/2026-11-11-X-event-log-notice.md` did for a new exception.
+      - The change is built as the slice X-legal-safe-restart.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
