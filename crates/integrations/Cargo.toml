@@ -22,11 +22,22 @@ quick-xml = { version = "=0.42.0", default-features = false }
 # (§16): aws-lc, reqwest's default provider, is a C/CMake build.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "multipart", "form", "query", "socks"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Certificate verification by route (`tls`): the OS verifier on a direct
+# route, webpki over the OS store's roots on every other. Both are
+# already in the lock file (through rustls-platform-verifier), at these
+# versions.
+rustls-native-certs = "=0.8.5"
+rustls-platform-verifier = "=0.7.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["rt", "net", "sync", "time"] }
 tracing = "0.1.44"
 zeroize = "1.9.1"
+
+# The Disallowed store, read with the ROOT store (`tls`); already in the
+# lock file through rustls-native-certs, at this version.
+[target.'cfg(windows)'.dependencies]
+schannel = "=0.1.30"
 
 [lints]
 workspace = true

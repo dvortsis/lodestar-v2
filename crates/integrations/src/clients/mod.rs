@@ -319,7 +319,9 @@ impl From<NetError> for ClientError {
             NetError::InvalidUrl(why) => ClientError::InvalidRequest(why),
             NetError::TooLarge => ClientError::Protocol("the response was too large"),
             NetError::Redirect => ClientError::Protocol("the client redirected"),
-            NetError::Resolve | NetError::Connect | NetError::Http => ClientError::Unreachable,
+            NetError::Resolve | NetError::Connect | NetError::Certificate | NetError::Http => {
+                ClientError::Unreachable
+            }
             NetError::NotReady => ClientError::NotReady,
         }
     }

@@ -2382,3 +2382,40 @@ async fn an_answer_ends_the_not_ready_streak() {
         .unwrap();
     assert_eq!(egress.not_ready_streak.load(Ordering::Relaxed), 0);
 }
+
+// ---------------------------------------------------------------- TLS by route
+
+#[tokio::test]
+async fn a_routed_sources_http_and_websocket_tls_verify_self_contained() {
+    use lodestar_integrations::tls::{Verification, verifies_self_contained};
+    let proxy: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let cases = [
+        (Egress::Direct, false),
+        (
+            Egress::Socks5 {
+                proxy,
+                dns: SocksDns::Proxy,
+            },
+            true,
+        ),
+        (
+            Egress::Socks5 {
+                proxy,
+                dns: SocksDns::Local,
+            },
+            true,
+        ),
+    ];
+    for (egress, routed) in cases {
+        let built = factory(Scripted::new(&[])).build("p", &egress, lan()).await;
+        let http = built.client.as_ref().expect("the client builds");
+        assert_eq!(
+            http.verification() == Verification::SelfContained,
+            routed,
+            "{egress:?}"
+        );
+        let tcp = built.tcp.as_ref().expect("the route builds");
+        let ws = built.tls(tcp).expect("the connector builds");
+        assert_eq!(verifies_self_contained(ws.config()), routed, "{egress:?}");
+    }
+}

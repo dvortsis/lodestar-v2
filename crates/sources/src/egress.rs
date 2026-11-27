@@ -511,8 +511,8 @@ impl EgressFactory {
         }
     }
 
-    /// The certificates WebSocket sessions trust: the platform's by
-    /// default; tests name their own CA.
+    /// The certificates WebSocket sessions trust: by default chosen by
+    /// the plugin's route ([`Roots::Platform`]); tests name their own CA.
     pub fn with_roots(mut self, roots: Roots) -> EgressFactory {
         self.roots = roots;
         self
@@ -528,6 +528,11 @@ impl EgressFactory {
     /// gives a client whose kill switch is down for good, so the reason is
     /// visible in its status and every request is refused.
     pub async fn build(&self, plugin: &str, egress: &Egress, endpoints: Endpoints) -> PluginEgress {
+        if !matches!(egress, Egress::Direct) {
+            // A routed client's roots are read from the OS store once, on a
+            // blocking thread rather than this one.
+            lodestar_integrations::tls::load_roots().await;
+        }
         let probe = match egress {
             Egress::Direct => Probe::Direct,
             Egress::BindAddress(ip) => Probe::Bind(*ip),
@@ -1064,8 +1069,10 @@ impl PluginEgress {
                 HttpError::NotReady(lodestar_integrations::net::NOT_READY.into())
             }
             e => {
-                if matches!(e, NetError::Connect | NetError::Timeout)
-                    && self.probe.ttl().is_some()
+                if matches!(
+                    e,
+                    NetError::Connect | NetError::Certificate | NetError::Timeout
+                ) && self.probe.ttl().is_some()
                     && let RouteState::Down(reason) = self.check_now().await
                 {
                     Counters::bump(&self.counters.kill_switch_aborts);
@@ -1252,8 +1259,10 @@ impl EgressBody {
         match read {
             Ok(chunk) => Ok(chunk),
             Err(e) => {
-                if matches!(e, NetError::Connect | NetError::Timeout | NetError::Http)
-                    && checked
+                if matches!(
+                    e,
+                    NetError::Connect | NetError::Certificate | NetError::Timeout | NetError::Http
+                ) && checked
                     && let Err(reason) = probe.probe().await
                 {
                     Counters::bump(&counters.kill_switch_aborts);
@@ -1320,14 +1329,14 @@ impl Fetch for PluginEgress {
 }
 
 impl PluginEgress {
-    /// The WebSocket TLS connector for this plugin's roots.
+    /// The WebSocket TLS connector for this plugin's roots and route.
     fn tls(&self, tcp: &TcpEgress) -> Result<tokio_rustls::TlsConnector, WsError> {
-        // Only a connector that built is kept: a failure (the platform's
-        // roots not loading) is tried again next time.
+        // Only a connector that built is kept: a failure (the verifier
+        // not starting) is tried again next time.
         if let Some(c) = self.tls.get() {
             return Ok(c.clone());
         }
-        let c = ws::tls_connector(&tcp.roots)?;
+        let c = ws::tls_connector(&tcp.roots, &tcp.route)?;
         Ok(self.tls.get_or_init(|| c).clone())
     }
 

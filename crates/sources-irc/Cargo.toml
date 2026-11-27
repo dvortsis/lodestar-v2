@@ -12,11 +12,9 @@ repository.workspace = true
 # The guarded, routed TCP connect (NOS-2a) and `Secret`: every connection
 # goes through the plugin's egress, never a socket of this crate's own.
 lodestar-integrations.workspace = true
-# TLS: rustls on ring with the platform verifier, as integrations and
-# sources-importers use them (approved for IRC-0 in the v0.7 plan). All
-# are already in the lock file.
+# TLS: rustls on ring (approved for IRC-0 in the v0.7 plan), verifying
+# with lodestar-integrations' `tls`, which picks the verifier by route.
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-rustls-platform-verifier = "=0.7.1"
 # Announce patterns (IRC-1), compiled with size, DFA and nesting limits;
 # the version the search crate pins, already in the lock file.
 regex = "=1.13.1"
