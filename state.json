@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T19:36:45Z",
+  "updated_at": "2026-11-28T19:38:41Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11163,7 +11163,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T19:36:45Z",
+    "updated": "2026-11-28T19:38:41Z",
     "items": [
       {
         "slot": 1,
@@ -11191,11 +11191,11 @@
       },
       {
         "slot": 4,
-        "slice": "M8-PERF-3",
+        "slice": "X-help",
         "role": "build",
-        "agent": "session_01MMjhn9RHhXEv4EPdxpobd7",
-        "doing": "#1186 open; second delta review running",
-        "since": "2026-11-28T18:17:48Z"
+        "agent": "session_01MMjhnAWKbEq68zeMH94EZr",
+        "doing": "step 0: screens, guide chapters, glossary terms, hooks",
+        "since": "2026-11-28T19:38:41Z"
       },
       {
         "slot": 5,
@@ -12324,10 +12324,8 @@
   },
   "merge_order": [],
   "next_launch": [
-    "X-help (fill)",
     "M8-REL-2 (after X-ci-test-shard)",
-    "X-hidden-count-drawer-wrap (fill)",
-    "dht proof spill-filter flake fix (once)"
+    "X-hidden-count-drawer-wrap (fill)"
   ],
   "paused_slices": {}
 }
