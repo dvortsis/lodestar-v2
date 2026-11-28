@@ -86,11 +86,7 @@ impl Fetcher for Fetch {
         _peer: SocketAddr,
         key: InfoHash,
     ) -> BoxFuture<'static, Result<Fetched, FailureKind>> {
-        let filled = self
-            .0
-            .monitor
-            .get()
-            .is_some_and(|m| m.have().is_filled());
+        let filled = self.0.monitor.get().is_some_and(|m| m.have().is_filled());
         self.0.asked.lock().unwrap().push((key, filled));
         Box::pin(async { Err(FailureKind::Refused) })
     }
@@ -119,6 +115,16 @@ impl Gate {
     }
 }
 
+/// Opens the gate when dropped, so a failed assertion doesn't leave the
+/// fill thread waiting, and the runtime's shutdown with it.
+struct OpenOnDrop(Arc<Gate>);
+
+impl Drop for OpenOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
 /// Polls until a 10 s deadline (standards §2).
 async fn until(what: &str, mut f: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -134,7 +140,10 @@ async fn until(what: &str, mut f: impl FnMut() -> bool) {
 fn stored_info() -> Info {
     let mut d = BTreeMap::new();
     d.insert(b"length".to_vec(), OwnedValue::Int(1_000));
-    d.insert(b"name".to_vec(), OwnedValue::from("stored before the start"));
+    d.insert(
+        b"name".to_vec(),
+        OwnedValue::from("stored before the start"),
+    );
     d.insert(b"piece length".to_vec(), OwnedValue::Int(1 << 18));
     d.insert(b"pieces".to_vec(), OwnedValue::Bytes(vec![7; 20]));
     Info::parse(&to_vec(&OwnedValue::Dict(d))).unwrap()
@@ -163,6 +172,7 @@ async fn the_start_doesnt_wait_for_the_fill_and_nothing_is_admitted_before_it() 
     let fresh = InfoHash([0x42; 20]);
 
     let gate = Arc::new(Gate::default());
+    let _open = OpenOnDrop(gate.clone());
     let config = PipelineConfig {
         fill_gate: Some(FillGate::new({
             let gate = gate.clone();
@@ -176,9 +186,14 @@ async fn the_start_doesnt_wait_for_the_fill_and_nothing_is_admitted_before_it() 
     let fetcher = Arc::new(Recording::default());
     let store = Store::open(&db, StoreConfig::default()).unwrap();
     // Returns with the fill held: the start doesn't wait for it.
-    let pipeline = Pipeline::start_with(config, store, vec![source], Arc::new(Fetch(fetcher.clone())))
-        .await
-        .unwrap();
+    let pipeline = Pipeline::start_with(
+        config,
+        store,
+        vec![source],
+        Arc::new(Fetch(fetcher.clone())),
+    )
+    .await
+    .unwrap();
     let m = pipeline.monitor();
     assert!(fetcher.monitor.set(m.clone()).is_ok());
     until("the fill to reach its gate", || {
@@ -214,7 +229,12 @@ async fn the_start_doesnt_wait_for_the_fill_and_nothing_is_admitted_before_it() 
     })
     .await;
     until("the new key to be fetched", || {
-        fetcher.asked.lock().unwrap().iter().any(|(k, _)| *k == fresh)
+        fetcher
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(k, _)| *k == fresh)
     })
     .await;
     assert_eq!(m.intake_stats().known.load(Ordering::Relaxed), 1);

@@ -114,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = Store::open(&db, StoreConfig::default())?;
         let pipeline = Pipeline::start(PipelineConfig::default(), store, Vec::new()).await?;
         let start_ms = started.elapsed().as_millis();
-        // pipeline.monitor().have().filled().await;
+        pipeline.monitor().have().filled().await;
         let filled_ms = started.elapsed().as_millis();
         println!(
             "{{\"torrents\":{torrents},\"counted\":{counted},\"bound\":{bound},\

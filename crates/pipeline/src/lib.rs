@@ -687,10 +687,17 @@ impl Pipeline {
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (store, registered, mut queue, (have, fill), backfill_until, stored_at_start, store_filter) =
-            tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
-                .await
-                .map_err(Error::Join)??;
+        let (
+            store,
+            registered,
+            mut queue,
+            (have, fill),
+            backfill_until,
+            stored_at_start,
+            store_filter,
+        ) = tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
+            .await
+            .map_err(Error::Join)??;
         // Uploads (UP-0) are stored under a built-in source, as imports
         // register theirs.
         let (store, upload_source) = tokio::task::spawn_blocking(move || {
