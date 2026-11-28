@@ -2,8 +2,10 @@
 	// One term facet (§10.4): its values with the server's disjunctive counts. A value is selected
 	// with its checkbox and excluded with the minus button; a selected value shows four ways (the
 	// box, medium weight, the value text, and its chip in the strip). Long lists ("Show more") get
-	// a search box over the values listed.
+	// a search box over the values listed. The exclude button is a toggle: its glyph fills while it's
+	// on (`aria-pressed`), the one on-state exception to the -bold rule.
 	import Minus from '~icons/ph/minus-circle-bold';
+	import MinusOn from '~icons/ph/minus-circle-fill';
 	import { formatCount } from '$lib/format';
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import { m } from '$lib/paraglide/messages.js';
@@ -120,7 +122,15 @@
 						data-testid="facet-{name}-{v.value}-exclude"
 						onclick={() => onvalue(v.value, 'exclude')}
 					>
-						<Minus class="fr-note-icon" aria-hidden="true" />
+						{#if v.excluded}
+							<MinusOn
+								class="fr-note-icon"
+								aria-hidden="true"
+								data-testid="facet-{name}-{v.value}-exclude-on"
+							/>
+						{:else}
+							<Minus class="fr-note-icon" aria-hidden="true" />
+						{/if}
 					</button>
 				{/if}
 			</li>

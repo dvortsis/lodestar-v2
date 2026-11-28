@@ -1853,7 +1853,8 @@ export default [
 	// (`label` through valueLabel and groupLabel in label-release, and TermGroup's labelOf).
 	// X-group-chip-label (runner §2.26): 18,843 → 18,856 B, facets.svelte.ts keeping each response's
 	// group labels for the query chips.
-	entry('Facet rail (lazy)', facetsLazy, '18.86 KB'),
+	// runner §2.26, X-facet-exclude-fill: 18,856 → 18,958 B, the filled exclude icon (measured, limit rounded up to 64 B).
+	entry('Facet rail (lazy)', facetsLazy, '19.01 KB'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main

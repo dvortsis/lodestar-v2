@@ -110,3 +110,25 @@ describe('A release group shows the spelling the server sends', () => {
 		expect(valueLabel('codec', 'h264', 'en', 'X')).toBe('H.264');
 	});
 });
+
+describe('The exclude toggle', () => {
+	it('fills its icon only while it is on', () => {
+		render(TermGroup, {
+			name: 'res',
+			title: 'res',
+			facet: term([
+				['1080p', 5, 'excluded'],
+				['720p', 3]
+			]),
+			onvalue: vi.fn(),
+			onclear: vi.fn()
+		});
+		const on = screen.getByTestId('facet-res-1080p-exclude');
+		const off = screen.getByTestId('facet-res-720p-exclude');
+		expect(on.getAttribute('aria-pressed')).toBe('true');
+		expect(off.getAttribute('aria-pressed')).toBe('false');
+		expect(screen.queryByTestId('facet-res-1080p-exclude-on')).not.toBeNull();
+		expect(screen.queryByTestId('facet-res-720p-exclude-on')).toBeNull();
+		expect(off.querySelector('svg')).not.toBeNull();
+	});
+});
