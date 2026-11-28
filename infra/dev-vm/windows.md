@@ -46,14 +46,14 @@ Kept for the record; don't run it. The owner had signed the AWS MCP connector in
 ### Phase 2: create, test, delete, as `lodestar-claude-testvm`
 A new session, started after the swap. First check `GetCallerIdentity`: the ARN must end in `user/lodestar-claude-testvm`. If it doesn't, stop. Keep its `UserId` for the `LaunchedBy` tag (in the session only; never write it to the repository).
 1. **One Windows instance at a time:** refuse if a Windows instance tagged `Purpose=X-test-vm` is pending, running, stopping or stopped. Count with the filters `tag:Purpose=X-test-vm` and `platform=windows`; up to four Linux test instances may run alongside it.
-2. **Launch**, following `infra/akamai/terraform/scripts/Deploy-AwsWindows.ps1` (lines 155–164) except for the profile and tags below:
+2. **Launch**, following `infra/akamai/terraform/scripts/Deploy-AwsWindows.ps1` (the `$runArgs` list) except for the profile and tags below:
    - the image, and the instance profile **`lodestar-claude-testvm-windows`** (the stack's Windows role: the SSM agent policy only). Never the Linux profile (`docs/decisions/2026-11-12-X-test-vm.md`, 2026-11-20 review fixes);
    - **a public IPv4 address:** `NetworkInterfaces=[{DeviceIndex: 0, SubnetId, Groups: [SG], AssociatePublicIpAddress: true}]`, with no top-level `SubnetId` or `SecurityGroupIds`.
      - **Why:** the subnet routes `0.0.0.0/0` to an internet gateway but has `MapPublicIpOnLaunch=false`, and there's no NAT gateway and no VPC endpoint. Without a public address, the instance can't reach SSM or the internet.
      - It's still unreachable from outside, because the security group allows no inbound traffic. The address costs about $0.005/h.
      - `Deploy-AwsWindows.ps1` doesn't do this yet; that's a follow-up for the runner.
    - `MetadataOptions={HttpTokens: required, HttpPutResponseHopLimit: 1, HttpProtocolIpv6: disabled}` (the policy refuses a launch without the first two; IAM has no condition key for the IPv6 endpoint, so the third is a rule for the sessions);
-   - `/dev/sda1` with `VolumeSize=100, Encrypted=true`;
+   - `/dev/sda1` with `VolumeSize=100, Encrypted=true, DeleteOnTermination=true` (set it explicitly, since the image default may be false; step 7 stays the backstop);
    - tags `Project=Lodestar`, `Environment=Test`, `ManagedBy=Terraform`, `Purpose=X-test-vm`, `LaunchedBy=<the UserId from GetCallerIdentity>`, `ExpiresAt=<now + lane length, at most 48 h, %Y-%m-%dT%H:%M:%SZ>` on both the instance and the volume. The policy lets this user stop, delete or run commands only on instances whose `LaunchedBy` is its own `UserId`, and refuses a launch without it.
    - Default tenancy (leave `Placement.Tenancy` unset): the policy refuses dedicated tenancy.
    - Record the instance ID locally only.
