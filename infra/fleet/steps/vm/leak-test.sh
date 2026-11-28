@@ -504,7 +504,7 @@ held_seen() {  # $1: an interface check's result; counts each return of the inte
 # the runner's call), or failing that, from one just before the pause.
 held_addr=""
 held_early=""
-held_pin() {  # the forwarder's answer for the echo host, into held_addr; an aid, never a verdict
+held_pin() {  # the forwarder's answer for ECHO_HOST, into held_addr; an aid, never a verdict
   local saved=$not_run
   held_addr=$(probe sh -c 'dig +short +time=3 +tries=1 "$1" | grep -E "^[0-9]{1,3}(\.[0-9]{1,3}){3}\$" | head -n 1' pin "$ECHO_HOST" 2>/dev/null | tr -d '\r\n')
   [[ $held_addr =~ $IPV4 ]] || held_addr=""
