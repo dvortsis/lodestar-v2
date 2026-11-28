@@ -11133,7 +11133,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T15:39:37Z",
+    "updated": "2026-11-28T15:41:40Z",
     "items": [
       {
         "slot": 1,
@@ -11153,11 +11153,11 @@
       },
       {
         "slot": 3,
-        "slice": "X-drawer-detach-flake",
+        "slice": "X-smoke-torrent-flake",
         "role": "build",
         "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
-        "doing": "#1177 re-run of e2e; next X-smoke-torrent-flake",
-        "since": "2026-11-28T12:39:45Z"
+        "doing": "prove the /t smoke race, then fix",
+        "since": "2026-11-28T15:41:40Z"
       },
       {
         "slot": 4,
