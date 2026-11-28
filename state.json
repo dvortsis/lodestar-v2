@@ -11116,15 +11116,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T04:12:14Z",
+    "updated": "2026-11-28T05:01:56Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-healthz-cold-start",
+        "slice": "X-vpn-bind",
         "role": "build",
-        "agent": "session_01MMjhnCzBhE8ykoynB1suXZ",
-        "doing": "PR #1159 fixes checked; merge on green",
-        "since": "2026-11-28T00:17:49Z"
+        "agent": "session_01MMjhnBk6q6p8uDAteN1GqD",
+        "doing": "launched; step 0 (owns and approach to the runner)",
+        "since": "2026-11-28T05:01:56Z"
       },
       {
         "slot": 2,
@@ -11148,7 +11148,7 @@
         "slice": "X-cmp-privilege-refusal-ci",
         "role": "build",
         "agent": "session_01MMjhnBV9RgqpY5DyG4DTJe",
-        "doing": "launched; brief briefs/X-cmp-privilege-refusal-ci.md",
+        "doing": "PR #1163 review MERGE; nits pushed, CI running",
         "since": "2026-11-28T04:12:14Z"
       }
     ],
