@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T19:12:09Z",
+  "updated_at": "2026-11-28T19:29:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11156,6 +11156,10 @@
       "via": "owner, runner chat",
       "words": "Yes, increase to 6 slots",
       "meaning": "Build slots 4 -> 6 (limits.phase_total; recorded in r24). Extra slots favour low-risk UI/docs/CI work; runner steps back to 4 if CI queueing appears."
+    },
+    {
+      "at": "2026-11-28T19:29:15Z",
+      "text": "Owner answers in the runner session: (A) D1 scope list approved as proposed (move OUT-1/3, UN-3/4, IRC-2/3, SRC-3b, ENR-13b, G-v07-scale and all 19 unmerged v0.8 slices to 1.1; keep WK-12/13/16/19/WK-G, Track Q, M8, RX-2; Track U becomes fill, unfinished at the cut moves to 1.1; rewire M8 and R-v1-cut deps; fold G-v07 safety checks into G-v1-audits; M6 manual installs on the 1.0 RC). (B) v0.5.2 is not published as a public release: 'We can wait until a major version' (next public release is 1.0). Also: the recurring review updates the roadmap dashboard's plan and estimates."
     }
   ],
   "slots": {
