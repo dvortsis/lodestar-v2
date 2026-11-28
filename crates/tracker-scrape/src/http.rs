@@ -481,12 +481,18 @@ mod tests {
     #[test]
     fn a_pinned_client_asks_only_trackers_it_can_keep_on_the_interface() {
         let reaches = |u: &str| through_reaches(&Url::parse(u).unwrap());
-        assert_eq!(reaches("http://203.0.113.9/scrape"), cfg!(target_os = "linux"));
+        assert_eq!(
+            reaches("http://203.0.113.9/scrape"),
+            cfg!(target_os = "linux")
+        );
         assert!(
             !reaches("http://tracker.example/scrape"),
             "a name: no lookup"
         );
-        assert_eq!(reaches("http://[2001:db8::66]/scrape"), cfg!(target_os = "linux"));
+        assert_eq!(
+            reaches("http://[2001:db8::66]/scrape"),
+            cfg!(target_os = "linux")
+        );
     }
 
     const A: InfoHash = InfoHash([0xaa; 20]);
