@@ -22,9 +22,15 @@ check fails when:
 - bench-10m.yml itself could run code from a pull request or a fork, or
   holds more than it needs (see check_bench).
 
-Known limit: the chain check reads ci_changes.py's syntax, not what it does
-at run time, so any diff to its test_os code, or to ci.yml's changes or test
-job, is a security-review item (docs/decisions/2026-11-28-M8-PERF-3.md).
+Known limit: under pull_request a PR controls its own workflows and its own
+copy of this guard, so the guard is a tripwire, not a wall. The chain check
+reads ci_changes.py's syntax, not what it does at run time, and can't see
+what the steps before it run (the import smoke tests, for one). Until ci.yml's
+test matrix is literal (a follow-up X-ci-test-shard owns), these are
+owner-review items: the guard's own files; ci.yml's changes or test job;
+ci_changes.py or any module it imports from .github/scripts/; and anything
+the changes job runs before ci_changes.py, including any new or changed file
+under docs/operations/imports/pilots/smoke/ (docs/decisions/2026-11-28-M8-PERF-3.md).
 
 It is a detector, not a barrier: a pushed branch runs its workflows at the
 same time as this check (OQ1). The barriers are the isolated, ephemeral
@@ -63,7 +69,24 @@ CHAIN_RUN = 'python3 .github/scripts/ci_changes.py "$EVENT" "$BASE" "$HEAD" "$LA
 CHAIN_SCRIPT = ".github/scripts/ci_changes.py"
 # Anything else in the changes job that mentions one of these could rewrite
 # the output or the script before step c runs.
-CHAIN_WORDS = re.compile(r"test_os|GITHUB_OUTPUT|ci_changes", re.I)
+CHAIN_WORDS = re.compile(r"test_os|GITHUB_OUTPUT|GITHUB_ENV|GITHUB_PATH|ci_changes", re.I)
+CHAIN_ENV = {
+    "EVENT": "${{ github.event_name }}",
+    "BASE": "${{ github.event.pull_request.base.sha }}",
+    "HEAD": "${{ github.event.pull_request.head.sha }}",
+    "LABELS": "${{ toJSON(github.event.pull_request.labels.*.name) }}",
+}
+CHAIN_TOP_ENV = {"CARGO_TERM_COLOR", "CARGO_INCREMENTAL"}
+# The steps before step c in ci.yml's changes job (checkout, the merge-guard
+# syntax check, the import smoke tests, the concurrency test, the lineage
+# guard), hashed as parsed. Any change, including what they run, is an
+# owner-review item: update this only after reading the new steps.
+CHAIN_BEFORE_SHA256 = "aa10f6ebf2a22764e3c5d9bb5482840d168eb5d6e9c400c061c34d84406303a9"
+# Builtins (bare names) and attributes in ci_changes.py that run built code
+# or reach around the json check. re.compile is an attribute, so it's fine.
+UNSAFE_NAMES = {"exec", "eval", "compile", "__import__", "__doc__", "globals", "setattr", "getattr", "vars",
+                "__builtins__"}
+UNSAFE_ATTRS = {"__import__", "__dict__", "__builtins__", "__globals__", "__doc__"}
 MATRIX_REF = re.compile(r"^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$")
 
 BENCH_TRIGGERS = {"push", "schedule", "workflow_dispatch"}
@@ -293,12 +316,16 @@ def check_workflow(name, text):
 
 def check_chain_script(source):
     """ci_changes.py may set test_os only as `X["test_os"] = json.dumps(L)`,
-    L a literal list of hosted images or a conditional between two."""
+    L a literal list of hosted images or a conditional between two, with a
+    plain `import json` that nothing rebinds, and no way to write the output
+    file or run built code."""
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
         return [f"{CHAIN_SCRIPT}: does not parse ({e.msg})"]
     out, allowed = [], set()
+    where = CHAIN_SCRIPT
+    doc = tree.body[0].value if tree.body and isinstance(tree.body[0], ast.Expr) else None
 
     def literal_images(node):
         if isinstance(node, ast.IfExp):
@@ -318,60 +345,120 @@ def check_chain_script(source):
                           and isinstance(v.func.value, ast.Name) and v.func.value.id == "json"
                           and literal_images(v.args[0]))
                     if not ok:
-                        out.append(f"{CHAIN_SCRIPT}:{node.lineno}: test_os must be json.dumps of a literal list "
+                        out.append(f"{where}:{node.lineno}: test_os must be json.dumps of a literal list "
                                    "of GitHub-hosted images (or a conditional between two)")
+    plain_json = False
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and "test_os" in node.value.lower():
-            if id(node) not in allowed:
-                out.append(f"{CHAIN_SCRIPT}:{node.lineno}: test_os named outside a plain assignment")
+        line = getattr(node, "lineno", "?")
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            low = node.value.lower()
+            if "test_os" in low and id(node) not in allowed:
+                out.append(f"{where}:{line}: test_os named outside a plain assignment")
+            if "github_output" in low and node is not doc:
+                out.append(f"{where}:{line}: a string names GITHUB_OUTPUT")
         elif isinstance(node, ast.keyword) and node.arg and "test_os" in node.arg.lower():
-            out.append(f"{CHAIN_SCRIPT}:{node.value.lineno}: test_os set as a keyword")
-        elif isinstance(node, ast.Name) and "test_os" in node.id.lower():
-            out.append(f"{CHAIN_SCRIPT}:{node.lineno}: a name containing test_os")
+            out.append(f"{where}:{node.value.lineno}: test_os set as a keyword")
+        elif isinstance(node, ast.Name):
+            if "test_os" in node.id.lower():
+                out.append(f"{where}:{line}: a name containing test_os")
+            if node.id in UNSAFE_NAMES:
+                out.append(f"{where}:{line}: uses {node.id}")
+            if node.id == "json" and not isinstance(node.ctx, ast.Load):
+                out.append(f"{where}:{line}: rebinds json")
+        elif isinstance(node, ast.Attribute):
+            if node.attr in UNSAFE_ATTRS:
+                out.append(f"{where}:{line}: uses .{node.attr}")
+            if (isinstance(node.value, ast.Name) and node.value.id == "json"
+                    and not isinstance(node.ctx, ast.Load)):
+                out.append(f"{where}:{line}: assigns to json.{node.attr}")
+        elif isinstance(node, ast.Import):
+            for al in node.names:
+                if al.name == "json" and al.asname is None:
+                    plain_json = True
+                elif al.asname == "json" or (al.name == "json" and al.asname):
+                    out.append(f"{where}:{line}: import ... as json, or json imported under another name")
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "json" or any(al.asname == "json" or al.name == "json" for al in node.names):
+                out.append(f"{where}:{line}: from-imports json")
+        elif isinstance(node, ast.arg) and node.arg == "json":
+            out.append(f"{where}:{line}: an argument named json")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "json":
+            out.append(f"{where}:{line}: defines json")
+        elif isinstance(node, (ast.Global, ast.Nonlocal)) and "json" in node.names:
+            out.append(f"{where}:{line}: declares json global")
+    if not plain_json:
+        out.append(f"{where}: needs a plain `import json`")
     if not allowed:
-        out.append(f"{CHAIN_SCRIPT}: test_os is never set")
+        out.append(f"{where}: test_os is never set")
     return out
 
 
+def steps_fingerprint(steps):
+    """A stable hash of step mappings, so any change to them shows."""
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(steps, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def check_dynamic_chain(ci_text, script_source):
-    """The changes job's test_os output, its step c and ci_changes.py: the
-    only route by which a runs-on in another workflow is computed."""
+    """The changes job's test_os output, everything in that job up to and
+    including step c, and ci_changes.py: the route by which a runs-on in
+    another workflow is computed."""
     name = "ci.yml"
     try:
         wf = yaml.safe_load(ci_text)
     except yaml.YAMLError:
         return []  # check_workflow reports it
-    jobs = (wf or {}).get("jobs") or {}
+    if not isinstance(wf, dict):
+        return []
+    jobs = wf.get("jobs") or {}
     test = jobs.get("test") or {}
     matrix_os = ((test.get("strategy") or {}).get("matrix") or {}).get("os")
     if not (isinstance(matrix_os, str) and "${{" in matrix_os):
         return []  # no dynamic matrix: nothing to pin
     out = []
+    # Settings that reach every step: a shell, a working directory, BASH_ENV.
+    if "defaults" in wf:
+        out.append(f"{name}: no top-level defaults while the test matrix is dynamic")
+    extra_env = set((wf.get("env") or {})) - CHAIN_TOP_ENV
+    if extra_env:
+        out.append(f"{name}: top-level env {sorted(extra_env)} not allowed while the test matrix is dynamic")
     changes = jobs.get("changes")
     if not isinstance(changes, dict):
-        return [f"{name}: the test job's matrix comes from a changes job that isn't there"]
+        return out + [f"{name}: the test job's matrix comes from a changes job that isn't there"]
+    for key in ("env", "defaults", "container", "services"):
+        if key in changes:
+            out.append(f"{name}: job changes: no {key}")
     if "changes" not in (test.get("needs") if isinstance(test.get("needs"), list) else [test.get("needs")]):
         out.append(f"{name}: job test must need changes")
     outputs = changes.get("outputs") or {}
-    if str(outputs.get("test_os", "")).strip() != CHAIN_OUTPUT:
-        out.append(f"{name}: job changes: output test_os must be exactly {CHAIN_OUTPUT}")
+    found = [k for k in outputs if str(k).lower() == "test_os"]
+    if found != ["test_os"] or str(outputs["test_os"]).strip() != CHAIN_OUTPUT:
+        out.append(f"{name}: job changes: output test_os must be exactly {CHAIN_OUTPUT}, once")
     for k, v in outputs.items():
-        if k != "test_os" and "test_os" in str(v).lower():
+        if str(k).lower() != "test_os" and "test_os" in str(v).lower():
             out.append(f"{name}: job changes: output {k} mentions test_os")
     steps = [st for st in changes.get("steps") or [] if isinstance(st, dict)]
-    cs = [st for st in steps if st.get("id") == "c"]
+    cs = [i for i, st in enumerate(steps) if str(st.get("id", "")).lower() == "c"]
     if len(cs) != 1:
-        out.append(f"{name}: job changes needs exactly one step with id c")
-    for st in steps:
-        if st.get("id") == "c":
-            if str(st.get("run", "")).strip() != CHAIN_RUN:
-                out.append(f"{name}: job changes: step c must run exactly: {CHAIN_RUN}")
-            if st.get("shell", "bash") != "bash" or "uses" in st:
-                out.append(f"{name}: job changes: step c must be a bash run step")
-            continue
-        body = " ".join(walk_strings(st))
-        if CHAIN_WORDS.search(body):
-            out.append(f"{name}: job changes: a step other than c mentions test_os, GITHUB_OUTPUT or ci_changes")
+        return out + [f"{name}: job changes needs exactly one step with id c"] + check_chain_script(script_source)
+    c = steps[cs[0]]
+    if set(c) != {"id", "env", "shell", "run"} or c.get("id") != "c" or c.get("shell") != "bash":
+        out.append(f"{name}: job changes: step c must have exactly id: c, env, shell: bash and run")
+    if str(c.get("run", "")).strip() != CHAIN_RUN:
+        out.append(f"{name}: job changes: step c must run exactly: {CHAIN_RUN}")
+    if c.get("env") != CHAIN_ENV:
+        out.append(f"{name}: job changes: step c's env must be exactly {CHAIN_ENV}")
+    # Every step before c runs in the same job and could change the script,
+    # the environment or the PATH that step c then uses.
+    before = steps[:cs[0]]
+    if steps_fingerprint(before) != CHAIN_BEFORE_SHA256:
+        out.append(f"{name}: job changes: the steps before step c changed (fingerprint "
+                   f"{steps_fingerprint(before)}). They run before ci_changes.py: review them, then update "
+                   "CHAIN_BEFORE_SHA256 in runner_guard.py")
+    for st in steps[cs[0] + 1:]:
+        if CHAIN_WORDS.search(" ".join(walk_strings(st))):
+            out.append(f"{name}: job changes: a step after c mentions test_os, ci_changes or a GITHUB_ file")
     return out + check_chain_script(script_source)
 
 

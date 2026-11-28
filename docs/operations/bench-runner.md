@@ -75,10 +75,11 @@ Each job runs in a fresh container that registers itself for **one** job, with o
    ARG RUNNER_SHA256
    # As root: the tools the benchmark builds with, then the runner, checked
    # against its published checksum, and the libraries it needs (ICU among them).
-   RUN test -n "$RUNNER_VERSION" && test -n "$RUNNER_SHA256" \
+   RUN : "${RUNNER_VERSION:?pass --build-arg RUNNER_VERSION}" \
+    && : "${RUNNER_SHA256:?pass --build-arg RUNNER_SHA256}" \
     && apt-get update && apt-get install -y --no-install-recommends \
          build-essential pkg-config curl ca-certificates git python3 \
-    && useradd -m runner && mkdir -p /bench /home/runner/actions-runner \
+    && useradd -m -u 1001 runner && mkdir -p /bench /home/runner/actions-runner \
     && cd /home/runner/actions-runner \
     && curl -fsSLo runner.tar.gz \
          "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
@@ -96,7 +97,7 @@ Each job runs in a fresh container that registers itself for **one** job, with o
    sudo docker build --build-arg RUNNER_VERSION=<version> --build-arg RUNNER_SHA256=<sha-256> \
      -t lodestar-bench-runner /srv/bench-runner
    ```
-   **Result:** the build ends with `naming to docker.io/library/lodestar-bench-runner` and shows `runner.tar.gz: OK` on the way. A checksum mismatch stops the build: don't work around it, check the version and checksum again.
+   **Result:** the build shows `runner.tar.gz: OK` on the way, and ends with `naming to docker.io/library/lodestar-bench-runner` (or `Successfully tagged lodestar-bench-runner:latest` on older Docker). A checksum mismatch stops the build: don't work around it, check the version and checksum again.
    - Rebuild with the newest version about once a month: GitHub refuses runners that fall too far behind.
 4. In GitHub, open **Settings → Actions → Runners → New self-hosted runner**, choose **Linux**, and copy the token from the **Configure** box. It's a short-lived registration token: valid for one hour.
 5. Start one job's runner, and paste the token when it asks (it isn't shown):
@@ -135,7 +136,11 @@ The benchmark runs on pushes to release lines: branches named like `release/v1.0
 **Result:** the ruleset lists both patterns as **Active**. A collaborator who tries `git push origin HEAD:release/v9.9` is refused.
 
 **Recommended: make `runner-guard` a required check.** In the `main` ruleset, under **Require status checks to pass**, add `runner-guard`. Otherwise a pull request can merge while the guard is red, because only `ci-ok` is required today. The trade-off: every pull request waits for one more check, about a minute.
-- **Its limit:** a pull request runs its own copy of the guard. A pull request that also changes the guard (`.github/scripts/runner_guard.py`, its test or `runner-guard.yml`) can make it pass. Treat any change to those files, to `ci.yml`'s `changes` or `test` job, or to `ci_changes.py`'s `test_os` lines as something you review yourself before it merges.
+- **Its limit:** a pull request runs its own workflows and its own copy of the guard, so the guard is a tripwire, not a wall. Until a planned change makes one CI setting fixed, review these yourself before they merge:
+  - the guard's own files (`.github/scripts/runner_guard.py`, its test, `runner-guard.yml`);
+  - `ci.yml`'s `changes` or `test` job;
+  - `.github/scripts/ci_changes.py`, or any file it imports from `.github/scripts/`;
+  - anything the `changes` job runs before `ci_changes.py`, including any new or changed file under `docs/operations/imports/pilots/smoke/`.
 
 **Undo:** set the ruleset's **Enforcement status** to **Disabled**, or delete it.
 
@@ -145,7 +150,9 @@ The benchmark runs on pushes to release lines: branches named like `release/v1.0
 2. Under **Approval for running fork pull request workflows from contributors**, choose **Require approval for all external contributors** (older wording: "all outside collaborators").
 3. Select **Save**.
 
-**Result:** a pull request from someone else's fork shows **Approve and run workflows** and runs nothing until you approve it. Never approve a fork's run that changes anything under `.github/`.
+**Result:** a pull request from someone else's fork shows **Approve and run workflows** and runs nothing until you approve it.
+
+**The rule: while the bench runner is registered, don't approve any fork pull request's workflow run.** A fork's change to almost any file that CI runs (a test, a script, not only `.github/`) can make a workflow reach the bench machine, and you can't check all of that by eye. To test a contributor's change, copy it to a branch of your own after reading it. As an extra check, a fork pull request that changes anything under `.github/` is never approved.
 
 **Why it matters:** this is the only safeguard against strangers. Without it, a first-time contributor's pull request could run a workflow that names the label.
 
@@ -175,6 +182,7 @@ Only the dataset disk persists. A hostile job could tamper with the dataset ther
 | The job waits with **Waiting for a runner to pick up this job** | Start a runner (step 2). Check that its label is exactly `lodestar-bench-10m`. |
 | `/bench isn't mounted` | Run the container with `-v /srv/bench:/bench`, and check `/srv/bench` is owned by uid 1001, the container's user (`sudo chown 1001:1001 /srv/bench`). |
 | `The dataset's key or store schema changed: rebuilding it` | Expected after a generator or schema change. The run takes many hours. |
+| The build stops at `curl` with `404` | The version was typed with its leading `v`, or doesn't exist. Use the number alone, for example `2.330.0`. |
 | `config.sh` stops with `Couldn't find a valid ICU package` | The image was built without `installdependencies.sh`. Rebuild it from the Dockerfile above. |
 | `is not empty and has no dataset.json` | Something else is in `/srv/bench/dataset-10m`, or a machine crash interrupted a build's first step. The job never deletes what it didn't build: check the folder, then delete or move it yourself. |
 | The `runner-guard` check fails on a pull request | A workflow names the label or could reach a self-hosted runner. Tell the runner, and don't merge it. |

@@ -344,6 +344,70 @@ class DynamicChain(unittest.TestCase):
             with self.subTest(run=run):
                 self.assertTrue(self.problems(ci=CI.replace(g.CHAIN_RUN, run)))
 
+    def test_step_c_is_pinned_as_a_whole(self):
+        step_c = "      - id: c\n        env:\n"
+        self.assertIn(step_c, CI)
+        for extra in ["        working-directory: x\n", "        continue-on-error: true\n", "        name: c\n"]:
+            with self.subTest(extra=extra):
+                self.assertTrue(self.problems(ci=CI.replace(step_c, "      - id: c\n" + extra + "        env:\n")))
+        for env in ["          BASH_ENV: /tmp/x\n", "          PYTHONPATH: x\n"]:
+            with self.subTest(env=env):
+                self.assertTrue(self.problems(ci=CI.replace(step_c, step_c + env)))
+        self.assertTrue(self.problems(ci=CI.replace("EVENT: ${{ github.event_name }}", "EVENT: push")))
+        self.assertTrue(self.problems(ci=CI.replace("      - id: c\n", "      - id: C\n")))
+
+    def test_the_changes_job_and_the_workflow_have_no_shared_settings(self):
+        job_head = "  changes:\n    name: changes\n"
+        self.assertIn(job_head, CI)
+        for extra in ["    env:\n      BASH_ENV: /tmp/x\n", "    defaults:\n      run:\n        working-directory: x\n",
+                      "    container: ubuntu:24.04\n", "    services:\n      x:\n        image: y\n"]:
+            with self.subTest(extra=extra):
+                self.assertTrue(self.problems(ci=CI.replace(job_head, job_head + extra)))
+        top = "env:\n  CARGO_TERM_COLOR: always\n"
+        self.assertIn(top, CI)
+        self.assertTrue(self.problems(ci=CI.replace(top, top + "  BASH_ENV: /tmp/x\n")))
+        self.assertTrue(self.problems(ci=CI.replace(top, "defaults:\n  run:\n    shell: bash\n" + top)))
+
+    def test_the_steps_before_c_are_fingerprinted(self):
+        for old, new in [("bash -n .claude/hooks/merge-guard.sh", "bash -n .claude/hooks/merge-guard.sh; true"),
+                         ("-p 'test_*.py'", "-p '*.py'"),
+                         ("fetch-depth: 0", "fetch-depth: 1")]:
+            with self.subTest(old=old):
+                self.assertIn(old, CI)
+                problems = self.problems(ci=CI.replace(old, new))
+                self.assertTrue(any("steps before step c changed" in p for p in problems), problems)
+        anchor = "      - run: bash -n .claude/hooks/merge-guard.sh\n"
+        problems = self.problems(ci=CI.replace(anchor, anchor + "      - run: echo hi\n        env:\n"
+                                               "          X: y\n"))
+        self.assertTrue(any("steps before step c changed" in p for p in problems), problems)
+
+    def test_a_later_step_naming_the_env_or_path_files(self):
+        anchor = '| tee -a "$GITHUB_OUTPUT"\n'
+        self.assertIn(anchor, CI)
+        for step in ['      - run: echo x >> "$GITHUB_ENV"\n', '      - run: echo x >> "$GITHUB_PATH"\n']:
+            with self.subTest(step=step):
+                self.assertTrue(self.problems(ci=CI.replace(anchor, anchor + step, 1)))
+
+    def test_output_keys_ignore_case(self):
+        self.assertTrue(self.problems(ci=CI.replace(CHAIN_OUT, CHAIN_OUT + "\n      TEST_OS: '[]'")))
+
+    def test_the_script_keeps_a_plain_json(self):
+        self.assertIn("import json\n", SCRIPT)
+        for old, new in [("import json\n", "import json as j\nimport j as json\n"),
+                         ("import json\n", "from json import dumps\n"),
+                         ("import json\n", "import json\njson = None\n"),
+                         ("import json\n", "import json\njson.dumps = str\n"),
+                         ("import json\n", "import json\nexec('x=1')\n"),
+                         ("import json\n", "import json\neval('1')\n"),
+                         ("import json\n", "import json\nm = __import__('os')\n"),
+                         ("import json\n", "import json\ngetattr(json, 'dumps')\n"),
+                         ("import json\n", "import json\nP = 'GITHUB_OUTPUT'\n"),
+                         ("import json\n", "import json\ndef f(json):\n    pass\n"),
+                         ("import json\n", "import json\nfor json in []:\n    pass\n"),
+                         ("import json\n", "")]:
+            with self.subTest(new=new):
+                self.assertTrue(self.problems(script=SCRIPT.replace(old, new, 1)))
+
     def test_the_whole_repo_check_runs_the_chain(self):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
