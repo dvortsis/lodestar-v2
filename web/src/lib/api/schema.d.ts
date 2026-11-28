@@ -10807,6 +10807,25 @@ export interface components {
              */
             adult_enrichment?: components["schemas"]["AdultEnrichment"];
             /**
+             * @description The release attributes parsed from the name, as `/compare` shows
+             *     them (`title`, `alt`, `year`, `season`, `episode`, `res`, `source`,
+             *     `vcodec`, `acodec`, `group`, …): only the keys the torrent has,
+             *     list values comma-joined. Null when the torrent hasn't been
+             *     classified yet, or its record can't be read by this build; `{}`
+             *     when it was classified and the name gave none.
+             * @example {
+             *       "group": "GROUP",
+             *       "res": "1080p",
+             *       "source": "bluray",
+             *       "title": "The Movie",
+             *       "vcodec": "h264",
+             *       "year": "2008"
+             *     }
+             */
+            attributes: {
+                [key: string]: string;
+            } | null;
+            /**
              * Format: int32
              * @description Null = never scraped.
              */

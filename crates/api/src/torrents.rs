@@ -1,7 +1,7 @@
 //! `/torrents/{hash}`: one torrent's details and its file list. Display
 //! data comes from SQLite, not the index (§8).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, Weak};
@@ -700,7 +700,25 @@ fn load(s: &ApiState, hash: &str, adult_shown: bool) -> ApiResult<(TorrentRow, F
     Ok((row, tree))
 }
 
+/// A torrent's parsed release attributes (the release fields its stored
+/// enrichment record holds: `title`, `year`, `res`, `vcodec`, `group`,
+/// …), as `/compare` and `/torrents/{hash}` both show them: each key
+/// once, its values comma-joined in the record's order (`alt` repeats
+/// in the record, one entry per alternative title). The one definition,
+/// so a torrent reads the same in both.
+pub(crate) fn release_attributes(r: &lodestar_classify::Record) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (k, _) in &r.release {
+        if !out.contains_key(k) {
+            let all: Vec<&str> = r.release_all(k).collect();
+            out.insert(k.clone(), all.join(", "));
+        }
+    }
+    out
+}
+
 /// The detail view: the summary, the swarm section and the first files.
+#[allow(clippy::too_many_arguments)]
 fn detail_of(
     row: &TorrentRow,
     tree: &FileTree,
@@ -709,9 +727,11 @@ fn detail_of(
     provenance: Provenance,
     adult_enrichment: Option<AdultEnrichment>,
     identified_as: Option<IdentifiedAs>,
+    attributes: Option<BTreeMap<String, String>>,
 ) -> TorrentDetail {
     TorrentDetail {
         adult_enrichment,
+        attributes,
         identified_as,
         completed: swarm.completed,
         dht_peers: more.dht_peers,
@@ -840,9 +860,18 @@ pub(crate) async fn detail(
             finders_adult,
         )
         .map_err(internal)?;
+        // The release fields as classify stored them: no parse runs here.
+        // Null without a record, or with one this build can't read.
+        let attributes = store
+            .enrichment(row.id)
+            .map_err(internal)?
+            .and_then(|e| lodestar_classify::Record::decode(&e.data).ok())
+            .map(|r| release_attributes(&r));
         drop(store);
         let id = row.id;
-        let detail = detail_of(&row, &tree, summary, more, provenance, section, identified);
+        let detail = detail_of(
+            &row, &tree, summary, more, provenance, section, identified, attributes,
+        );
         Ok::<_, ApiError>((detail, wanted.then_some(id)))
     })
     .await
@@ -1424,6 +1453,73 @@ pub(crate) mod tests {
     use lodestar_store::claims::ClaimedFile;
 
     use super::*;
+
+    fn release_record(release: &[(&str, &str)]) -> lodestar_classify::Record {
+        let mut r = lodestar_classify::Record::decode(b"e1\ntype\tother").expect("a bare record");
+        r.release = release
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        r
+    }
+
+    #[test]
+    fn a_record_without_release_fields_has_an_empty_map() {
+        assert!(release_attributes(&release_record(&[])).is_empty());
+        // `{}`, not null: classified, and the name gave nothing.
+        let json = serde_json::to_value(Some(release_attributes(&release_record(&[])))).unwrap();
+        assert_eq!(json, serde_json::json!({}));
+    }
+
+    #[test]
+    fn each_key_is_listed_once_its_values_joined_in_record_order() {
+        let r = release_record(&[
+            ("title", "Movie"),
+            ("alt", "Film"),
+            ("alt", "Pelicula"),
+            ("res", "1080p"),
+            ("acodec", "aac, flac"),
+        ]);
+        let got = release_attributes(&r);
+        let want: BTreeMap<String, String> = [
+            ("acodec", "aac, flac"),
+            ("alt", "Film, Pelicula"),
+            ("res", "1080p"),
+            ("title", "Movie"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(got, want);
+    }
+
+    proptest::proptest! {
+        /// Any name, through the real parser and the stored record's
+        /// round trip: every stored key appears once with every one of its
+        /// values, and the map is bounded by the parser's input cap.
+        #[test]
+        fn attributes_follow_the_stored_record(name in "\\PC{0,600}") {
+            let release = lodestar_release_parser::parse(&name);
+            let mut r = release_record(&[]);
+            for (k, v) in release.fields() {
+                if k == "alt" {
+                    r.release.extend(release.alt_titles.iter().map(|a| ("alt".to_owned(), a.clone())));
+                } else {
+                    r.release.push((k.to_owned(), v));
+                }
+            }
+            let r = lodestar_classify::Record::decode(&r.encode()).expect("round trip");
+            let got = release_attributes(&r);
+            for (k, _) in &r.release {
+                let all: Vec<&str> = r.release_all(k).collect();
+                proptest::prop_assert_eq!(&got[k], &all.join(", "));
+            }
+            proptest::prop_assert_eq!(got.len(), r.release.iter().map(|(k, _)| k).collect::<std::collections::BTreeSet<_>>().len());
+            for v in got.values() {
+                proptest::prop_assert!(v.len() <= 2 * lodestar_release_parser::MAX_INPUT_BYTES);
+            }
+        }
+    }
 
     fn row(sources: u64, first: Option<u8>, flags: i64) -> TorrentRow {
         TorrentRow {

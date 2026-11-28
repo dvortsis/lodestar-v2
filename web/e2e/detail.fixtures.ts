@@ -10,6 +10,7 @@ export const HASH = '0123456789abcdef0123456789abcdef00000000';
 export const BIG = 'c'.repeat(40);
 
 export const detail = (over: Partial<Detail> = {}): Detail => ({
+	attributes: null,
 	completed: 12,
 	dht_peers: null,
 	dht_seeds: null,
