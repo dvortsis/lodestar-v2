@@ -1309,7 +1309,9 @@ fn bench_alone() -> std::sync::MutexGuard<'static, ()> {
 #[test]
 fn the_benches_run_alone() {
     // Every ignored test here is a bench, and each takes the lock first.
-    let src = include_str!("props.rs");
+    // A Windows checkout has CRLF line endings.
+    let src = include_str!("props.rs").replace("\r\n", "\n");
+    let src = src.as_str();
     let mut benches = 0;
     // Each `#[ignore` attribute at the start of a line, however it's
     // written, and the first statement of the function it marks.
