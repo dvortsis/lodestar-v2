@@ -10,6 +10,8 @@ import { liveEvents } from './support/events-server';
 import { test } from './support/test';
 
 type Mock = Parameters<typeof server>[0];
+/** The registration endpoint: the page holds the id once it has read this body. */
+const LIVE = '/api/v1/search/live';
 
 /** Search answers `total` hits; `/search/live` hands out `a1`, `a2`, ... or fails when `fail`. */
 function live(mock: Mock, state: { total: number; approx: boolean; fail?: boolean }) {
@@ -36,6 +38,9 @@ test('new matches show a banner; the list holds until Show reloads it and regist
 	await go('/search?q=lantern');
 	await expect(row(page, 1)).toBeVisible();
 	await expect.poll(() => mock.calls('registerSearchLive').length).toBe(1);
+	// The mock counts a call before it answers: wait until the page has read the id `a1`, or its
+	// event would arrive while the page still has no id, and be dropped.
+	await expect.poll(() => events.answered(LIVE), { timeout: 10_000 }).toBe(1);
 	const banner = page.getByTestId('results-live');
 	// An event for some other registration counts for nothing.
 	await events.send('search_live', { id: 'zzz', matched: 9, through: 5 });
@@ -52,6 +57,7 @@ test('new matches show a banner; the list holds until Show reloads it and regist
 	await expect.poll(() => mock.calls('searchPost').length).toBeGreaterThan(calls);
 	// Show registers again (the count starts from 0) and releases the old id.
 	await expect.poll(() => mock.calls('registerSearchLive').length).toBe(2);
+	await expect.poll(() => events.answered(LIVE), { timeout: 10_000 }).toBe(2);
 	await expect.poll(() => mock.calls('releaseSearchLive').length).toBeGreaterThan(0);
 	// The list owns its active row after Show: focus is on the first row, and j goes to the second.
 	await expect(rowOf(page, 1)).toBeFocused();
