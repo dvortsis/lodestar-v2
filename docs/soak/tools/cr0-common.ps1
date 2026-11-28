@@ -249,12 +249,32 @@ function Save-SoakLifecycle([string]$Path, [string]$Step, [hashtable]$Fields) {
     Save-SoakJson $record $Path
 }
 
+function Read-SoakOptionalMetric([string]$Text, [string]$Name) {
+    # A sample value that may be absent: $null when the series isn't there (unknown, never 0);
+    # a series that's there but unreadable still throws, as a required one does.
+    if (-not [regex]::IsMatch($Text, '(?m)^lodestar_' + [regex]::Escape($Name) + ' ')) { return $null }
+    $match = [regex]::Match($Text, '(?m)^lodestar_' + [regex]::Escape($Name) + ' ([0-9.]+)\r?$')
+    if (-not $match.Success) { throw "Unreadable metric: $Name" }
+    return [double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Get-SoakTorrentCount([string]$Bind,
-    [scriptblock]$Fetch = { param($url) (Invoke-WebRequest $url -TimeoutSec 5).Content }) {
-    $text = & $Fetch "http://$Bind/metrics"
-    $match = [regex]::Match($text, '(?m)^lodestar_torrents ([0-9.]+)\r?$')
-    if (-not $match.Success) { throw 'Missing metric: torrents' }
-    return [long][double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+    [scriptblock]$Fetch = { param($url) (Invoke-WebRequest $url -TimeoutSec 5).Content },
+    [double]$DeadlineSeconds = 120, [int]$PollMilliseconds = 1000) {
+    # The server leaves lodestar_torrents out until its start-up count lands, seconds after
+    # a start (X-healthz-count-async): poll until it's there, up to the deadline.
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $text = & $Fetch "http://$Bind/metrics"
+        $match = [regex]::Match([string]$text, '(?m)^lodestar_torrents ([0-9.]+)\r?$')
+        if ($match.Success) {
+            return [long][double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+        }
+        if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) {
+            throw "Missing metric: torrents (the start-up torrent count didn't land within $DeadlineSeconds s)"
+        }
+        Start-Sleep -Milliseconds $PollMilliseconds
+    }
 }
 
 function Get-SoakInstalledVersion([string]$Exe = (Join-Path $env:ProgramFiles 'Lodestar\lodestar.exe'),

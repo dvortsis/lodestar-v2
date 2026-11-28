@@ -4,7 +4,9 @@
 //! the pipeline is up, the intake waits, the filter answers "stored" to
 //! every hash, and no key reaches the fetcher. Once the fill is let go,
 //! the stored hash is a rediscovery, never fetched, and a new key is
-//! fetched, only ever with the filter filled.
+//! fetched, only ever with the filter filled. The start-up count is held
+//! the same way, before it, to see it unknown until it lands
+//! (X-healthz-count-async).
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -283,5 +285,78 @@ async fn the_bound_holds_the_count_and_the_filter_is_filled() {
         .await
         .expect("filled within 10 s");
     assert!(m.have().contains(&info.v1.unwrap()));
+    pipeline.shutdown().await.unwrap();
+}
+
+/// The start-up count runs on the fill thread (X-healthz-count-async):
+/// held before it, the pipeline is up and the count reads as unknown,
+/// never as 0 or a partial number; let go, it's exact, and the filter is
+/// sized and filled after it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_torrent_count_is_unknown_until_the_fill_has_counted() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let info = stored_info();
+    {
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let src = store.register_source("importer", "1", 0).unwrap();
+        store
+            .insert(&[NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 1_600_000_000,
+                metadata_at: 1_600_000_000,
+                extra_flags: 0,
+                source: src,
+            }])
+            .unwrap();
+    }
+    let gate = Arc::new(Gate::default());
+    let _open = OpenOnDrop(gate.clone());
+    let config = PipelineConfig {
+        count_gate: Some(FillGate::new({
+            let gate = gate.clone();
+            move || gate.pass()
+        })),
+        ..PipelineConfig::default()
+    };
+    let store = Store::open(&db, StoreConfig::default()).unwrap();
+    let pipeline = Pipeline::start_with(config, store, Vec::new(), Arc::new(Fetch(Arc::default())))
+        .await
+        .unwrap();
+    let m = pipeline.monitor();
+    until("the fill to reach the count", || {
+        gate.entered.load(Ordering::SeqCst)
+    })
+    .await;
+    assert_eq!(m.torrents(), None, "no count before it's taken");
+    assert!(!m.have().is_sized() && !m.have().is_filled());
+
+    gate.release();
+    until("the count to land", || m.torrents().is_some()).await;
+    assert_eq!(m.torrents(), Some(1));
+    tokio::time::timeout(Duration::from_secs(10), m.have().filled())
+        .await
+        .expect("filled within 10 s");
+    assert!(m.have().is_sized());
+    assert!(m.have().contains(&info.v1.unwrap()));
+    pipeline.shutdown().await.unwrap();
+}
+
+/// An in-memory store (no second connection) is still counted and filled
+/// in the start: the count is known at once.
+#[tokio::test]
+async fn an_in_memory_store_is_counted_in_the_start() {
+    let pipeline = Pipeline::start_with(
+        PipelineConfig::default(),
+        Store::open_in_memory(StoreConfig::default()).unwrap(),
+        Vec::new(),
+        Arc::new(Fetch(Arc::default())),
+    )
+    .await
+    .unwrap();
+    let m = pipeline.monitor();
+    assert_eq!(m.torrents(), Some(0));
+    assert!(m.have().is_filled() && m.have().is_sized());
     pipeline.shutdown().await.unwrap();
 }

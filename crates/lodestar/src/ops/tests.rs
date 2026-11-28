@@ -113,6 +113,11 @@ fn free_udp_port() -> u16 {
 }
 
 async fn fixture() -> Fixture {
+    fixture_with(None).await
+}
+
+/// [`fixture`], its pipeline's start-up count held at `count_gate`.
+async fn fixture_with(count_gate: Option<lodestar_pipeline::FillGate>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let config = Config::load(None, |_| None).unwrap();
     let db = dir.path().join("t.db");
@@ -138,6 +143,7 @@ async fn fixture() -> Fixture {
                 ..PoolConfig::default()
             },
             flush_every: Duration::from_millis(100),
+            count_gate,
             ..PipelineConfig::default()
         },
         Store::open(&db, StoreConfig::default()).unwrap(),
@@ -493,6 +499,73 @@ async fn pause_resume_and_intensity_through_the_api() {
     f.stop().await;
 }
 
+/// While the start-up count runs (held here), `/stats` says
+/// `stored_torrents` is null and `/metrics` has no `lodestar_torrents`,
+/// never a 0; once it lands, both read the same number
+/// (X-healthz-count-async).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_stored_count_is_null_and_its_gauge_absent_until_it_lands() {
+    let gate = Arc::new((Mutex::new((false, false)), std::sync::Condvar::new()));
+    let mut f = fixture_with(Some(lodestar_pipeline::FillGate::new({
+        let gate = gate.clone();
+        move || {
+            let (lock, cv) = &*gate;
+            let mut g = lock.lock().unwrap();
+            g.0 = true;
+            while !g.1 {
+                g = cv.wait(g).unwrap();
+            }
+        }
+    })))
+    .await;
+    // Opened when dropped too, so a failed assertion doesn't leave the
+    // fill thread, and the runtime's shutdown with it, waiting.
+    struct Release(Arc<(Mutex<(bool, bool)>, std::sync::Condvar)>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let (lock, cv) = &*self.0;
+            lock.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+            cv.notify_all();
+        }
+    }
+    let release = Release(gate.clone());
+    let cookie = f.session().await;
+    let c = cookie.as_str();
+    eventually(
+        "the fill held before its count",
+        || format!("{:?}", gate.0.lock().unwrap()),
+        || gate.0.lock().unwrap().0,
+    )
+    .await;
+    let metrics =
+        || crate::metrics::render(&f.ops.monitor, f.dht.stats().as_ref(), &Default::default());
+    let (status, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
+    assert_eq!(status, 200, "{stats}");
+    let held = (stats.clone(), metrics());
+    drop(release);
+    assert_eq!(held.0["stored_torrents"], Value::Null, "{}", held.0);
+    assert!(
+        !held.1.contains("lodestar_torrents"),
+        "the gauge is absent while counting"
+    );
+    eventually(
+        "the count to land",
+        || format!("{:?}", f.ops.monitor.torrents()),
+        || f.ops.monitor.torrents().is_some(),
+    )
+    .await;
+    let (_, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
+    assert!(
+        stats["stored_torrents"].is_u64(),
+        "a number once counted: {stats}"
+    );
+    assert!(
+        metrics().contains("\nlodestar_torrents "),
+        "the gauge once counted"
+    );
+    f.stop().await;
+}
+
 /// `/stats` reads the counters `/metrics` shows; what can't be measured
 /// is null.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -518,23 +591,25 @@ async fn stats_match_the_metrics() {
         assert_eq!(status, 200, "{stats}");
         let monitor = f.ops.monitor.clone();
         let metrics = crate::metrics::render(&monitor, f.dht.stats().as_ref(), &Default::default());
-        let metric = move |name: &str| -> u64 {
+        // Absent until the start-up count lands (X-healthz-count-async).
+        let found = move |name: &str| -> Option<u64> {
             metrics
                 .lines()
                 .find_map(|l| l.strip_prefix(&format!("lodestar_{name} ")))
-                .unwrap_or_else(|| panic!("no {name} in /metrics"))
-                .parse()
-                .unwrap()
+                .map(|v| v.parse().unwrap())
         };
-        if stats["stored_torrents"] == json!(metric("torrents"))
+        let torrents = found("torrents");
+        let metric = move |name: &str| -> u64 {
+            found(name).unwrap_or_else(|| panic!("no {name} in /metrics"))
+        };
+        if torrents.is_some_and(|n| stats["stored_torrents"] == json!(n))
             && stats["queue_depth"] == json!(metric("fetch_pending"))
         {
             break (stats, metric);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "after 15 s /stats said {stats} but /metrics said torrents {} fetch_pending {}",
-            metric("torrents"),
+            "after 15 s /stats said {stats} but /metrics said torrents {torrents:?} fetch_pending {}",
             metric("fetch_pending")
         );
         tokio::time::sleep(Duration::from_millis(50)).await;

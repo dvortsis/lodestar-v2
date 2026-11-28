@@ -280,7 +280,7 @@ impl OpsApi for FakeOps {
                     remaining_s: 21_540,
                 }),
                 searchable_torrents: None,
-                stored_torrents: 2_410_391,
+                stored_torrents: Some(2_410_391),
                 updated_at: 1_700_000_100,
                 uptime_s: 100,
             }
