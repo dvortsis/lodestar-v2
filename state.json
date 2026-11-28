@@ -11116,14 +11116,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T03:53:23Z",
+    "updated": "2026-11-28T04:12:14Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-healthz-cold-start",
         "role": "build",
         "agent": "session_01MMjhnCzBhE8ykoynB1suXZ",
-        "doing": "PR #1159 review fixes (FIX ruled)",
+        "doing": "PR #1159 fixes checked; merge on green",
         "since": "2026-11-28T00:17:49Z"
       },
       {
@@ -11140,16 +11140,16 @@
         "slice": "CMP-G",
         "role": "build",
         "agent": "session_01MMjhn9KRy17VkjD1ziKQHs",
-        "doing": "companion gate tests for v0.6",
+        "doing": "PR #1161 review fixes pushed and checked; merge on green",
         "since": "2026-11-28T03:23Z"
       },
       {
         "slot": 4,
-        "slice": "X-testvm-delete-on-termination",
+        "slice": "X-cmp-privilege-refusal-ci",
         "role": "build",
-        "agent": "session_01MMjhnCgGRj92DMxR43X78B",
-        "doing": "launched; brief briefs/X-testvm-delete-on-termination.md",
-        "since": "2026-11-28T03:53:23Z"
+        "agent": "session_01MMjhnBV9RgqpY5DyG4DTJe",
+        "doing": "launched; brief briefs/X-cmp-privilege-refusal-ci.md",
+        "since": "2026-11-28T04:12:14Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
