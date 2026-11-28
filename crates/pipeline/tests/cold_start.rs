@@ -1,5 +1,6 @@
 //! A start doesn't wait for the have-filter (X-healthz-cold-start), and
-//! nothing reads it as complete before it is: the fill is held here, so
+//! nothing reads it as complete before it is: the fill is held here
+//! between its scan and its mark, so
 //! the pipeline is up, the intake waits, the filter answers "stored" to
 //! every hash, and no key reaches the fetcher. Once the fill is let go,
 //! the stored hash is a rediscovery, never fetched, and a new key is
@@ -247,10 +248,10 @@ async fn the_start_doesnt_wait_for_the_fill_and_nothing_is_admitted_before_it() 
     pipeline.shutdown().await.unwrap();
 }
 
-/// A start over a store too big for the minimum filter sizes it from the
-/// id bound, not a count, and fills it completely.
+/// The id bound holds the count, and a start over a file store fills
+/// the filter completely, sized for twice the count.
 #[tokio::test]
-async fn the_filter_is_sized_from_the_id_bound_and_filled() {
+async fn the_bound_holds_the_count_and_the_filter_is_filled() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -282,6 +283,6 @@ async fn the_filter_is_sized_from_the_id_bound_and_filled() {
         .await
         .expect("filled within 10 s");
     assert!(m.have().contains(&info.v1.unwrap()));
-    assert!(m.have().capacity() >= 2 * bound);
+    assert!(m.have().capacity() >= 2 * m.torrents());
     pipeline.shutdown().await.unwrap();
 }

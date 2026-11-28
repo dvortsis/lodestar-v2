@@ -13,7 +13,7 @@
 //! **Filling at start (X-healthz-cold-start).** A large store takes
 //! seconds to scan, so a start no longer waits for it: the filter is made
 //! [`filling`](Have::filling), a blocking thread inserts every stored hash
-//! ([`fill_insert`](Have::fill_insert)) and then calls
+//! ([`fill`](Have::fill)) and then calls
 //! [`mark_filled`](Have::mark_filled). Until then a "no" can't be
 //! trusted, so:
 //! - the intake waits for [`filled`](Have::filled) before it admits
@@ -136,12 +136,17 @@ impl Have {
         self.filled_tx.receiver_count()
     }
 
-    /// Inserts a hash the fill read from the store: into the filter only,
-    /// not to the observer. The workers' filter is built from the store
-    /// itself (WK-3), as it was when the fill ran before an observer could
-    /// be set.
-    pub fn fill_insert(&self, hash: &InfoHash) {
-        self.current().insert(hash);
+    /// Runs `scan` with an insert into the current filter, for the hashes
+    /// the fill reads from the store: into the filter only, not to the
+    /// observer. The workers' filter is built from the store itself (WK-3),
+    /// as it was when the fill ran before an observer could be set. The
+    /// filter is taken once: nothing replaces it while filling.
+    pub fn fill<E>(
+        &self,
+        scan: impl FnOnce(&mut dyn FnMut(InfoHash)) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let bloom = self.current();
+        scan(&mut |h| bloom.insert(&h))
     }
 
     /// Ends the fill: every hash stored when it began is in, and every one
@@ -481,9 +486,11 @@ mod tests {
         assert!(!have.is_filled());
         // The bloom is empty, but no "no" may be given yet.
         assert!(have.contains(&hash(1)));
-        for i in 0..1_000 {
-            have.fill_insert(&hash(i));
-        }
+        have.fill(|insert| {
+            (0..1_000).for_each(|i| insert(hash(i)));
+            Ok::<_, ()>(())
+        })
+        .unwrap();
         assert!(have.current().is_full());
         assert!(!have.is_full(), "a rebuild was asked for while filling");
         have.mark_filled();
@@ -505,7 +512,11 @@ mod tests {
         let have = Have::filling(100);
         let seen = Arc::new(Count::default());
         assert!(have.observe(seen.clone()));
-        have.fill_insert(&hash(1));
+        have.fill(|insert| {
+            insert(hash(1));
+            Ok::<_, ()>(())
+        })
+        .unwrap();
         have.insert(&hash(2));
         assert_eq!(seen.0.load(Ordering::Relaxed), 1);
     }

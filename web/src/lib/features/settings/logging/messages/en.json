@@ -609,6 +609,8 @@
 	"settings_logging_ev_pipeline_core_rejudge_stall_cleared_h": "Stored torrents the re-judge had skipped were judged.",
 	"settings_logging_ev_pipeline_enrichment_failed_n": "Enrichment failed",
 	"settings_logging_ev_pipeline_enrichment_failed_h": "Adding details to a torrent failed.",
+	"settings_logging_ev_pipeline_have_fill_failed_n": "Have-list fill failed",
+	"settings_logging_ev_pipeline_have_fill_failed_h": "Filling the list of known torrents at start failed. It is tried again; crawling waits until it succeeds.",
 	"settings_logging_ev_pipeline_have_rebuild_failed_n": "Have-list rebuild failed",
 	"settings_logging_ev_pipeline_have_rebuild_failed_h": "Rebuilding the list of known torrents failed.",
 	"settings_logging_ev_pipeline_queue_save_failed_n": "Queue not saved",

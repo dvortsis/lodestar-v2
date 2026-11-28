@@ -181,6 +181,9 @@ pub trait Stored: Send + Sync + 'static {
     fn swarm_hashes(&self) -> u64;
     /// Sets the one insert observer (`Have::observe`).
     fn observe(&self, observer: Arc<dyn HaveObserver>) -> bool;
+    /// Whether the start's fill is done (`Have::is_filled`), so
+    /// `swarm_hashes` is the whole stored set (X-healthz-cold-start).
+    fn filled(&self) -> bool;
 }
 
 impl Stored for Monitor {
@@ -191,6 +194,10 @@ impl Stored for Monitor {
     fn observe(&self, observer: Arc<dyn HaveObserver>) -> bool {
         self.have().observe(observer)
     }
+
+    fn filled(&self) -> bool {
+        self.have().is_filled()
+    }
 }
 
 impl Stored for Have {
@@ -200,6 +207,10 @@ impl Stored for Have {
 
     fn observe(&self, observer: Arc<dyn HaveObserver>) -> bool {
         Have::observe(self, observer)
+    }
+
+    fn filled(&self) -> bool {
+        self.is_filled()
     }
 }
 
@@ -1720,7 +1731,12 @@ fn have_step(
     } else if !synced.at_cap {
         tick.at_cap.store(false, Ordering::Relaxed);
     }
-    if !synced.rebuild || !tick.rebuild_retry.due() || tick.rebuilding.swap(true, Ordering::AcqRel)
+    // Not while the coordinator's filter is still filling at start: it
+    // would be sized from a partial count (X-healthz-cold-start).
+    if !synced.rebuild
+        || !fleet.stored.filled()
+        || !tick.rebuild_retry.due()
+        || tick.rebuilding.swap(true, Ordering::AcqRel)
     {
         return;
     }
@@ -4728,9 +4744,13 @@ mod tests {
     }
 
     async fn rig(db: Option<&str>) -> Rig {
+        rig_with(db, fleet()).await
+    }
+
+    async fn rig_with(db: Option<&str>, fleet: Fleet) -> Rig {
         let dir = tempfile::tempdir().unwrap();
         let mut wiring = wiring(dir.path(), true, any_port());
-        wiring.fleet = Some(fleet());
+        wiring.fleet = Some(fleet);
         let (pki, check) = open_pki(&wiring, Arc::new(AtomicU64::new(0)), Arc::default()).unwrap();
         let mut tick = Tick::new(&wiring);
         if let Some(db) = db {
@@ -5154,6 +5174,51 @@ mod tests {
         let now = r.tick.snapshots().as_ref().map(|s| s.versions().1);
         assert!(now.is_some_and(|v| v != 0) && version != 0);
         assert_eq!(planned, now);
+    }
+
+    /// A worker connected while the coordinator's have-filter is still
+    /// filling at start gets no filter built until the fill is done, so
+    /// the build is sized from the whole stored set (X-healthz-cold-start).
+    #[tokio::test]
+    async fn no_worker_filter_is_built_while_the_have_filter_fills() {
+        let have = Arc::new(Have::filling(1 << 20));
+        let mut r = rig_with(
+            None,
+            Fleet {
+                stored: have.clone(),
+                ..fleet()
+            },
+        )
+        .await;
+        let _link = session_at(&r.addr, &r.creds).await;
+        until("connected", || {
+            let s = r.sessions();
+            (s.1, s)
+        })
+        .await;
+        r.step().await;
+        r.step().await;
+        // `have_step` starts a rebuild synchronously: none was started.
+        assert!(!r.tick.rebuilding.load(Ordering::Acquire));
+        assert_eq!(r.tick.have_rebuilds.load(Ordering::Relaxed), 0);
+
+        have.fill(|insert| {
+            (0..1_000u32).for_each(|i| {
+                let mut h = [0u8; 20];
+                h[..4].copy_from_slice(&i.to_le_bytes());
+                insert(InfoHash(h));
+            });
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        have.mark_filled();
+        assert!(have.swarm_hashes() > 990, "sized from the whole set");
+        r.step().await;
+        until("the rebuild", || {
+            let n = r.tick.have_rebuilds.load(Ordering::Relaxed);
+            (n == 1, n)
+        })
+        .await;
     }
 
     /// A store the snapshots can't read: said once, counted each time; a

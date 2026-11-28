@@ -385,6 +385,15 @@ lodestar_log::catalogue! {
         message: "Rebuilding the have-filter failed",
         fields: { error: Error },
     }
+    /// Filling the have-filter at start failed; it's tried again, and
+    /// nothing is crawled until it succeeds (X-healthz-cold-start).
+    HAVE_FILL_FAILED {
+        id: "pipeline.have_fill_failed",
+        component: Pipeline,
+        level: Error,
+        message: "Filling the have-filter failed; crawling waits until it succeeds",
+        fields: { error: Error, attempts: Size },
+    }
     /// The fetch queue couldn't be saved.
     QUEUE_SAVE_FAILED {
         id: "pipeline.queue_save_failed",

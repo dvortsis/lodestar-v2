@@ -751,10 +751,11 @@ impl Pipeline {
         if let Some(open) = fill {
             let (have, gate) = (Arc::downgrade(&have), config.fill_gate.clone());
             tokio::task::spawn_blocking(move || {
-                if let Some(gate) = gate {
-                    gate.wait();
-                }
-                fill_have(&have, || Store::open_reader(&open.0, open.1.clone()));
+                fill_have(
+                    &have,
+                    || Store::open_reader(&open.0, open.1.clone()),
+                    gate.as_ref(),
+                );
             });
         }
         for note in load_filter(&config.filter, &store_filter) {
@@ -1561,15 +1562,12 @@ fn prepare(
     }
     let stored = store.count()?;
     // The have-filter is filled off the start (X-healthz-cold-start), from
-    // its own connection, and sized from a bound that needs no scan: ids
-    // are distinct, so the torrents fit in `torrent_bound`, and each has
-    // at most two swarm hashes, which `capacity_for`'s doubling covers. An
-    // in-memory store (tests) can't be reopened, so it's filled here.
+    // its own connection. It's sized from the exact count while that is
+    // still taken here; `Store::torrent_bound` is the scan-free bound for
+    // when it isn't (X-healthz-count-async). An in-memory store (tests)
+    // can't be reopened, so it's filled here.
     let have = match store.reopen_args() {
-        Some(open) => (
-            Have::filling(have::capacity_for(store.torrent_bound()?)),
-            Some(open),
-        ),
+        Some(open) => (Have::filling(have::capacity_for(stored)), Some(open)),
         None => {
             let have = Have::new(have::capacity_for(stored));
             store.for_each_swarm_hash(|h| have.insert(&h))?;
@@ -1610,6 +1608,8 @@ fn prepare(
 
 /// The longest wait between two tries of a fill whose store read failed.
 const FILL_RETRY_MAX: Duration = Duration::from_secs(60);
+/// How often a fill waiting to try again checks that the pipeline is up.
+const FILL_RETRY_CHECK: Duration = Duration::from_secs(1);
 
 /// Fills a [`Have::filling`] filter from the store (blocking), then marks
 /// it filled. The scan is one statement, so one read snapshot: a hash
@@ -1618,26 +1618,39 @@ const FILL_RETRY_MAX: Duration = Duration::from_secs(60);
 /// after 1 s and then twice as long each time up to a minute, while the
 /// pipeline is up; the filter is never marked filled until a scan has
 /// finished. Its inserts stay in between: a filter only gains bits.
+/// `gate` (tests) runs after a scan, before the filter is marked.
 fn fill_have(
     have: &std::sync::Weak<Have>,
     open: impl Fn() -> Result<Store, lodestar_store::Error>,
+    gate: Option<&FillGate>,
 ) {
     let mut wait = Duration::from_secs(1);
-    loop {
+    for attempts in 1u64.. {
         // Gone when the pipeline has stopped: nothing reads it any more.
-        let Some(have) = have.upgrade() else { return };
-        match open().and_then(|s| s.for_each_swarm_hash(|h| have.fill_insert(&h))) {
+        let Some(filter) = have.upgrade() else { return };
+        match open().and_then(|s| filter.fill(|insert| s.for_each_swarm_hash(insert))) {
             Ok(()) => {
-                have.mark_filled();
+                if let Some(gate) = gate {
+                    gate.wait();
+                }
+                filter.mark_filled();
                 return;
             }
             Err(e) => lodestar_log::log_event!(
-                log_events::HAVE_REBUILD_FAILED,
-                error = log_events::store_error(&e)
+                log_events::HAVE_FILL_FAILED,
+                error = log_events::store_error(&e),
+                attempts = attempts
             ),
         }
-        drop(have);
-        std::thread::sleep(wait);
+        drop(filter);
+        // In short steps, so a stopped pipeline doesn't wait it out.
+        let until = std::time::Instant::now() + wait;
+        while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+            if have.strong_count() == 0 {
+                return;
+            }
+            std::thread::sleep(left.min(FILL_RETRY_CHECK));
+        }
         wait = (wait * 2).min(FILL_RETRY_MAX);
     }
 }
