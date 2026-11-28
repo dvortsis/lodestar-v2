@@ -180,6 +180,23 @@ class RealWorkspace(unittest.TestCase):
         self.assertEqual(sorted(flags), ["--bins", "--doc", "--lib"])  # each once
 
 
+    def test_every_feature_gated_test_runs_in_its_own_ci_step(self):
+        # No shard names a test behind required-features (plain cargo test skips
+        # it); some other ci.yml step must run it with those features on, as on
+        # main (mmap_retention: the mmap-retention job).
+        m = test_shards.metadata()
+        members = set(m["workspace_members"])
+        gated = [(p["name"], t["name"], t["required-features"]) for p in m["packages"] if p["id"] in members
+                 for t in p["targets"] if t["kind"] == ["test"] and t.get("required-features")]
+        self.assertTrue(gated)
+        ci = CI.read_text()
+        for pkg, name, feats in gated:
+            with self.subTest(name):
+                pattern = (rf"cargo test [^\n]*-p {re.escape(pkg)} [^\n]*--features {re.escape(','.join(feats))}"
+                           rf" [^\n]*--test {re.escape(name)}(\s|$)")
+                self.assertRegex(ci, pattern)
+
+
 class Workflow(unittest.TestCase):
     """ci.yml's `test` job and ci-ok agree with the script (stdlib only: no YAML parser)."""
 
