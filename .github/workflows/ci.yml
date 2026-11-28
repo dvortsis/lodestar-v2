@@ -227,9 +227,15 @@ jobs:
             if [ -z "$filters" ]; then echo "::error::empty filters for $SHARD"; exit 1; fi
             echo "cargo test --workspace --no-fail-fast $filters"
             # $filters is unquoted on purpose: one word per target filter
-            # (test_shards.py allows only [A-Za-z0-9_-] names).
-            cargo test --workspace --no-fail-fast $filters || rc=$?
+            # (test_shards.py allows only [A-Za-z0-9_-] names). The job's bash
+            # sets pipefail, so cargo's status survives the tee.
+            cargo test --workspace --no-fail-fast $filters 2>&1 | tee -a shard-test.log || rc=$?
           done
+          # Per-shard counts, so the OS totals can be added up and compared.
+          sed 's/\x1b\[[0-9;]*m//g' shard-test.log | awk -v shard="$SHARD" -v os="$RUNNER_OS" '
+            /^test result: / { b++; p += $4; f += $6; i += $8 }
+            END { printf "%s %s: %d passed, %d failed, %d ignored in %d test binaries\n", os, shard, p, f, i, b }' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$rc"
       # Disk numbers for the next time this job runs short (X-ci-disk).
       - name: disk after test build
