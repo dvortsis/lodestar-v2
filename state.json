@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T11:06:42Z",
+  "updated_at": "2026-11-28T12:38:54Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-28T09:39:03Z",
+  "last_heartbeat": "2026-11-28T12:38:54Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -11133,14 +11133,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T11:06:42Z",
+    "updated": "2026-11-28T12:38:54Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-vpn-bind",
         "role": "build",
         "agent": "session_01MMjhnBk6q6p8uDAteN1GqD",
-        "doing": "#1167 reviewed (MERGE); CI on 8cb47323",
+        "doing": "#1167: reviewed MERGE; Windows test fixed; CI on the new head; e2e flake re-run",
         "since": "2026-11-28T10:48:57Z"
       },
       {
@@ -11149,7 +11149,7 @@
         "role": "build",
         "agent": "session_01MMjhnAdLGBQaRDghkS2MDK",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "hidden count moved to a follow-up request; re-bench",
+        "doing": "#1173: review fixes pushed; snapshot regen; delta review next",
         "since": "2026-11-28T09:39:03Z"
       },
       {
@@ -11157,7 +11157,7 @@
         "slice": "X-upload-screen-flake",
         "role": "build",
         "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
-        "doing": "step 0: reproduce and name the race",
+        "doing": "#1174: cleared; CI on c905d6a1; next X-drawer-detach-flake",
         "since": "2026-11-28T10:48:57Z"
       },
       {
@@ -11165,7 +11165,7 @@
         "slice": "X-filter-budget-drift",
         "role": "build",
         "agent": "session_01MMjhnD7WDpGhQX1vKVsT7r",
-        "doing": "step 0: diagnose in-run calibration drift",
+        "doing": "#1175: cleared; CI on aac28654",
         "since": "2026-11-28T11:06:42Z"
       }
     ],
@@ -11303,7 +11303,7 @@
       "effect": "AWS stop = 90% of the lower of $130.56 and $133.72 = $117.50 of new AWS spend from 2026-11-23T00:31Z (r15 rule; conservative: spend since 00:31Z already counts against it). Replaces the interim $100 stop."
     }
   ],
-  "heartbeat": "2026-11-28T09:39:03Z",
+  "heartbeat": "2026-11-28T12:38:54Z",
   "updated": "2026-11-28T11:10:27Z",
   "pause": {
     "state": "resumed",
