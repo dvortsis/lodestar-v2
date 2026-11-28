@@ -359,6 +359,7 @@ python3 docs/soak/tools/analyze_cr.py gate-round <round>/manifest.json --output 
 
 - `manifest` refuses a report on another image, a repeated run ID or a gap in repeats: tell the runner, don't edit a file.
 - If an attempt ended short (the runner says so), record it first: `$C end-attempt /root/round1-coordinator.json --attempt <attempt> --reason <reason>`.
+  - The runner gives the `<reason>`: one or more comma-separated tokens, each naming an arm where it applies. For example, `rehearsal_drop:C` when the rehearsal drops C from `r1-L3`, or `product_failure:A`. The other forms are `solo_confirmation:<arm>`, `valid_miss:<arm>` and `other:<slug>`. `end-attempt` refuses anything else; tell the runner if it does.
 - Send the runner `verdict.json` and the manifest's SHA-256 line. **The verdict and what follows are the runner's.**
 - **Keep every raw folder** (both days, the rehearsal's samples) until the runner has reproduced `gate-round` from the copy.
 

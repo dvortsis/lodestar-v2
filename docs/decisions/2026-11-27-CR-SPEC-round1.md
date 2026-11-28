@@ -202,7 +202,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
   - L2 and L2b follow L3. L2c may follow only when the chain's last attempt that isn't S is L3 (1917–1918; X-cr-round1-collect-fixes, #1151). So L3 → S → L2c is allowed.
 - **An S attempt is allowed only** in these cases (X-cr-round1-spec-fixes):
   - (a) for a candidate whose day in the attempt just before was `solo_confirmation_required`;
-  - (b) when its arm is the only arm left (plan line 469, "S if both are gone"). Every other arm of the attempt before it has dropped, at the rehearsal or by a class 2 product failure, and that attempt's `attempt_ends` reason records the drop (`rehearsal_drop` or `product_failure:<arm>`).
+  - (b) when its arm is the only arm left (plan line 469, "S if both are gone"). Every other arm of the attempt before it has dropped, at the rehearsal or by a class 2 product failure, and that attempt's `attempt_ends` reason records the drop (`rehearsal_drop:<arm>` or `product_failure:<arm>`, one token per dropped arm). `rehearsal_drop:<arm>` counts only on the round's first attempt, with `days_run: []` (X-cr-round1-spec-fixes, #1158).
   - Each candidate gets at most one S attempt per round.
   - Anything else makes the candidate `not_judged` with `solo_not_permitted`.
   - Today `check_declaration` accepts any one-arm S attempt within the chain (1915–1916), so S could act as an unbudgeted retry.
@@ -218,6 +218,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 - **`attempt_ends`** records an attempt that ended short (`load_manifest`, 1969–1974, 1990–1994; coordinator `end-attempt`, 912–924).
   - Its format is {attempt: {`reason`, `days_run`}}. `days_run` is exactly `[]`, `[1]` or `[1, 2]` as plain integers, and each day is listed in the manifest.
   - `[]` means the attempt never started. It's accepted only when no day of that attempt is listed. An example is `r1-L3` when the rehearsal drops C.
+  - `reason` is one or more comma-separated tokens: `rehearsal_drop:<arm>`, `product_failure:<arm>`, `solo_confirmation:<arm>`, `valid_miss:<arm>` or `other:<slug>` (`<arm>` one capital letter, `<slug>` up to 40 of `[a-z0-9_]`). `end-attempt` refuses any other form, and a `rehearsal_drop` on an attempt other than the round's first or after a day ran (#1158).
   - An earlier attempt's declared days must all be listed, or its end recorded. Otherwise it's `earlier_attempt_incomplete` (2391–2394).
 
 **The drop-C rule,** frozen here (plan lines 430–432), computed by `analyze_cr.py drop-c SAMPLES --arm X=DIR …` (`drop_c`, 2585–2630; `DROP_C`, 2566) (X-cr-round1-collect-fixes, #1151):
