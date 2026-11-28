@@ -14,16 +14,28 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      # The companions crate and every workspace crate it builds
+      # (cargo metadata), the toolchain, the manifests, and the build files
+      # the gate's release check reads.
       - "crates/companions/**"
+      - "crates/bencode/**"
       - "crates/integrations/**"
       - "crates/log/**"
+      - "crates/metainfo/**"
+      - "crates/network-policy/**"
+      - "crates/peer-wire/**"
       - "crates/sources/**"
       - "crates/sources-feeds/**"
+      - "crates/store/**"
       - "crates/update/**"
+      - "crates/utp/**"
       - "crates/*/Cargo.toml"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/release.yml"
+      - "packaging/docker/Dockerfile"
+      - "packaging/windows/build-msi.ps1"
       - ".github/workflows/companions-smoke.yml"
   workflow_dispatch:
 

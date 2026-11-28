@@ -204,8 +204,12 @@ fn qbt() -> CompanionId {
 /// Windows runners are administrators; `Supervised` refuses that, and
 /// `tests/supervise.rs` checks it).
 fn spec(data: &Path, exe: PathBuf, env: &[(&str, OsString)]) -> SpawnSpec {
+    spec_for(prowlarr(), data, exe, env)
+}
+
+fn spec_for(id: CompanionId, data: &Path, exe: PathBuf, env: &[(&str, OsString)]) -> SpawnSpec {
     SpawnSpec {
-        id: prowlarr(),
+        id,
         executable: exe,
         args: args_for("fake_companion"),
         env: env
@@ -524,7 +528,12 @@ impl ApiConfigure for Api {
 }
 
 struct World {
-    data: tempfile::TempDir,
+    /// Kept alive for `root`.
+    _dir: tempfile::TempDir,
+    /// The data folder as the OS names it: the manager canonicalises its
+    /// own, and on Windows that is the `\\?\` form with 8.3 names
+    /// (`RUNNER~1`) expanded, not the temporary folder's spelling.
+    root: PathBuf,
     secrets: Arc<SecretStore>,
     rows: Arc<Memory>,
     run: Arc<Recorder>,
@@ -533,8 +542,11 @@ struct World {
 
 impl World {
     fn new() -> World {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = std::fs::canonicalize(dir.path()).unwrap_or_else(|e| panic!("{e}"));
         World {
-            data: tempfile::tempdir().unwrap_or_else(|e| panic!("{e}")),
+            _dir: dir,
+            root,
             secrets: Arc::new(SecretStore::from_key(&[7u8; 32])),
             rows: Arc::default(),
             run: Arc::default(),
@@ -543,7 +555,7 @@ impl World {
     }
 
     fn data(&self) -> &Path {
-        self.data.path()
+        &self.root
     }
 
     fn manager(&self, net: Arc<Net>) -> Manager {
@@ -588,13 +600,6 @@ impl World {
         );
         (m, self.run.launched())
     }
-}
-
-/// `p` as the OS names it: the manager canonicalises its data folder, and
-/// on Windows that is the `\\?\` form with 8.3 names expanded
-/// (`RUNNER~1`), not the temporary folder's own spelling.
-fn canonical(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
 }
 
 /// Every file and folder under `dir`, relative, sorted.
@@ -732,6 +737,32 @@ async fn run_installed(
     let c = companion(spawn, l.secrets.clone());
     let gated = egress::add(&mut sup, c, Follows::of(&prowlarr()), route);
     (sup, sb, gated)
+}
+
+/// A second companion (qBittorrent's slot) on the direct route, from its
+/// own install folder, answering on `port`: the control the kill-switch
+/// test waits on.
+fn control(data: &Path, sb: &Sandbox, sup: &mut Supervisor, port: u16) -> egress::Gated {
+    let install = data.join("companions").join("qbittorrent").join("1.0.0");
+    std::fs::create_dir_all(&install).unwrap_or_else(|e| panic!("{e}"));
+    let exe = install.join(me().file_name().unwrap_or_default());
+    std::fs::copy(me(), &exe).unwrap_or_else(|e| panic!("{e}"));
+    let env = [
+        ("FAKE_MODE", OsString::from("serve")),
+        ("FAKE_PORT", port.to_string().into()),
+    ];
+    let (spawn, _) = sb
+        .prepare(
+            spec_for(qbt(), data, exe, &env),
+            &Confinement {
+                install,
+                downloads: None,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    let (_tx, r) = route(RouteKind::Direct, RouteState::Up);
+    egress::add(sup, companion(spawn, Vec::new()), Follows::of(&qbt()), r)
+        .unwrap_or_else(|e| panic!("{e}"))
 }
 
 fn route(kind: RouteKind, state: RouteState) -> (watch::Sender<RouteState>, Route) {
@@ -1157,6 +1188,23 @@ async fn managed_companions_bind_to_loopback() {
         Some(TemplateError::UnknownPort),
         "a port the entry doesn't have"
     );
+    let gluetun = CompanionId::parse("gluetun").unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(
+        compose::compose(
+            cat,
+            &gluetun,
+            &ServiceInput {
+                paths: Paths::default(),
+                ..service(
+                    ComposeRoute::Direct,
+                    vec![publish("control", Bind::Lan, 8000)]
+                )
+            },
+        )
+        .err(),
+        Some(TemplateError::LanRefused),
+        "gluetun's control port on your network"
+    );
 }
 
 // ─── 3. Egress and the kill switch ──────────────────────────────────────
@@ -1266,12 +1314,27 @@ async fn the_kill_switch_stops_a_companion_whose_vpn_route_is_down() {
         RouteKind::Socks5,
         RouteState::Down(DownReason::ProxyUnreachable),
     );
-    let (sup, _sb, gated) = run_installed(w.data(), &l, r, Some(proxy()), port, &[]).await;
+    let (mut sup, sb, gated) = run_installed(w.data(), &l, r, Some(proxy()), port, &[]).await;
     let gated = gated.unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(gated.decision, Decision::Follow(RouteKind::Socks5));
     let id = prowlarr();
     let mut st = sup.status(&id).unwrap_or_else(|| panic!("not supervised"));
-    assert_eq!(st.borrow().state, State::Held);
+    // Not one instant but a whole start: a direct companion added after it
+    // to the same supervisor starts and answers, and the gated one still
+    // hasn't started.
+    let control_port = free_port();
+    let _control = control(w.data(), &sb, &mut sup, control_port);
+    until("the direct control companion answers", || {
+        answers(control_port)
+    })
+    .await;
+    let now = *st.borrow();
+    assert_eq!(now.state, State::Held, "{now:?}");
+    assert_eq!(
+        (now.run, now.up),
+        (0, false),
+        "started with the tunnel down"
+    );
     assert_eq!(recorded_pid(w.data()), None, "started with the tunnel down");
     assert!(!answers(port));
 
@@ -1352,13 +1415,38 @@ async fn a_missing_or_unset_companion_needs_setup_and_is_not_started() {
     let m = w.manager(Net::serving(artifact().to_vec()));
     assert!(!met(&req, &m.snapshot().borrow()));
 
-    // The real runner, with no route and with a SOCKS5 route whose proxy
+    // An install whose start is refused that way is undone.
+    *w.run.refuse.lock().unwrap_or_else(|e| e.into_inner()) = Some("no_route");
+    let got = m.install(&token()).await;
+    assert!(
+        matches!(
+            got,
+            Err(ManagerError::Step {
+                code: "no_route",
+                ..
+            })
+        ),
+        "{got:?}"
+    );
+    assert!(!w.folder().join(VERSION).exists(), "left installed");
+    assert!(w.rows.rows().is_empty(), "left its credential");
+    assert!(!met(&req, &m.snapshot().borrow()));
+
+    *w.run.refuse.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    m.install(&token())
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(met(&req, &m.snapshot().borrow()));
+
+    // The real runner, with the program installed, with no route and with a SOCKS5 route whose proxy
     // isn't known: refused before anything is spawned.
+    let l = w.run.launched();
+    assert!(l.executable.is_file());
     let launched = || Launch {
         id: prowlarr(),
-        executable: w.folder().join(VERSION).join("Prowlarr").join("Prowlarr"),
-        install: w.folder().join(VERSION),
-        args: Vec::new(),
+        executable: l.executable.clone(),
+        install: l.install.clone(),
+        args: args_for("fake_companion"),
         target: Target::Loopback(PortNumber::new(free_port()).unwrap_or_else(|e| panic!("{e:?}"))),
         secrets: Vec::new(),
     };
@@ -1393,28 +1481,6 @@ async fn a_missing_or_unset_companion_needs_setup_and_is_not_started() {
         assert_eq!(recorded_pid(w.data()), None, "{code}: spawned");
     }
 
-    // An install whose start is refused that way is undone.
-    *w.run.refuse.lock().unwrap_or_else(|e| e.into_inner()) = Some("no_route");
-    let got = m.install(&token()).await;
-    assert!(
-        matches!(
-            got,
-            Err(ManagerError::Step {
-                code: "no_route",
-                ..
-            })
-        ),
-        "{got:?}"
-    );
-    assert!(!w.folder().join(VERSION).exists(), "left installed");
-    assert!(w.rows.rows().is_empty(), "left its credential");
-    assert!(!met(&req, &m.snapshot().borrow()));
-
-    *w.run.refuse.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    m.install(&token())
-        .await
-        .unwrap_or_else(|e| panic!("{e:?}"));
-    assert!(met(&req, &m.snapshot().borrow()));
     m.remove(&prowlarr())
         .await
         .unwrap_or_else(|e| panic!("{e:?}"));
@@ -1563,6 +1629,34 @@ fn alive(pid: u32, exe: &Path) -> bool {
     })
 }
 
+/// Kills what the orphan test started if it fails part-way, so no process
+/// outlives it or keeps its folder open on Windows.
+struct Reap {
+    work: Option<std::process::Child>,
+    pid: Option<u32>,
+    exe: PathBuf,
+}
+
+impl Drop for Reap {
+    fn drop(&mut self) {
+        if let Some(mut w) = self.work.take() {
+            let _ = w.kill();
+            let _ = w.wait();
+        }
+        let Some(pid) = self.pid.filter(|p| alive(*p, &self.exe)) else {
+            return;
+        };
+        #[cfg(unix)]
+        if let Some(p) = rustix::process::Pid::from_raw(pid as i32) {
+            let _ = rustix::process::kill_process(p, rustix::process::Signal::KILL);
+        }
+        #[cfg(windows)]
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output();
+    }
+}
+
 /// An earlier run's work child is killed outright, which leaves its
 /// companion running. The next start's supervisor kills it before
 /// anything starts. Then an uninstall removes exactly what it listed, and
@@ -1572,7 +1666,12 @@ async fn an_orphan_is_killed_at_start_and_an_uninstall_leaves_nothing() {
     let _g = SERIAL.lock().await;
     let w = World::new();
     let (m, l) = w.install().await;
-    let mut work = std::process::Command::new(me())
+    let mut guard = Reap {
+        work: None,
+        pid: None,
+        exe: l.executable.clone(),
+    };
+    let work = std::process::Command::new(me())
         .args(args_for("fake_companion"))
         .env("FAKE_MODE", "work")
         .env("FAKE_DATA", w.data())
@@ -1581,6 +1680,7 @@ async fn an_orphan_is_killed_at_start_and_an_uninstall_leaves_nothing() {
         .stdout(std::process::Stdio::null())
         .spawn()
         .unwrap_or_else(|e| panic!("{e}"));
+    guard.work = Some(work);
     let mut pid = None;
     until("the earlier run's companion", || {
         pid = recorded_pid(w.data()).filter(|p| alive(*p, &l.executable));
@@ -1588,8 +1688,11 @@ async fn an_orphan_is_killed_at_start_and_an_uninstall_leaves_nothing() {
     })
     .await;
     let pid = pid.unwrap_or_default();
-    let _ = work.kill();
-    let _ = work.wait();
+    guard.pid = Some(pid);
+    if let Some(mut work) = guard.work.take() {
+        let _ = work.kill();
+        let _ = work.wait();
+    }
     assert!(
         alive(pid, &l.executable),
         "the companion died with its parent"
@@ -1604,7 +1707,7 @@ async fn an_orphan_is_killed_at_start_and_an_uninstall_leaves_nothing() {
     sup.shutdown().await;
 
     let removal = m.removal(&prowlarr()).unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(canonical(&removal.folder), canonical(&w.folder()));
+    assert_eq!(removal.folder, w.folder());
     // Every credential field it could have, whichever it has.
     assert!(
         removal
@@ -1659,7 +1762,7 @@ async fn install_smoke_installs_checks_runs_and_removes_the_test_companion() {
     let l = w.run.launched();
 
     // Checked: what runs is the archive's program, in its version folder.
-    assert_eq!(canonical(&l.install), canonical(&w.folder().join(VERSION)));
+    assert_eq!(l.install, w.folder().join(VERSION));
     assert!(l.executable.starts_with(&l.install));
     let installed = std::fs::read(&l.executable).unwrap_or_else(|e| panic!("{e}"));
     let original = std::fs::read(me()).unwrap_or_else(|e| panic!("{e}"));
@@ -1740,7 +1843,8 @@ fn test_only(src: &str, item: &str) -> bool {
 /// environment; the other ways in (another catalogue, a download from
 /// anything but the guarded client, the fault points) are test-only; no
 /// crate's normal dependency or feature turns `testing` on; and the
-/// release workflow builds the binary with only its `web` feature.
+/// release workflow, the container image and the MSI build the binary with
+/// only its `web` feature.
 #[test]
 fn a_release_build_has_no_catalogue_override() {
     let cat = source("crates/companions/src/catalogue.rs");
@@ -1836,21 +1940,32 @@ fn a_release_build_has_no_catalogue_override() {
         "found only {checked} crates using lodestar-companions"
     );
 
-    let release = source(".github/workflows/release.yml");
-    assert!(!release.contains("--all-features"));
-    let builds: Vec<&str> = release
-        .lines()
-        .filter(|l| l.contains("-p lodestar ") || l.contains("--package lodestar "))
-        .collect();
-    assert!(
-        !builds.is_empty(),
-        "no release build line found; update the gate"
-    );
-    for l in builds {
+    // Every place a shipped binary is built: the release workflow, the
+    // container image and the MSI.
+    for file in [
+        ".github/workflows/release.yml",
+        "packaging/docker/Dockerfile",
+        "packaging/windows/build-msi.ps1",
+    ] {
+        let text = source(file);
+        assert!(!text.contains("--all-features"), "{file}");
+        assert!(!text.contains("lodestar-companions/testing"), "{file}");
+        let builds: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("-p lodestar ") || l.contains("--package lodestar "))
+            // `cargo wix … --no-build` packages the binary built above.
+            .filter(|l| !l.contains("--no-build"))
+            .collect();
         assert!(
-            l.contains("--no-default-features --features web") && !l.contains("testing"),
-            "release build line: {l}"
+            !builds.is_empty(),
+            "no build line in {file}; update the gate"
         );
+        for l in builds {
+            assert!(
+                l.contains("--no-default-features --features web") && !l.contains("testing"),
+                "{file}: {l}"
+            );
+        }
     }
     // Nothing shipped knows about the test catalogue.
     for dir in std::fs::read_dir(root().join("crates"))
