@@ -204,5 +204,6 @@
 	"search_rescue_didyoumean": "Did you mean {query}?",
 	"search_rescue_natural": "These words read as filters:",
 	"search_rescue_natural_apply": "Apply filters",
-	"search_rescue_chips": "Filters these words mean"
+	"search_rescue_chips": "Filters these words mean",
+	"search_rescue_chips_ready": "{count} filters found in your words. Apply them or change the search."
 }

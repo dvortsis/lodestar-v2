@@ -2,6 +2,7 @@
 // "Did you mean", words that read as filters offer their chips, and each is one explicit click.
 // Name ends in `routes.test.ts` so the `core` project runs it.
 import { body, expect, hits, row, server, toAst } from './search-results.fixtures';
+import { expectNoA11yViolations } from './a11y';
 import { test } from './support/test';
 
 const field = (name: string, operators: string[]) => ({
@@ -53,9 +54,10 @@ test('a filter typed as words offers "Did you mean", and one click searches it',
 	// It only offers: the zero-result words advice for text is not shown, and nothing was re-run.
 	await expect(none).not.toContainText('Try fewer');
 	expect(new URL(page.url()).searchParams.get('q')).toBe('seeders>5');
+	await expectNoA11yViolations(page, { include: ['#results'] });
 	await offer.click();
 	await expect(row(page, 1)).toBeVisible();
-	expect(new URL(page.url()).searchParams.get('q')).toBe('seeders:>5');
+	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('seeders:>5');
 });
 
 test('words that read as filters offer their chips on zero results, with Apply', async ({
@@ -67,6 +69,7 @@ test('words that read as filters offer their chips on zero results, with Apply',
 	await go('/search?q=nothing%204k');
 	const chips = page.getByTestId('rescue-natural');
 	await expect(chips).toContainText('res:2160p');
+	await expectNoA11yViolations(page, { include: ['#results'] });
 	await expect(page.getByTestId('rescue-didyoumean')).toHaveCount(0);
 	await chips.getByRole('button', { name: 'Apply filters' }).click();
 	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('nothing res:2160p');
@@ -78,7 +81,12 @@ test('nothing is offered when the words are plain and no filter was meant', asyn
 	mock
 }) => {
 	setUp(mock);
+	// The rescue has asked and been answered before anything is asserted absent.
+	const answered = page.waitForResponse(
+		(r) => r.url().includes('/parse') && r.url().includes('natural=true')
+	);
 	await go('/search?q=nothing');
+	await answered;
 	await expect(page.getByTestId('results-none')).toBeVisible();
 	await expect(page.getByTestId('results-none')).toContainText('Try fewer');
 	await expect(page.getByTestId('rescue-didyoumean')).toHaveCount(0);

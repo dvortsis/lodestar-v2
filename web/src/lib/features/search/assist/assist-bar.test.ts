@@ -69,6 +69,21 @@ function server() {
 				return json({ canonical: print(body.ast), hits: [], total: 0 });
 			}
 			const q = u.searchParams.get('q') ?? '';
+			// `bad` is a token the parser rejects, at its bytes.
+			const bad = q.indexOf('bad');
+			if (bad >= 0)
+				return json(
+					{
+						error: {
+							code: 'query_syntax',
+							message: 'bad token',
+							field: 'q',
+							start: bad,
+							end: bad + 3
+						}
+					},
+					400
+				);
 			const base = { ast: toAst(q), canonical: q.trim() };
 			if (u.searchParams.get('natural') === 'true')
 				return json(
@@ -258,5 +273,39 @@ describe('the Builder', () => {
 			within(panel).getByRole('button', { name: 'Remove filter: Resolution: 720p' })
 		);
 		await waitFor(() => expect(searchBodies.at(-1)!.ast).toEqual({ op: 'all' }), LAZY);
+	});
+});
+
+describe('an unfinished token', () => {
+	const invalid = (el: HTMLElement) => el.getAttribute('aria-invalid') === 'true';
+	/** The error has reached the state and the suggestions are on screen. */
+	async function typed(state: { parseError: unknown }, editor: HTMLElement) {
+		editor.textContent = 'a bad';
+		document.getSelection()?.collapse(editor.firstChild, 5); // the caret at the end, as typed
+		await fireEvent(editor, new InputEvent('input', { inputType: 'insertText', data: 'd' }));
+		await screen.findByRole('listbox', {}, LAZY);
+		await waitFor(() => expect(state.parseError).not.toBeNull(), LAZY);
+	}
+
+	it('is not an error while its suggestions are open, and Enter shows it at once', async () => {
+		const { state, editor } = await setup();
+		await typed(state, editor);
+		expect(invalid(editor)).toBe(false);
+		await fireEvent.keyDown(editor, { key: 'Enter' });
+		await waitFor(() => expect(invalid(editor)).toBe(true), LAZY);
+	});
+
+	it('shows the error when the suggestions close with Esc', async () => {
+		const { state, editor } = await setup();
+		await typed(state, editor);
+		await fireEvent.keyDown(editor, { key: 'Escape' });
+		await waitFor(() => expect(invalid(editor)).toBe(true), LAZY);
+	});
+
+	it('shows the error when the bar loses focus', async () => {
+		const { state, editor } = await setup();
+		await typed(state, editor);
+		await fireEvent.blur(editor);
+		await waitFor(() => expect(invalid(editor)).toBe(true), LAZY);
 	});
 });

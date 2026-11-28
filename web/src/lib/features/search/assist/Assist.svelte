@@ -95,7 +95,7 @@
 	function oninput() {
 		show();
 		typed = true;
-		onsuggest?.(caret());
+		caretAt = caret();
 		if (current.trim()) suggester.request(current, charPos(current, caret()));
 		else {
 			suggester.cancel();
@@ -103,14 +103,21 @@
 		}
 	}
 
+	// Reported only while the list is on screen: no list, no "unfinished token".
+	let caretAt = $state<number | null>(null);
+	$effect(() => {
+		const at = shown ? caretAt : null;
+		untrack(() => onsuggest?.(at));
+	});
+
 	/** The caret moved without typing (arrows, a click): the token it is in may have changed. */
 	function moved() {
-		if (open) onsuggest?.(caret());
+		if (open) caretAt = caret();
 	}
 
 	function close() {
 		open = false;
-		onsuggest?.(null);
+		caretAt = null;
 		active = -1;
 		typed = false;
 		suggester.cancel();
@@ -245,7 +252,10 @@
 				class="assist-option"
 				onclick={() => pick(o)}
 			>
-				{#if o.kind !== 'value'}<span class="assist-kind">{KIND[o.kind]()}</span>{/if}
+				{#if o.kind !== 'value'}<span class="assist-kind">{KIND[o.kind]()}</span>{:else}<span
+						class="assist-kind"
+						aria-hidden="true"
+					></span>{/if}
 				<span class="assist-text" class:assist-mono={o.kind !== 'title' && o.kind !== 'saved'}
 					>{o.text}</span
 				>

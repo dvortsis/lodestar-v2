@@ -14,47 +14,77 @@
 	interface Props {
 		/** True while a "Did you mean" shows, so the panel doesn't also say "try fewer words". */
 		suggesting?: boolean;
+		/** False from a new query until the rescue has finished asking: the panel holds its hint. */
+		settled?: boolean;
 	}
-	let { suggesting = $bindable(false) }: Props = $props();
+	let { suggesting = $bindable(false), settled = $bindable(false) }: Props = $props();
 
 	type Natural = NonNullable<components['schemas']['ParseResponse']['natural']>;
-	let didYouMean = $state<{ text: string; clauses: string[] } | null>(null);
+	type Found = { fix: { text: string; clauses: string[] } | null; natural: Natural | null };
+	let didYouMean = $state<Found['fix']>(null);
 	let natural = $state.raw<Natural | null>(null);
 	let said = $state('');
 
+	// Asked once per query text: the field list for the page's life, the answers for the last text,
+	// so a remount for the same text (a retry, a facet change) asks nothing.
+	let fieldsOnce: Promise<components['schemas']['SearchField'][]> | undefined;
+	let last: { q: string; found: Found } | undefined;
+
 	const asked = $derived(search.q);
+
+	async function ask(q: string, signal: AbortSignal): Promise<Found> {
+		let fix: Found['fix'] = null;
+		let chips: Natural | null = null;
+		try {
+			fieldsOnce ??= api
+				.get('/search/fields', {})
+				.then((r) => r.fields)
+				.catch((e) => {
+					fieldsOnce = undefined;
+					throw e;
+				});
+			const found = correct(q, await fieldsOnce);
+			if (found) {
+				// Only a correction the server's own parser accepts is offered.
+				await api.get('/parse', { query: { q: found.text }, signal });
+				fix = found;
+			}
+		} catch (e) {
+			if (isAbort(e)) throw e;
+		}
+		try {
+			const r = await api.get('/parse', { query: { q, natural: true }, signal });
+			if (r.natural?.chips.length && r.natural.canonical !== q) chips = r.natural;
+		} catch (e) {
+			if (isAbort(e)) throw e;
+		}
+		return { fix, natural: chips };
+	}
 
 	$effect(() => {
 		const q = asked;
 		didYouMean = null;
 		natural = null;
 		suggesting = false;
+		settled = false;
 		said = '';
 		if (!q.trim()) return;
 		const ctl = new AbortController();
-		const signal = ctl.signal;
 		void (async () => {
 			try {
-				const { fields } = await api.get('/search/fields', { signal });
-				const fix = correct(q, fields);
-				if (fix) {
-					// Only a correction the server's own parser accepts is offered.
-					await api.get('/parse', { query: { q: fix.text }, signal });
-					if (signal.aborted) return;
-					didYouMean = fix;
-					suggesting = true;
-					said = m.search_rescue_didyoumean({ query: fix.text });
-				}
-			} catch (e) {
-				if (isAbort(e)) return;
-			}
-			try {
-				const r = await api.get('/parse', { query: { q, natural: true }, signal });
-				if (signal.aborted) return;
-				if (r.natural?.chips.length && r.natural.canonical !== q) natural = r.natural;
+				const found = last?.q === q ? last.found : await ask(q, ctl.signal);
+				if (ctl.signal.aborted) return;
+				last = { q, found };
+				didYouMean = found.fix;
+				natural = found.natural;
+				suggesting = !!found.fix;
+				if (found.fix) said = m.search_rescue_didyoumean({ query: found.fix.text });
+				else if (found.natural)
+					said = m.search_rescue_chips_ready({ count: found.natural.chips.length });
 			} catch {
-				// no rescue offered
+				// aborted by a newer text, or nothing to offer
 			}
+			if (!ctl.signal.aborted) settled = true;
 		})();
 		return () => {
 			ctl.abort();
@@ -66,6 +96,8 @@
 		ensureSearchPath();
 		search.setText(text);
 		void search.submit();
+		// The block goes away with the new search: focus goes to the bar, not to the page.
+		document.querySelector<HTMLElement>('[data-testid="query-editor"]')?.focus();
 	}
 </script>
 
