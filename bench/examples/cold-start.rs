@@ -97,6 +97,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("built {torrents} torrents in {:?}", t.elapsed());
     }
 
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    // The start first, so it finds the page cache as it was (drop it
+    // before the run for a cold start, as after a reboot).
+    let (start_ms, filled_ms) = rt.block_on(async {
+        let started = Instant::now();
+        let store = Store::open(&db, StoreConfig::default())?;
+        let pipeline = Pipeline::start(PipelineConfig::default(), store, Vec::new()).await?;
+        let start_ms = started.elapsed().as_millis();
+        pipeline.monitor().have().filled().await;
+        let filled_ms = started.elapsed().as_millis();
+        pipeline.shutdown().await?;
+        Ok::<_, Box<dyn std::error::Error>>((start_ms, filled_ms))
+    })?;
     let reader = Store::open_reader(&db, StoreConfig::default())?;
     let t = Instant::now();
     let counted = reader.count()?;
@@ -106,22 +121,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bound_ms = t.elapsed().as_millis();
     drop(reader);
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    rt.block_on(async {
-        let started = Instant::now();
-        let store = Store::open(&db, StoreConfig::default())?;
-        let pipeline = Pipeline::start(PipelineConfig::default(), store, Vec::new()).await?;
-        let start_ms = started.elapsed().as_millis();
-        pipeline.monitor().have().filled().await;
-        let filled_ms = started.elapsed().as_millis();
-        println!(
-            "{{\"torrents\":{torrents},\"counted\":{counted},\"bound\":{bound},\
-             \"start_ms\":{start_ms},\"filled_ms\":{filled_ms},\
-             \"count_ms\":{count_ms},\"bound_ms\":{bound_ms}}}"
-        );
-        pipeline.shutdown().await?;
-        Ok::<_, Box<dyn std::error::Error>>(())
-    })
+    println!(
+        "{{\"torrents\":{torrents},\"counted\":{counted},\"bound\":{bound},\
+         \"start_ms\":{start_ms},\"filled_ms\":{filled_ms},\
+         \"count_ms\":{count_ms},\"bound_ms\":{bound_ms}}}"
+    );
+    Ok(())
 }
