@@ -225,6 +225,15 @@ async fn an_unclassified_torrent_has_null_attributes() {
     assert_eq!(attributes(&body), &Value::Null);
 }
 
+/// Classified, and nothing was parsed: `{}`, never null.
+#[tokio::test]
+async fn a_name_that_parses_to_nothing_has_an_empty_map() {
+    let f = fixture(&[("---", true, false)], false).await;
+    let (status, body) = detail(&f, 0).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(attributes(&body), &json!({}));
+}
+
 #[tokio::test]
 async fn a_record_this_build_cant_read_has_null_attributes() {
     let f = fixture_with(
