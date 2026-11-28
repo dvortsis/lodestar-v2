@@ -166,7 +166,9 @@ export function createResults() {
 			cursor = r.next_cursor;
 			lease = r.next_cursor;
 			shownKey = key;
-			shownQuery = q;
+			// A fresh object every answer, a forced reload of the same query included (a Block hid a
+			// row): the toolbar asks for the hidden count again.
+			shownQuery = { ...q };
 			settledKey = key;
 			status = 'ready';
 		} catch (e) {

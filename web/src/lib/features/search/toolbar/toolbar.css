@@ -73,8 +73,9 @@
 		display: none;
 	}
 }
-/* Room for the note where the controls share its row (below 46rem of toolbar): Sort and View keep
-   their labels as accessible names only, as below 40rem of window. */
+/* Below 46rem of toolbar (a narrow window, or the drawer narrowing it), Sort and View keep their
+   labels as accessible names only, as below 40rem of window: room for the hidden count where the
+   controls share its row. */
 @container tb (width < 46rem) {
 	.tb-lbl > span {
 		position: absolute;
@@ -125,16 +126,6 @@
 @media (width >= 40rem) {
 	.tb-phone {
 		display: none;
-	}
-}
-/* A toolbar narrowed by the drawer: Sort and View keep their names for screen readers only. */
-@container tb (width < 38rem) {
-	.tb-lbl > span {
-		position: absolute;
-		overflow: hidden;
-		width: 1px;
-		height: 1px;
-		clip-path: inset(50%);
 	}
 }
 .tb-lbl {

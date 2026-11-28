@@ -943,9 +943,20 @@ fn count_hidden(
             Err(e) => Err(e),
         }
     };
-    let exact = |l: &Lease| Some(l.total()).filter(|t| !t.approx).map(|t| t.value);
-    // Nothing hidden anywhere: no need to run the query (one posting list).
-    let Some(any) = lease(&flag)? else {
+    // A count stands only when it's exact and every `/…/` clause verified
+    // the whole snapshot (as recovery's counts, `recovery.rs`).
+    let exact = |l: &Lease| {
+        Some(l.total())
+            .filter(|t| !t.approx && !l.regex_stopped())
+            .map(|t| t.value)
+    };
+    // Nothing "Show" could reveal anywhere: no need to run the query. The
+    // probe is what `hidden=true` adds to a browse, under the request's
+    // Adult visibility and verified default, so a fast answer tells
+    // nothing about torrents the viewer may not see (filter-hidden Adult
+    // while Adult is hidden).
+    let probe = base_query(&flag, Visibility { hidden: true, ..v }).query();
+    let Some(any) = lease(&probe)? else {
         return Ok(None);
     };
     if exact(&any) == Some(0) {

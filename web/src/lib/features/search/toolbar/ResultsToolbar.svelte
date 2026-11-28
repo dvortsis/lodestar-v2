@@ -174,7 +174,7 @@
 {#if results.status !== 'empty'}
 	<div class="tb" data-testid="results-toolbar">
 		<p class="tb-count" data-testid="results-count">
-			{count}{#if hidden > 0 && results.status === 'ready'}<span class="tb-hid"
+			{count}{#if hidden > 0 && results.status === 'ready' && !results.refining}<span class="tb-hid"
 					>&nbsp;· <span id="{id}-hidden" class="tb-full" data-testid="results-hidden"
 						>{m.search_toolbar_hidden({ count: formatCount(hidden, locale) })}</span
 					><span class="tb-short" aria-hidden="true"

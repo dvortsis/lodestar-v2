@@ -56,6 +56,7 @@ beforeEach(() => {
 		total: 1284,
 		totalApprox: false,
 		query: null,
+		refining: false,
 		grouped: {}
 	});
 });
@@ -131,6 +132,28 @@ describe('ResultsToolbar', () => {
 		await tick();
 		expect(screen.queryByTestId('results-hidden-show')).toBeNull();
 		results.status = 'ready';
+	});
+
+	it('asks again when the rows reload for the same query', async () => {
+		post.mockResolvedValue({ hidden_total: 3 });
+		results.query = lantern;
+		render(ResultsToolbar);
+		await waitFor(() => expect(asked()).toHaveLength(1), WAIT);
+		results.query = { ...lantern };
+		await waitFor(() => expect(asked()).toHaveLength(2), WAIT);
+	});
+
+	it('hides the count while new rows are on their way, so Show waits for them', async () => {
+		post.mockResolvedValue({ hidden_total: 3 });
+		results.query = lantern;
+		render(ResultsToolbar);
+		await waitFor(() => expect(screen.getByTestId('results-hidden-show')).toBeTruthy(), WAIT);
+		results.refining = true;
+		await tick();
+		expect(screen.queryByTestId('results-hidden-show')).toBeNull();
+		results.refining = false;
+		await tick();
+		expect(screen.getByTestId('results-hidden-show')).toBeTruthy();
 	});
 
 	it('offers nothing for none, an unknown count, a failure, or hidden already shown', async () => {

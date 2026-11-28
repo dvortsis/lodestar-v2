@@ -354,6 +354,9 @@ async fn the_hidden_count_never_counts_adult_while_it_is_hidden() {
     let added = shown["total"].as_u64().unwrap() - plain["total"].as_u64().unwrap();
     assert_eq!(hidden(&f, &c, json!({ "q": "movies" })).await, added);
     assert_eq!(added, 1, "{plain} {shown}");
+    // An Adult query while Adult is hidden: never a positive count.
+    let adult = hidden(&f, &c, json!({ "q": "type:adult" })).await;
+    assert!(adult == 0 || adult == Value::Null, "{adult}");
     // A query naming `hidden` itself gets no count.
     assert_eq!(
         hidden(&f, &c, json!({ "q": "hidden:yes" })).await,
@@ -368,6 +371,21 @@ async fn the_hidden_count_never_counts_adult_while_it_is_hidden() {
         shown["total"].as_u64().unwrap() - body["total"].as_u64().unwrap(),
         2
     );
+}
+
+#[tokio::test]
+async fn hidden_adult_alone_takes_the_free_skip_while_adult_is_hidden() {
+    // The only filter-hidden torrents are Adult (0 and 1): with Adult
+    // hidden, "Show" could reveal nothing, so the answer is the skip's 0
+    // for any query, and says nothing about what's hidden.
+    let f = build(None, &[0, 1]);
+    let c = session(&f).await;
+    for q in ["", "movie", "studio", "xxx"] {
+        assert_eq!(hidden(&f, &c, json!({ "q": q })).await, 0, "{q}");
+    }
+    // With Adult shown they're what "Show" adds.
+    f.show.send(true).unwrap();
+    assert_eq!(hidden(&f, &c, json!({ "q": "xxx" })).await, 2);
 }
 
 #[tokio::test]

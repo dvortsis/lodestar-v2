@@ -46,7 +46,14 @@ describe('the results store', () => {
 		expect(r.query).toBeNull();
 		const q = query();
 		await r.load(q);
-		expect(r.query).toBe(q);
+		expect(r.query).toEqual(q);
+		// A forced reload of the same query (a Block hid a row) names it afresh, so the hidden count
+		// is asked again.
+		const first = r.query;
+		post.mockResolvedValueOnce(page([1]));
+		await r.retry();
+		expect(r.query).toEqual(q);
+		expect(r.query).not.toBe(first);
 		await r.load({ ...q, ast: null });
 		expect(r.query).toBeNull();
 	});

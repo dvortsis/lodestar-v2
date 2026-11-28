@@ -5,6 +5,7 @@ export const fakeResults = $state({
 	hits: [] as unknown[],
 	total: 0,
 	totalApprox: false,
+	refining: false,
 	query: null as { ast: unknown; hidden: boolean } | null,
 	grouped: {} as Record<string, unknown>
 });

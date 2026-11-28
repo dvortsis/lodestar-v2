@@ -547,9 +547,10 @@ test.describe('"N hidden · Show" under a coarse pointer', () => {
 	});
 });
 
-// X-hidden-count (runner): the note arrives after the rows and moves nothing at any width. Where
-// even "N filtered · Show" would wrap the count line or the controls it shows no note ("Show hidden"
-// stays in Filters).
+// X-hidden-count (runner): the note arrives after the rows and moves nothing. Where even "N filtered
+// · Show" would wrap the count line or the controls it shows no note ("Show hidden" stays in
+// Filters). From 128rem (2,048 px) the controls follow the count (L3), so they move sideways when it
+// arrives: the known follow-up X-hidden-count-wide-shift, so only vertical positions are held there.
 for (const [width, shows] of [
 	[360, false],
 	[390, true],
@@ -582,7 +583,9 @@ for (const [width, shows] of [
 		else await expect(show).toBeHidden();
 		expect((await toolbar.boundingBox())?.height).toBe(before?.height);
 		expect((await row(page, 1).boundingBox())?.y).toBe(first);
-		expect((await page.getByLabel('Sort').boundingBox())?.y).toBe(sort?.y);
+		const after = await page.getByLabel('Sort').boundingBox();
+		expect(after?.y).toBe(sort?.y);
+		if (width < 2048) expect(after?.x).toBe(sort?.x);
 	});
 }
 
