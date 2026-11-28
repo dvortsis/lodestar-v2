@@ -73,12 +73,6 @@ pub struct Crawler {
     /// Harvesting and metadata fetching are paused; the DHT node still
     /// answers other nodes.
     pub paused: bool,
-    /// Crawl only through this network interface (X-vpn-bind): `wg0`,
-    /// `tun0`, or a Windows adapter's name. Empty: any route. While it's
-    /// missing or down the crawl pauses (`GET /crawler` says why) and
-    /// never uses another route. Takes effect at the next start.
-    #[schema(max_length = 256)]
-    pub interface: String,
 }
 
 impl Default for Crawler {
@@ -126,11 +120,6 @@ impl Section for Crawler {
             .advanced()
             .unit("mebibytes"),
         Field::new("paused").group("intensity"),
-        Field::new("interface")
-            .file("dht.interface")
-            .restart()
-            .group("fetching")
-            .advanced(),
     ];
 
     fn from_config(config: &Config) -> Self {
@@ -153,14 +142,6 @@ impl Section for Crawler {
             max_metadata_mib: config.fetch.max_metadata_mib as u64,
             // Only ever saved in the app.
             paused: false,
-            interface: config.dht.interface.clone().unwrap_or_default(),
-        }
-    }
-
-    fn check(&self, field: &str) -> Result<(), String> {
-        match field {
-            "interface" => self.check_interface(),
-            _ => Ok(()),
         }
     }
 
@@ -190,9 +171,6 @@ impl Section for Crawler {
             }
             "timeout_secs" => config.fetch.timeout_secs = self.timeout_secs,
             "max_metadata_mib" => config.fetch.max_metadata_mib = self.max_metadata_mib as usize,
-            "interface" => {
-                config.dht.interface = (!self.interface.is_empty()).then(|| self.interface.clone())
-            }
             // The services read it from the registry, not the config.
             "paused" => {}
             _ => {}
@@ -201,24 +179,6 @@ impl Section for Crawler {
 }
 
 impl Crawler {
-    /// The interface name, checked as `config.toml`'s `dht.interface` is.
-    fn check_interface(&self) -> Result<(), String> {
-        if self.interface.is_empty() {
-            return Ok(());
-        }
-        lodestar_network_policy::iface::Interface::parse(&self.interface)
-            .map(drop)
-            .map_err(|_| {
-                if cfg!(windows) {
-                    "Must be a network adapter's name, as Windows shows it.".into()
-                } else {
-                    "Must be a network interface name: 1 to 15 letters, digits or \
-                     symbols, without spaces, / or :."
-                        .into()
-                }
-            })
-    }
-
     /// Concurrent metadata fetches: `max_sockets`, or the intensity's
     /// when it's 0, as `Config::pipeline_config` sizes the fetch pool
     /// (a test holds them together).

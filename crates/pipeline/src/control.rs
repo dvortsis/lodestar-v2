@@ -498,8 +498,8 @@ pub struct CrawlerStatus {
     pub lookups: u64,
 }
 
-/// The crawl's network interface (X-vpn-bind); its name is the
-/// setting's (`crawler.interface`).
+/// The crawl's network interface (X-vpn-bind); its name is
+/// [`Control::vpn_interface`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VpnStatus {
     /// Why it's down ([`lodestar_network_policy::iface::Down::code`]);

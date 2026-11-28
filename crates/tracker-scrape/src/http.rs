@@ -72,7 +72,9 @@ pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwe
         .map_err(|e| Error::Http(e.to_string()))
 }
 
-/// [`client`], sending only through `iface` (X-vpn-bind): pinned to the
+/// [`client`], sending only through `iface` (X-vpn-bind), and looking
+/// no name up ([`NoLookups`]: a tracker named by host fails, one named by
+/// address works): pinned to the
 /// device on Linux (`SO_BINDTODEVICE`), bound to the interface's IPv4
 /// address on Windows (the strong host model keeps it there; an IPv6-only
 /// tracker then fails). An interface that can't be used fails the build,
@@ -91,7 +93,9 @@ fn through(
     iface: &lodestar_network_policy::iface::Interface,
     deny: Option<&crate::Deny>,
 ) -> Result<reqwest::ClientBuilder> {
-    Ok(builder(None, deny, None)?.interface(iface.name()))
+    Ok(builder(None, deny, None)?
+        .interface(iface.name())
+        .dns_resolver(NoLookups))
 }
 
 #[cfg(windows)]
@@ -103,7 +107,7 @@ fn through(
         .map_err(|d| Error::Http(format!("network interface {iface}: {}", d.code())))?;
     let v4 = link.addrs.iter().copied().find(IpAddr::is_ipv4);
     let v4 = v4.ok_or_else(|| Error::Http(format!("{iface} has no IPv4 address")))?;
-    builder(Some(v4), deny, None)
+    Ok(builder(Some(v4), deny, None)?.dns_resolver(NoLookups))
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
@@ -186,6 +190,17 @@ fn literal_ip(url: &Url) -> Option<IpAddr> {
     }
 }
 
+/// X-vpn-bind: no name is looked up (the system resolver would ask
+/// outside the crawl's interface). IP-literal URLs never reach a resolver,
+/// so only names come here, and each is refused.
+struct NoLookups;
+
+impl reqwest::dns::Resolve for NoLookups {
+    fn resolve(&self, _: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async { Err(Error::Resolve.into()) })
+    }
+}
+
 /// The system resolver, minus blocklisted addresses.
 struct DenyResolver(crate::Deny);
 
@@ -193,6 +208,7 @@ impl reqwest::dns::Resolve for DenyResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let (deny, host) = (self.0.clone(), name.as_str().to_owned());
         Box::pin(async move {
+            crate::looked_up();
             let all: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
             let allowed: Vec<SocketAddr> = all
                 .iter()

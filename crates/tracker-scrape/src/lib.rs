@@ -37,6 +37,18 @@ pub use crate::address::{Scheme, TrackerUrl, UrlError};
 pub use crate::http::{HttpConfig, HttpTracker};
 pub use crate::udp::{UdpConfig, UdpTracker};
 
+static LOOKUPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn looked_up() {
+    LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Names this process's scrapers sent to the system resolver, for tests
+/// that show a scraper limited to an interface sends none (X-vpn-bind).
+pub fn lookups() -> u64 {
+    LOOKUPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Addresses a scrape must never reach: the subscribed IP blocklists
 /// (§20.13), the same check the DHT and the fetch pool make.
 #[derive(Clone)]

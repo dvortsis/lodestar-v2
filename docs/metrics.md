@@ -1078,7 +1078,7 @@ See [the decision](decisions/2026-11-11-WK-11.md). A remote worker's on-disk spo
 
 ## Crawl interface (X-vpn-bind, 2026-11-28)
 
-Only when `crawler.interface` (`dht.interface`) names an interface; absent otherwise. `docs/decisions/2026-11-28-X-vpn-bind.md`.
+Only when `dht.interface` names an interface; absent otherwise. `docs/decisions/2026-11-28-X-vpn-bind.md`.
 
 | Series | Type | Meaning |
 |---|---|---|

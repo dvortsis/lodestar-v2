@@ -255,8 +255,9 @@ pub struct Dht {
     /// `tun0`; on Windows the adapter's name). Every DHT, peer and tracker
     /// socket is pinned to it, and while it's missing or down the crawl
     /// pauses ("VPN down") rather than use the normal route. Unset or
-    /// empty: any route, as before. Takes effect at the next start
-    /// (`crawler.interface` in the Settings API).
+    /// empty: any route, as before. Takes effect at the next start. Only
+    /// in `config.toml` for now; the Settings field comes with the UI
+    /// (X-vpn-bind-ui).
     pub interface: Option<String>,
 }
 

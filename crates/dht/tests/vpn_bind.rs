@@ -75,8 +75,17 @@ async fn nodes_pinned_to_loopback_still_find_each_other() {
     let mut seed_cfg = config(vec![]);
     seed_cfg.guard = lo();
     let seed = Node::start(seed_cfg, None).await.unwrap();
-    let mut cfg = config(vec![seed.local_addrs()[0].to_string()]);
+    // A name among the entries: skipped, never looked up (the system
+    // resolver would ask outside the interface). The seed's literal
+    // address is used, and the built-in router addresses join it.
+    let mut cfg = config(vec![
+        "localhost:6881".to_owned(),
+        seed.local_addrs()[0].to_string(),
+    ]);
     cfg.guard = lo();
+    // Every other test here bootstraps from nothing, so no lookup can
+    // land between the two reads but this test's own.
+    let looked_up = lodestar_dht::node::lookups();
     let node = Node::start(cfg, None).await.unwrap();
     let joined = wait_for(
         async || node.snapshot().await.is_some_and(|s| !s.nodes.is_empty()),
@@ -84,7 +93,20 @@ async fn nodes_pinned_to_loopback_still_find_each_other() {
     )
     .await;
     assert!(joined, "a node pinned to lo didn't reach the seed on lo");
+    assert_eq!(
+        lodestar_dht::node::lookups(),
+        looked_up,
+        "no name went to the system resolver"
+    );
     node.shutdown().await.unwrap();
+    // The control: without an interface the same name is looked up.
+    let plain = Node::start(config(vec!["localhost:6881".to_owned()]), None)
+        .await
+        .unwrap();
+    // The actor looks names up once it runs, after `start` returns.
+    let looked = wait_for(async || lodestar_dht::node::lookups() > looked_up, DEADLINE).await;
+    assert!(looked, "the control never looked the name up");
+    plain.shutdown().await.unwrap();
     seed.shutdown().await.unwrap();
 }
 
@@ -141,6 +163,10 @@ async fn utp_leaves_from_the_pinned_dht_socket_and_follows_a_rebind() {
     let second_addr = second.local_addrs()[0];
     let _b = send().await;
     let froms = timeout(DEADLINE, accept).await.unwrap().unwrap().unwrap();
-    assert_eq!(froms, [first_addr, second_addr], "from each node's own pinned port");
+    assert_eq!(
+        froms,
+        [first_addr, second_addr],
+        "from each node's own pinned port"
+    );
     second.shutdown().await.unwrap();
 }

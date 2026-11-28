@@ -109,3 +109,29 @@ async fn the_http_client_is_pinned_to_the_device() {
         "never reached"
     );
 }
+
+/// No name goes to the system resolver with an interface set: a tracker
+/// named by host isn't asked at all, over UDP or HTTP; one named by
+/// address is (the tests above).
+#[tokio::test]
+async fn trackers_named_by_host_are_not_looked_up() {
+    let before = lodestar_tracker_scrape::lookups();
+    let fake = udp_tracker().await;
+    let guard = Guard::new(Interface::parse("lo").unwrap());
+    let mut t = udp(&format!("udp://localhost:{}", fake.addr.port()), guard);
+    assert!(matches!(t.scrape(&[LIVE]).await, Err(Error::Resolve)));
+    assert_eq!(fake.state.connects.load(Ordering::Relaxed), 0);
+
+    let fake = http_tracker().await;
+    let url =
+        TrackerUrl::parse(&format!("http://localhost:{}/announce", fake.addr.port())).unwrap();
+    let client = http::client_through(&Interface::parse("lo").unwrap(), None).unwrap();
+    let mut t = Tracker::new(&url, UdpConfig::default(), HttpConfig::default(), &client).unwrap();
+    assert!(t.scrape(&[LIVE]).await.is_err());
+    assert_eq!(fake.state.scrapes.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        lodestar_tracker_scrape::lookups(),
+        before,
+        "no name went to the system resolver"
+    );
+}

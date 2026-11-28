@@ -37,7 +37,7 @@ pub enum InterfaceState {
 }
 
 /// X-vpn-bind: the network interface the crawl is limited to
-/// (`crawler.interface`, as this start applied it).
+/// (`dht.interface` in `config.toml`, as this start applied it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({ "interface": "wg0", "reason": "missing", "state": "down" }))]
 pub struct CrawlerInterface {

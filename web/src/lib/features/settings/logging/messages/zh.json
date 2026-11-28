@@ -665,6 +665,8 @@
 	"settings_logging_ev_search_saved_verified_rewritten_h": "用“显示未验证项”创建的已保存搜索现在也包含导入的种子。",
 	"settings_logging_ev_dht_socket_buffers_n": "DHT 网络缓冲",
 	"settings_logging_ev_dht_socket_buffers_h": "DHT 网络缓冲区的大小已设置或受限。",
+	"settings_logging_ev_dht_bootstrap_name_skipped_n": "已跳过引导主机名",
+	"settings_logging_ev_dht_bootstrap_name_skipped_h": "爬取限定于一个网络接口时，不会查询主机名形式的 DHT 引导节点，因此会跳过它。请用 IP 地址填写引导节点。",
 	"settings_logging_ev_dht_bootstrap_unreachable_n": "无法连接 DHT 引导节点",
 	"settings_logging_ev_dht_bootstrap_unreachable_h": "无法连接用于启动 DHT 的节点。",
 	"settings_logging_ev_dht_restart_check_n": "DHT 重启检查",

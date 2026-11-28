@@ -11,6 +11,7 @@
 //! outstanding is capped by the [`Intensity`] preset.
 
 mod actor;
+pub use actor::lookups;
 mod hints;
 mod ledger;
 mod limits;
@@ -108,6 +109,18 @@ pub const DEFAULT_BOOTSTRAP: &[&str] = &[
     "dht.transmissionbt.com:6881",
     "router.utorrent.com:6881",
     "dht.libtorrent.org:25401",
+];
+
+/// X-vpn-bind: [`DEFAULT_BOOTSTRAP`]'s routers by address, in the same
+/// order. With an interface set ([`Config::guard`]) no name is looked
+/// up, since the system resolver would ask outside the interface; a
+/// node with no saved table joins through these instead.
+/// Checked against DNS: unverified (the build container has no DNS).
+pub const BOOTSTRAP_LITERALS: &[&str] = &[
+    "67.215.246.10:6881",
+    "87.98.162.88:6881",
+    "82.221.103.244:6881",
+    "185.157.221.247:25401",
 ];
 
 /// Harvest strategies (architecture §5), each toggleable.

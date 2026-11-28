@@ -636,7 +636,10 @@ pub(crate) async fn run(
     };
     let (recv, sockets): (Vec<RecvSocket>, Vec<SendSocket>) = sockets.into_iter().unzip();
     let local_addrs = recv.iter().filter_map(|s| s.local_addr().ok()).collect();
-    let bootstrap = resolve(&cfg.bootstrap).await;
+    let bootstrap = match &cfg.guard {
+        None => resolve(&cfg.bootstrap).await,
+        Some(_) => literal_bootstrap(&cfg.bootstrap),
+    };
     let mut actor = Actor::new(
         cfg,
         stats,
@@ -791,9 +794,78 @@ fn sharded_ids(
     }
 }
 
+/// Names looked up through the system resolver by this process's nodes,
+/// for tests that show a node limited to an interface looks up none.
+static LOOKUPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// See [`LOOKUPS`].
+pub fn lookups() -> u64 {
+    LOOKUPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// X-vpn-bind: the bootstrap entries that are already addresses, then
+/// [`super::BOOTSTRAP_LITERALS`]; names are skipped, never looked up.
+/// A skipped name is logged, unless it's a default router, which the
+/// built-in addresses stand for.
+pub(crate) fn literal_bootstrap(hosts: &[String]) -> Vec<SocketAddr> {
+    let mut out = Vec::new();
+    for host in hosts {
+        match host.parse::<SocketAddr>() {
+            Ok(addr) => out.push(addr),
+            Err(_) if super::DEFAULT_BOOTSTRAP.contains(&host.as_str()) => {}
+            Err(_) => {
+                let entry = format!("udp://{host}");
+                lodestar_log::log_event!(
+                    crate::log_events::BOOTSTRAP_NAME_SKIPPED,
+                    entry = lodestar_log::Url::new(&entry)
+                );
+            }
+        }
+    }
+    for addr in super::BOOTSTRAP_LITERALS {
+        let addr: SocketAddr = addr.parse().expect("a literal address");
+        if !out.contains(&addr) {
+            out.push(addr);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod literal_bootstrap_tests {
+    use super::*;
+
+    #[test]
+    fn names_are_skipped_and_the_router_addresses_follow() {
+        let hosts = [
+            "192.0.2.7:6881",
+            "router.bittorrent.com:6881",
+            "tracker.example:6881",
+            "[2001:db8::1]:6881",
+            "67.215.246.10:6881",
+        ]
+        .map(String::from);
+        let before = lookups();
+        let got = literal_bootstrap(&hosts);
+        let want: Vec<SocketAddr> = ["192.0.2.7:6881", "[2001:db8::1]:6881"]
+            .iter()
+            .chain(super::super::BOOTSTRAP_LITERALS)
+            .map(|a| a.parse().unwrap())
+            .collect();
+        assert_eq!(got, want, "literals first, then each router once");
+        assert_eq!(lookups(), before, "nothing looked up");
+        assert_eq!(
+            super::super::BOOTSTRAP_LITERALS.len(),
+            super::super::DEFAULT_BOOTSTRAP.len(),
+            "one address per default router"
+        );
+    }
+}
+
 async fn resolve(hosts: &[String]) -> Vec<SocketAddr> {
     let mut out = Vec::new();
     for host in hosts {
+        LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let lookup = tokio::time::timeout(
             Duration::from_secs(5),
             tokio::net::lookup_host(host.as_str()),

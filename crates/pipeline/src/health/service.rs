@@ -216,7 +216,18 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             last_ok_at: None,
         }));
         let udp = url.scheme() == lodestar_tracker_scrape::Scheme::Udp;
+        // X-vpn-bind: with an interface set no name is looked up (the
+        // system resolver would ask outside it), so a tracker named by
+        // host is never asked; one named by address is.
+        let named = url
+            .host()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_err();
+        let skip_named = s.cfg.udp.guard.is_some() && named;
         let tracker = match &client {
+            _ if skip_named => None,
             Some(c) => Tracker::new(url, s.cfg.udp.clone(), s.cfg.http.clone(), c),
             None if udp => Some(Tracker::Udp(UdpTracker::new(
                 url.host(),

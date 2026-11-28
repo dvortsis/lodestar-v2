@@ -303,9 +303,21 @@ impl UdpTracker {
         let stale = stale || self.socket.is_none();
         if stale {
             self.socket = None;
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((self.host.as_str(), self.port))
-                .await
-                .map_err(|_| Error::Resolve)?
+            let addrs: Vec<SocketAddr> = if self.cfg.guard.is_some() {
+                // X-vpn-bind: no lookup outside the interface; a tracker
+                // named by host isn't asked.
+                let literal = self.host.trim_start_matches('[').trim_end_matches(']');
+                let ip: std::net::IpAddr = literal.parse().map_err(|_| Error::Resolve)?;
+                vec![SocketAddr::new(ip, self.port)]
+            } else {
+                crate::looked_up();
+                tokio::net::lookup_host((self.host.as_str(), self.port))
+                    .await
+                    .map_err(|_| Error::Resolve)?
+                    .collect()
+            };
+            let addrs: Vec<SocketAddr> = addrs
+                .into_iter()
                 .filter(|a| self.cfg.bind.is_none_or(|b| b.is_ipv4() == a.is_ipv4()))
                 .collect();
             if addrs.is_empty() {
