@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T07:53:22Z",
+    "updated": "2026-11-28T07:53:59Z",
     "items": [
       {
         "slot": 1,
@@ -11130,17 +11130,17 @@
         "slot": 2,
         "slice": "X-testvm-iam-volumes",
         "role": "build",
-        "agent": "pending",
+        "agent": "session_01MMjhn9aCxhE2yoUnM8KHqg",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "launching",
+        "doing": "building the IAM policy edit",
         "since": "2026-11-28T07:53:22Z"
       },
       {
         "slot": 3,
         "slice": "X-zero-rescue",
         "role": "build",
-        "agent": "pending",
-        "doing": "launching",
+        "agent": "session_01MMjhnAXT3pCUkPv79nyKsi",
+        "doing": "step 0: plan for U8, U9, P10",
         "since": "2026-11-28T07:53:22Z"
       },
       {
