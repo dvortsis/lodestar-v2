@@ -507,15 +507,26 @@ held_early=""
 held_pin() {  # the forwarder's answer for ECHO_HOST, into held_addr; an aid, never a verdict
   local saved=$not_run
   held_addr=$(probe sh -c 'dig +short +time=3 +tries=1 "$1" | grep -E "^[0-9]{1,3}(\.[0-9]{1,3}){3}\$" | head -n 1' pin "$ECHO_HOST" 2>/dev/null | tr -d '\r\n')
-  [[ $held_addr =~ $IPV4 ]] || held_addr=""
+  held_routable "$held_addr" || held_addr=""
   not_run=$saved  # a lookup that never ran proves nothing either way
   return 0
 }
+# An address a probe can really send to: not 0.0.0.0/8, 127.0.0.0/8 or
+# 169.254.0.0/16, where curl is refused without sending (the runner).
+held_routable() {
+  [[ $1 =~ $IPV4 ]] || return 1
+  case $1 in 0.*|127.*|169.254.*) return 1 ;; esac
+}
+# A curl that couldn't resolve (exit 6) sent nothing, live or held: never a
+# clean attempt. A live one is retried held, at the pinned address (the runner).
 ipv4_probe() {
   local rc
-  [[ -n $held_frozen ]] || { probe curl -4 -s -m 8 "$ECHO_URL"; return; }
-  [[ $held_addr =~ $IPV4 ]] || return "$HELD_UNSENT"
-  probe curl -4 -s -m 8 --resolve "$ECHO_HOST:80:$held_addr" "$ECHO_URL"; rc=$?
+  if [[ -n $held_frozen ]]; then
+    held_routable "$held_addr" || return "$HELD_UNSENT"
+    probe curl -4 -s -m 8 --resolve "$ECHO_HOST:80:$held_addr" "$ECHO_URL"; rc=$?
+  else
+    probe curl -4 -s -m 8 "$ECHO_URL"; rc=$?
+  fi
   ((rc == 6)) && return "$HELD_UNSENT"
   return "$rc"
 }
@@ -557,7 +568,7 @@ held() {  # [--live] (never hold gluetun) or [--pin] (held_pin before a hold); $
       # in between (its ifindex would differ).
       same=""
       ((after == 1 && index_rc == 0)) && [[ $(iface_index) == "$index" ]] && same=1
-      ((rc == HELD_UNSENT)) && same=""  # it never tried to send: nothing was tested
+      ((rc == HELD_UNSENT)) && same=""  # it never tried to send, held or live: nothing was tested
       # gluetun runs again before any verdict; one that won't resume ends the phase.
       held_thaw || { held_dead=1; break; }
       held_took "$start"

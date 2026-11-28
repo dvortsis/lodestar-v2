@@ -22,7 +22,7 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
     - turning `HEALTH_RESTART_VPN` off would change the production stack;
     - stopping the VPN through gluetun's control server would delete the interface instead of taking it down (see the DNS bullet below);
     - steering routes with an `ip rule` would replace what the bracket checks.
-- **Each probe's first attempt still runs with gluetun live,** as before. A phase with no restarts never pauses, and gluetun's own reactions (its DNS forwarder, its health checks) still face every probe once.
+- **Who still meets a live gluetun.** The first probe meets a live gluetun, and so does every probe in a phase with no restarts. After `hold_from_first` (below), only `dns_blocked` and the live stretches between holds do, under the capture and the counter. A phase with no restarts never pauses.
 - **`dns_blocked_ifdown` is never held** (runner). It asks gluetun's own DNS forwarder at 127.0.0.1, and its point is that the forwarder, running with the interface down, doesn't leak.
   - A paused forwarder proves nothing, and a query it took in while paused could leave through a new tunnel once it resumes.
   - So every attempt of this probe runs live, as before this PR (`held --live`). A clean attempt still needs the interface down before and after, with the same ifindex, and a probe with none by the deadline still fails `vpn_interface_held_down`.
@@ -64,7 +64,9 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
     - If the early lookup found nothing, a lookup through the live forwarder just before the pause stands in (`held_pin`).
     - The address is kept in a variable only. It's never printed, written or committed.
     - The lookup is an aid, never a verdict: a lookup probe that never ran doesn't count as `probe_ran`.
-  - The live first attempt still tests the forwarder's resolver and cache path, as before.
+  - `ipv4_blocked`'s first attempt runs live, and still tests the forwarder's resolver and cache path, as before.
+  - **A pinned address must be one a probe can send to** (runner). An address in 0.0.0.0/8, 127.0.0.0/8 or 169.254.0.0/16 is never pinned: a curl to it is refused locally without sending, which would read as blocked. With no usable address the held attempt is `HELD_UNSENT`.
+  - **A live attempt whose name didn't resolve isn't clean either** (runner). A live phase-B `ipv4_blocked` curl that ends in exit 6 sent nothing, so it's `HELD_UNSENT` and gets retried (held, at the pinned address), never passed. That loophole was on `main`, where it read as blocked. Phase A's `ipv4_blocked` is unchanged (out of scope).
 - **The guard: a held attempt counts as clean only when its probe tried to send** (runner). For curl, an empty pinned address or a failure to resolve (exit 6) returns `HELD_UNSENT`, and the attempt is discarded and retried, never passed. The other held probes go to literal addresses, so they always try.
   - If both lookups fail, every held attempt is discarded, and the probe fails `vpn_interface_held_down`. That fails closed. With the early lookup, this needs a tunnel that couldn't resolve the name even while up.
 
@@ -72,7 +74,9 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
 - **The same about the kill switch.** gluetun's firewall and its post-rules are kernel netfilter state, which stays in force while its processes are frozen. So a held retry still tests exactly what phase B is for: with the VPN interface down, only gluetun's firewall stands between the probes and `eth0`.
   - A gluetun with its firewall off still leaks on every attempt.
   - A gluetun without its post-rules still leaks the open flow, and the capture and the counter see it.
-- **Fewer meetings with a live gluetun.** Before, a probe met a live, restarting gluetun on every attempt, and a leak on any of them failed at once. Now each held probe meets it once, on its first attempt. That's acceptable because the capture and the counter run through the live stretches between holds, so gluetun's own traffic there is still judged.
+- **Fewer meetings with a live gluetun.** Before, a probe met a live, restarting gluetun on every attempt, and a leak on any of them failed at once.
+  - Now the first probe meets it on its first attempt, and after `hold_from_first` the later kernel-state probes may never meet it. Only `dns_blocked` and the live stretches between holds do.
+  - That's acceptable because the capture and the counter run through those live stretches, so gluetun's own traffic there is still judged. A hold doesn't change what a kernel-state probe proves.
 - **What a held attempt does prove:** the kernel's answer to a probe that really tried to send, with the interface down and gluetun's firewall and post-rules in place.
 - **What a held attempt doesn't prove:** anything about gluetun's own processes during that attempt, meaning its DNS forwarder and its health checks. That's why `dns_blocked_ifdown`, the one probe aimed at them, is never held (runner). The other probes test kernel state: the firewall, the post-rules and the routes.
 - **The verdict rules are as before:**
@@ -92,6 +96,8 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
     - the `clean_held` and `clean_live` counts.
   - `test_a_held_ipv4_probe_that_sends_nothing_is_never_a_pass`: no pinned address, or a curl that can't resolve, is never a pass. The probe fails `vpn_interface_held_down`.
   - `test_a_held_ipv4_probe_uses_the_address_looked_up_while_the_tunnel_was_up`: with no answer from the forwarder in phase B, the held probe still gets a clean attempt from the early address. With no early answer, the late lookup stands in. Neither puts the address in the output.
+  - `test_a_pinned_address_that_cant_be_sent_to_is_never_a_pass`: a looked-up 127.0.0.1, 0.0.0.0 or 169.254.169.254 is never used, and the probe fails `vpn_interface_held_down`.
+  - `test_a_live_ipv4_probe_that_couldnt_resolve_is_never_a_pass`: a live exit 6 is retried held and passes there. With no hold available, the probe never passes.
   - The main test also checks `hold_from_first`, five holds (one per kernel-state probe), the `--resolve` to the pinned address, and that the address appears in no output line.
   - `test_dns_blocked_is_never_held`: no `dig` to the forwarder ever runs under a pause, and every attempt it makes comes after the last held one. On a slow host, where every live attempt meets a restart, it fails `vpn_interface_held_down` as before, while `dns_direct_blocked` and the UDP probe still pass on held attempts.
   - A refused pause, and one that froze gluetun anyway, both still fail `vpn_interface_held_down`.

@@ -676,7 +676,12 @@ case "$1" in
           [ -n "$PIN_FAILS" ] && exit 1
           [ -n "$PIN_FAILS_LATE" ] && [ -e "$STUB/blocked" ] && exit 1  # cached only until the block
           [ -n "$PIN_FAILS_EARLY" ] && [ ! -e "$STUB/blocked" ] && exit 1
-          echo 192.0.2.80 ;;
+          echo "${PIN_ADDR:-192.0.2.80}" ;;
+        # LIVE_RESOLVE_FAILS: in phase B a live curl can't resolve the name (exit 6).
+        "curl -4 -s -m 8 http://checkip.amazonaws.com")
+          [ -e "$STUB/ifdown" ] && [ -n "$LIVE_RESOLVE_FAILS" ] && [ -z "$leak" ] && exit 6
+          [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
+          if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
         "curl -4"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
                     if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
         "curl -6"*) [ -n "$V6_OPEN" ] || [ -n "$leak" ] || exit 1 ;;
@@ -1973,6 +1978,38 @@ class VMScripts(unittest.TestCase):
                 self.assertEqual(sum(i < down for i in pins), 1)  # once while the tunnel was up
                 # A late lookup only when the early one had nothing.
                 self.assertEqual(sum(i > down for i in pins), 0 if flag == "PIN_FAILS_LATE" else 1)
+
+    def test_a_pinned_address_that_cant_be_sent_to_is_never_a_pass(self):
+        """The runner's call: an address in 0.0.0.0/8, 127.0.0.0/8 or 169.254.0.0/16
+        is refused locally without sending, so it's never pinned: no held
+        ipv4_blocked attempt is clean, and the probe fails vpn_interface_held_down."""
+        for addr in ("127.0.0.1", "0.0.0.0", "169.254.169.254"):
+            with self.subTest(addr):
+                self.setUp()
+                rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20,
+                                                 HELD_ATTEMPT_MIN=1, PIN_ADDR=addr)
+                self.assertEqual(rc, 1, raw)
+                self.assertIn("fail vpn_interface_held_down", lines)
+                self.assertIn("skip ipv4_blocked_ifdown", lines)
+                self.assertNotIn("--resolve", self.log())  # never sent to it
+                self.assertNotIn(addr, raw)
+
+    def test_a_live_ipv4_probe_that_couldnt_resolve_is_never_a_pass(self):
+        """The runner's call: a live phase B ipv4_blocked whose curl couldn't resolve
+        the name (exit 6) sent nothing. That attempt isn't clean, even with no
+        restart: it's retried held, at the pinned address, and passes there."""
+        rc, lines, raw = self.run_script("leak-test.sh", LIVE_RESOLVE_FAILS=1, HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok ipv4_blocked_ifdown", lines)
+        self.assertIn("count clean_held_ipv4_blocked_ifdown 1", lines)
+        self.assertNotIn("count clean_live_ipv4_blocked_ifdown 1", lines)
+        self.assertIn("count hold_from_first 1", lines)
+        self.setUp()
+        rc, lines, raw = self.run_script("leak-test.sh", LIVE_RESOLVE_FAILS=1, PAUSE_FAILS=1,
+                                         HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)  # with no hold to fall back on, it never passes
+        self.assertIn("skip ipv4_blocked_ifdown", lines)
+        self.assertIn("fail vpn_interface_held_down", lines)
 
     def test_phase_b_without_the_hold_still_fails_held_down(self):
         """A pause Docker refuses: the retry runs with gluetun live, as before the
