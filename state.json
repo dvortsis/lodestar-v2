@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T17:30:18Z",
+  "updated_at": "2026-11-28T17:31:15Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11136,6 +11136,12 @@
       "via": "owner, runner chat",
       "words": "1. Windows VPN binding: Yes",
       "meaning": "Allow one small Windows-only unsafe setsockopt (IP_UNICAST_IF / IPV6_UNICAST_IF) in crates/network-policy, scoped like the store exception (\u00a72.35). Unblocks X-vpn-bind-win; to be recorded in r24."
+    },
+    {
+      "at": "2026-11-28T17:31:15Z",
+      "via": "owner, runner chat",
+      "words": "2. The test-VM laptop: Yes, same internet connection. 3. Your own items: use your recommendations",
+      "meaning": "The test VM shares the experiment host uplink: no X-test-vm load screen during any measured window (comparator, rehearsal, CR-R1 days, drills) or night hours 06:00Z-15:00Z. Items 20, 38, 44 stay owner actions (owner-only surfaces); runner gave its recommended timing."
     }
   ],
   "slots": {
