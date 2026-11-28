@@ -2,10 +2,12 @@
 // file, Retry only where the server or the connection failed, and nothing sent after leaving.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, configure, fireEvent, render, screen } from '@testing-library/svelte';
+import Stub from '../settings/shell/testing/Stub.svelte';
 
-vi.mock('./WatchFolder.svelte', async () => ({
-	default: (await import('../settings/shell/testing/Stub.svelte')).default
-}));
+// A synchronous factory. With an async one, any `import('./WatchFolder.svelte')` the screen starts
+// while the factory is still pending gets the real WatchFolder, whose settings requests then land
+// in whichever test is running and throw its request counts off under load.
+vi.mock('./WatchFolder.svelte', () => ({ default: Stub }));
 
 import UploadScreen from './UploadScreen.svelte';
 import { MAX_BYTES, MAX_FILES } from './upload';
@@ -37,6 +39,14 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
+/** Renders the screen and waits for its watch-folder part (the stub) to load, so every request a
+ * test counts is the upload's own. */
+async function show() {
+	const out = render(UploadScreen);
+	await screen.findByTestId('stub');
+	return out;
+}
+
 const input = () => screen.getByTestId('upload-input') as HTMLInputElement;
 async function pick(...files: File[]) {
 	await fireEvent.change(input(), { target: { files } });
@@ -46,7 +56,7 @@ const states = () => rows().map((r) => r.getAttribute('data-state'));
 
 describe('UploadScreen', () => {
 	it('names the limits before anything is sent, and Choose files opens the picker', async () => {
-		render(UploadScreen);
+		await show();
 		expect(screen.getByRole('heading', { level: 1, name: 'Add torrent files' })).toBeTruthy();
 		expect(screen.getByTestId('upload-limits').textContent).toContain(
 			`Up to ${MAX_FILES} files at a time, each at most 8.00\u00a0MiB`
@@ -60,7 +70,7 @@ describe('UploadScreen', () => {
 	});
 
 	it('refuses a pick over the limit whole, naming it, and sends nothing', async () => {
-		render(UploadScreen);
+		await show();
 		await pick(...Array.from({ length: MAX_FILES + 1 }, (_, i) => torrent(`${i}.torrent`)));
 		expect(screen.getByTestId('upload-too-many').textContent).toContain(
 			`You chose ${MAX_FILES + 1} files, and Lodestar takes at most ${MAX_FILES} at a time`
@@ -86,7 +96,7 @@ describe('UploadScreen', () => {
 			inFlight--;
 			return answers.shift()!;
 		});
-		render(UploadScreen);
+		await show();
 		await pick(
 			torrent('one.torrent'),
 			torrent('two.torrent'),
@@ -139,7 +149,7 @@ describe('UploadScreen', () => {
 		fetch
 			.mockResolvedValueOnce(json(202, { info_hash: 'a'.repeat(40), private: false }))
 			.mockResolvedValueOnce(refusal(429, 'rate_limited', { 'Retry-After': '1' }));
-		render(UploadScreen);
+		await show();
 		await pick(torrent('a.torrent'), torrent('b.torrent'), torrent('c.torrent'));
 		await wait(() => expect(states()).toEqual(['added', 'rate_limited', 'stopped']));
 		expect(fetch).toHaveBeenCalledTimes(2);
@@ -169,7 +179,7 @@ describe('UploadScreen', () => {
 
 	it('a network failure can be retried; Clear results empties the list', async () => {
 		fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
-		render(UploadScreen);
+		await show();
 		await pick(torrent('a.torrent'));
 		await wait(() => expect(states()).toEqual(['failed']));
 		expect(rows()[0]!.textContent).toContain("Couldn't send");
@@ -179,7 +189,7 @@ describe('UploadScreen', () => {
 
 	it('a drop anywhere on the page adds the files', async () => {
 		fetch.mockResolvedValue(json(202, { info_hash: 'e'.repeat(40), private: false }));
-		render(UploadScreen);
+		await show();
 		const files = [torrent('dropped.torrent')];
 		const dataTransfer = { types: ['Files'], files, dropEffect: 'none' };
 		await fireEvent.dragOver(window, { dataTransfer });
@@ -203,7 +213,7 @@ describe('UploadScreen', () => {
 					);
 				})
 		);
-		const { unmount } = render(UploadScreen);
+		const { unmount } = await show();
 		await pick(torrent('a.torrent'), torrent('b.torrent'));
 		await wait(() => expect(fetch).toHaveBeenCalledOnce());
 		unmount();
