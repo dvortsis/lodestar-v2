@@ -252,7 +252,8 @@ jobs:
       - name: companion refusal as root
         if: runner.os == 'Linux'
         run: |
-          bin=$(cargo test -p lodestar-companions --test supervise --no-run --message-format=json \
+          # --workspace: the features the run above built, so nothing rebuilds.
+          bin=$(cargo test --workspace --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .target.name == "supervise") | .executable')
           sudo -n env LODESTAR_TEST_ROOT_RUN=1 "$bin" root_or_an_administrator_is_refused \
             --exact --nocapture 2>&1 | tee cmp-root.log

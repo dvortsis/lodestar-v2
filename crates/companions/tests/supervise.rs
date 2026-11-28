@@ -514,8 +514,15 @@ async fn root_or_an_administrator_is_refused() {
             assert!(left.is_empty(), "a refused spawn left {left:?}");
             println!("refused: privileged, nothing started");
         }
-        // Unknown fails closed, with the same error.
-        Err(e) => assert_eq!(got.err(), Some(e)),
+        // Unknown fails closed. Windows asks again after a failed probe,
+        // so the second answer may be the definite one.
+        Err(_) => assert!(
+            matches!(
+                got.err(),
+                Some(process::SpawnError::PrivilegeUnknown | process::SpawnError::Privileged)
+            ),
+            "spawn didn't fail closed"
+        ),
         Ok(false) => {
             let mut started = got.unwrap_or_else(|e| panic!("{e}"));
             let _ = started.child.kill().await;
