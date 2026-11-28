@@ -108,6 +108,8 @@
 	"search_toolbar_count_one": "1 result",
 	"search_toolbar_count_other": "{count} results",
 	"search_toolbar_count_about": "≈ {count} results",
+	"search_toolbar_hidden": "{count} hidden",
+	"search_toolbar_hidden_show": "Show",
 	"search_toolbar_sort": "Sort",
 	"search_toolbar_sort_relevance": "Relevance",
 	"search_toolbar_sort_newest": "Newest discovered",
@@ -197,8 +199,8 @@
 	"search_state_rebuilding": "The index is being rebuilt: {done} of {total} torrents. Search uses the current index until it's done.",
 	"search_state_unavailable": "Until then these fields match nothing: {fields}.",
 	"search_state_cold_title": "The index is still growing",
-	"search_state_growing": "Index still growing: {count} torrents.",
-	"search_state_growing_rate": "Index still growing: {count} torrents, +{rate}.",
-	"search_state_cold_body": "{count} torrents so far. Older content appears over time.",
-	"search_state_cold_body_rate": "{count} torrents so far, +{rate}. Older content appears over time."
+	"search_state_growing": "Index still growing: {count} searchable.",
+	"search_state_growing_rate": "Index still growing: {count} searchable, +{rate}.",
+	"search_state_cold_body": "{count} searchable torrents so far. Older content appears over time.",
+	"search_state_cold_body_rate": "{count} searchable torrents so far, +{rate}. Older content appears over time."
 }

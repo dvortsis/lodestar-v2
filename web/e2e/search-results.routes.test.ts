@@ -164,7 +164,9 @@ test.describe('states', () => {
 		mock.on('listSavedSearches', []);
 		await go('/search');
 		await interact(page);
-		await expect(page.getByTestId('results-empty-title')).toHaveText('Search 2,400,000 torrents');
+		await expect(page.getByTestId('results-empty-title')).toHaveText(
+			'Search 2,400,000 searchable torrents'
+		);
 		await expect(page.getByTestId('results-empty').getByRole('link')).toHaveCount(3);
 		await page.getByRole('button', { name: 'Start typing' }).click();
 		await expect(page.getByRole('combobox', { name: 'Search torrents' })).toBeFocused();

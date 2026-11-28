@@ -16,7 +16,13 @@ const goto = vi.hoisted(() => vi.fn());
 const nav = vi.hoisted(() => ({ visit: (() => {}) as (to: string) => void }));
 const replaceState = vi.hoisted(() => vi.fn((to: string) => nav.visit(to)));
 vi.mock('$app/navigation', () => ({ goto, replaceState, pushState: vi.fn() }));
-const search = vi.hoisted(() => ({ q: 'lantern', sort: 'relevance', setSort: vi.fn() }));
+const search = vi.hoisted(() => ({
+	q: 'lantern',
+	sort: 'relevance',
+	hidden: false,
+	setSort: vi.fn(),
+	setHidden: vi.fn()
+}));
 vi.mock('$lib/state/search.svelte', async (original) => ({
 	...(await original<typeof import('$lib/state/search.svelte')>()),
 	search
@@ -26,6 +32,7 @@ const results = vi.hoisted(() => ({
 	hits: [] as unknown[],
 	total: 0,
 	totalApprox: false,
+	hiddenTotal: null as number | null,
 	grouped: {} as Record<string, unknown>
 }));
 vi.mock('../results/results.svelte', () => ({ results }));
@@ -40,11 +47,14 @@ beforeEach(() => {
 	replaceState.mockClear();
 	search.setSort.mockReset();
 	search.sort = 'relevance';
+	search.hidden = false;
+	search.setHidden.mockReset();
 	Object.assign(results, {
 		status: 'ready',
 		hits: [hit(1)],
 		total: 1284,
 		totalApprox: false,
+		hiddenTotal: null,
 		grouped: {}
 	});
 });
@@ -52,6 +62,34 @@ beforeEach(() => {
 const count = () => screen.getByTestId('results-count').textContent?.trim();
 
 describe('ResultsToolbar', () => {
+	it('says how many a filter rule hid, and Show adds them (P7)', async () => {
+		results.hiddenTotal = 1200;
+		render(ResultsToolbar);
+		expect(count()?.replace(/\s+/g, ' ')).toBe('1,284 results · 1,200 hidden · Show');
+		const show = screen.getByRole('button', { name: 'Show' });
+		const described = document.getElementById(show.getAttribute('aria-describedby')!);
+		expect(described?.textContent).toBe('1,200 hidden');
+		await fireEvent.click(show);
+		expect(search.setHidden).toHaveBeenCalledWith(true);
+	});
+
+	it('offers nothing extra for none, an unknown count, hidden already shown, or no answer', () => {
+		for (const set of [
+			() => (results.hiddenTotal = 0),
+			() => (results.hiddenTotal = null),
+			() => ((results.hiddenTotal = 5), (search.hidden = true)),
+			() => ((results.hiddenTotal = 5), (results.status = 'loading'))
+		]) {
+			set();
+			const { unmount } = render(ResultsToolbar);
+			expect(screen.queryByTestId('results-hidden')).toBeNull();
+			expect(screen.queryByTestId('results-hidden-show')).toBeNull();
+			unmount();
+			search.hidden = false;
+			results.status = 'ready';
+		}
+	});
+
 	it('counts the results: exact, one, none, and ≈ compact only when the server says so', () => {
 		const { unmount } = render(ResultsToolbar);
 		expect(count()).toBe('1,284 results');

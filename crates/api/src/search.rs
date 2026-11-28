@@ -710,6 +710,12 @@ async fn run_search(
         } else {
             None
         };
+        // What "N hidden · Show" would add: first pages only.
+        let hidden_total = if cursor.is_none() && served == 0 {
+            hidden_total(&lease, &ast, visibility, &cancel).map_err(failed)?
+        } else {
+            None
+        };
         if let Some(ev) = &events {
             ev.searched(started.elapsed(), Some(total.value));
         }
@@ -803,6 +809,7 @@ async fn run_search(
             }),
             groups: groups.map(|g| g.value),
             groups_approx: groups.map(|g| g.approx),
+            hidden_total,
         }))
     })
     .await
@@ -838,6 +845,45 @@ fn search_disabled() -> ApiError {
         "search_disabled",
         "Search is turned off.",
     )
+}
+
+/// The matches of `ast` a filter rule hid, as `hidden=true` would add
+/// them to the total: on `lease`'s snapshot (the searcher the page came
+/// from, with the AST already parsed), under the request's verified
+/// default and Adult visibility, so it never counts Adult while Adult is
+/// hidden, nor unverified items "Show" wouldn't bring back. Quarantined
+/// and dropped torrents are never in the index, so never counted.
+///
+/// `None` when there's nothing to offer: the request already shows
+/// hidden torrents, the query names `hidden` itself, the count ran out
+/// of the shared [`RECOVERY_BUDGET`], or it's an estimate.
+fn hidden_total(
+    lease: &Lease,
+    ast: &Node,
+    v: Visibility,
+    cancel: &CancelToken,
+) -> Result<Option<usize>, SearchError> {
+    if v.hidden || ast.mentions_flag("hidden") {
+        return Ok(None);
+    }
+    let base = base_query(ast, Visibility { hidden: true, ..v });
+    let only_hidden = Node::And {
+        of: vec![
+            base.node.clone(),
+            Node::Flag {
+                name: "hidden".into(),
+                value: true,
+            },
+        ],
+    };
+    let query = base.restrict(only_hidden);
+    let totals = recovery::totals_on(lease, &[query], cancel, RECOVERY_BUDGET)?;
+    Ok(totals
+        .into_iter()
+        .next()
+        .flatten()
+        .filter(|t| !t.approx)
+        .map(|t| t.value))
 }
 
 /// Zero-result recovery for `ast` on `lease`'s snapshot: each removable

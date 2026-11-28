@@ -237,6 +237,15 @@ pub struct SearchResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub groups_approx: Option<bool>,
+    /// Matches a filter rule hid, which `hidden=true` ("N hidden · Show")
+    /// would add to `total`: counted under the same verified default and
+    /// Adult visibility, so it's exactly what showing them brings back
+    /// (never Adult while it's hidden; quarantined and dropped torrents
+    /// are never indexed). First page only, without `hidden=true` and
+    /// when the query doesn't name `hidden` itself; null otherwise, and
+    /// when the count ran out of time or would be an estimate.
+    #[serde(default)]
+    pub hidden_total: Option<usize>,
 }
 
 /// `collapse` on `GET /search`: `group` for one row per group of

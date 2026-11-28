@@ -40,7 +40,9 @@ for (const width of [1440, 390]) {
 			}, RECENT_KEY);
 			await go('/search');
 			await interact(page);
-			await expect(page.getByTestId('results-empty-title')).toHaveText('Search 2,400,000 torrents');
+			await expect(page.getByTestId('results-empty-title')).toHaveText(
+				'Search 2,400,000 searchable torrents'
+			);
 			await expect(page.getByTestId('home-recent').getByRole('link')).toHaveCount(2);
 			await expect(page.getByTestId('status-pill')).toBeVisible();
 			const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);

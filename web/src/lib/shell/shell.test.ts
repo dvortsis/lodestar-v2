@@ -14,8 +14,9 @@ const crawler = (over: Partial<CrawlerSnapshot> = {}): CrawlerSnapshot => ({
 	fetched: 5,
 	harvested: 9,
 	paused: false,
+	searchable: 1_234_567,
 	stored: 4,
-	torrents: 1_234_567,
+	torrents: 1_300_000,
 	...over
 });
 const rebuild = (over: Partial<RebuildSnapshot> = {}): RebuildSnapshot => ({
@@ -35,27 +36,42 @@ describe('pillState', () => {
 			'connecting'
 		);
 		const live = pillState({ stream: 'live', crawler: null, rebuild: null });
-		expect(live).toEqual({ kind: 'unknown', torrents: null, done: null, total: null });
+		expect(live).toEqual({ kind: 'unknown', searchable: null, done: null, total: null });
 	});
 
 	it('carries the server count, including zero, and never invents one', () => {
 		expect(pillState({ stream: 'live', crawler: crawler(), rebuild: null })).toMatchObject({
 			kind: 'crawling',
-			torrents: 1_234_567
+			searchable: 1_234_567
 		});
 		expect(
 			pillState({
 				stream: 'live',
-				crawler: crawler({ fetch_active: 0, fetch_pending: 0, torrents: 0 }),
+				crawler: crawler({ fetch_active: 0, fetch_pending: 0, searchable: 0 }),
 				rebuild: null
 			})
-		).toMatchObject({ kind: 'idle', torrents: 0 });
+		).toMatchObject({ kind: 'idle', searchable: 0 });
+	});
+
+	it('counts searchable torrents, not stored ones, and has none with search off', () => {
+		// A server from before `searchable`: the field is absent.
+		const older: Partial<CrawlerSnapshot> = crawler();
+		delete older.searchable;
+		expect(
+			pillState({ stream: 'live', crawler: older as CrawlerSnapshot, rebuild: null })
+		).toMatchObject({
+			kind: 'crawling',
+			searchable: null
+		});
+		expect(
+			pillState({ stream: 'live', crawler: crawler({ searchable: null }), rebuild: null })
+		).toMatchObject({ searchable: null });
 	});
 
 	it('says "paused" when the server does, with the count, even while fetches drain', () => {
 		expect(
 			pillState({ stream: 'live', crawler: crawler({ paused: true }), rebuild: null })
-		).toMatchObject({ kind: 'paused', torrents: 1_234_567 });
+		).toMatchObject({ kind: 'paused', searchable: 1_234_567 });
 	});
 
 	it('shows the rebuild while it runs, the failure once, and ignores a finished one', () => {
@@ -64,7 +80,7 @@ describe('pillState', () => {
 				pillState({ stream: 'live', crawler: crawler(), rebuild: rebuild({ phase }) })
 			).toEqual({
 				kind: 'rebuilding',
-				torrents: null,
+				searchable: null,
 				done: 10,
 				total: 100
 			});
@@ -84,7 +100,7 @@ describe('pillState', () => {
 		] as const) {
 			expect(pillState({ stream, crawler: crawler(), rebuild: null })).toEqual({
 				kind,
-				torrents: null,
+				searchable: null,
 				done: null,
 				total: null
 			});
@@ -99,7 +115,7 @@ describe('pillState', () => {
 		for (const over of [{}, { paused: true }, { fetch_active: 0, fetch_pending: 0 }])
 			expect(pillState({ ...live, crawler: crawler(over) })).toMatchObject({
 				kind: 'restart',
-				torrents: 1_234_567
+				searchable: 1_234_567
 			});
 	});
 

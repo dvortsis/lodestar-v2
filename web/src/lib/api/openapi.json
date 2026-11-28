@@ -14148,6 +14148,15 @@
             "type": "boolean",
             "description": "The crawler is paused (`POST /crawler/pause`): the counters stand\nstill because nothing is harvested or fetched, not because\nsomething broke."
           },
+          "searchable": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Documents in the serving search index, as `/stats`'s\n`searchable_torrents` (the status pill's \"N searchable\"); null\nwhen search is off.",
+            "minimum": 0
+          },
           "stored": {
             "type": "integer",
             "format": "int64",
@@ -14169,6 +14178,7 @@
           "fetched": 3400,
           "harvested": 91000,
           "paused": false,
+          "searchable": 48190,
           "stored": 3100,
           "torrents": 48211
         }
@@ -23061,6 +23071,14 @@
           "groups_approx": {
             "type": "boolean",
             "description": "`groups` is an estimate (shown with \"≈\"); sent with `groups`."
+          },
+          "hidden_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Matches a filter rule hid, which `hidden=true` (\"N hidden · Show\")\nwould add to `total`: counted under the same verified default and\nAdult visibility, so it's exactly what showing them brings back\n(never Adult while it's hidden; quarantined and dropped torrents\nare never indexed). First page only, without `hidden=true` and\nwhen the query doesn't name `hidden` itself; null otherwise, and\nwhen the count ran out of time or would be an estimate.",
+            "minimum": 0
           },
           "hits": {
             "type": "array",

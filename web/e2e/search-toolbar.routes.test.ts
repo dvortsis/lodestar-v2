@@ -41,6 +41,27 @@ test('the count is the server’s, ≈ and compact only when it says so', async 
 	await expect(count(page)).toHaveText('≈ 2.4M results');
 });
 
+test('"N hidden · Show" counts what a filter rule hid, and Show adds them (P7)', async ({
+	page,
+	go,
+	mock
+}) => {
+	server(mock, (sent) =>
+		(sent as { hidden?: boolean }).hidden
+			? body(hits(5), { total: 5, hidden_total: null })
+			: body(hits(3), { total: 3, hidden_total: 2 })
+	);
+	await go('/search?q=lantern');
+	await expect(count(page)).toHaveText('3 results · 2 hidden · Show');
+	const show = page.getByRole('button', { name: 'Show', exact: true });
+	await expect(show).toHaveAccessibleDescription('2 hidden');
+	await show.click();
+	await expect.poll(() => new URL(page.url()).searchParams.get('hidden')).toBe('1');
+	await expect(count(page)).toHaveText('5 results');
+	await expect(page.getByTestId('results-hidden-show')).toHaveCount(0);
+	await expectNoA11yViolations(page);
+});
+
 test('sort goes to the URL and the request; Back walks it', async ({ page, go, mock }) => {
 	server(mock, () => body(hits(3)));
 	await go('/search?q=lantern');

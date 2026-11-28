@@ -7,7 +7,7 @@ import type { PillState } from './status';
 
 export const INITIAL_PILL: PillState = {
 	kind: 'connecting',
-	torrents: null,
+	searchable: null,
 	done: null,
 	total: null
 };

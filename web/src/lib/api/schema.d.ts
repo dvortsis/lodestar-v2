@@ -4457,6 +4457,7 @@ export interface components {
          *       "fetched": 3400,
          *       "harvested": 91000,
          *       "paused": false,
+         *       "searchable": 48190,
          *       "stored": 3100,
          *       "torrents": 48211
          *     }
@@ -4499,6 +4500,13 @@ export interface components {
              *     something broke.
              */
             paused: boolean;
+            /**
+             * Format: int64
+             * @description Documents in the serving search index, as `/stats`'s
+             *     `searchable_torrents` (the status pill's "N searchable"); null
+             *     when search is off.
+             */
+            searchable?: number | null;
             /**
              * Format: int64
              * @description Torrents stored since start.
@@ -9066,6 +9074,16 @@ export interface components {
             groups?: number;
             /** @description `groups` is an estimate (shown with "≈"); sent with `groups`. */
             groups_approx?: boolean;
+            /**
+             * @description Matches a filter rule hid, which `hidden=true` ("N hidden · Show")
+             *     would add to `total`: counted under the same verified default and
+             *     Adult visibility, so it's exactly what showing them brings back
+             *     (never Adult while it's hidden; quarantined and dropped torrents
+             *     are never indexed). First page only, without `hidden=true` and
+             *     when the query doesn't name `hidden` itself; null otherwise, and
+             *     when the count ran out of time or would be an estimate.
+             */
+            hidden_total?: number | null;
             hits: components["schemas"]["SearchHit"][];
             /**
              * @description The fields this query's clauses name that the index can't fully

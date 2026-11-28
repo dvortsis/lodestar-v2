@@ -19,6 +19,7 @@
 	import { groupsCount } from '../collapse/count';
 	import { PARAM, groupHref, groupedIn, grouping } from '../collapse/grouping.svelte';
 	import { viewOf, type View } from './view';
+	import { FOCUS_RING } from '$lib/ui/classes';
 
 	const id = $props.id();
 	const locale = $derived(currentLocale());
@@ -74,6 +75,17 @@
 			? m.search_toolbar_count_one()
 			: m.search_toolbar_count_other({ count: formatCount(n, locale) });
 	});
+
+	// "N hidden · Show" (§10.4, P7): matches a filter rule hid, as the server counted them for this
+	// query. "Show" adds exactly those (`hidden=true`); none to offer, nothing shown. Its 44 px target
+	// under a coarse pointer is padding taken back by a negative margin, so the line keeps its height.
+	const hidden = $derived(
+		results.status === 'ready' && !search.hidden ? (results.hiddenTotal ?? 0) : 0
+	);
+	function showHidden() {
+		ensureSearchPath();
+		void search.setHidden(true);
+	}
 
 	// With the drawer open the URL is a shallow `/t/{hash}?…`: each write puts it back on /search
 	// first (query/path.ts), which closes the drawer, rather than navigating to the detail page.
@@ -131,7 +143,19 @@
 
 {#if results.status !== 'empty'}
 	<div class="tb" data-testid="results-toolbar">
-		<p class="tb-count" data-testid="results-count">{count}</p>
+		<p class="tb-count" data-testid="results-count">
+			{count}{#if hidden > 0}
+				&nbsp;· <span id="{id}-hidden" data-testid="results-hidden"
+					>{m.search_toolbar_hidden({ count: formatCount(hidden, locale) })}</span
+				>&nbsp;·
+				<button
+					type="button"
+					class="text-primary underline pointer-coarse:-m-3 pointer-coarse:p-3 {FOCUS_RING}"
+					data-testid="results-hidden-show"
+					aria-describedby="{id}-hidden"
+					onclick={showHidden}>{m.search_toolbar_hidden_show()}</button
+				>{/if}
+		</p>
 		<div class="tb-controls">
 			<GroupToggle
 				on={grouped}
