@@ -11133,7 +11133,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T14:41:41Z",
+    "updated": "2026-11-28T15:16:15Z",
     "items": [
       {
         "slot": 1,
@@ -11161,11 +11161,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-events-send-await",
+        "slice": null,
         "role": "build",
-        "agent": "session_01MMjhnAp9PNbusfTh9AQrbx",
-        "doing": "building",
-        "since": "2026-11-28T14:41:41Z"
+        "agent": null,
+        "doing": "idle; #1176 merged",
+        "status": "idle"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
