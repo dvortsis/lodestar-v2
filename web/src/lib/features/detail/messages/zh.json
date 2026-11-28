@@ -104,5 +104,12 @@
 	"detail_swarm_dht_estimate": "{seeds} 个做种、{peers} 个节点（DHT 估算值）",
 	"detail_swarm_completed": "已上报 {count} 次完成下载",
 	"detail_swarm_none": "暂无节点群数据。",
-	"detail_setup_client": "设置下载客户端…"
+	"detail_setup_client": "设置下载客户端…",
+	"detail_attr_sample": "采样率",
+	"detail_attr_version": "版本号",
+	"detail_attr_platform": "平台",
+	"detail_attr_arch": "架构",
+	"detail_attr_bit_depth": "{n} 位",
+	"detail_attr_pack_yes": "整季或合集包",
+	"detail_release": "发布信息"
 }

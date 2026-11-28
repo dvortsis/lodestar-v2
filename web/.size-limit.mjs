@@ -1944,7 +1944,9 @@ export default [
 	// X-gs-followups-2 (runner §2.26): 28.31 → 28.27 KB, measured 28,269 B (−35 B): Parsed hides
 	// quietly on a withheld answer, and Show all leaves a one-line ask on the drawer's host; the
 	// focus step itself is in Related, which loads on demand.
-	entry('Detail drawer (own JS + CSS)', drawerView, '28.27 KB'),
+	// X-detail-attributes-ui (runner §2.26): 28.27 → 28,352 B, measured 28,301 B (+32 B: the attributes and level props and
+	// the larger message barrel); rounded up to 64 B.
+	entry('Detail drawer (own JS + CSS)', drawerView, '28352 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)
@@ -1964,7 +1966,8 @@ export default [
 	// placeholder and the dynamic import); the section itself is on demand.
 	// X-gs-followups (runner §2.26): 15.69 → 15.71 KB, measured 15,705 B (+18 B, no /t code: the
 	// shared message barrel and chunk names moved; Settings and Welcome moved by +9 and −2 B too).
-	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15.71 KB'),
+	// X-detail-attributes-ui (runner §2.26): 15.71 KB → 15,744 B, measured 15,718 B (+13 B, the message barrel); rounded up to 64 B.
+	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15744 B'),
 	entry(
 		'Detail sections (on demand)',
 		[
@@ -1982,7 +1985,7 @@ export default [
 		// X-gs-followups: 47.87 → 47.44 KB, measured 47,433 B. Related no longer imports open.ts (the
 		// drawer hands it the open function), and the siblings loader Parsed and Related now share
 		// counts in Related's entry. Earlier, GS-4 (runner §2.26): 47.49 → 47.87 KB for that import.
-		'47.52 KB' // X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
+		'50624 B' // X-detail-attributes-ui (runner §2.26): 47.52 KB → 50,624 B, measured 50,577 B (+3.0 kB: the Release list with Compare's shared label tables and messages, so both views word a torrent alike; the list's own formatters and 16 service names are about 0.2 kB of it); rounded up to 64 B. Earlier: X-labels (runner §2.26): 38,605 → 38,811 B, Found by in Differences and the composition text. Earlier: runner §2.26, SRC-17: the claim differences load here (37,520 B → 38,608 B; measured 1.04 kB over, rounded up to 64 B). Earlier: runner FX-5 incl. review fixes §2.26: 37.31 → 37.52 (I1 tree height + P4 parsed rows, +~0.2 KB). Earlier: runner 2026-11-01 (§2.26, FX-1): +4 B chunk reshuffle. Owner ruling, 2026-10-30: see the Alerts entries. Runner, 2026-11-01, X-detail-headroom
 		// (§2.26): the event client and SSE (visibility-events.ts) moved here from the drawer and /t
 		// first views (-2.2 KB each). Alone they compress worse (+0.25 KB net here), and the magnet
 		// error toasts add ~0.17 KB. Was 34.5 KB.

@@ -105,3 +105,117 @@ describe('Parsed', () => {
 		expect(label('detail-parsed-seasons')).toBe('Seasons');
 	});
 });
+
+describe('Parsed: the Release list', () => {
+	it('drops values that are not strings and treats a prototype name as a service as sent', () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		const bad = {
+			year: 2008,
+			lang: ['en'],
+			res: '1080p',
+			service: 'constructor'
+		} as unknown as Record<string, string>;
+		render(Parsed, { hash: HASH, hit: searchHit(), attributes: bad });
+		expect(text('detail-release-res')).toBe('1080p');
+		expect(text('detail-release-service')).toBe('constructor');
+		expect(screen.queryByTestId('detail-release-lang')).toBeNull();
+		expect(screen.queryByTestId('detail-release-year')).toBeNull();
+	});
+
+	it('holds the title back until the hit lookup is done', () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		const props = { hash: HASH, hit: null, attributes: { title: 'Other' } };
+		const { unmount } = render(Parsed, { ...props, hitDone: false });
+		expect(screen.queryByTestId('detail-release-title')).toBeNull();
+		unmount();
+		render(Parsed, { ...props, hitDone: true });
+		expect(text('detail-release-title')).toBe('Other');
+	});
+
+	const attrs = {
+		res: '1080p',
+		vcodec: 'h265',
+		bits: '10',
+		lang: 'en, multi',
+		subs: 'fr',
+		pack: 'yes',
+		service: 'hidi',
+		source: 'web-dl',
+		year: '2008',
+		season: '2',
+		mystery: 'zzq'
+	};
+	const text = (id: string) => screen.getByTestId(id).textContent?.trim();
+
+	it('labels each key as Compare does, formats values, and drops unknown keys', async () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		render(Parsed, { hash: HASH, hit: searchHit(), attributes: attrs });
+		await waitFor(() => expect(screen.getByTestId('detail-release-year')).toBeTruthy());
+		expect(text('detail-release-res')).toBe('1080p');
+		expect(text('detail-release-vcodec')).toBe('H.265 (HEVC)');
+		expect(text('detail-release-source')).toBe('WEB-DL');
+		expect(text('detail-release-bits')).toBe('10-bit');
+		expect(text('detail-release-lang')).toBe('English, Multiple languages');
+		expect(text('detail-release-subs')).toBe('French');
+		expect(text('detail-release-pack')).toBe('Season or collection pack');
+		expect(text('detail-release-service')).toBe('HIDIVE');
+		expect(text('detail-release-year')).toBe('2008');
+		expect(text('detail-release-season')).toBe('2');
+		const list = screen.getByTestId('detail-release');
+		expect(list.textContent).toContain('Video codec');
+		expect(list.textContent).toContain('Subtitles');
+		expect(list.textContent).not.toContain('mystery');
+		expect(list.textContent).not.toContain('zzq');
+	});
+
+	it('holds the identity keys back while the identity loads, then leaves out those it shows', async () => {
+		let answer!: (v: unknown) => void;
+		get.mockReturnValue(new Promise((r) => (answer = r)));
+		render(Parsed, { hash: HASH, hit: searchHit(), attributes: { year: '2019', res: '720p' } });
+		expect(text('detail-release-res')).toBe('720p');
+		expect(screen.queryByTestId('detail-release-year')).toBeNull();
+		answer({ hash: HASH, identity });
+		await waitFor(() => expect(screen.getByTestId('detail-parsed-years')).toBeTruthy());
+		expect(screen.queryByTestId('detail-release-year')).toBeNull();
+		expect(text('detail-release-res')).toBe('720p');
+	});
+
+	it("shows this torrent's own year when the identity has none", async () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		render(Parsed, { hash: HASH, hit: searchHit(), attributes: { year: '2019' } });
+		await waitFor(() => expect(screen.getByTestId('detail-release-year')).toBeTruthy());
+		expect(text('detail-release-year')).toBe('2019');
+	});
+
+	it('shows nothing for null or {}', () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		const { unmount } = render(Parsed, { hash: HASH, hit: searchHit(), attributes: null });
+		expect(screen.queryByTestId('detail-release')).toBeNull();
+		unmount();
+		render(Parsed, { hash: HASH, hit: searchHit(), attributes: {} });
+		expect(screen.queryByTestId('detail-release')).toBeNull();
+	});
+
+	it('shows the parsed title only when it differs from the resolved one', () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		const hit = searchHit();
+		const { unmount } = render(Parsed, { hash: HASH, hit, attributes: { title: hit.title ?? '' } });
+		expect(screen.queryByTestId('detail-release')).toBeNull();
+		unmount();
+		render(Parsed, { hash: HASH, hit, attributes: { title: 'Another Name' } });
+		expect(text('detail-release-title')).toBe('Another Name');
+	});
+
+	it('words the values in the UI language', async () => {
+		const { applyLocale } = await import('$lib/i18n/locale.svelte');
+		applyLocale('zh');
+		try {
+			get.mockResolvedValue({ hash: HASH, identity: null });
+			render(Parsed, { hash: HASH, hit: searchHit(), attributes: { bits: '10', lang: 'fr' } });
+			expect(text('detail-release-bits')).toBe('10 位');
+			expect(text('detail-release-lang')).toBe('法语');
+		} finally {
+			applyLocale('en');
+		}
+	});
+});
