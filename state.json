@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T18:12:29Z",
+  "updated_at": "2026-11-28T18:17:48Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11159,7 +11159,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T18:12:29Z",
+    "updated": "2026-11-28T18:17:48Z",
     "items": [
       {
         "slot": 1,
@@ -11182,16 +11182,16 @@
         "slice": "X-detail-actions-timeout",
         "role": "build",
         "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
-        "doing": "testTimeout+hookTimeout 20 s; load runs",
+        "doing": "#1184 open; fresh review running",
         "since": "2026-11-28T17:23:23Z"
       },
       {
         "slot": 4,
-        "slice": "X-hidden-count-grouped",
+        "slice": "M8-PERF-3",
         "role": "build",
-        "agent": "session_01MMjhnC5ux8vDCYL2oNoj1y",
-        "doing": "#1183 open; fresh review running",
-        "since": "2026-11-28T17:04:47Z"
+        "agent": "session_01MMjhn9RHhXEv4EPdxpobd7",
+        "doing": "step 0: workflow and guard design",
+        "since": "2026-11-28T18:17:48Z"
       },
       {
         "slot": 5,
