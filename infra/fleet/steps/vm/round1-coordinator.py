@@ -25,6 +25,8 @@ operator's steps are docs/soak/runsheets/host-round1-runsheet.md.
   stop         stop every arm now (the rehearsal's 4 h limit), then the archive
   archive      (re)write the day archive from what's recorded
   end-attempt  record an attempt that ends short of its declared days (the manifest's attempt_ends)
+  bind-comparator  bind a comparator run without round-1 fields, after its window: its run
+               id, the salted identities computed now, and its end (comparator-binding.json)
   identity     the host's salted identity, the uplink's hash, the /data device and the uplink
                interface, for the runner's declaration
   manifest     the round's manifest: every input with its SHA-256, checked for one image
@@ -392,7 +394,8 @@ def cmd_check_start(cfg, day, host, args):
     if end is None:
         raise Fail("the comparator report has no timeline.window_end_utc")
     if s.get("rehearsal"):  # §8 item 5: inside the 12 h, from stores deleted after; never beside the comparator
-        if host.now() < end or not (comp.get("binding") or {}).get("ended_utc"):
+        ended = (comp.get("binding") or {}).get("ended_utc") or (comparator_binding(cfg) or {}).get("ended_utc")
+        if host.now() < end or not ended:
             raise Fail(f"the comparator is still running (its window ends {iso(end)}): the rehearsal waits for it")
         lines.append("ok rehearsal after the comparator (spacing doesn't apply: not a measurement)")
     elif host.now() < end + SPACING:
@@ -444,6 +447,7 @@ def measuring(day, host):
 GRAMMAR = re.compile(r"^(?:(?:ok|fail|skip) [a-z0-9_]{1,64}|count [a-z0-9_]{1,80} [0-9]{1,12})$")
 LEAK_FILES = ("leak-test.sh", "block-lib.sh", "compose.yaml")
 LEAK_TIMEOUT = 1500  # the step's own 900 s, and margin for a loaded host
+LEAK_CLEANUP_SECONDS = 120  # after TERM, the test's EXIT trap releases its rules and captures
 
 
 def run_leak_test(cfg, host, arm):
@@ -457,14 +461,22 @@ def run_leak_test(cfg, host, arm):
         for name in LEAK_FILES:
             shutil.copyfile(HERE / name, Path(work) / name)
         env = {"LODESTAR_ARM": a["suffix"][1:], "LODESTAR_UI_PORT": str(a["port"]), "LODESTAR_GLUETUN_RESTART": "no"}
-        rc, out = host.run(["bash", str(Path(work) / "leak-test.sh"), work, a["stack"]], env=env, timeout=LEAK_TIMEOUT)
+        # `timeout` sends TERM, so the test's own traps release its guards, its endpoint block and
+        # its captures before the folder goes (a kill from Python would skip them); Python's own
+        # limit is longer, for that cleanup (steps/remote.py runs steps the same way).
+        rc, out = host.run(["timeout", "-s", "TERM", str(LEAK_TIMEOUT), "bash", str(Path(work) / "leak-test.sh"),
+                            work, a["stack"]], env=env, timeout=LEAK_TIMEOUT + LEAK_CLEANUP_SECONDS)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    return [ln for ln in (out or "").splitlines() if GRAMMAR.fullmatch(ln)]
+    lines = [ln for ln in (out or "").splitlines() if GRAMMAR.fullmatch(ln)]
+    if rc is None or rc == 124:  # timed out: never a pass, whatever it printed before
+        lines += ["fail leak_test_timed_out", "fail leak_test"]
+    return lines
 
 
 def leak_lock(cfg):
-    """One leak test at a time on the host: each recreates its own tunnel and sets host rules."""
+    """One leak test at a time per round folder (its lock file lives there): each recreates its
+    own tunnel and sets host rules."""
     fh = open(Path(cfg["round_dir"]) / ".leak-test.lock", "a")
     try:
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -492,7 +504,7 @@ def cmd_leak(cfg, day, host, args):
     finally:
         lock.close()
     text = "\n".join(lines_out) + "\n"
-    n = len(s["arms"][args.arm]["leak_tests"]) + 1
+    n = len(list(day.dir.glob(f"leak-{args.arm}-*.log"))) + 1  # every run numbered, `not_run` ones too
     log = day.dir / f"leak-{args.arm}-{args.phase}-{n}.log"
     log.write_text(text, encoding="utf-8")
     result = leak_verdict(text)
@@ -536,17 +548,18 @@ def cmd_up(cfg, day, host, args):
     cmd_check_start(cfg, day, host, args)
     if not cfg.get("image") or "@sha256:" not in cfg["image"]:
         raise Fail("config: image must be pinned by digest (name@sha256:...)")
-    if cfg["image"].rsplit("@", 1)[1] != cfg["decl"]["image_digest"]:
+    if cfg["image"] != cfg["decl"]["image_digest"]:  # both name@sha256:<hex>: run by the declared digest
         raise Fail("config: image's digest isn't the declaration's image_digest")
     lines, up = [], []
     for arm in day.arms():
         env = dict(stack_env(cfg, arm), **arm_switch_env(day.entry(arm)))
         rc, _ = host.run(compose(cfg, arm, "--profile", "block", "up", "-d", "lodestar"), env=env, timeout=300)
-        if rc != 0:  # no partial day: what started is stopped again
-            for other in up:
+        if rc != 0:  # no partial day: what started is stopped again, the failing arm too (its
+            # containers may be up although the command failed or timed out)
+            for other in up + [arm]:
                 rc2, _ = host.run(compose(cfg, other, "stop"), env=stack_env(cfg, other), timeout=300)
                 lines.append(f"{'ok' if rc2 == 0 else 'fail'} stack_stopped arm={other}")
-            raise Partial(lines, f"arm {arm}'s stack didn't start; the arms already up were stopped again")
+            raise Partial(lines, f"arm {arm}'s stack didn't start; every arm's stack, its own too, was stopped again")
         up.append(arm)
         lines.append(f"ok up arm={arm}")
     return lines
@@ -580,7 +593,9 @@ def cmd_bring_up(cfg, day, host, args):
         # again, and the archive keeps both checks.
         s["notes"].append(f"{iso(host.now())} exits checked again before the start: "
                           + ", ".join(sorted(k for k in exits if exits[k] != s["exits"].get(k))) + " changed")
-    s.setdefault("exit_checks", []).append({"utc": iso(host.now()), "exits": exits})
+    # Stamped with this check's first reading, so every reading it took is in force under it.
+    first = iso(min(parse_utc(r["utc"]) for r in readings.values()))
+    s.setdefault("exit_checks", []).append({"utc": first, "exits": exits})
     s["exits"] = exits
     for arm in day.arms():
         s["arms"][arm]["egress"].append(readings[arm])
@@ -941,7 +956,8 @@ def cmd_manifest(cfg, day, host, args):
         if any(v != decl["image_digest"] for v in a.get("candidate_digests", {}).values()):
             raise Fail(f"attempt {a['id']}'s candidate digests aren't the round's image")
     comp = Path(cfg["comparator_report"])
-    comp_run = (load(comp).get("binding") or {}).get("run_id")
+    binding = root / BINDING
+    comp_run = (load(comp).get("binding") or {}).get("run_id") or (load(binding)["run_id"] if binding.exists() else None)
     run_ids = [comp_run]
     days, repeats = [], {}
     for d in list_days(cfg):
@@ -952,7 +968,7 @@ def cmd_manifest(cfg, day, host, args):
                 raise Fail(f"{p} is missing: run analyze_cr.py segment for arm {arm} first")
             rep = load(p)
             got = (rep.get("identity") or {}).get("image_digest")
-            if got != decl["image_digest"]:
+            if (got or "").rsplit("@", 1)[-1] != decl["image_digest"].rsplit("@", 1)[-1]:
                 raise Fail(f"{p}'s image digest isn't the round's")
             run_ids.append((rep.get("binding") or {}).get("run_id"))
             reports[arm] = ref(p)
@@ -972,6 +988,8 @@ def cmd_manifest(cfg, day, host, args):
            "comparator": ref(comp), "days": sorted(days, key=lambda d: (d["attempt"], d["day"], d["repeat"]))}
     if ends_path.exists():
         man["attempt_ends"] = load(ends_path)
+    if binding.exists():
+        man["comparator_binding"] = ref(binding)
     out = root / "manifest.json"
     save(out, man)
     return [f"ok manifest {out} sha256={sha256(out)}"]
@@ -985,6 +1003,84 @@ def block_device(path):
         return link.resolve(strict=True).name
     except OSError:
         return None
+
+
+BINDING = "comparator-binding.json"
+
+
+def comparator_binding(cfg):
+    path = Path(cfg["round_dir"]) / BINDING
+    return load(path) if path.exists() else None
+
+
+def comparator_segment(run_dir):
+    """`analyze_cr.py segment` on a run directory, in process (the same analyzer the round's
+    comparator.json came from)."""
+    if str(TOOLS.parent) not in sys.path:
+        sys.path.insert(0, str(TOOLS.parent))
+    import analyze_cr  # noqa: E402  (loaded only here: the other commands don't need it)
+    return analyze_cr.analyze_segment(run_dir)
+
+
+def cmd_bind_comparator(cfg, day, host, args):
+    """Bind a comparator that ran under a collector without round-1 binding fields (runner,
+    2026-11-27, §2.19): after its window, from its run directory, with the identities computed
+    now under the round's salt, as the arms compute theirs. Written once into the round folder,
+    so the manifest carries it. Its run id is `comparator-<run directory name>`."""
+    out = Path(cfg["round_dir"]) / BINDING
+    if out.exists():
+        raise Fail(f"{out} is already written: a binding is never changed")
+    run_dir = Path(args.comparator_run or "")
+    try:
+        run, result = load(run_dir / "run.json"), load(run_dir / "result.json")
+    except (OSError, ValueError):
+        raise Fail("--comparator-run must name the comparator's finished run directory (run.json and result.json)") from None
+    if (run.get("settings") or {}).get("run_kind") != "comparator":
+        raise Fail("that run directory isn't a comparator run")
+    ended = parse_utc(result.get("ended"))
+    if ended is None:
+        raise Fail("the comparator's result.json has no `ended`: it hasn't finished")
+    try:  # runner, 2026-11-27: an end before its window's end is an interrupted comparator
+        end = parse_utc((load(cfg["comparator_report"]).get("timeline") or {}).get("window_end_utc"))
+    except (OSError, ValueError):
+        end = None
+    if end is None:
+        raise Fail("the comparator's report (comparator_report) isn't there or has no timeline.window_end_utc")
+    if ended < end:
+        raise Fail(f"the comparator ended at {iso(ended)}, before its window's end {iso(end)}: it was interrupted")
+    # Runner review (A): the round's comparator.json must be this run's report, or the binding
+    # would pair this run's identity with another comparator's evidence. Segment the run
+    # directory now and require the same window and binary.
+    try:
+        report = load(cfg["comparator_report"])
+        seg = comparator_segment(run_dir)
+    except (OSError, ValueError, KeyError, TypeError):
+        raise Fail("the comparator's run directory can't be segmented (analyze_cr.py segment)") from None
+    sha = (report.get("identity") or {}).get("binary_sha256")
+    if seg.get("kind") != "comparator" or seg.get("timeline") != report.get("timeline") \
+            or seg.get("window_hours") != report.get("window_hours") \
+            or not sha or (seg.get("identity") or {}).get("binary_sha256") != sha:
+        raise Fail("that run directory isn't the comparator the round's comparator.json was made from "
+                   "(its window or binary differs)")
+    run_id = "comparator-" + run_dir.resolve().name
+    if not collect.RUN_ID.fullmatch(run_id):
+        raise Fail("the comparator's run directory name makes no valid run id (letters, digits, _ . : -)")
+    key = salt(cfg)
+    machine = collect.host_key()
+    if machine is None:
+        raise Fail("can't read /etc/machine-id")
+    try:
+        uplink = collect.salted_hash(key, "ip", host.uplink_ip(cfg["ip_echo_url"]))
+    except (OSError, ValueError, UnicodeError):
+        raise Fail("can't read the uplink's address outside the tunnels") from None
+    binding = {"schema": 1, "kind": "cr_round1_comparator_binding", "run_id": run_id,
+               "host_identity": collect.salted_hash(key, "host", machine),
+               "network_identity": {"uplink_hash": uplink, "provider": cfg.get("vpn_provider", "pia"),
+                                    "protocol": cfg.get("vpn_protocol", "wireguard")},
+               "ended_utc": iso(ended), "bound_utc": iso(host.now()), "bound_after_window": True}
+    save(out, binding)
+    return [f"ok comparator_bound run_id={run_id} ended={iso(ended)}",
+            "the declaration's comparator.run_id must name this run id"]
 
 
 def cmd_identity(cfg, day, host, args):
@@ -1003,7 +1099,7 @@ def cmd_identity(cfg, day, host, args):
             f"backing_device {block_device(cfg['data_volume'])}", f"uplink_interface {m[1] if m else 'unknown'}"]
 
 
-COMMANDS = {"stop": cmd_stop, "identity": cmd_identity, "check-endpoints": cmd_check_endpoints, "check-start": cmd_check_start, "leak": cmd_leak, "up": cmd_up, "bring-up": cmd_bring_up,
+COMMANDS = {"bind-comparator": cmd_bind_comparator, "stop": cmd_stop, "identity": cmd_identity, "check-endpoints": cmd_check_endpoints, "check-start": cmd_check_start, "leak": cmd_leak, "up": cmd_up, "bring-up": cmd_bring_up,
             "collect": cmd_collect, "watch": cmd_watch, "archive": cmd_archive, "end-attempt": cmd_end_attempt,
             "manifest": cmd_manifest}
 
@@ -1020,6 +1116,7 @@ def build_parser():
     p.add_argument("--phase", choices=("before", "after", "retest"))
     p.add_argument("--host-level", action="store_true", help="A leak failure with a host-level cause stops every arm")
     p.add_argument("--reason", help="Why the attempt ended (end-attempt)")
+    p.add_argument("--comparator-run", help="The comparator's finished run directory (bind-comparator)")
     p.add_argument("--rehearsal", action="store_true", help="The rehearsal's day (leak, bring-up): never in the manifest")
     return p
 
@@ -1029,8 +1126,8 @@ def main(argv=None, host=None):
     host = host or Host()
     try:
         cfg = load_config(args.config)
-        needs_day = args.command not in ("end-attempt", "manifest", "check-endpoints", "identity")
-        if cfg["decl"] is None and args.command not in ("identity", "check-endpoints"):
+        needs_day = args.command not in ("end-attempt", "manifest", "check-endpoints", "identity", "bind-comparator")
+        if cfg["decl"] is None and args.command not in ("identity", "check-endpoints", "bind-comparator"):
             raise Fail(f"the declaration ({cfg['declaration']}) isn't there yet: the runner writes it")
         if needs_day and not args.day_dir:
             raise Fail("--day-dir is required")

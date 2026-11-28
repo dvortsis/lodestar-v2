@@ -32,7 +32,7 @@ SALT = b"coordinator test salt, never real"
 UPLINK = "198.51.100.7"
 EXIT_IP = {"X": "203.0.113.21", "Y": "203.0.113.22", "Z": "203.0.113.23"}
 T0 = datetime(2026, 11, 29, 8, 0, tzinfo=timezone.utc)
-IMAGE = "lodestar@" + mk.DIGEST
+IMAGE = mk.DIGEST  # name@sha256:<hex>, as the declaration names it
 
 
 def iso(t):
@@ -51,6 +51,7 @@ class FakeHost:
         self.counter = lambda port, t: (t - T0).total_seconds()
         self.dead = set()  # PIDs that have exited
         self.leak_out, self.leak_runs = "", []  # what leak-test.sh prints, and each run
+        self.leak_rc, self.leak_timeouts = None, []  # a forced exit code, and each run's limits
 
     def alive(self, pid, needle):
         return pid is not None and pid not in self.dead
@@ -63,8 +64,11 @@ class FakeHost:
 
     def run(self, argv, env=None, timeout=120):
         self.calls.append((list(argv), dict(env or {})))
-        if argv[0] == "bash":  # the leak test, from its private work folder
-            work = Path(argv[2])
+        if argv[0] == "timeout" and argv[4] == "bash":  # the leak test, from its private work folder
+            self.leak_timeouts.append((argv[:4], timeout))
+            if self.leak_rc is not None:
+                return self.leak_rc, self.leak_out
+            work = Path(argv[6])
             self.leak_runs.append({"argv": list(argv), "env": dict(env or {}), "work": work,
                                    "files": sorted(p.name for p in work.iterdir()), "mode": work.stat().st_mode & 0o777})
             return (0 if self.leak_out.rstrip().endswith("ok leak_test") else 1), self.leak_out + "a stray stderr-like line\n"
@@ -279,13 +283,32 @@ class ReviewFixTests(CoordinatorBase):
         self.assertEqual(run["files"], sorted(co.LEAK_FILES))
         self.assertEqual(run["mode"], 0o700)
         self.assertFalse(run["work"].exists())  # removed after: its captures hold addresses
-        self.assertEqual(run["argv"][3], json.loads(self.cfg_path.read_text())["arms"]["C"]["stack"])
+        self.assertEqual(run["argv"][7], json.loads(self.cfg_path.read_text())["arms"]["C"]["stack"])
         self.assertEqual((run["env"]["LODESTAR_ARM"], run["env"]["LODESTAR_UI_PORT"],
                           run["env"]["LODESTAR_GLUETUN_RESTART"]), ("c", "8093", "no"))
         test = self.state()["arms"]["C"]["leak_tests"][-1]
         log = (self.day_dir() / test["log"]).read_text()
         self.assertNotIn("stray", log)  # only the test's own grammar lines
         self.assertTrue(log.rstrip().endswith("ok leak_test"))
+
+    def test_a_hung_leak_test_is_stopped_by_term_and_reads_as_a_failure(self):
+        self.host.leak_out, self.host.leak_rc = "ok tunnel_healthy\nok leak_test\n", 124  # even a pass line
+        rc, out = self.go("leak", "--arm", "B", "--phase", "before")
+        self.assertIn("fail leak_test arm=B", out[0])
+        limits, py_timeout = self.host.leak_timeouts[-1]
+        self.assertEqual(limits, ["timeout", "-s", "TERM", str(co.LEAK_TIMEOUT)])
+        self.assertGreater(py_timeout, co.LEAK_TIMEOUT)
+        log = (self.day_dir() / self.state()["arms"]["B"]["leak_tests"][-1]["log"]).read_text()
+        self.assertIn("fail leak_test_timed_out", log)
+
+    def test_a_not_run_result_gets_its_own_log(self):
+        self.host.leak_out = "fail block_running\nfail leak_test\n"
+        self.go("leak", "--arm", "B", "--phase", "before")
+        self.host.leak_out = "ok leak_test\n"
+        self.go("leak", "--arm", "B", "--phase", "before")
+        logs = sorted(p.name for p in self.day_dir().glob("leak-B-*.log"))
+        self.assertEqual(logs, ["leak-B-before-1.log", "leak-B-before-2.log"])
+        self.assertIn("block_running", (self.day_dir() / "leak-B-before-1.log").read_text())
 
     def test_arms_are_leak_tested_one_at_a_time(self):
         lock = co.leak_lock(co.load_config(self.cfg_path))
@@ -328,8 +351,9 @@ class ReviewFixTests(CoordinatorBase):
         rc, out = self.go("up")
         self.assertEqual(rc, 1)
         stopped = sorted(c for c in self.host.commands() if c.endswith(" stop"))
-        self.assertEqual(len(stopped), 2)
+        self.assertEqual(len(stopped), 3)  # A and B, and C itself: its containers may be up
         self.assertIn("ok stack_stopped arm=A", out)
+        self.assertIn("ok stack_stopped arm=C", out)
 
     def test_a_stack_that_wont_stop_fails_the_step_after_saving(self):
         self.pass_leaks()
@@ -359,6 +383,112 @@ class ReviewFixTests(CoordinatorBase):
         self.assertNotIn("LODESTAR_DHT_UTP", env)
         self.assertNotIn("HTTPS_PROXY", env)
         self.assertEqual(env["LODESTAR_ARM"], "b")
+
+
+class BindComparatorTests(CoordinatorBase):
+    def comparator_run(self, ended=True, kind="comparator"):
+        run = self.tmp / "cr-ab-comp-2"
+        run.mkdir(exist_ok=True)
+        (run / "run.json").write_text(json.dumps({"settings": {"run_kind": kind}}))
+        if ended:
+            (run / "result.json").write_text(json.dumps({"ended": iso(T0 - timedelta(hours=12, minutes=59))}))
+        return run
+
+    def setUp(self):
+        super().setUp()
+        comp = json.loads((self.round / "comparator.json").read_text())
+        comp["identity"] = {"binary_sha256": "b" * 64}
+        (self.round / "comparator.json").write_text(json.dumps(comp))
+        self.segmented = []
+
+    def segment(self, run_dir, **change):
+        # The comparator run's own report, as analyze_cr.py segment makes it (faked here: the
+        # analyzer's segment tests cover the real thing).
+        self.segmented.append(Path(run_dir))
+        comp = json.loads((self.round / "comparator.json").read_text())
+        return dict({k: comp.get(k) for k in ("kind", "timeline", "window_hours", "identity")}, **change)
+
+    def bind(self, run, segment=None):
+        argv = ["bind-comparator", str(self.cfg_path), "--comparator-run", str(run)]
+        with mock.patch.object(co.collect, "host_key", lambda: "0" * 32), \
+                mock.patch.object(co, "comparator_segment", segment or self.segment):
+            import io
+            from contextlib import redirect_stdout
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = co.main(argv, host=self.host)
+        return rc, out.getvalue().splitlines()
+
+    def test_binds_once_from_the_finished_run_with_identities_computed_now(self):
+        rc, out = self.bind(self.comparator_run())
+        self.assertEqual(rc, 0, out)
+        b = json.loads((self.round / "comparator-binding.json").read_text())
+        self.assertEqual(b["run_id"], "comparator-cr-ab-comp-2")
+        self.assertEqual(b["host_identity"], collect.salted_hash(SALT, "host", "0" * 32))
+        self.assertEqual(b["network_identity"], {"uplink_hash": collect.salted_hash(SALT, "ip", UPLINK),
+                                                 "provider": "pia", "protocol": "wireguard"})
+        self.assertEqual((b["ended_utc"], b["bound_after_window"]), (iso(T0 - timedelta(hours=12, minutes=59)), True))
+        self.assertNotIn(UPLINK, json.dumps(b))
+        rc, out = self.bind(self.comparator_run())
+        self.assertIn("never changed", out[-1])
+
+    def test_refuses_a_run_directory_other_than_the_reports(self):
+        run = self.comparator_run()
+        comp = json.loads((self.round / "comparator.json").read_text())
+        other_window = dict(comp["timeline"], window_start_utc=iso(T0 - timedelta(days=3)))
+        for change in ({"timeline": other_window}, {"identity": {"binary_sha256": "c" * 64}},
+                       {"kind": "comb"}, {"window_hours": 12}):
+            with self.subTest(change=sorted(change)):
+                rc, out = self.bind(run, lambda d, change=change: self.segment(d, **change))
+                self.assertEqual(rc, 1)
+                self.assertIn("isn't the comparator", out[-1])
+                self.assertFalse((self.round / "comparator-binding.json").exists())
+
+        def broken(d):
+            raise ValueError("no samples")
+        self.assertIn("can't be segmented", self.bind(run, broken)[1][-1])
+        self.assertEqual(self.bind(run)[0], 0)
+        self.assertEqual(self.segmented[-1], run)
+
+    def test_the_real_segment_runs_on_the_run_directory(self):
+        sys.path.insert(0, str(HERE.parent))
+        import analyze_cr
+        with mock.patch.object(analyze_cr, "analyze_segment", lambda root: {"root": str(root)}):
+            self.assertEqual(co.comparator_segment(self.tmp), {"root": str(self.tmp)})
+
+    def test_refuses_a_running_comparator_or_another_kind(self):
+        rc, out = self.bind(self.comparator_run(ended=False))
+        self.assertEqual(rc, 1)
+        (self.tmp / "cr-ab-comp-2" / "result.json").write_text(json.dumps({"ended": None}))
+        self.assertIn("hasn't finished", self.bind(self.tmp / "cr-ab-comp-2")[1][-1])
+        rc, out = self.bind(self.comparator_run(kind="comb"))
+        self.assertIn("isn't a comparator", out[-1])
+
+    def test_refuses_a_comparator_that_ended_before_its_window(self):
+        run = self.comparator_run()
+        (run / "result.json").write_text(json.dumps({"ended": iso(T0 - timedelta(hours=14))}))
+        rc, out = self.bind(run)
+        self.assertIn("interrupted", out[-1])
+        self.assertFalse((self.round / "comparator-binding.json").exists())
+
+    def test_the_manifest_carries_the_binding_and_the_rehearsal_gate_reads_it(self):
+        comp = json.loads((self.round / "comparator.json").read_text())
+        comp.pop("binding")  # as the old collector's report: no binding
+        (self.round / "comparator.json").write_text(json.dumps(comp))
+        self.bind(self.comparator_run())
+        self.host.t = T0 - timedelta(hours=5)
+        day = self.round / "rehearsal"
+        argv = ["--day-dir", str(day), "--attempt", "r1-a1", "--day", "1", "--rehearsal"]
+        for arm in mk.LAYOUTS["L3"][1]:
+            self.main(["leak", str(self.cfg_path), *argv, "--arm", arm, "--phase", "before", "--log", str(self.leak_log())])
+        self.main(["bring-up", str(self.cfg_path), *argv])
+        self.assertEqual(co.main(["check-start", str(self.cfg_path), "--day-dir", str(day)], host=self.host), 0)
+        ManifestTests.make_day(self, 1)
+        ManifestTests.make_day(self, 2)
+        rc, out = self.go("manifest")
+        self.assertEqual(rc, 0, out)
+        man = json.loads((self.round / "manifest.json").read_text())
+        self.assertEqual(man["comparator_binding"]["path"], "comparator-binding.json")
 
 
 class RehearsalAndIdentityTests(CoordinatorBase):
@@ -448,7 +578,7 @@ class LeakTests(CoordinatorBase):
         rc, out = self.go("leak", "--arm", "B", "--phase", "before", "--log", str(log))
         self.assertIn("skip leak_test", out[-1])
         self.assertEqual(self.state()["arms"]["B"]["leak_tests"], [])
-        self.assertFalse([c for c in self.host.commands() if not c.startswith("bash ")])  # nothing stopped
+        self.assertFalse([c for c in self.host.commands() if not c.startswith("timeout ")])  # nothing stopped
         self.assertEqual(co.leak_verdict("fail tool_missing_tcpdump\nfail leak_test\n"), "not_run")
         self.assertEqual(co.leak_verdict("fail block_running\nfail no_egress_captured_down\nfail leak_test\n"), "fail")
 
@@ -489,6 +619,28 @@ class BringUpTests(CoordinatorBase):
         self.go("collect")
         self.host.ip_of_pid[102] = EXIT_IP["Y"]
         self.assertIn("after its start", self.go("bring-up")[1][-1])
+
+    def test_a_check_is_stamped_with_its_first_reading_not_its_end(self):
+        # The reads take time; a check stamped at its end would put its own readings before
+        # it, and the gate would judge them against the check in force before this one.
+        self.pass_leaks()
+        read = self.host.egress_ip
+
+        def slow(pid, url):
+            ip = read(pid, url)
+            self.host.t += timedelta(seconds=7)
+            return ip
+        self.host.egress_ip = slow
+        self.go("bring-up")
+        self.host.ip_of_pid[102] = "203.0.113.99"
+        rc, out = self.go("bring-up")
+        self.assertEqual(rc, 0, out)
+        s = self.state()
+        check = s["exit_checks"][-1]
+        mine = [r["utc"] for a in s["arms"].values() for r in a["egress"][-1:]]
+        self.assertEqual(check["utc"], min(mine))
+        self.assertLess(co.parse_utc(check["utc"]), self.host.now())
+        self.assertTrue(all(co.parse_utc(check["utc"]) <= co.parse_utc(u) for u in mine))
 
     def test_two_arms_on_one_exit_or_an_untunnelled_arm_are_refused(self):
         self.pass_leaks()
@@ -607,6 +759,37 @@ class LaunchPathTests(unittest.TestCase):
     def test_the_commands_it_launches_exist_in_this_checkout(self):
         self.assertTrue((co.TOOLS / "collect.py").is_file())
         self.assertTrue((co.TOOLS / "host_samples.py").is_file())
+
+
+class LeakTimeoutTests(unittest.TestCase):
+    """A real subprocess: `timeout` sends TERM, so the test's EXIT trap runs its cleanup while
+    its work folder is still there, and the result is a failure. The stand-in script mirrors
+    leak-test.sh's traps (TERM exits 143, EXIT cleans up)."""
+
+    def test_term_runs_the_tests_own_cleanup_before_the_folder_goes(self):
+        import shutil as sh
+        with tempfile.TemporaryDirectory() as d:
+            here, marker = Path(d) / "steps", Path(d) / "cleanup-saw"
+            here.mkdir()
+            (here / "leak-test.sh").write_text(
+                "#!/usr/bin/env bash\n"
+                f"trap 'ls \"$1\" > {marker}; echo ok cleanup_ran' EXIT\n"
+                "trap 'exit 143' TERM\n"
+                "echo ok started\n"
+                "sleep 30 & wait $!\n"
+                "echo ok leak_test\n")
+            for name in ("block-lib.sh", "compose.yaml"):
+                (here / name).write_text("")
+            cfg = {"arms": {"B": {"suffix": "-b", "port": 8091, "stack": d}}}
+            if sh.which("timeout") is None:
+                self.skipTest("coreutils timeout not installed")
+            with mock.patch.object(co, "HERE", here), mock.patch.object(co, "LEAK_TIMEOUT", 2), \
+                    mock.patch.object(co, "LEAK_CLEANUP_SECONDS", 30):
+                lines = co.run_leak_test(cfg, co.Host(), "B")
+            self.assertIn("leak-test.sh", marker.read_text())  # the folder was there for the cleanup
+        self.assertEqual(lines[-2:], ["fail leak_test_timed_out", "fail leak_test"])
+        self.assertIn("ok cleanup_ran", lines)
+        self.assertEqual(co.leak_verdict("\n".join(lines)), "fail")
 
 
 class CollectorStateTests(unittest.TestCase):
@@ -771,6 +954,22 @@ class HostSamplerTests(unittest.TestCase):
         self.assertEqual([h["hour_utc"] for h in doc["coverage_by_hour"]],
                          [iso(T0 + timedelta(hours=k)) for k in range(3)])
         self.assertEqual(set(doc["coverage_by_hour"][2]["coverage"].values()), {0})
+
+    def test_partial_first_and_last_hours_expect_only_their_covered_slots(self):
+        start, end = T0 + timedelta(minutes=30), T0 + timedelta(hours=2, minutes=29, seconds=50)
+        rows, t = [], start
+        while t <= end:
+            rows.append({"utc": iso(t), "device": "sda", "cpu": 0.4, "steal": 0.0, "disk_inflight": 0,
+                         "uplink_drops_total": 0, "tunnels": {"B": {"rtt_ms": 30.0, "lost": False}}})
+            t += timedelta(seconds=10)
+        headers = [{"kind": "header", "started_utc": iso(start), "device": "sda", "tunnels": ["B"], "vcpus": 8}]
+        doc = hs.assemble(rows, "sda", headers, end=end)
+        self.assertEqual([h["expected"] for h in doc["coverage_by_hour"]], [180, 360, 180])
+        self.assertTrue(all(set(h["coverage"].values()) == {1.0} for h in doc["coverage_by_hour"]))
+        rows = [r for r in rows if not r["utc"].startswith(iso(T0 + timedelta(hours=1))[:15])]  # a 10 min gap
+        doc = hs.assemble(rows, "sda", headers, end=end)
+        self.assertLess(doc["coverage_by_hour"][1]["coverage"]["cpu"], 0.98)
+        self.assertEqual(doc["coverage_by_hour"][0]["coverage"]["cpu"], 1.0)
 
     def test_assemble_refuses_another_device_or_no_header(self):
         rows = [{"utc": iso(T0), "device": "sda"}]

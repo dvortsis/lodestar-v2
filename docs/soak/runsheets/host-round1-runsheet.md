@@ -53,7 +53,7 @@ The layouts (the runner picks one at the rehearsal, and it holds for both days):
 | Every day | fresh data, witness and state directories, new node identities. No restart inside a window | §6.3 |
 | Disruptive steps (leak tests, restart drills, the exit swap) | only while **no** arm has a window open | §6.3 |
 | Leak tests | each arm's own, before the day's starts and after the coordinator has stopped everything | §5.2 item 3 |
-| A failed leak test | stops crawling on that arm (all arms if the cause is on the host) until it's repaired and a re-test passes. The day is repeated | §6.3 |
+| A failed leak test | stops crawling on that arm (all arms if the cause is on the host) until it's repaired and a re-test passes. Before the day's start it's a note, and the day runs after the passing re-test; after the start, the day is repeated | §6.3; the runner's ruling |
 | Shutdown | the coordinator's, at the latest final boundary + 2 min. Never stop an arm yourself | §5.2 item 11 |
 | Retry budget | at most two repeated days in the round | §6.3 |
 | Never stitch | one process, one window | rule 6.7 |
@@ -64,7 +64,14 @@ The layouts (the runner picks one at the rehearsal, and it holds for both days):
 
 Do this once, before the rehearsal. Run everything as root on the experiment VM, from a checkout of this repository at the commit the runner names, with Python 3.10 or later.
 
-1. **Pin the build.** The runner gives you the image digest, the source commit and the spec commit. Every arm and both days use the same digest.
+1. **Pin the build.** The runner gives you the image tag, the source commit and the spec commit. Pull the image by its tag **once**, and read the digest Docker gives it:
+
+   ```bash
+   docker pull <image>:<tag>
+   docker inspect --format '{{index .RepoDigests 0}}' <image>:<tag>
+   ```
+
+   Send the runner that line (`<image>@sha256:<64 hex>`): it goes into the declaration as `image_digest`, and into the coordinator file as `image`. From then on everything runs by that digest, never the tag. Every arm and both days use it.
 2. **Make the salt** (once for the round; never copy it into the round's folder):
 
    ```bash
@@ -118,7 +125,17 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
    $C identity /root/round1-coordinator.json
    ```
 
-   Send the runner the four lines. It writes `host_identity`, `network_identity.uplink_hash`, `backing_device` into the declaration, and you put `uplink_interface` in the coordinator file. Then the runner gives you `declaration.json` and the comparator's report (`comparator.json`) for `<round>`.
+   Send the runner the four lines, and the box's vCPU count (`nproc`, which must be 8). It writes `host_identity`, `network_identity.uplink_hash`, `backing_device` and `vcpus` into the declaration, and you put `uplink_interface` in the coordinator file. The declaration is append-only: these are filled once, before the rehearsal, and never change.
+
+   Also send the **pool map**: for each Unraid pool (`cache`, `array` and any others), the kernel names, **as this VM sees them** (`lsblk -dno NAME`), of the VM's disks whose storage sits on that pool. Use whole-disk names such as `vdb`, never the Unraid host's own device names (`nvme0n1`, `md1`) or a partition (`vdb1`). The `backing_device` line above must appear in exactly one pool. The runner's records PR writes the map into the declaration as `pools`; without it, no mover run or parity check can spare a window (§8 item 6, D3).
+5a. **Bind the comparator** once it has stopped (its collector wrote `result.json`), before the rehearsal. Its collector predates round 1, so its report carries no binding; the coordinator binds it now, with the round's salt. First its report, then the binding:
+
+   ```bash
+   python3 docs/soak/tools/analyze_cr.py segment <the comparator's evidence folder> --output <round>/comparator.json
+   $C bind-comparator /root/round1-coordinator.json --comparator-run <the comparator's evidence folder>
+   ```
+
+   It writes `<round>/comparator-binding.json` and prints the comparator's run id (`comparator-<folder name>`). Send the runner that line: the declaration's `comparator.run_id` names it. It refuses a comparator that hasn't finished, that ended before its window's end, or whose folder isn't the one `comparator.json` was made from (it segments the folder again and compares the window and binary), and it never rewrites a binding. Then the runner gives you `declaration.json` for `<round>`.
 6. **Disk.** The coordinator checks free space each day (every arm's expected growth plus the round's archives, plus 20 %). If it refuses, ask the runner; never delete an archive to make room.
 
 ## 4. Each arm's leak test
@@ -193,7 +210,25 @@ The rehearsal checks the setup and the timing. Its stores are deleted afterwards
    python3 docs/soak/tools/linux/host_samples.py drops --samples <round>/rehearsal/host-samples.jsonl
    ```
 
-   It prints one line per hour with each series' rise (`uplink_rx_dropped`, `uplink_tx_dropped`, and the card's own `rx_missed_errors` and `rx_fifo_errors` where it has them). Send the runner the lines. If any is above 0, tell the runner before day 1: some network cards count harmless frames as drops, and the series may need changing. **The runner selects the layout** (the drop-C rule) from the rehearsal and tells you.
+   It prints one line per hour with each series' rise (`uplink_rx_dropped`, `uplink_tx_dropped`, and the card's own `rx_missed_errors` and `rx_fifo_errors` where it has them). Send the runner the lines. If any is above 0, tell the runner before day 1: some network cards count harmless frames as drops, and the series may need changing.
+8b. **Each arm's settings, as the declaration says.** Judge each rehearsal arm against the declaration (it reads the switch gauge the arm reported):
+
+   ```bash
+   for arm in B A C; do
+     python3 docs/soak/tools/analyze_cr.py segment <round>/rehearsal/$arm --declaration <round>/declaration.json \
+       --output <round>/rehearsal/$arm.report.json
+   done
+   ```
+
+   Every check named `declared_*`, `effective_switches_recorded` and `safe_restart_on` must read ok (a rehearsal is never a measurement, whatever its verdict). If one doesn't, stop and tell the runner.
+8c. **The drop-C rule.** Run it on the rehearsal and send the runner its output:
+
+   ```bash
+   python3 docs/soak/tools/analyze_cr.py drop-c <round>/rehearsal/host-samples.jsonl \
+     --arm B=<round>/rehearsal/B --arm A=<round>/rehearsal/A --arm C=<round>/rehearsal/C
+   ```
+
+   It prints `keep` or `drop` with its numbers (the last 60 min once every arm crawled; host CPU p95 over 70 % or steal p95 over 3 % drops C). **The runner selects the layout** from it and tells you.
 9. Delete each arm's rehearsal `data` and `witness` folders. Keep `<round>/rehearsal` itself.
 
 ## 6. A day, step by step
@@ -261,11 +296,11 @@ Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<
 
 | What happened | What you do |
 |---|---|
-| A leak test failed | §4: the coordinator stopped the arm. Tell the runner. The day is repeated from fresh stores after a repair and a passing re-test |
+| A leak test failed | §4: the coordinator stopped the arm. Tell the runner. Before the day's start: it's a note; repair, pass a `--phase retest`, and the day runs. After the start (an `after` test): the day is repeated from fresh stores |
 | An arm's collector stopped early (its `result.json` names a reason other than `baseline_window_complete`) | Leave the others running: the watch carries on and records the event. Tell the runner, who diagnoses it with a fresh reviewer |
 | The watch died, or your session dropped | Start the watch again at once with the same command. Inside a window, the collectors' own scrapes cover the gap. In the overhang, a gap of over 3 min ends the arms' recorded activity, so later candidates may not be judged: tell the runner the times. If every window has closed and the overhang has passed, it stops everything at once |
 | The host rebooted or lost power | The day is invalid. Round 1's stacks never restart by themselves, so no arm crawls untested after a reboot. Leave them down. Write a note when you can, restore, and tell the runner. The repeated day starts as any day does: leak tests, `bring-up`, then `up` |
-| A parity operation, sync, rebuild or mover run on the array | Write the note (`array_operation`). Data on `ssd_apps` isn't invalidated by mover or parity (§8 item 6); anything else, tell the runner |
+| A parity operation, sync, rebuild or mover run | Write the note in each running arm's evidence folder, saying what ran and on which pool: `collect.py note --root <day dir>/<arm> --category array_operation --kind <mover, parity or other> --pool <name>`, with one `--pool` for **every** pool it touches (the mover moves files between a cache pool and the array: name both). A mover run or parity check spares a window only when none of the pools it touched holds that arm's `/data` (§8 item 6, D3); a sync or rebuild is `--kind other` and always counts. Tell the runner either way |
 
 ## 7. After each day, before the exit swap
 

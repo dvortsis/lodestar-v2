@@ -40,7 +40,7 @@ DAY_START = {1: tc.T0, 2: tc.T0 + timedelta(hours=26)}
 PORTS = {"B": 8091, "A": 8092, "C": 8093}
 
 
-def collector_run(root, arm, day, start, exit_ip, salt_file, password_file, run_id):
+def collector_run(root, arm, day, start, exit_ip, salt_file, password_file, run_id, fail_call=None):
     """One arm's real-window collector on fakes, started at `start` (its Lodestar 2 s before)."""
     clock = FakeClock()
     clock.base = start
@@ -66,12 +66,19 @@ def collector_run(root, arm, day, start, exit_ip, salt_file, password_file, run_
                 "--day", str(day), "--arm", arm, "--run-id", run_id,
                 "--identity-salt-file", str(salt_file)]
         args = collect.build_parser().parse_args(argv)
+        calls = []
+
+        def egress(pid):  # `fail_call`: that read fails (the final boundary's is the 26th)
+            calls.append(pid)
+            if len(calls) == fail_call:
+                raise OSError("echo service hiccup")
+            return exit_ip
         args.tick_seconds = 5.0
         c = collect.Collector(args, instance, clock=clock.clock, sleep=clock.sleep, now=clock.now,
                               volumes=fixed_volumes(), ip_lookup=lambda url: PUBLIC_IP,
                               api_call=FakeAPI(intensity=preset),
                               run_command=lambda a: CHRONY if a[0] == "chronyc" else None,
-                              egress_lookup=lambda pid: exit_ip, host_id=lambda: r1.MACHINE_ID)
+                              egress_lookup=egress, host_id=lambda: r1.MACHINE_ID)
         return c.run()
     finally:
         lodestar.close()
@@ -108,7 +115,9 @@ def sample_host(root, out, arms, start, end):
     def sleep(seconds):
         clock[0] += timedelta(seconds=seconds)
     import threading
-    hs.run_loop(sampler, out, threading.Event(), now=lambda: clock[0], sleep=sleep, until=end)
+    from unittest import mock
+    with mock.patch.object(hs.os, "cpu_count", lambda: 8):  # the box's 8 vCPUs (the declaration's)
+        hs.run_loop(sampler, out, threading.Event(), now=lambda: clock[0], sleep=sleep, until=end)
 
 
 class EndToEnd(unittest.TestCase):
@@ -125,7 +134,7 @@ class EndToEnd(unittest.TestCase):
         pw.write_text(PASSWORD + "\n")
         pw.chmod(0o600)
         # The declaration and booked comparator, on this host, network and image.
-        a = json.loads(json.dumps(mk.archive("L3")).replace(mk.DIGEST, r1.IMAGE))
+        a = json.loads(json.dumps(mk.archive("L3")).replace(mk.DIGEST, "lodestar@" + r1.IMAGE))
         decl = a["declaration"]
         decl.update(host_identity=HOST, network_identity=NETWORK)
         (cls.round / "declaration.json").write_text(json.dumps(decl))
@@ -194,8 +203,10 @@ class EndToEnd(unittest.TestCase):
         state = json.loads((day_dir / "state.json").read_text())
         for arm, label in placed.items():  # as `collect` launches them, with its run IDs
             start = DAY_START[day] + timedelta(minutes=mk.STAGGER[arm])
+            # Day 1's B: its final boundary's egress read fails once and is retried in place.
             cls.codes[(day, arm)] = collector_run(day_dir / arm, arm, day, start, tc.EXIT_IP[label], salt, pw,
-                                                  state["arms"][arm]["run_id"])
+                                                  state["arms"][arm]["run_id"],
+                                                  fail_call=26 if (day, arm) == (1, "B") else None)
         host.t = DAY_START[day] - timedelta(minutes=1)
         cls.call("watch", day=day)
         for arm in placed:
@@ -254,6 +265,14 @@ class EndToEnd(unittest.TestCase):
             check = [c for c in self.reports[(day, "A")]["checks"] if c["check"] == "declared_preset"][0]
             self.assertTrue(check["ok"])
         self.assertIn("C", self.verdict["diagnostics"])
+
+    def test_a_retried_final_egress_reading_still_binds_the_window(self):
+        rows = [json.loads(x) for x in (self.round / "r1-a1" / "day1" / "B" / "samples.jsonl").read_text().splitlines()]
+        final = [r for r in rows if 24 in (r.get("boundary") or [])][0]
+        self.assertEqual(final["egress"], {"read": "failed"})
+        self.assertEqual(final["egress_retries"][-1]["read"], "ok")
+        day1 = [d for d in self.verdict["candidates"]["B"]["days"] if d["day"] == 1][0]
+        self.assertEqual(day1["status"], "pass", day1["reasons"])
 
     def test_the_verdict_reproduces(self):
         again = analyze_cr.gate_round(analyze_cr.load_manifest(self.round / "manifest.json"))
