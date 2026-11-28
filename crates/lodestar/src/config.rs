@@ -1335,6 +1335,12 @@ mod tests {
             ..Dht::default()
         };
         assert!(dht.crawl_interface().is_err());
+        // And from config.toml: the load itself refuses it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\ninterface = \"wg0\"\n").unwrap();
+        let e = Config::load(Some(&path), no_env).unwrap_err();
+        assert!(e.to_string().contains("X-vpn-bind-win"), "{e}");
     }
 
     /// X-vpn-bind: `dht.interface` is checked at load (Linux's rules).

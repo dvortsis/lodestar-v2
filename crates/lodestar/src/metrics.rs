@@ -718,8 +718,6 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     o.0
 }
 
-/// The core re-judge's stalled ranges (X-rejudge-stall), as the writer
-/// last set them.
 /// X-vpn-bind: the crawl's interface, only with one set. Whether it's up
 /// and how often it went down; never its name or addresses.
 fn render_vpn(o: &mut Out, guard: Option<&lodestar_network_policy::iface::Guard>) {
@@ -738,6 +736,8 @@ fn render_vpn(o: &mut Out, guard: Option<&lodestar_network_policy::iface::Guard>
     );
 }
 
+/// The core re-judge's stalled ranges (X-rejudge-stall), as the writer
+/// last set them.
 fn render_core_rejudge(o: &mut Out, w: &lodestar_pipeline::WriterStats) {
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
     o.one(

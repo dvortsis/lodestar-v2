@@ -165,3 +165,59 @@ async fn without_an_interface_the_name_is_looked_up() {
         "the name went to the system resolver"
     );
 }
+
+/// A server that answers every request with a redirect to the same path
+/// and query on `to`.
+async fn redirector(to: std::net::SocketAddr) -> std::net::SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0; 4096];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]);
+                let path = head.split(' ').nth(1).unwrap_or("/").to_owned();
+                let reply = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://{to}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = s.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    addr
+}
+
+/// With an interface set no redirect is followed: one could name an
+/// address of a family the interface has none of, which would leave with
+/// another interface's source address. The control follows it.
+#[tokio::test]
+async fn a_pinned_client_refuses_every_redirect() {
+    let fake = http_tracker().await;
+    fake.state.set(LIVE, SWARM);
+    let hop = redirector(fake.addr).await;
+    let url = TrackerUrl::parse(&format!("http://{hop}/announce")).unwrap();
+    let tracker = |client: &reqwest::Client| {
+        Tracker::new(&url, UdpConfig::default(), HttpConfig::default(), client).unwrap()
+    };
+
+    let pinned = http::client_through(&Interface::parse("lo").unwrap(), None).unwrap();
+    let e = tracker(&pinned).scrape(&[LIVE]).await.unwrap_err();
+    assert_eq!(
+        fake.state.scrapes.load(Ordering::Relaxed),
+        0,
+        "not followed: {e}"
+    );
+
+    let plain = http::client(None, None).unwrap();
+    assert_eq!(
+        tracker(&plain).scrape(&[LIVE]).await.unwrap().counts,
+        [Some(SWARM)]
+    );
+    assert_eq!(
+        fake.state.scrapes.load(Ordering::Relaxed),
+        1,
+        "the control follows it"
+    );
+}

@@ -149,8 +149,11 @@ async fn utp_leaves_from_the_pinned_dht_socket_and_follows_a_rebind() {
             .await
             .expect("connect in time")
             .expect("connected");
-        out.write_all(b"hi").await.unwrap();
-        out.flush().await.unwrap();
+        timeout(DEADLINE, out.write_all(b"hi"))
+            .await
+            .unwrap()
+            .unwrap();
+        timeout(DEADLINE, out.flush()).await.unwrap().unwrap();
         out
     };
 

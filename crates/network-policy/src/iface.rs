@@ -150,8 +150,10 @@ fn pin_os(
     let looked;
     let link = match link {
         PinLink::Seen(link) => link,
-        // The kernel refuses its sends while it's down or gone.
-        PinLink::Down => return Ok(addr),
+        // Down by the last check: refused, as on Windows. A device that's
+        // up with no address (`no_address`) would take another
+        // interface's source address.
+        PinLink::Down => return Err(while_down()),
         PinLink::Look => {
             looked = check(iface).map_err(Down::into_io)?;
             &looked
@@ -171,12 +173,7 @@ fn pin_os(
     let looked;
     let link = match link {
         PinLink::Seen(link) => link,
-        PinLink::Down => {
-            return Err(io::Error::new(
-                io::ErrorKind::NetworkDown,
-                "the crawl's network interface is down",
-            ));
-        }
+        PinLink::Down => return Err(while_down()),
         PinLink::Look => {
             looked = windows_link(iface).map_err(Down::into_io)?;
             &looked
@@ -213,6 +210,30 @@ static PINS: AtomicU64 = AtomicU64::new(0);
 /// constructor goes through [`pin`].
 pub fn pins() -> u64 {
     PINS.load(Ordering::Relaxed)
+}
+
+/// A [`Guard::pin`] while the guard's last check found the interface
+/// unusable: the caller waits for it to come back ([`is_while_down`]).
+#[derive(Debug)]
+struct WhileDown;
+
+impl fmt::Display for WhileDown {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the crawl's network interface is down")
+    }
+}
+
+impl std::error::Error for WhileDown {}
+
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+fn while_down() -> io::Error {
+    io::Error::new(io::ErrorKind::NetworkDown, WhileDown)
+}
+
+/// Whether a pin failed only because the guard has the interface down:
+/// nothing to hold, the crawl waits for it as it does for any drop.
+pub fn is_while_down(e: &io::Error) -> bool {
+    inner(e).get_ref().is_some_and(|i| i.is::<WhileDown>())
 }
 
 /// The interface has no address of the socket's family.
@@ -280,7 +301,8 @@ pub fn is_no_family(e: &io::Error) -> bool {
 /// ports gives.
 pub fn is_gone(e: &io::Error) -> bool {
     let e = inner(e);
-    if is_no_family(e) {
+    // Nothing new: the guard already has it down.
+    if is_no_family(e) || is_while_down(e) {
         return false;
     }
     e.kind() == io::ErrorKind::NetworkDown
@@ -293,9 +315,10 @@ pub fn is_gone(e: &io::Error) -> bool {
 /// allowed (Linux before 5.7 without `CAP_NET_RAW`) or isn't supported
 /// here. The crawl can't use the interface, so it stays down
 /// ([`Guard::hold`]). A bind's own error (a port below 1024, a port in
-/// use) isn't one.
+/// use) isn't one, nor is a pin while the guard has it down
+/// ([`is_while_down`]).
 pub fn is_refused(e: &io::Error) -> bool {
-    pin_failure(e).is_some() && !is_no_family(e)
+    pin_failure(e).is_some() && !is_no_family(e) && !is_while_down(e)
 }
 
 /// Why the interface can't be used. [`code`](Self::code) is the stable
@@ -572,10 +595,20 @@ impl Guard {
         self.seen().link.is_some()
     }
 
+    /// Whether the last check found an address of `ip`'s family on the
+    /// interface: a connection to `ip` through it would otherwise carry
+    /// another interface's source address. False while it's down.
+    pub fn has_family(&self, ip: IpAddr) -> bool {
+        self.seen()
+            .link
+            .as_ref()
+            .is_some_and(|l| l.addrs.iter().any(|a| a.is_ipv6() == ip.is_ipv6()))
+    }
+
     /// [`pin`] for the crawl's sockets, from the last check: its addresses
-    /// (Windows binds one; both check the socket's family), and refused on
-    /// Windows while that check found the interface unusable. Linux pins
-    /// the device either way; the kernel refuses its sends while it's down.
+    /// (Windows binds one; both check the socket's family), and refused
+    /// ([`is_while_down`]) while that check found the interface unusable,
+    /// so a drop between a caller's state check and its pin sends nothing.
     pub fn pin(&self, socket: &Socket, addr: SocketAddr) -> io::Result<SocketAddr> {
         PINS.fetch_add(1, Ordering::Relaxed);
         let link = self.seen().link.clone();
@@ -953,6 +986,40 @@ mod tests {
         );
         let e = family(&v4_only, "[::]:0".parse().unwrap()).unwrap_err();
         assert!(is_no_family(&e), "{e}");
+    }
+
+    #[test]
+    fn has_family_follows_the_last_link() {
+        let (guard, seen) = scripted(Ok(Link {
+            index: Some(1),
+            addrs: vec!["10.64.0.2".parse().unwrap()],
+        }));
+        guard.poll();
+        assert!(guard.has_family("203.0.113.9".parse().unwrap()));
+        assert!(!guard.has_family("2001:db8::66".parse().unwrap()));
+        *seen.lock().unwrap() = Err(Down::Down);
+        guard.poll();
+        assert!(!guard.has_family("203.0.113.9".parse().unwrap()), "down");
+    }
+
+    /// A pin while the last check found the interface unusable is refused,
+    /// whatever made a caller try: a device up with no address would
+    /// otherwise send with another interface's source address. It's a
+    /// wait, not a hold.
+    #[test]
+    fn a_pin_while_the_guard_is_down_is_refused_as_a_wait() {
+        let guard = Guard::with_probe(Interface::parse("lo").unwrap(), |_| Err(Down::NoAddress));
+        assert_eq!(guard.poll(), State::Down(Down::NoAddress));
+        let socket = Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None).unwrap();
+        let e = guard
+            .pin(&socket, "0.0.0.0:0".parse().unwrap())
+            .unwrap_err();
+        assert!(
+            is_while_down(&e) && !is_refused(&e) && !is_no_family(&e),
+            "{e}"
+        );
+        assert!(!is_gone(&e), "no trip: the guard already has it down");
+        assert!(pin_failure(&e).is_some(), "still marked as a pin's");
     }
 
     /// Linux: a guard whose link has only an IPv4 address refuses an IPv6

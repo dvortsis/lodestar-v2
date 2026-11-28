@@ -211,6 +211,19 @@ impl ClientTask {
         self.guard.as_ref().is_some_and(|g| !g.state().is_up())
     }
 
+    /// Whether a job must be skipped because this HTTP tracker's address is
+    /// of a family the interface has no address of (X-vpn-bind): pinning
+    /// the device alone, the request would leave with another interface's
+    /// source address. UDP sockets check their family when pinned.
+    fn off_family(&self) -> bool {
+        match (&self.guard, &self.tracker) {
+            (Some(guard), Tracker::Http(t)) => {
+                t.literal_ip().is_some_and(|ip| !guard.has_family(ip))
+            }
+            _ => false,
+        }
+    }
+
     fn publish(&self) {
         self.gate
             .ready_at
@@ -235,7 +248,7 @@ impl ClientTask {
             .unwrap_or(usize::MAX)
             .saturating_mul(per_request)
             .min(job.hashes.len());
-        if take == 0 || self.vpn_down() {
+        if take == 0 || self.vpn_down() || self.off_family() {
             return (Vec::new(), Outcome::Skipped, 0);
         }
         let hashes = &job.hashes[..take];
@@ -296,14 +309,21 @@ mod tests {
 
     /// A UDP tracker task with `guard`, aimed at a port nothing answers.
     fn task(guard: Arc<lodestar_network_policy::iface::Guard>) -> ClientTask {
-        let clock = Clock::new();
-        ClientTask {
-            id: 1,
-            tracker: Tracker::Udp(lodestar_tracker_scrape::UdpTracker::new(
+        task_for(
+            guard,
+            Tracker::Udp(lodestar_tracker_scrape::UdpTracker::new(
                 "192.0.2.1",
                 9,
                 Default::default(),
             )),
+        )
+    }
+
+    fn task_for(guard: Arc<lodestar_network_policy::iface::Guard>, tracker: Tracker) -> ClientTask {
+        let clock = Clock::new();
+        ClientTask {
+            id: 1,
+            tracker,
             pacer: Pacer::new(Duration::from_secs(1), clock.now()),
             clock,
             max_wait: Duration::from_secs(60),
@@ -349,6 +369,32 @@ mod tests {
         up.store(true, Ordering::SeqCst);
         guard.poll();
         assert!(!t.vpn_down(), "up again: jobs run");
+    }
+
+    /// X-vpn-bind: an HTTP tracker whose address is of a family the
+    /// interface has no address of is skipped, with no request: pinned to
+    /// the device alone, it would leave with another interface's source.
+    #[tokio::test]
+    async fn an_http_tracker_of_a_family_the_interface_lacks_is_skipped() {
+        use lodestar_network_policy::iface::{Guard, Interface, Link};
+        let guard = Guard::with_probe(Interface::parse("wg0").unwrap(), |_| {
+            Ok(Link {
+                index: Some(1),
+                addrs: vec!["10.64.0.2".parse().unwrap()],
+            })
+        });
+        guard.poll();
+        let client = lodestar_tracker_scrape::http::client(None, None).unwrap();
+        let http = |u: &str| {
+            let url = lodestar_tracker_scrape::TrackerUrl::parse(u).unwrap();
+            Tracker::new(&url, Default::default(), Default::default(), &client).unwrap()
+        };
+        let mut t = task_for(guard.clone(), http("http://[2001:db8::66]:6969/announce"));
+        let (answers, outcome, asked) = t.scrape(&job()).await;
+        assert_eq!((answers.len(), outcome, asked), (0, Outcome::Skipped, 0));
+        assert_eq!(t.pacer.failures(), 0, "not a failure");
+        let v4 = task_for(guard, http("http://203.0.113.9:6969/announce"));
+        assert!(!v4.off_family(), "a family it has: asked");
     }
 
     #[test]

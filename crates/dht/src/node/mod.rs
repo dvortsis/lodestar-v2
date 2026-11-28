@@ -1381,9 +1381,9 @@ impl Node {
         for addr in &config.bind {
             let (recv, send) = match bind(*addr, guard) {
                 Ok(halves) => halves,
-                // X-vpn-bind (Windows): the interface has no address of
-                // this family, so that family has no socket; the other
-                // still binds.
+                // X-vpn-bind: the interface has no address of this
+                // family, so that family has no socket; the other still
+                // binds.
                 Err(e) if lodestar_network_policy::iface::is_no_family(&e) => {
                     skipped = Some(e);
                     continue;

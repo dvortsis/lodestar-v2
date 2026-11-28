@@ -101,6 +101,12 @@ fn through(
     Ok(builder(None, deny, None)?
         .interface(iface.name())
         .dns_resolver(NoLookups)
+        // A redirect could name an address of a family the interface has
+        // no address of, which would leave with another interface's
+        // source; trackers rarely redirect, so none is followed.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            attempt.error("a redirect is refused with an interface set")
+        }))
         .tls_backend_preconfigured(tls))
 }
 
@@ -324,6 +330,11 @@ impl HttpTracker {
 
     pub fn max_hashes(&self) -> usize {
         self.cfg.max_hashes.clamp(1, MAX_HASHES)
+    }
+
+    /// The tracker's address when its URL names one rather than a host.
+    pub fn literal_ip(&self) -> Option<IpAddr> {
+        literal_ip(&self.scrape_url)
     }
 
     pub async fn scrape(&self, hashes: &[InfoHash]) -> Result<Reply> {

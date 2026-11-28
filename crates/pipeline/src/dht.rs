@@ -277,6 +277,7 @@ impl SourcePlugin for DhtSource {
                             };
                             match Node::start(config, Some(tx.clone())).await {
                                 Ok(node) => break Some((node, generation)),
+                                Err(e) if iface::is_while_down(&e) => break None,
                                 Err(e) if iface::is_refused(&e) => {}
                                 Err(e) => {
                                     guard.release();
@@ -290,6 +291,9 @@ impl SourcePlugin for DhtSource {
                         };
                         (node, Some(generation))
                     }
+                    // It went down between the wait above and the pin: wait
+                    // for it again.
+                    (Err(e), Some(_)) if iface::is_while_down(&e) => continue,
                     (Err(e), _) => return Err(PluginError(format!("DHT bind failed: {e}"))),
                 };
                 lodestar_log::log_event!(
