@@ -14213,9 +14213,12 @@
             "minimum": 0
           },
           "torrents": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
-            "description": "Torrents in the store.",
+            "description": "Torrents in the store, as `/stats`'s `stored_torrents`: null while\nthe start-up count runs.",
             "minimum": 0
           }
         },
@@ -25327,8 +25330,12 @@
             "minimum": 0
           },
           "stored_torrents": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int64",
+            "description": "Torrents stored; null while the start-up count runs (seconds\nafter a start on a large store), and for the rest of the run if\nthe store couldn't be counted then.",
             "minimum": 0
           },
           "updated_at": {

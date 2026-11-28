@@ -67,7 +67,11 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
         "Unix time the pipeline started.",
         m.started_at(),
     );
-    o.one("torrents", "gauge", "Torrents stored.", m.torrents());
+    // Absent, never 0, until the start-up count lands
+    // (X-healthz-count-async).
+    if let Some(torrents) = m.torrents() {
+        o.one("torrents", "gauge", "Torrents stored.", torrents);
+    }
     o.one(
         "floor_removals_kept_total",
         "counter",

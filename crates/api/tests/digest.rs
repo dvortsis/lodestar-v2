@@ -85,7 +85,7 @@ impl OpsApi for FakeOps {
                 queue_depth: 0,
                 sampling_blocked: None,
                 searchable_torrents: *self.searchable.lock().unwrap(),
-                stored_torrents: 0,
+                stored_torrents: Some(0),
                 updated_at: NOW,
                 uptime_s: 0,
             }

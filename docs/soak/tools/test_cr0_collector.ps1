@@ -149,7 +149,7 @@ try {
     [IO.Directory]::Delete($fixture)
 }
 # Every changed script must parse: a slip in a branch would otherwise first show on the owner's PC.
-foreach ($script in @('cr0-soak.ps1', 'cr0-common.ps1', 'test_cr0_collector.ps1')) {
+foreach ($script in @('cr0-soak.ps1', 'cr0-common.ps1', 'smoke_windows.ps1', 'test_cr0_collector.ps1')) {
     $parseErrors = $null
     [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $script), [ref]$null, [ref]$parseErrors)
     Assert ($parseErrors.Count -eq 0) "parse errors in $script"
@@ -158,8 +158,19 @@ foreach ($script in @('cr0-soak.ps1', 'cr0-common.ps1', 'test_cr0_collector.ps1'
 # Evidence producers (M8-WIN-1), with the Windows calls replaced.
 Assert ((Get-SoakTorrentCount '127.0.0.1:8090' { param($u) "# HELP`nlodestar_torrents 1234`r`nlodestar_other 1`r`n" }) -eq 1234) 'torrent count'
 $rejected=$false
-try { Get-SoakTorrentCount '127.0.0.1:8090' { 'lodestar_other 1' } | Out-Null } catch { $rejected=$true }
-Assert $rejected 'missing torrent metric accepted'
+try { Get-SoakTorrentCount '127.0.0.1:8090' { 'lodestar_other 1' } -DeadlineSeconds 0 | Out-Null } catch { $rejected = $_.Exception.Message -match 'torrents' }
+Assert $rejected 'missing torrent metric accepted, or the error does not name the count'
+# X-healthz-count-async: absent until the start-up count lands, then read; polled, not failed.
+$script:fetches = 0
+$late = { param($u) $script:fetches++; if ($script:fetches -lt 3) { 'lodestar_other 1' } else { "lodestar_torrents 7`n" } }
+Assert ((Get-SoakTorrentCount '127.0.0.1:8090' $late -DeadlineSeconds 10 -PollMilliseconds 1) -eq 7) 'a late torrent count is waited for'
+Assert ($script:fetches -eq 3) 'polled until the count appeared'
+# A sample's torrents: absent is $null (unknown), present is read, malformed throws.
+Assert ($null -eq (Read-SoakOptionalMetric "lodestar_other 1`n" 'torrents')) 'absent torrents is null'
+Assert ((Read-SoakOptionalMetric "lodestar_torrents 0`r`n" 'torrents') -eq 0) 'a measured zero is 0'
+$rejected=$false
+try { Read-SoakOptionalMetric "lodestar_torrents x`n" 'torrents' | Out-Null } catch { $rejected=$true }
+Assert $rejected 'an unreadable torrents value accepted'
 Assert ((Get-SoakInstalledVersion 'x.exe' { param($e) 'lodestar 1.0.0' }) -eq '1.0.0') 'version prefix stripped'
 
 $lifeDir = Join-Path ([IO.Path]::GetTempPath()) ('cr0-prod-' + [Guid]::NewGuid().ToString('N'))

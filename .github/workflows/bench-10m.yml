@@ -1,0 +1,191 @@
+name: Bench 10M
+
+# M8-PERF-3: every §3 figure on the synthetic 10M dataset (bench/README.md,
+# "10M mode"), on the owner's dedicated machine. Plan 2026-11-06 §5 OQ1 and
+# its mitigations (a)-(d) (docs/owner-decisions.md §2.47); the decisions are
+# in docs/decisions/2026-11-28-M8-PERF-3.md and the machine's setup in
+# docs/operations/bench-runner.md.
+#
+# The runner's label is named in this file only. runner-guard.yml fails any
+# other workflow that names it, and checks this file's rules: no pull-request
+# or comment triggers, permissions {} with contents: read on the job, no
+# secrets or vars, actions pinned by SHA, checkout without credentials.
+# Never add pull_request or pull_request_target here: a pull request's code
+# would run on the machine.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # Mondays 03:17Z, on main
+  # Release lines only (release/v1.0, release/v0.5.1), never the backport
+  # PR branches sessions push under release/ (release/rc4-docs, release/v052-rc1).
+  push:
+    branches: ["release/v[0-9]+.[0-9]+", "release/v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      smoke_only:
+        description: "Run only the smoke step (minutes, not hours)"
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One machine. A run in progress is never cancelled; GitHub keeps one
+# pending run per group, and a newer one replaces it.
+concurrency:
+  group: bench-10m
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    name: bench 10M (dedicated runner)
+    # Schedule: main only. Push: release lines. Dispatch: main or a release
+    # line. Not a barrier: a branch can edit this out (OQ1). The machine and
+    # the fork-PR setting are.
+    if: (github.event_name == 'schedule' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/release/v') && contains(github.ref_name, '.') && !contains(github.ref_name, '-'))) || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/heads/release/v') && contains(github.ref_name, '.') && !contains(github.ref_name, '-'))))
+    runs-on: lodestar-bench-10m
+    permissions:
+      contents: read
+    # Under the job token's 24 h lifetime, so the reports still upload.
+    timeout-minutes: 1380
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      # The dataset disk (bench-runner.md step 1): the one thing a job leaves
+      # behind. Built once, reused while its key holds.
+      DATASET: /bench/dataset-10m
+      TORRENTS: "10000000"
+      SMOKE_TORRENTS: "20000"
+      # Empty on schedule and push, "true" or "false" on a dispatch. Read
+      # from the environment, never inlined into a script.
+      SMOKE_ONLY: ${{ inputs.smoke_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: machine
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          # Only what ubuntu:24.04 has (coreutils): the reports record memory.
+          nproc; uname -a
+          test -d "$(dirname "$DATASET")" || { echo "::error::$(dirname "$DATASET") isn't mounted (docs/operations/bench-runner.md step 1)"; exit 1; }
+          test -w "$(dirname "$DATASET")" || { echo "::error::$(dirname "$DATASET") isn't writable by the runner"; exit 1; }
+          df -h "$(dirname "$DATASET")"
+
+      - name: build
+        run: cargo build --release --locked -p lodestar-bench --bin size-report --bin search-bench
+
+      # A small dataset in the job's own temporary folder: proves the machine,
+      # the build and both tools work before the long runs. ext:bench-runner
+      # is a manual run on main that passes this step.
+      - name: smoke
+        run: |
+          set -euo pipefail
+          smoke="$RUNNER_TEMP/smoke-dataset"
+          rm -rf "$smoke"
+          target/release/size-report --dataset "$smoke" --torrents "$SMOKE_TORRENTS" --json reports/smoke-size.json
+          target/release/search-bench --dataset "$smoke" --torrents "$SMOKE_TORRENTS" --json reports/smoke-search.json
+          rm -rf "$smoke"
+
+      # Builds the dataset on the first run (hours) and resumes an interrupted
+      # build. A dataset built with another key or store schema is refused;
+      # then the folder is emptied and rebuilt once. Any other refusal (not a
+      # dataset, unreadable manifest) stops the job: never delete what this
+      # tool didn't build.
+      - name: size-report (10M)
+        if: env.SMOKE_ONLY != 'true'
+        run: |
+          set -euo pipefail
+          # A rebuild moves the old dataset aside first, so an interrupted
+          # delete never leaves a half-empty folder the next run refuses.
+          rm -rf -- "$DATASET.old"
+          run() {
+            status=0
+            target/release/size-report --dataset "$DATASET" --torrents "$TORRENTS" --json reports/size.json 2> "$RUNNER_TEMP/size.err" || status=$?
+            cat "$RUNNER_TEMP/size.err" >&2
+            return "$status"
+          }
+          if ! run; then
+            # Only the two refusals of a dataset this tool built: another key
+            # ("delete this one to rebuild") or store schema ("never migrated in
+            # place"). A damaged index or anything else stops the job.
+            if grep -qE "delete this one to rebuild|never migrated in place" "$RUNNER_TEMP/size.err"; then
+              echo "::warning::The dataset's key or store schema changed: rebuilding it"
+              echo "rebuilt" > reports/dataset-rebuilt.txt
+              mv -- "$DATASET" "$DATASET.old"
+              rm -rf -- "$DATASET.old"
+              run
+            else
+              exit 1
+            fi
+          fi
+          target/release/size-report --dataset "$DATASET" --torrents "$TORRENTS" --json reports/size-low.json --low-resource
+
+      # A fresh process, so cold start and steady-state RSS are measured (the
+      # process that built the dataset reports them unmeasured). No root: cold
+      # start is reported as page-cache-as-found (bench/README.md).
+      - name: search-bench (10M)
+        if: env.SMOKE_ONLY != 'true'
+        run: |
+          set -euo pipefail
+          target/release/search-bench --dataset "$DATASET" --torrents "$TORRENTS" --json reports/search.json
+          target/release/search-bench --dataset "$DATASET" --torrents "$TORRENTS" --json reports/search-low.json --low-resource
+
+      - name: summary
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib
+          rows, failed = [], False
+          for path in sorted(pathlib.Path("reports").glob("*.json")):
+              try:
+                  r = json.loads(path.read_text())
+              except ValueError as e:
+                  rows.append(f"| {path.name} | ? | ? | unreadable: {e} |"); failed = True; continue
+              bad = [x["id"] for x in r.get("rows", []) if x.get("status") == "fail"]
+              open_ = [x["id"] for x in r.get("rows", []) if x.get("status") in ("unavailable", "unmeasured")]
+              verdict = r.get("verdict", "?")
+              if verdict not in ("pass", "incomplete", "fail"):
+                  failed = True
+              elif path.name.startswith("smoke-"):
+                  # 20,000 torrents can't meet per-torrent size budgets (fixed
+                  # costs aren't spread out): the smoke step proves the tools
+                  # run and write a report, and its verdicts are shown only.
+                  verdict += " (not gated)"
+              else:
+                  failed |= verdict == "fail"
+              note = ", ".join(bad) if bad else (f"{len(open_)} rows not yet measurable" if open_ else "")
+              rows.append(f"| {path.name} | {r.get('tool')} {r.get('mode')} | **{verdict}** | {note} |")
+          want = ["smoke-size.json", "smoke-search.json"]
+          if os.environ.get("SMOKE_ONLY") != "true":
+              want += ["size.json", "size-low.json", "search.json", "search-low.json"]
+          for name in want:
+              if not pathlib.Path("reports", name).exists():
+                  rows.append(f"| {name} | | **missing** | not written |")
+                  failed = True
+          out = ["## Bench 10M", "", f"Commit `{os.environ['GITHUB_SHA'][:12]}`, ref `{os.environ['GITHUB_REF_NAME']}`.", ""]
+          if pathlib.Path("reports/dataset-rebuilt.txt").exists():
+              out += ["The dataset was rebuilt in this run (its key or store schema changed).", ""]
+          out += ["| Report | Tool, mode | Verdict | Failing rows |", "|---|---|---|---|", *rows]
+          out += ["", "`incomplete` passes: some rows stay unavailable until their features land. Smoke verdicts are not gated. G-v1-10m reads the full reports."]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(out) + "\n")
+          if failed:
+              print("::error::A report failed (or none was written): see the summary")
+              raise SystemExit(1)
+          PY
+
+      - name: upload reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-10m-${{ github.sha }}
+          path: reports/
+          retention-days: 90
+          if-no-files-found: warn

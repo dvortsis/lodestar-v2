@@ -58,6 +58,11 @@ REQUIRED = (
     "dht_lookup_deadlines_total", "dht_lookups_completed_total", "dht_outstanding",
     "fetch_lookups", "fetch_active", "fetch_pending",
 )
+# Read with the rest, but absent is unknown (null), not a failed sample: since
+# X-healthz-count-async the server leaves `lodestar_torrents` out until its start-up count
+# lands (seconds), and for the rest of a run whose count failed. A missing one would
+# otherwise fail every sample and stop the soak after three.
+NULLABLE = frozenset({"torrents"})
 # Counters analyze_cr0.py reads from snapshots. test_collect.py pins this to its list.
 COUNTERS = tuple("dht_" + name + "_total" for name in (
     "peer_admitted", "peer_rejected", "peer_cancelled", "peer_rejection_reasons",
@@ -490,6 +495,18 @@ def read_metric(text, name):
     if not match:
         raise ValueError(f"Missing metric: {name}")
     return float(match[1])
+
+
+def read_required(text):
+    """A sample's REQUIRED values. A NULLABLE one that's absent is None (unknown, never 0);
+    one that's there but unreadable still fails the sample, as any required one does."""
+    values = {}
+    for name in REQUIRED:
+        if name in NULLABLE and not re.search(r"(?m)^lodestar_" + re.escape(name) + " ", text):
+            values[name] = None
+        else:
+            values[name] = read_metric(text, name)
+    return values
 
 
 def labels_allowed(name, labels):
@@ -2262,7 +2279,7 @@ class Collector:
                         if status != 200:
                             raise ValueError("metrics status")
                         text = body.decode("utf-8")
-                        values = {name: read_metric(text, name) for name in REQUIRED}
+                        values = read_required(text)
                         metrics_ok, bad_metrics = True, 0
                     except (OSError, ValueError, http.client.HTTPException):
                         values, bad_metrics = {}, bad_metrics + 1
