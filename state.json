@@ -12084,11 +12084,11 @@
     ]
   },
   "reserved_for_api_lane": {
-    "updated": "2026-11-23T02:38:29Z",
+    "closed": "2026-11-28T05:25:03Z",
     "by": "runner",
-    "credit": "owner $200 Claude API credit, 2026-11-22",
-    "max_open_prs": 2,
-    "order": [
+    "reason": "API lane round 2 ended: credit used up (lane coordinator, 2026-11-28); 10 lane PRs merged; #1145 X-facet-exclude-fill finished in-house",
+    "returned_to_runner_queue": "every id in the old order not yet merged on main",
+    "old_order": [
       "X-size-own-modules",
       "RX-1",
       "X-setup-token-boot",
@@ -12119,15 +12119,7 @@
       "X-capacity-rejection-source",
       "X-hidden-count",
       "X-detail-attributes"
-    ],
-    "after": {
-      "ENR-13b": "ENR-terms-api merged",
-      "GS-4": "X-detail-depth-compare merged",
-      "X-cmp-egress-ui": "X-gluetun-hostfile-ui merged",
-      "X-capacity-rejection-source": "CR-SOFT-TIMEOUT merged (both own actor.rs, mod.rs, metrics.rs, docs/metrics.md)",
-      "X-sampler-streak-metrics": "CR-SOFT-TIMEOUT merged (both own crates/lodestar/src/metrics.rs and docs/metrics.md)",
-      "X-size-own-modules": "X-detail-depth-compare merged (it holds web/.size-limit.mjs first; runner 2026-11-23T04:1xZ)"
-    }
+    ]
   },
   "pause_history": [
     {
