@@ -11,6 +11,7 @@ X-healthz-cold-start (#1159) took the have-filter's scan off the start, but `cou
 - **`lodestar_torrents` is absent from `/metrics` until the count lands,** never 0, following metrics.md's rule for series that can't be read yet. Dashboards see a gap, not a drop.
 - **Nullable alike:** `stats.stored_torrents` (`#[schema(required = true)]`: always present, may be null), the SSE `crawler` event's `torrents`, and `/status`' `torrents`. The status page shows "—" for null. No web screen reads either field today, so the web change is only the regenerated `openapi.json` and `schema.d.ts`.
 - **`pipeline.starting` loses its `stored` field; the new `pipeline.torrents_counted` (Info) carries `stored` and `ms` when the count lands.** Nothing in `tools/`, `bench/`, `soak/`, `packaging/`, `runner/` or the docs parses `stored` (one 2026-10-23 soak log quotes it). The field keeps its name on the new event anyway. The prepare-time fallback logs it too.
+- **The pipeline event-names chunk's size budget goes from 3,328 B to 3,456 B** (runner, §2.26). The new event's name and help, in en and zh, measure 3,407 B, rounded up to 64 B as X-vpn-bind did. The help strings were already shortened, which took the chunk from 3,468 B to 3,407 B.
 - **`PipelineConfig::count_gate`** (hidden, tests only) runs on the fill thread before the count, so a test can hold the null window.
 
 ## Measured (`bench/examples/cold-start.rs`, 10M)
