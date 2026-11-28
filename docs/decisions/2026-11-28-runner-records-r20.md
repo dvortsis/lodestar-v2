@@ -38,9 +38,9 @@ These rulings are cited here, not repeated:
 
 ## Rulings recorded here
 - **X-healthz-cold-start (in flight):**
-  - The have-filter fills on a background thread, and intake waits for the fill (the runner's default in its brief). It's sized from the exact count, since the id range follows a shared sequence and can be several times larger. The id-range bound is kept for X-healthz-count-async.
+  - The have-filter fills on a background thread, and intake waits for the fill (the runner's default in its brief, §2.26). It's sized from the exact count, since the id range follows a shared sequence and can be several times larger. The id-range bound is kept for X-healthz-count-async.
   - **The start-up `count(*)` stays in `prepare()` for now.** At 10M a cold start fell from about 5.3 s to 0.9 s with it kept. Moving it to the fill thread makes `stats.stored_torrents` null while the fill runs, which changes a documented contract (`docs/metrics.md`, the API and the web schema). So it's a follow-up of its own, X-healthz-count-async, not part of this PR.
-  - Granted 2026-11-28: `crates/lodestar/src/cluster/serve.rs` (its have step waits for the fill) and `crates/pipeline/src/log_events.rs` (`pipeline.have_fill_failed`).
+  - Granted 2026-11-28: `crates/lodestar/src/cluster/serve.rs` (its have step waits for the fill), `crates/pipeline/src/log_events.rs` (`pipeline.have_fill_failed`), and `bench/examples/cold-start.rs` with its `bench/Cargo.toml` and `bench/README.md` lines.
   - **A fill that keeps failing no longer fails the start.** `/healthz` answers ok while crawling waits, and an Error event is raised at most every 60 s. Before, a failing fill in `prepare()` failed the start.
 - **UX-start (#1152, open):**
   - `/welcome` opens the event stream for its live counts, a refinement of item W9.
@@ -48,7 +48,10 @@ These rulings are cited here, not repeated:
   - Search results (lazy) rises to 44,224 B (§2.26). Trimming saved nothing.
 - **X-facet-exclude-fill (#1145, open):** `TermGroup.test.ts` is granted, and `web/.size-limit.mjs` for its Facet rail (lazy) entry only (§2.26).
 - **X-dht-switch-identity (#1146):** `crates/lodestar/tests/dht_switch.rs` was granted on 2026-11-27 for its end-to-end `/metrics` test.
-- **D-start (#1148):** `docs/user/revisions.md`, `docs/user/index.md` and `docs/user/glossary.md` were granted with `docs/user/README.md`.
+- **D-start (#1148):**
+  - **The safe-restart section comes back as user guide 3.8, and "Check your understanding" becomes 3.9.** The Legal Notice's "user guide, section 3.8" pointer is the owner's wording (§2.87), so the guide moves to match it, not the notice. `docs/decisions/2026-11-27-X-legal-safe-restart.md` points here for this call.
+  - `docs/user/revisions.md`, `docs/user/index.md` and `docs/user/glossary.md` were granted with `docs/user/README.md`.
+- **`web/.size-limit.mjs` is a shared edit between UX-start and X-facet-exclude-fill.** Each touches only its own entry, and whichever merges second brings `main` in, as X-prowlarr-register's `services.rs` note does.
 - **X-irc-fuzz-seeds (#1133):** `crates/sources-irc/tests/fuzz_seeds.rs` was granted on 2026-11-27 (the seed writer and its staleness check). r19 missed the owns line.
 - **X-leaktest-vpn-held-down is launched before the rehearsal.** Round 1 runs `leak-test.sh` on every arm before and after every day, so a harness flake costs a day (CR-SPEC-R1 §4). It owns its 2026-11-28 decisions file, and the cloud runbook's §3.2 only if the failure's description changes.
 - **X-cr-round1-spec-fixes replaces the X-rehearsal-window brief,** which never launched and never had an entry. Its items come from the review of #1155.
@@ -76,14 +79,17 @@ These rulings are cited here, not repeated:
   - The plan leaves the exact list to the runner, "for a yes" from the owner. It isn't drawn here, and nothing is held for D1 until the owner says yes to it.
 - **D2, the host of record:**
   - G-v06-crawler, G-v1-crawler and G-v1-soak-linux name `lodestar-host` in their notes, and the soak's gate text and `ext:unraid-soak-host` comment say so too.
-  - G-v1-crawler's note records the plan's one RC run serving three gates (§6.1 week 5).
+  - G-v1-crawler's note records the plan's one RC run serving three gates (§6.1 week 5). `runner/README.md` step 7 now names it as the one exception to "two never share a run".
+  - G-v1-vs-bitmagnet's side-by-side runs are booked by the runner in the same hours, swap included. The RC's one run doesn't replace them.
 - **D4, politeness:**
-  - G-v1-audits' note and gate text say that for 1.0 the crawler's politeness part is a bounded-load check, and that the full audit is a 1.1 gate.
-  - Which slice carries the check, and what M8-POL keeps, is set with D1's list. M8-POL depends on G-v07 and G-v08, which D1 moves to 1.1.
+  - D4 adds a bounded-load check of the crawler's DHT politeness for 1.0 and moves the crawler's full politeness audit to 1.1. G-v1-audits' title, note and gate text say so.
+  - **M8-POL stays a 1.0 audit of every plugin that ships:** manifest caps, the per-host limiter and back-off. D1's list may narrow it only to the plugins that ship.
+  - The slice that carries the bounded-load check is named with D1's list.
 - **D5, the 50M import:**
-  - G-v1 no longer depends on G-import-50M or `ext:owner-50m-approval`, and G-import-50M's note says 1.0.x.
+  - As the owner wrote it: the 50M import moves to 1.0.x unless the host has spare time in weeks 2–4.
+  - G-v1 no longer depends on G-import-50M or `ext:owner-50m-approval`, and G-import-50M's note says 1.0.x. **If the host has that time and the import runs then, both go back into G-v1's deps;** otherwise they stay out. G-v1's note and the dashboard say the same.
   - On the roadmap, the 50M step is marked 1.0.x and its arrow into M8 is gone.
-  - Runner's reading of "unless the host has spare time in weeks 2–4": it may still run before 1.0, but it no longer gates it.
+  - `docs/build-plan.md` §0's gate count (now twelve G-v1-* gates) and P7's 50M line follow.
 - **D8, the optional VPN:**
   - X-vpn-bind (Opus, security review).
   - D-vpn-guide (docs), which rewrites guide 3.3 as "Use a VPN (optional)".
@@ -134,8 +140,11 @@ Recorded here:
 6. `/welcome` opens the event stream for its live counts (UX-start, item W9).
 7. A fill that keeps failing no longer fails the start. `/healthz` answers ok while crawling waits, with an Error event at most every 60 s (X-healthz-cold-start).
 8. The start-up count stays in `prepare()`, and the nullable `stored_torrents` contract change waits for X-healthz-count-async.
-9. Size raises under §2.26: Search results (lazy) to 44,224 B (UX-start), and the Facet rail (lazy) entry (X-facet-exclude-fill).
+9. Size raises under §2.26: Search results (lazy) to 44,224 B (UX-start), and the Facet rail (lazy) entry, 18.86 KB on `main`, for X-facet-exclude-fill. #1145's head doesn't change it yet, so the runner records the new figure when it lands.
 10. The Prowlarr notice ships under version 7 on the owner's version-5 approval of its wording, with the condition renamed.
-11. D5 read as "50M no longer gates 1.0, though it may still run before it".
-12. D4's carrier slice and M8-POL's split wait for D1's list, and D1's list goes to the owner before anything is held.
+11. D5 as written: the 50M import moves to 1.0.x, and goes back into G-v1's deps only if the host has spare time in weeks 2–4 and it runs then.
+12. D4 leaves M8-POL a 1.0 audit of every shipped plugin, narrowed by D1's list only to the plugins that ship. The bounded-load check's slice is named with that list, and the list goes to the owner before anything is held.
 13. D11's wording: "only adding switch lines to shared files" is the test for running crawler slices in parallel.
+14. The 1.0 RC's one 24 h run serves G-v1-crawler, G-v1-soak-linux and the RC side of G-v1-vs-bitmagnet (plan §6.1 week 5), an exception to `runner/README.md`'s "two never share a run".
+15. Intake waits for the have-filter fill (X-healthz-cold-start, §2.26).
+16. D-start restores guide 3.8 and renumbers "Check your understanding" to 3.9, to match the owner's Legal Notice pointer.

@@ -1560,7 +1560,7 @@ roadmap:
     - SB-6
   - id: i50
     label: Import 50M gate (1.0.x)
-    plain: 'Numbers come to you before the full library. Moved to 1.0.x by your D5 (§2.85), unless the host has spare time in weeks 2 to 4.'
+    plain: 'Numbers come to you before the full library. Moved to 1.0.x by your D5 (§2.85), unless the host has spare time in weeks 2 to 4; if the import runs then, it gates 1.0 again.'
     col: 3
     row: 8
     members:
@@ -2117,7 +2117,7 @@ gates:
   where: docs/decisions/2026-11-07-SRC-G.md
 - id: G-import
   name: Import scale (1M, 10M, 50M)
-  plain: Lodestar holds big libraries within its speed and size budgets. The 50M step moves to 1.0.x (your D5, §2.85).
+  plain: Lodestar holds big libraries within its speed and size budgets. The 50M step moves to 1.0.x (your D5, §2.85) unless the host has spare time in weeks 2 to 4.
   slice: G-import-50M
   measure: 'Only a synthetic figure: 100k at about 13,900/s'
   target: Import >= 2,000/s offline; about 2.3 KB per torrent all-in; cold file search p95 <= 150 ms at 10M
@@ -2166,7 +2166,7 @@ gates:
   where: architecture 20.8
 - id: G-v1
   name: 1.0 gates
-  plain: Every 1.0 gate below green on the release candidate, then you tag v1.0.0. The 50M import moves to 1.0.x (your D5, §2.85).
+  plain: Every 1.0 gate below green on the release candidate, then you tag v1.0.0. The 50M import moves to 1.0.x (your D5, §2.85), unless the host has spare time in weeks 2 to 4 and it runs then, when its approved numbers gate 1.0 again.
   slice: G-v1
   measure: ''
   target: architecture 17
@@ -2222,7 +2222,7 @@ gates:
   where: docs/plan/2026-11-06-m8-hardening.md
 - id: G-v1-audits
   name: '1.0: politeness, purge and filter gates'
-  plain: The purge audit complete, a bounded-load politeness check for the crawler (your D4, §2.85; the full politeness audit is a 1.1 gate), the sources, rule-pack and enrichment gates re-run, and the filter speed budget (G-filter-budget) checked on the reference CPU.
+  plain: The politeness audit of every plug-in that ships and the purge audit complete, a bounded-load check of the crawler's DHT politeness (your D4, §2.85; the crawler's full politeness audit is a 1.1 gate), the sources, rule-pack and enrichment gates re-run, and the filter speed budget (G-filter-budget) checked on the reference CPU.
   slice: G-v1-audits
   measure: ''
   target: 18.9, 20.8; 50 us on the 2.20 reference CPU
@@ -2253,7 +2253,7 @@ gates:
   plain: 'Search, storage, memory and latency beat bitmagnet, measured side by side on lodestar-host in the same hours (your D13 B, §2.85). Crawl-rate parity is the 1.1 target.'
   slice: G-v1-vs-bitmagnet
   measure: ''
-  target: Every non-crawl row of the scorecard better than bitmagnet's
+  target: Every row of the §4.8 scorecard except crawl rate better than bitmagnet's
   where: docs/plan/2026-11-26-fastest-1.0-proposal.md 4.8
 crawler:
 - label: CR-0, 24 h on Linux
