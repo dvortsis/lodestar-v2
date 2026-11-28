@@ -35,26 +35,34 @@
 		>
 			{#snippet illustration()}<StateScene id="searching_crawling" />{/snippet}
 			{#snippet action()}
-				<dl class="ins-counters">
-					<div>
-						<dt>{m.harvested()}</dt>
-						<dd data-testid="insights-starting-harvested">
-							{formatCount(live?.harvested, locale)}
-						</dd>
-					</div>
-					<div>
-						<dt>{m.insights_overview_funnel_fetched()}</dt>
-						<dd data-testid="insights-starting-fetched">
-							{formatCount(live?.fetched, locale)}
-						</dd>
-					</div>
-					<div>
-						<dt>{m.insights_overview_funnel_stored()}</dt>
-						<dd data-testid="insights-starting-stored">
-							{formatCount(live?.stored, locale)}
-						</dd>
-					</div>
-				</dl>
+				<div role="group" aria-label={m.insights_overview_starting_pipeline()}>
+					<dl class="ins-counters">
+						<div>
+							<dt>{m.insights_overview_starting_nodes()}</dt>
+							<dd data-testid="insights-starting-nodes">
+								{formatCount(live?.dht_nodes, locale)}
+							</dd>
+						</div>
+						<div>
+							<dt>{m.harvested()}</dt>
+							<dd data-testid="insights-starting-harvested">
+								{formatCount(live?.harvested, locale)}
+							</dd>
+						</div>
+						<div>
+							<dt>{m.insights_overview_funnel_fetched()}</dt>
+							<dd data-testid="insights-starting-fetched">
+								{formatCount(live?.fetched, locale)}
+							</dd>
+						</div>
+						<div>
+							<dt>{m.insights_overview_funnel_stored()}</dt>
+							<dd data-testid="insights-starting-stored">
+								{formatCount(live?.stored, locale)}
+							</dd>
+						</div>
+					</dl>
+				</div>
 			{/snippet}
 		</EmptyState>
 	</div>

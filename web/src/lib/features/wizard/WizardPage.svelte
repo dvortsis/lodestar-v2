@@ -64,6 +64,15 @@
 	const info = $derived(STEPS[stepIndex(progress.step)]!);
 	const index = $derived(stepIndex(progress.step));
 	let Step = $state<Loaded | undefined>();
+	// The live counts load after the first view, with the steps that show them.
+	let Live = $state.raw<Component>();
+	$effect(() => {
+		if (index > stepIndex('how') && !Live)
+			void import('./LiveCounts.svelte').then(
+				(mod) => (Live = mod.default),
+				() => {}
+			);
+	});
 	let failed = $state(false);
 	let body = $state<Body>();
 	let working = $state(false);
@@ -194,6 +203,11 @@
 			<p class="text-muted-text" aria-busy="true">{m.wizard_loading()}</p>
 		{/if}
 	</section>
+
+	<!-- The crawler is already running, so the steps after "How it works" show what it has found. -->
+	{#if index > stepIndex('how') && Live}
+		<Live />
+	{/if}
 
 	{#if progress.step !== 'done' && Step}
 		<div class="flex flex-wrap items-center gap-3">
