@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T13:26:25Z",
+  "updated_at": "2026-11-28T14:32:02Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11133,21 +11133,23 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T13:26:25Z",
+    "updated": "2026-11-28T14:32:02Z",
     "items": [
       {
         "slot": 1,
-        "status": "idle",
-        "doing": "free: X-healthz-count-async and X-events-send-await wait for #1173 (owns overlap)"
+        "slice": "X-healthz-count-async",
+        "role": "build",
+        "agent": "session_01MMjhn8NdgJe3D7wFtABUPJ",
+        "doing": "step 0",
+        "since": "2026-11-28T14:32:02Z"
       },
       {
         "slot": 2,
-        "slice": "X-hidden-count",
+        "slice": "X-detail-attributes-ui",
         "role": "build",
-        "agent": "session_01MMjhnAdLGBQaRDghkS2MDK",
-        "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "#1173: review fixes pushed; snapshot regen; delta review next",
-        "since": "2026-11-28T09:39:03Z"
+        "agent": "session_01MMjhnBEdoHsYhf8pYPCb4E",
+        "doing": "step 0",
+        "since": "2026-11-28T14:32:02Z"
       },
       {
         "slot": 3,
