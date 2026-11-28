@@ -1,0 +1,38 @@
+name: Runner guard
+
+# M8-PERF-3, mitigation (c) of plan 2026-11-06 §5 OQ1 (docs/owner-decisions.md
+# §2.47): only bench-10m.yml may use the dedicated benchmark runner, and no
+# other job may reach a self-hosted runner (.github/scripts/runner_guard.py).
+# It detects misuse after the fact, because a pushed branch runs its
+# workflows at the same time as this check. It runs on every push, so a
+# branch with no pull request is checked too. Made a required check in the
+# main ruleset, it also blocks such a pull request from merging
+# (docs/operations/bench-runner.md step 3).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  guard:
+    name: runner-guard
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The image's own Python and PyYAML: nothing is downloaded.
+      - run: python3 -c "import yaml; print('PyYAML', yaml.__version__)"
+      - run: python3 .github/scripts/test_runner_guard.py
+      - run: python3 .github/scripts/runner_guard.py

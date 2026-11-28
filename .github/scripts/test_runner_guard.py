@@ -216,6 +216,17 @@ class Repo(unittest.TestCase):
     def test_the_repository_is_clean(self):
         self.assertEqual(g.check(ROOT), [])
 
+    def test_every_other_workflow_passes_one_by_one(self):
+        # main's runs-on expressions (ci.yml's dynamic matrix.os, companions-smoke's
+        # literal one) must not trip the expression rule.
+        names = sorted(p.name for p in (ROOT / ".github/workflows").iterdir() if p.suffix in {".yml", ".yaml"})
+        self.assertIn("ci.yml", names)
+        self.assertIn("companions-smoke.yml", names)
+        for name in names:
+            with self.subTest(workflow=name):
+                text = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+                self.assertEqual(g.check_workflow(name, text), [])
+
     def test_the_real_bench_workflow_runs_on_the_label(self):
         text = (ROOT / ".github/workflows" / g.BENCH).read_text(encoding="utf-8")
         self.assertIn(f"runs-on: {g.LABEL}", text)

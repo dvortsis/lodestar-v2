@@ -258,7 +258,8 @@ def check(root):
     # a script that prints a matrix could feed it to a runs-on.
     for path in sorted((root / ".github").rglob("*")):
         rel = path.relative_to(root).as_posix()
-        if not path.is_file() or rel.startswith(".github/workflows/") or rel in NAMES_LABEL:
+        if (not path.is_file() or rel.startswith(".github/workflows/") or rel in NAMES_LABEL
+                or "__pycache__" in path.parts):
             continue
         try:
             body = path.read_text(encoding="utf-8")
