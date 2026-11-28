@@ -14175,7 +14175,7 @@
       },
       "CrawlerInterface": {
         "type": "object",
-        "description": "X-vpn-bind: the network interface the crawl is limited to\n(`crawler.interface`, as this start applied it).",
+        "description": "X-vpn-bind: the network interface the crawl is limited to\n(`dht.interface` in `config.toml`, as this start applied it).",
         "required": [
           "interface",
           "state",

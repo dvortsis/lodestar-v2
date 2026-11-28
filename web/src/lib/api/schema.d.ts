@@ -4512,7 +4512,7 @@ export interface components {
         };
         /**
          * @description X-vpn-bind: the network interface the crawl is limited to
-         *     (`crawler.interface`, as this start applied it).
+         *     (`dht.interface` in `config.toml`, as this start applied it).
          * @example {
          *       "interface": "wg0",
          *       "reason": "missing",
