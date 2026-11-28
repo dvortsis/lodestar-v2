@@ -1,0 +1,16 @@
+{
+  "_why": "Hours for nodes that are measured runs or fixed waits, not build slices. The runner revises these from actual runs. Gates on different hosts run in parallel; the experiment host's runs (CR-*, G-v1-crawler, G-v1-vs-bitmagnet) are serial in practice, so G-v1-vs-bitmagnet carries the crawler re-measure's time too.",
+  "targets": [
+    {"id": "G-v06-crawler", "label": "Crawler at 100 a minute (v0.6 gate)"},
+    {"id": "R-v1-cut", "label": "1.0 feature-complete: release/v1.0 cut"},
+    {"id": "G-v1", "label": "1.0 ready to tag"}
+  ],
+  "hours": {
+    "CR-AB-COMP": 0, "CR-R1": 72, "CR-COMB": 48, "G-v06-crawler": 30,
+    "G-m6": 24, "R-v1-cut": 2,
+    "G-v1-ci": 3, "G-v1-relevance": 8, "G-v1-10m": 26, "G-v1-crawler": 30,
+    "G-v1-windows": 30, "G-v1-soak-linux": 30, "G-v1-chaos": 12, "G-v1-audits": 8,
+    "G-v1-security": 8, "G-v1-design": 8, "G-v1-ui": 6, "G-v1-vs-bitmagnet": 60,
+    "G-v1": 4
+  }
+}

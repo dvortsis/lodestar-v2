@@ -6,7 +6,9 @@ inefficiencies are identified or improvements in strategy are identified, always
 goal in mind, along with app principals."
 
 The runner runs it every 6 h (the scheduled task "Lodestar throughput review", into the runner
-session). There are three parts: speed signals, the plan, and the principles check. Each run acts
+session). There are four parts: speed signals, the plan, the principles check, and the dashboard's plan
+and estimates (added by the owner, 2026-11-28: "have the recurring review also update the roadmap
+status dashboard's plan and estimates"). Each run acts
 on what it finds, then posts a summary of at most 6 lines.
 
 ## The end goal
@@ -72,6 +74,27 @@ The input is the status connector's `plan_nodes` output (saved to a file).
 For each change made or proposed in the run, one line: which principle it could touch, and why
 it holds.
 
+## 4. The dashboard's plan and estimates (`tools/estimate.py <plan_nodes.json> 14 state.json reviews/estimate-fixed.json`)
+1. **Estimate.** Run the estimator on the same `plan_nodes` file. For each target in
+   `reviews/estimate-fixed.json` (the v0.6 crawler gate, the 1.0 cut, 1.0 ready to tag) it gives a
+   likely date (p50) and a slow-case date (p75), from measured launch-to-merge times of planned
+   slices over 14 days, the slots, the remaining chain and the fixed waits (live crawls, soaks).
+   Owner steps are assumed on time and listed. Revise `estimate-fixed.json` when a measured run
+   takes a different time than it says.
+2. **Plan.** Every plan change the run makes in part 2 (re-sequencing, splits, deferrals, new or
+   removed dependencies) goes into `runner/slices.yaml` and `runner/dashboard.yaml`
+   (`roadmap`, `phases`, `workstreams`, `conditions`, `owner_queue`) so the dashboard shows the plan
+   as it now stands. Owner-reserved changes are asked first, never made.
+3. **Estimates on the dashboard.** The `notes.now` entry labelled "Estimates" carries the three
+   dates (likely and slow case), what bounds each (the chain or the slots), the owner steps they
+   assume, and the biggest risk. `notes.updated` gets the date. Roadmap step texts that give a date
+   are kept in line with it.
+4. **When to publish.** The dashboard reads main, so a change needs a PR. Open or update the
+   runner's records PR (`claude/busy-allen-aptli2`) when a likely date moves by a day or more, the
+   plan changed, or on the daily strategy pass, whichever comes first; otherwise log only. Run
+   `cd tools/status-connector && npm test` first. One open runner PR at a time: add to it rather
+   than opening another.
+
 ## Log
 Each run appends one line to `reviews/throughput.log`: the time, the key numbers, the length of
-the critical path, and what changed.
+the critical path, the three estimate dates, and what changed.
