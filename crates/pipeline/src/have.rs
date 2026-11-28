@@ -131,7 +131,8 @@ impl Have {
     }
 
     /// How many are waiting in [`filled`](Self::filled) now: the intake,
-    /// while it waits for the fill.
+    /// while it waits for the fill. For tests.
+    #[doc(hidden)]
     pub fn waiting(&self) -> usize {
         self.filled_tx.receiver_count()
     }

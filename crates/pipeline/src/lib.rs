@@ -1067,6 +1067,7 @@ impl Pipeline {
                     .map(|s| (s.id, s.plugin.manifest().finds_private)),
             ),
         }));
+        remote.wait_for_fill(&have);
         let (pool, pool_task, prepare) = (stages.pool, stages.pool_task, stages.prepare);
 
         let intake_stats = Arc::new(IntakeStats::default());
@@ -1980,13 +1981,17 @@ mod tests {
         let missing = dir.path().join("missing.db");
         let have = Arc::new(Have::filling(16));
         let (stop, rx) = watch::channel(false);
+        let (tried_tx, tried) = std::sync::mpsc::channel();
         let (done_tx, done) = std::sync::mpsc::channel();
         let fill = std::thread::spawn({
             let have = Arc::downgrade(&have);
             move || {
                 let n = fill_have(
                     &have,
-                    || Store::open_reader(&missing, StoreConfig::default()),
+                    || {
+                        let _ = tried_tx.send(());
+                        Store::open_reader(&missing, StoreConfig::default())
+                    },
                     None,
                     || *rx.borrow() || rx.has_changed().is_err(),
                     // A long wait: only the stop can end it in time.
@@ -1995,14 +2000,18 @@ mod tests {
                 done_tx.send(n).unwrap();
             }
         });
+        // The first try fails, and the fill goes into its hour's wait.
+        tried
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a first try within 10 s");
         // Still holding the filter (as a kept `Monitor` would), the
         // pipeline stops: the waiting fill ends well within the deadline.
         let _ = stop.send(true);
         let attempts = done
             .recv_timeout(Duration::from_secs(10))
-            .expect("the fill stopped within 10 s");
+            .expect("the fill stopped within 10 s, in its wait");
         fill.join().unwrap();
-        assert!(attempts <= 1, "{attempts}");
+        assert_eq!(attempts, 1);
         assert!(!have.is_filled());
     }
 
