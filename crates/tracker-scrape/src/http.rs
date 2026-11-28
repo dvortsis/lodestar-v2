@@ -192,9 +192,12 @@ fn literal_ip(url: &Url) -> Option<IpAddr> {
 
 /// X-vpn-bind: no name is looked up (the system resolver would ask
 /// outside the crawl's interface). IP-literal URLs never reach a resolver,
-/// so only names come here, and each is refused.
+/// so only names come here, and each is refused. Linux only: elsewhere the
+/// pinned client is refused before it is built.
+#[cfg(target_os = "linux")]
 struct NoLookups;
 
+#[cfg(target_os = "linux")]
 impl reqwest::dns::Resolve for NoLookups {
     fn resolve(&self, _: reqwest::dns::Name) -> reqwest::dns::Resolving {
         Box::pin(async { Err(Error::Resolve.into()) })
