@@ -135,6 +135,11 @@ export default defineConfig({
 	test: {
 		environment: 'jsdom',
 		include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
-		setupFiles: ['./vitest-setup.ts']
+		setupFiles: ['./vitest-setup.ts'],
+		// A test's (and a hook's) timeout exceeds the waits inside it: the repo's waits are at least 10 s
+		// (CLAUDE.md), and vitest's defaults (5 s a test, 10 s a hook) would cut them short.
+		// A file's own vi.setConfig still wins.
+		testTimeout: 20_000,
+		hookTimeout: 20_000
 	}
 });
