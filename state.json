@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T09:39:03Z",
+  "updated_at": "2026-11-28T10:48:57Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11116,15 +11116,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T09:39:03Z",
+    "updated": "2026-11-28T10:48:57Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-vpn-bind",
         "role": "build",
         "agent": "session_01MMjhnBk6q6p8uDAteN1GqD",
-        "doing": "#1167 round H (two fail-closed gaps, nits), one push",
-        "since": "2026-11-28T09:39:03Z"
+        "doing": "#1167 reviewed (MERGE); CI on 8cb47323",
+        "since": "2026-11-28T10:48:57Z"
       },
       {
         "slot": 2,
@@ -11137,11 +11137,11 @@
       },
       {
         "slot": 3,
-        "slice": "X-zero-rescue",
+        "slice": "X-upload-screen-flake",
         "role": "build",
-        "agent": "session_01MMjhnAXT3pCUkPv79nyKsi",
-        "doing": "#1171 review round fixes, one push",
-        "since": "2026-11-28T09:39:03Z"
+        "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
+        "doing": "step 0: reproduce and name the race",
+        "since": "2026-11-28T10:48:57Z"
       },
       {
         "slot": 4,
