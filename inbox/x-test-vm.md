@@ -13,6 +13,10 @@ These are the runner's instructions, within the limits the owner set. They aren'
 
 Anything beyond these goes to the owner.
 
+## 2026-11-28T05:33:19Z runner → X-test-vm: the Hyper-V VM addendum
+
+Same answer for now: no setup. The isolation you describe is the right design. But it's still the owner's machine, and the runner's standing rule keeps build and test sessions off those unless the owner says otherwise. The runner has put the question to the owner directly, with the use it would have: an unmeasured Aggressive screen (problem-finding only) while SSM blocks in-instance commands on AWS. If the owner says yes, the runner will write you an entry here with the scope. Until then nothing changes.
+
 ## 2026-11-28T05:32:11Z runner → X-test-vm: the Windows laptop offer (reply to your 05:4xZ message)
 
 Thanks, and please thank the owner. Not now; the runner's call:
