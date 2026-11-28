@@ -549,8 +549,8 @@ test.describe('"N hidden · Show" under a coarse pointer', () => {
 
 // X-hidden-count (runner): the note arrives after the rows and moves nothing. Where even "N filtered
 // · Show" would wrap the count line or the controls it shows no note ("Show hidden" stays in
-// Filters). From 128rem (2,048 px) the controls follow the count (L3), so they move sideways when it
-// arrives: the known follow-up X-hidden-count-wide-shift, so only vertical positions are held there.
+// Filters). From 128rem (2,048 px) the toolbar is as wide as the rows and its controls end at that
+// box's edge (L3, toolbar.css), so they hold their x as well.
 for (const [width, shows] of [
 	[360, false],
 	[390, true],
@@ -558,7 +558,8 @@ for (const [width, shows] of [
 	[900, true],
 	[1024, true],
 	[1366, true],
-	[2048, true]
+	[2048, true],
+	[2560, true]
 ] as const) {
 	test(`at ${width} px the hidden count ${shows ? 'shows' : 'stays out'} and nothing moves`, async ({
 		page,
@@ -585,8 +586,77 @@ for (const [width, shows] of [
 		expect((await row(page, 1).boundingBox())?.y).toBe(first);
 		const after = await page.getByLabel('Sort').boundingBox();
 		expect(after?.y).toBe(sort?.y);
-		if (width < 2048) expect(after?.x).toBe(sort?.x);
+		expect(after?.x).toBe(sort?.x);
 	});
+}
+
+// The worst cases for the count's length from 128rem: exact totals stop at 200,000, so the longest
+// exact line is 199,999 and the longest approximate one is "≈ 123.5M" in en and "≈ 1234.6万" in zh,
+// each with a 7-digit hidden count and the full words.
+const WORST = [
+	{
+		lang: 'en',
+		total: { total: 123_456_789, total_approx: true },
+		text: '≈ 123.5M results · 9,999,999 hidden by filters · Show',
+		label: 'Sort'
+	},
+	{
+		lang: 'en',
+		total: { total: 199_999 },
+		text: '199,999 results · 9,999,999 hidden by filters · Show',
+		label: 'Sort'
+	},
+	{
+		lang: 'zh-CN',
+		total: { total: 12_345_678, total_approx: true },
+		text: '≈ 1234.6万 个结果 · 9,999,999 个已被过滤器隐藏 · 显示',
+		label: '排序'
+	},
+	{
+		lang: 'zh-CN',
+		total: { total: 199_999 },
+		text: '199,999 个结果 · 9,999,999 个已被过滤器隐藏 · 显示',
+		label: '排序'
+	}
+] as const;
+for (const { lang, total, text, label } of WORST) {
+	for (const width of [2048, 2560]) {
+		test.describe(`the longest count in ${lang} (${text.slice(0, 8)}) at ${width} px`, () => {
+			test.use({ locale: lang });
+			test('is one row, ends at the box, and moves nothing', async ({ page, go, mock }) => {
+				await page.setViewportSize({ width, height: 900 });
+				server(mock, () => body(hits(3), total));
+				let release!: () => void;
+				const held = new Promise<void>((r) => (release = r));
+				mock.on('searchHiddenCount', async () => (await held, { hidden_total: 9_999_999 }));
+				await go('/search?q=lantern');
+				await expect(row(page, 1)).toBeVisible();
+				const toolbar = page.getByTestId('results-toolbar');
+				const before = await toolbar.boundingBox();
+				const first = (await row(page, 1).boundingBox())?.y;
+				const sort = await page.getByLabel(label).boundingBox();
+				release();
+				await expect(page.getByTestId('results-hidden-show')).toBeVisible();
+				await expect(count(page)).toHaveText(text, { useInnerText: true });
+				// One row: as tall as a dense control. The box is capped (L3, 1,024 px).
+				expect(before?.height).toBe(sort?.height);
+				expect(before!.width).toBeLessThanOrEqual(1024);
+				// The longest line and the controls leave at least 48 px of room in the box.
+				const room = await toolbar.evaluate((el) => {
+					const r = document.createRange();
+					r.selectNodeContents(el.querySelector('[data-testid="results-count"]')!);
+					const controls = el.querySelector('.tb-controls')!.getBoundingClientRect();
+					return (
+						el.getBoundingClientRect().width - r.getBoundingClientRect().width - controls.width
+					);
+				});
+				expect(room).toBeGreaterThanOrEqual(48 + 16);
+				expect(await page.getByLabel(label).boundingBox()).toEqual(sort);
+				expect((await toolbar.boundingBox())?.height).toBe(before?.height);
+				expect((await row(page, 1).boundingBox())?.y).toBe(first);
+			});
+		});
+	}
 }
 
 test('below 46rem of toolbar Sort and View keep their names, without visible labels', async ({
