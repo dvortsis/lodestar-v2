@@ -106,6 +106,7 @@ export interface EventsHandle {
 	/**
 	 * Sends one frame on every open connection, once one is open whose `?topics=` has `event` (any
 	 * open one for `resync`), with a 10 s deadline. A frame sent before then would be lost silently.
+	 * Await it: an unawaited send that times out loses its message, and two can arrive out of order.
 	 */
 	send(event: string, data: unknown): Promise<void>;
 	/** Ends every open connection (a clean close). */
@@ -113,8 +114,9 @@ export interface EventsHandle {
 	/** URLs the current document asked for. */
 	requests(): Promise<string[]>;
 	/**
-	 * How many JSON bodies from `pathname` (e.g. `/api/v1/search/live`) the page has read. Once it
-	 * counts a response, the code that awaited that body has already run.
+	 * How many JSON bodies from `pathname` (e.g. `/api/v1/search/live`) the page has read, error
+	 * bodies included (a 429 counts too). Once it counts a response, the code that awaited that body
+	 * has already run.
 	 */
 	answered(pathname: string): Promise<number>;
 }
