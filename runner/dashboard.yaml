@@ -294,6 +294,8 @@ placement:
   - D-start
   - X-start-wait-strings
   - X-vpn-bind
+  - X-vpn-bind-ui
+  - X-vpn-bind-worker
   - D-vpn-guide
 - ws: ws-filters
   match:
@@ -523,6 +525,7 @@ placement:
   - X-testvm-teardown-by-id
   - X-api-openapi-400s
   - X-testvm-delete-on-termination
+  - X-testvm-iam-volumes
   - X-fleet-stacked-arms
   - X-block-on-only-mode
   - X-infra-filter-workflows
@@ -779,6 +782,7 @@ placement:
   - X-watch-env
   - X-watch-open-fstat
   - X-watch-stall-retry
+  - X-watch-search-wait
   - /^ENR-[a-z]+$/
   - ENR-terms-api
   - X-steam-followups
@@ -853,6 +857,8 @@ placement:
   - X-cmp-native-handover
   - X-cmp-handover-followups
   - X-cmp-egress-api
+  - X-cmp-real-smoke
+  - X-cmp-privilege-refusal-ci
   - X-gluetun-leak
   - X-gluetun-leak-cmp
   - X-gluetun-templates
@@ -2028,26 +2034,6 @@ owner_queue:
   action: 'Runner calls you may want to veto (§2.19, §2.26; docs/decisions/2026-11-14-runner-ui-review-placement.md): the three-step setup with a checklist instead of the nine-step wizard stays declined (U1, D7; §2.9, §2.13, §2.39); failed watch-folder files get Retry in the UI; with five badges on a row, safety and verification stay and the rest collapse into +N; worker display names are editable; where a platform cannot update itself, Workers shows that platform''s steps, not a button; the Insights intensity click gets Undo for 10 s'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
-- n: 29
-  type: decision
-  action: 'May docs/reviews/dht-survey-evidence/original-scheduler.rs.txt stay in the repository? It is 2,227 lines of outside code, the scheduler proposal that the 2026-11-16 crawler survey reviewed (#970). Its source is not recorded, and the repository is AGPL'
-  unblocks: Keeping the survey's evidence reproducible, or removing the file and keeping only its hash
-  when: Any time
-- n: 31
-  type: decision
-  action: 'Require the Purpose=X-test-vm tag on test-VM volumes in the test-VM IAM policy (infra/dev-vm/aws-claude-testvm.json, RunOnlyEncryptedBoundedVolumes)? Today it requires only Project=Lodestar on volumes, so a volume launched without Purpose would slip past the teardown check, which looks for Purpose. The runner recommends yes. X-testvm-teardown-by-id also checks each lane''s own volume by id'
-  unblocks: A teardown check that can't miss a leftover test volume
-  when: Any time; IAM changes are yours
-- n: 33
-  type: decision
-  action: 'Grant the test-VM user ec2:DeleteVolume on its own test volumes (infra/dev-vm/aws-claude-testvm.json)? Today it has none, so a test volume that survives teardown waits for you to delete it, and a 100 GiB volume costs about $0.011/h (about $8 a month) until then. The runner recommends yes, scoped like the existing terminate permission (ManageOnlyOwnLodestarTestInstances): Project=Lodestar, Environment=Test, Purpose=X-test-vm and LaunchedBy=its own UserId'
-  unblocks: Test lanes that clean up their own leftover volume
-  when: Any time; IAM changes are yours
-- n: 34
-  type: decision
-  action: 'Should a metadata fetch over uTP get one extra 4 s for its first window, only while pieces are still arriving (CR-UTP-FIRST-WINDOW option (b), on top of (d), which merged as #1054)? A slow uTP peer could then hold its first claim for 8 s instead of 4 s; a silent peer still has 4 s, and TCP is unchanged. After (d), at most 9.25% of first windows still miss at 20% packet loss and 2.5% at 15%; the extension would save those that need under 8 s (not measured with it in place). The runner recommends no, unless live data show uTP paths at 15% loss or worse are common (docs/decisions/2026-11-22-CR-UTP-FIRST-WINDOW.md)'
-  unblocks: Fewer missed metadata fetches over lossy uTP paths, at a looser bound against slow peers
-  when: Any time; until then the 4 s deadline holds for every transport
 - n: 37
   type: action
   action: 'Optional: will you, or a person you choose, read TorBox''s current terms (and its abuse-system article) in a browser before v0.7 closes? Debrid cache status was skipped because no provider qualifies (docs/decisions/2026-11-23-ENR-debrid.md): TorBox appears to offer a cache check by hash (its changelog and third-party docs say so), but its docs and terms pages are script-rendered and couldn''t be read by a session. If the terms clearly allow a third-party app to check hashes with the user''s own key, the runner can relaunch ENR-debrid for TorBox within v0.7 under your Q4 answer. If they''re silent or ambiguous, that''s a grey case and comes back to you under §2.28'
@@ -2058,16 +2044,6 @@ owner_queue:
   action: 'Open draft security advisories for S8-25, S8-26 and S8-27 (the runner gives you the detail directly), as item 20 does for the earlier held findings. docs/security/v1/README.md §5 has you open them; Claude sessions here can''t create one'
   unblocks: Disclosure records for S8-25 to S8-27
   when: Any time; the advisories before the fixes ship
-- n: 39
-  type: decision
-  action: May the runner delete HANDOVER.md from the runner-state branch?
-  unblocks: A runner-state branch without a stale handover note
-  when: Any time; until then it stays
-- n: 40
-  type: decision
-  action: 'May web/licenses/allow.json add CDLA-Permissive-2.0, the licence of webpki-root-certs (Mozilla''s root list)? X-sec-S8-25 (#1125) would bundle it. The runner first allowed it, then withdrew that: a licence change is a legal call and yours'
-  unblocks: Bundling Mozilla's root list, or a recorded no
-  when: Any time; X-sec-S8-25 lands without it
 - n: 41
   type: review
   action: 'Runner calls you may want to veto (§2.19; docs/decisions/2026-11-27-runner-records-r19.md): CR-0w (#1134) merged before round 1, its stage-1 timing hold being moot; round 1''s harness is built as three slices on disjoint files (X-dht-switch-identity, X-cr-round1-collect, X-cr-round1-gate) to meet the 12 h gap after the comparator; CR-AB-ADM, CR-AB-4 and CR-AB-LC no longer need cloud provisional runs, and the optional Aggressive cloud screen stays blocked while the test lanes'' SSM access is denied'
@@ -2076,6 +2052,11 @@ owner_queue:
 - n: 42
   type: review
   action: 'Runner calls since r19 you may want to veto (§2.19; docs/decisions/2026-11-28-runner-records-r20.md, "Flags for the owner"): the round-1 harness and measurement refinements, the title-suggestion file rebuilt at every start, /healthz answering while the have-filter fills, the start-up count left for a follow-up with a contract change, the wizard opening the event stream, and the 1.0 scope changes from D1, D4, D5 and D13 as the runner applied them'
+  unblocks: Nothing; these go ahead unless you object
+  when: Any time
+- n: 43
+  type: review
+  action: 'Runner calls since r20 you may want to veto (§2.19; the "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r21.md and -r22.md): the leak test''s held retries and its never-sent-is-never-clean rule, the round-1 gateway check and three stricter round-1 rules, remote workers waiting for the have-filter fill, the 10M re-run after round 1''s day 2, the VPN setting being restart-required, remote workers outside the VPN setting until X-vpn-bind-worker, and CMP-G''s privileged test runs and advisory smoke check'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
 
