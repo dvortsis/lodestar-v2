@@ -1372,8 +1372,10 @@ mod tests {
                 .name(),
             "wg0"
         );
-        // A name the platform's rule refuses.
-        let bad = "wg/0";
+        // A name the platform's rule refuses: a newline is whitespace to
+        // Linux and a control character to Windows (whose friendly names
+        // may hold a `/`).
+        let bad = "wg\n0";
         let e = dht(Some(bad), "0.0.0.0:6881")
             .crawl_interface_on(false)
             .unwrap_err();
