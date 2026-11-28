@@ -20,7 +20,7 @@ const disc = [
 	{ worker: 7, granted: 400, marginal: 100, rediscovered: 4, dropped: 1 }
 ];
 const fleet = { workers: 3, online: 2, draining: 1, paused: 1, offline: 2, stored_per_hour: 4200 };
-const none = { torrents: 5, done: null, total: null };
+const none = { searchable: 5, done: null, total: null };
 
 beforeEach(() => {
 	get.mockReset();

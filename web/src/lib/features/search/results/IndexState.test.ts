@@ -33,3 +33,8 @@ it('leaves the rate out for null, 0 and under 1 per hour', () => {
 it('shows the rate from 1 per hour', () => {
 	expect(shown(2104.5)).toContain('/h');
 });
+
+it('says the count is of searchable torrents, the index total (X-hidden-count)', () => {
+	expect(shown(null)).toBe('Index still growing: 5,000 searchable.');
+	expect(shown(2104.5)).toMatch(/^Index still growing: 5,000 searchable, \+/);
+});

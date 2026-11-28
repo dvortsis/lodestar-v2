@@ -27,6 +27,7 @@ const crawler = (over: Partial<CrawlerSnapshot> = {}): CrawlerSnapshot => ({
 	fetched: 50,
 	harvested: 500,
 	paused: false,
+	searchable: 1000,
 	stored: 40,
 	torrents: 1000,
 	...over
@@ -283,7 +284,7 @@ describe('pill progress states', () => {
 });
 
 describe('StatusPill progress states', () => {
-	const none = { torrents: 1000, done: null, total: null };
+	const none = { searchable: 1000, done: null, total: null };
 
 	it('stalled: warning tone, words, and an announcement that explains it', () => {
 		render(StatusPill, { state: { kind: 'stalled', ...none, reason: 'writer_stalled' } });
@@ -327,7 +328,7 @@ describe('StatusPill progress states', () => {
 });
 
 describe('StatusPill other states', () => {
-	const none = { torrents: 5, done: null, total: null };
+	const none = { searchable: 5, done: null, total: null };
 	it.each([
 		['paused', 'Paused'],
 		['reconnecting', 'Reconnecting']

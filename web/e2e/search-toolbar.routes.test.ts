@@ -7,6 +7,7 @@ import {
 	expect,
 	hits,
 	indexState,
+	toAst,
 	resultsCalls,
 	row,
 	rowOf,
@@ -39,6 +40,44 @@ test('the count is the server’s, ≈ and compact only when it says so', async 
 	await expect(count(page)).not.toHaveAttribute('aria-live');
 	await go('/search?q=many');
 	await expect(count(page)).toHaveText('≈ 2.4M results');
+});
+
+test('"N hidden · Show" counts what a filter rule hid, and Show adds them (P7)', async ({
+	page,
+	go,
+	mock
+}) => {
+	server(mock, (sent) =>
+		(sent as { hidden?: boolean }).hidden
+			? body(hits(5), { total: 5 })
+			: body(hits(3), { total: 3 })
+	);
+	// Asked after the rows, with the rows' query; held a moment so the count shows alone first.
+	let release!: () => void;
+	const held = new Promise<void>((r) => (release = r));
+	mock.on('searchHiddenCount', async () => (await held, { hidden_total: 2 }));
+	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible();
+	await expect(count(page)).toHaveText('3 results');
+	const box = await count(page).boundingBox();
+	release();
+	await expect(count(page)).toHaveText('3 results · 2 hidden by filters · Show', {
+		useInnerText: true
+	});
+	// The line keeps its height: nothing under it moves.
+	expect((await count(page).boundingBox())?.height).toBe(box?.height);
+	const sent = mock.calls('searchHiddenCount').map((r) => r.postDataJSON());
+	expect(sent).toHaveLength(1);
+	expect(sent[0]).toMatchObject({ hidden: false, ast: toAst('lantern') });
+	const show = page.getByRole('button', { name: 'Show', exact: true });
+	await expect(show).toHaveAccessibleDescription('2 hidden by filters');
+	await show.click();
+	await expect.poll(() => new URL(page.url()).searchParams.get('hidden')).toBe('1');
+	await expect(count(page)).toHaveText('5 results');
+	// Focus goes to the results it opened, not the page.
+	await expect(page.locator('#results')).toBeFocused();
+	await expect(page.getByTestId('results-hidden-show')).toHaveCount(0);
+	await expectNoA11yViolations(page);
 });
 
 test('sort goes to the URL and the request; Back walks it', async ({ page, go, mock }) => {
@@ -470,4 +509,98 @@ test.describe('the Filters button at 390 px never covers other content', () => {
 		const filters = page.getByTestId('facet-open');
 		expect(overlaps((await filters.boundingBox())!, (await alert.boundingBox())!)).toBe(false);
 	});
+});
+
+test.describe('"N hidden · Show" under a coarse pointer', () => {
+	test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 800 } });
+
+	test('Show is a 44 px target and its arrival leaves the count line as it was', async ({
+		page,
+		go,
+		mock
+	}) => {
+		server(mock, () => body(hits(3), { total: 3 }));
+		let release!: () => void;
+		const held = new Promise<void>((r) => (release = r));
+		mock.on('searchHiddenCount', async () => (await held, { hidden_total: 2 }));
+		await go('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		await expect(count(page)).toHaveText('3 results');
+		const before = await count(page).boundingBox();
+		const first = await row(page, 1).boundingBox();
+		release();
+		const show = page.getByTestId('results-hidden-show');
+		await expect(show).toBeVisible();
+		const after = await count(page).boundingBox();
+		expect(after?.height).toBe(before?.height);
+		expect((await row(page, 1).boundingBox())?.y).toBe(first?.y);
+		const target = await show.evaluate((el) => {
+			const r = el.getBoundingClientRect();
+			const s = getComputedStyle(el);
+			const pad = (a: string, b: string) => parseFloat(s[a as never]) + parseFloat(s[b as never]);
+			return { w: r.width, h: r.height, py: pad('paddingTop', 'paddingBottom') };
+		});
+		// Padding taken back by a negative margin: the box is at least 44 px, the line unchanged.
+		expect(target.w).toBeGreaterThanOrEqual(44);
+		expect(target.h).toBeGreaterThanOrEqual(44);
+		expect(target.py).toBeGreaterThan(0);
+	});
+});
+
+// X-hidden-count (runner): the note arrives after the rows and moves nothing. Where even "N filtered
+// · Show" would wrap the count line or the controls it shows no note ("Show hidden" stays in
+// Filters). From 128rem (2,048 px) the controls follow the count (L3), so they move sideways when it
+// arrives: the known follow-up X-hidden-count-wide-shift, so only vertical positions are held there.
+for (const [width, shows] of [
+	[360, false],
+	[390, true],
+	[768, false],
+	[900, true],
+	[1024, true],
+	[1366, true],
+	[2048, true]
+] as const) {
+	test(`at ${width} px the hidden count ${shows ? 'shows' : 'stays out'} and nothing moves`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		await page.setViewportSize({ width, height: 900 });
+		server(mock, () => body(hits(3), { total: 2196 }));
+		let release!: () => void;
+		const held = new Promise<void>((r) => (release = r));
+		mock.on('searchHiddenCount', async () => (await held, { hidden_total: 12 }));
+		await go('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		const toolbar = page.getByTestId('results-toolbar');
+		const before = await toolbar.boundingBox();
+		const first = (await row(page, 1).boundingBox())?.y;
+		const sort = await page.getByLabel('Sort').boundingBox();
+		release();
+		const show = page.getByTestId('results-hidden-show');
+		await expect(show).toHaveCount(1);
+		if (shows) await expect(show).toBeVisible();
+		else await expect(show).toBeHidden();
+		expect((await toolbar.boundingBox())?.height).toBe(before?.height);
+		expect((await row(page, 1).boundingBox())?.y).toBe(first);
+		const after = await page.getByLabel('Sort').boundingBox();
+		expect(after?.y).toBe(sort?.y);
+		if (width < 2048) expect(after?.x).toBe(sort?.x);
+	});
+}
+
+test('below 46rem of toolbar Sort and View keep their names, without visible labels', async ({
+	page,
+	go,
+	mock
+}) => {
+	await page.setViewportSize({ width: 1024, height: 900 });
+	server(mock, () => body(hits(3)));
+	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible();
+	for (const name of ['Sort', 'View']) {
+		await expect(page.getByRole('combobox', { name, exact: true })).toBeVisible();
+		const label = page.locator('.tb-lbl > span', { hasText: name }).first();
+		expect((await label.boundingBox())?.width).toBeLessThanOrEqual(1);
+	}
 });

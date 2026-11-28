@@ -683,6 +683,8 @@ impl Services {
         // rebuild progress.
         let crawler = {
             let (monitor, dht) = (http.monitor.clone(), http.dht.clone());
+            // The serving index, as `/stats` counts `searchable_torrents`.
+            let index = http.search.as_ref().map(|s| s.index.clone());
             let control = paused_now;
             move || {
                 let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
@@ -698,6 +700,7 @@ impl Services {
                     fetched: get(&p.fetched),
                     harvested: get(&monitor.intake_stats().received),
                     paused: control.status().paused,
+                    searchable: index.as_ref().map(|i| i.index().num_docs()),
                     stored: get(&monitor.writer_stats().stored),
                     torrents: monitor.torrents(),
                 }

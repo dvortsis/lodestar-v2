@@ -67,7 +67,7 @@ describe('ResultsPanel, the bare page', () => {
 		render(ResultsPanel, { focusBar: () => {}, Home });
 		await waitFor(() =>
 			expect(screen.getByTestId('results-empty-title').textContent?.trim()).toBe(
-				'Search 2,400,000 torrents'
+				'Search 2,400,000 searchable torrents'
 			)
 		);
 		await waitFor(() =>

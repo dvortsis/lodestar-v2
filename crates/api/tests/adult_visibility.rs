@@ -97,6 +97,12 @@ fn fixture() -> Fixture {
 /// With `seeders`, per torrent in `NAMES` order (`None`: never scraped),
 /// the index and the API read swarm health from hot columns (§7).
 fn fixture_with(seeders: Option<[Option<u32>; 5]>) -> Fixture {
+    build(seeders, &[])
+}
+
+/// With the torrents at `hidden` (indexes into `NAMES`) hidden by a filter
+/// rule, as the pipeline stores them.
+fn build(seeders: Option<[Option<u32>; 5]>, hidden: &[usize]) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -111,7 +117,11 @@ fn fixture_with(seeders: Option<[Option<u32>; 5]>) -> Fixture {
             raw_info: Some(raw),
             discovered_at: 1_700_000_000 + i as i64,
             metadata_at: 1_700_000_100,
-            extra_flags: 0,
+            extra_flags: if hidden.contains(&i) {
+                lodestar_store::flags::HIDDEN
+            } else {
+                0
+            },
             source: SourceId::new(0).unwrap(),
         })
         .collect();
@@ -311,6 +321,86 @@ async fn adult_is_hidden_by_default_in_results_and_counts() {
     // `hidden=true` brings back filter-hidden torrents, never Adult.
     let (_, body) = json_call(&f.app, get("/api/v1/search?hidden=true", &c)).await;
     assert_eq!(names(&body), sorted(&[2, 3, 4]));
+}
+
+/// `POST /search/hidden` with the search's body: its `hidden_total`.
+async fn hidden(f: &Fixture, c: &str, body: Value) -> Value {
+    let (status, body) = json_call(&f.app, post("/api/v1/search/hidden", Some(c), body)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["hidden_total"].clone()
+}
+
+#[tokio::test]
+async fn the_hidden_count_never_counts_adult_while_it_is_hidden() {
+    // An adult torrent (0) and a film (2), both hidden by a filter rule.
+    let f = build(None, &[0, 2]);
+    let c = session(&f).await;
+    let (_, body) = json_call(&f.app, get("/api/v1/search", &c)).await;
+    assert_eq!(names(&body), sorted(&[3, 4]));
+    assert_eq!(body["total"], 2);
+    // Only the film: Adult stays out of the count while it's hidden.
+    assert_eq!(hidden(&f, &c, json!({})).await, 1);
+    // "Show" brings back exactly that one.
+    let (_, shown) = json_call(&f.app, get("/api/v1/search?hidden=true", &c)).await;
+    assert_eq!(names(&shown), sorted(&[2, 3, 4]));
+    // Nothing more to offer once they're shown.
+    assert_eq!(hidden(&f, &c, json!({ "hidden": true })).await, Value::Null);
+    // A query that matches only the adult one counts nothing.
+    assert_eq!(hidden(&f, &c, json!({ "q": "studio" })).await, 0);
+    // A word only stems match ("movies" for "Movie"): the count follows
+    // the searches' own stem fallback, so it's what "Show" adds.
+    let (_, plain) = json_call(&f.app, get("/api/v1/search?q=movies", &c)).await;
+    let (_, shown) = json_call(&f.app, get("/api/v1/search?q=movies&hidden=true", &c)).await;
+    let added = shown["total"].as_u64().unwrap() - plain["total"].as_u64().unwrap();
+    assert_eq!(hidden(&f, &c, json!({ "q": "movies" })).await, added);
+    assert_eq!(added, 1, "{plain} {shown}");
+    // An Adult query while Adult is hidden: never a positive count.
+    let adult = hidden(&f, &c, json!({ "q": "type:adult" })).await;
+    assert!(adult == 0 || adult == Value::Null, "{adult}");
+    // A query naming `hidden` itself gets no count.
+    assert_eq!(
+        hidden(&f, &c, json!({ "q": "hidden:yes" })).await,
+        Value::Null
+    );
+    // With Adult shown, both count, and "Show" brings back both.
+    f.show.send(true).unwrap();
+    assert_eq!(hidden(&f, &c, json!({})).await, 2);
+    let (_, body) = json_call(&f.app, get("/api/v1/search", &c)).await;
+    let (_, shown) = json_call(&f.app, get("/api/v1/search?hidden=true", &c)).await;
+    assert_eq!(
+        shown["total"].as_u64().unwrap() - body["total"].as_u64().unwrap(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn hidden_adult_alone_takes_the_free_skip_while_adult_is_hidden() {
+    // The only filter-hidden torrents are Adult (0 and 1): with Adult
+    // hidden, "Show" could reveal nothing, so the answer is the skip's 0
+    // for any query, and says nothing about what's hidden.
+    let f = build(None, &[0, 1]);
+    let c = session(&f).await;
+    for q in ["", "movie", "studio", "xxx"] {
+        assert_eq!(hidden(&f, &c, json!({ "q": q })).await, 0, "{q}");
+    }
+    // With Adult shown they're what "Show" adds.
+    f.show.send(true).unwrap();
+    assert_eq!(hidden(&f, &c, json!({ "q": "xxx" })).await, 2);
+}
+
+#[tokio::test]
+async fn the_hidden_count_is_zero_at_once_with_nothing_hidden() {
+    let f = fixture();
+    let c = session(&f).await;
+    assert_eq!(hidden(&f, &c, json!({ "q": "movie" })).await, 0);
+    // A bad query is refused as a search refuses it.
+    let (status, body) = json_call(
+        &f.app,
+        post("/api/v1/search/hidden", Some(&c), json!({ "q": "\"open" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "query_syntax");
 }
 
 #[tokio::test]
