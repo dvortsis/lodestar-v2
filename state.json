@@ -11116,14 +11116,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T01:54Z",
+    "updated": "2026-11-28T03:23Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-healthz-cold-start",
         "role": "build",
         "agent": "session_01MMjhnCzBhE8ykoynB1suXZ",
-        "doing": "have-filter fill off the start path; /healthz in seconds at 10M",
+        "doing": "PR #1159 under fresh review",
         "since": "2026-11-28T00:17:49Z"
       },
       {
@@ -11137,11 +11137,11 @@
       },
       {
         "slot": 3,
-        "slice": "X-leaktest-vpn-held-down",
+        "slice": "CMP-G",
         "role": "build",
-        "agent": "session_01MMjhnBiA1WMJZuXSJ8uexc",
-        "doing": "leak test phase B: remove the gluetun restore race before the round-1 rehearsal",
-        "since": "2026-11-28T01:54Z"
+        "agent": "session_01MMjhn9KRy17VkjD1ziKQHs",
+        "doing": "companion gate tests for v0.6",
+        "since": "2026-11-28T03:23Z"
       },
       {
         "slot": 4,
@@ -11149,7 +11149,7 @@
         "role": "build",
         "agent": "session_01MMjhnCcun2RuQsQZsLsZhP",
         "session": "session_01MMjhn8Vk45KrXtoM9AXh1o",
-        "doing": "round-1 tools: rehearsal window, S bound, repeats, gateway check, declaration checks, gluetun logs",
+        "doing": "PR #1158 review fixes (two missing tests + five small)",
         "since": "2026-11-28T01:51Z"
       }
     ],
