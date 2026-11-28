@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T08:06:15Z",
+    "updated": "2026-11-28T08:18:32Z",
     "items": [
       {
         "slot": 1,
@@ -11128,12 +11128,12 @@
       },
       {
         "slot": 2,
-        "slice": "X-testvm-iam-volumes",
+        "slice": "X-hidden-count",
         "role": "build",
-        "agent": "session_01MMjhn9aCxhE2yoUnM8KHqg",
+        "agent": "pending",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "building the IAM policy edit",
-        "since": "2026-11-28T07:53:22Z"
+        "doing": "launching",
+        "since": "2026-11-28T08:18:32Z"
       },
       {
         "slot": 3,
