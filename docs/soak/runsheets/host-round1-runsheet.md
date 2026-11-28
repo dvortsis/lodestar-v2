@@ -253,6 +253,8 @@ The rehearsal checks the setup and the timing. Its stores are deleted afterwards
 
 ## 6. A day, step by step
 
+**Don't start day 1 until the runner says** the code for the S bound, the repeat rule and `declaration_checks_missing` has merged (X-cr-round1-spec-fixes, or its split-out PR).
+
 Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<n>-repeat<k>` (k = 1, then 2), and its **first** command (the first `leak`) carries `--repeat <k>`; later commands read it from the folder. Pause the backup and parity schedules as the stage-1 sheet's 4.1 says, and write the restore time down.
 
 1. **Fresh folders.** Each arm's `data` and `witness` folders are empty (day 2: only after §7 is done).

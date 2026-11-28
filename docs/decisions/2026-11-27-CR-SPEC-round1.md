@@ -37,7 +37,12 @@ This amends `docs/decisions/2026-11-02-CR-SPEC.md` (CR-SPEC) for round 1 of `doc
   - the RTT base taken on the day-1 exit (§7);
   - the per-IP guards resting on the digest (§9);
   - coverage counted window-wide (§7);
-  - the stricter `disk_inflight` (§7).
+  - the stricter `disk_inflight` (§7);
+  - a diagnostic arm dropped on its first product failure, where plan line 400 says a repeated one (§8; §14 #15);
+  - an uplink counter decrease making contention `not_judged` (§7; §14 #17);
+  - "not measured" failing as a valid miss, with §6.4 governing over §3.4's line 153 (§9; §14 #6);
+  - the stricter CR-ADM and uTP checks (§14 #9);
+  - a changed uplink hash read only at each collector's launch, kept strict until 1.1 (§10; §14 #25).
 - **Scope:** round 1, and any later round of this design whose declaration names this file.
   - Runs that started earlier are judged by the spec in force when they started (plan §8 item 8, line 570).
   - `gate` and `effect` keep their behaviour for those runs. `segment` without `--declaration` is unchanged.
@@ -165,12 +170,12 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
   - `check-start` refuses an exit check older than the latest leak test (423–430).
   - Egress is then judged against the new check (item 2).
 - **After the start, or in an `after` test:** the failure is an `infrastructure` event (525–527), and §8 applies.
-- The run sheet says the same (lines 59, 160–162, 319) (X-cr-round1-collect-fixes, #1151).
+- The run sheet says the same (lines 59, 160–162, 321) (X-cr-round1-collect-fixes, #1151).
 
 **Reboot rule:**
 - Round-1 stacks never restart by themselves. The coordinator sets `LODESTAR_GLUETUN_RESTART=no` (coordinator:266), and Lodestar's own policy is `"no"` (`compose.yaml`:111).
 - After a host reboot, the stacks stay down and the day is invalid.
-- The repeated day starts as any day does: leak tests, then `bring-up`, then `up` (run sheet line 322).
+- The repeated day starts as any day does: leak tests, then `bring-up`, then `up` (run sheet line 324).
 
 ## 5. Layouts and attempts
 **The layouts** (`LAYOUTS`, analyzer:1788–1796; plan §6.3, lines 394–401; plan §8 item 11). `layout_problems` (2166–2177) requires each day's declared arms and exits to match exactly:
@@ -188,7 +193,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 - **Pairing:** a candidate's two days pair only within its latest attempt (`judge_candidate`, 2369–2374). The attempt must declare days 1 and 2 (`attempt_does_not_declare_two_days`, 2427–2429).
 - **Repeats:** each (attempt, day) runs repeats 0..k with no gap (`repeats_not_contiguous`, 2386–2388; coordinator `manifest`, 983–985).
   - A repeated day is the folder `day<n>-repeat<k>`.
-  - The repeat number comes from its first `leak` (run sheet line 256).
+  - The repeat number comes from its first `leak` (run sheet line 258).
 - **The retry budget:** at most 2 repeated days per round (`RETRY_BUDGET`, 1800). It's counted as the sum over every (attempt, day) of its highest repeat (2466–2473).
   - A third repeat is `retry_budget_exhausted`. That's `not_judged`, with the disposition `out_of_retries` (2514–2515).
   - Fresh attempts the layout chain bounds (L2, L2b and L2c after a drop) are repeat 0, so they never count against the budget.
@@ -205,6 +210,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
   - any `not_judged` day, except:
     - one with `solo_confirmation_required`, which goes to S;
     - one that is `not_judged` because of a product failure, its own or a peer's, which goes to a fresh attempt (class 2, §8).
+  - A day with `solo_confirmation_failed` can't be repeated either (`repeat_of_a_non_repeatable_day`): a failed solo means `out_of_retries`, and the slice keeps replaced days in `every`, so it stays terminal.
   - Repeating either of those is `repeat_of_a_non_repeatable_day`. It replaces today's `repeat_without_infrastructure_fault` (2420–2424), which allows only an infrastructure fault.
   - Every repeat counts against the budget of 2.
   - Repeating a passing day is `repeat_of_a_judged_day` (2418–2419).
@@ -248,6 +254,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 
 **The rehearsal:**
 - **When it starts:** only after X-cr-round1-spec-fixes has merged. That slice lands the 30 min warm-up and 3 h window, the gateway check (§7) and the gluetun logs (§8).
+  - **Day 1 also waits** until the code for the S bound, the repeat rule and `declaration_checks_missing` is on `main`, whichever PR carries it, if the slice is split.
   - It also waits until the comparator's window has ended and the comparator is bound (§10). `check-start` reads `ended_utc` from the report's binding or from `comparator-binding.json` (coordinator:396–400). Rule 2.2's 12 h doesn't apply to it.
 - **What it runs:**
   - Every arm of `r1-L3` runs on its day-1 exit, with leak tests before and after.
@@ -452,7 +459,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 X-cr-round1-collect-fixes, #1151 (analyzer:518–539; collect.py `note`, 1844–1881).
 - **The note:** an array operation is recorded with `collect.py note --category array_operation --kind mover|parity|other --pool P …`. That gives {`kind`, `pools`: [..]}, where `pools` lists every pool the operation touches; a mover run names both the cache pool and the array.
   - A round-1 run's `array_operation` note must carry `--kind` and `--pool` (collect.py:1870–1872).
-  - The run sheet's line 323 says how.
+  - The run sheet's line 325 says how.
 - **The map:** the declaration maps each pool to the devices whose storage sits on it, named as the VM's kernel sees them (the names `identity` records, such as `vdb`), not the Unraid host's.
   - The operator reports the map (run sheet step 5, line 136), and the records PR writes it into the declaration.
   - Pool names must match `[a-z0-9_]{1,32}`, the form `note --pool` accepts (collect.py:1861). `check_declaration` doesn't enforce this yet. A pool named otherwise can never match a note, so it can never spare a window: the rule fails safe.
