@@ -6,7 +6,7 @@
 import type { Request } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
 import { body, expect, hits, row, rowOf, server } from './search-results.fixtures';
-import { liveEvents } from './support/events-server';
+import { crawlerEvent, liveEvents } from './support/events-server';
 import { test } from './support/test';
 
 type Mock = Parameters<typeof server>[0];
@@ -63,8 +63,13 @@ test('new matches show a banner; the list holds until Show reloads it and regist
 	await expect(rowOf(page, 1)).toBeFocused();
 	await page.keyboard.press('j');
 	await expect(rowOf(page, 2)).toBeFocused();
-	// The old id is dead: its late event does nothing; the new one counts.
+	// The old id is dead: its late event does nothing. A crawler snapshot sent after it is the sync
+	// point (events are handled in order): once the pill shows it, the `a1` event has been handled,
+	// and the banner must still be absent. Then the new id counts.
 	await events.send('search_live', { id: 'a1', matched: 7, through: 120 });
+	await events.send('crawler', crawlerEvent({ torrents: 1 }));
+	await expect(page.getByTestId('status-pill-count')).toHaveText('· 1 torrent');
+	await expect(banner).toHaveCount(0);
 	await events.send('search_live', { id: 'a2', matched: 1, through: 121 });
 	await expect(banner).toHaveText('1 new result');
 });
