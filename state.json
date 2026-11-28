@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T18:01:42Z",
+  "updated_at": "2026-11-28T18:08:49Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -3769,7 +3769,9 @@
     "V14": "SRC-1 (assigned by master-plan r2; waits ext:owner-migrations-on-main)",
     "V15": "ENR-terms (runner 2026-11-16T01:25Z: torrent_claims.stored_at + index; CR-3's reservation released)",
     "V14_status": "merged #379 a4f6ebb5",
-    "queue_after_V15": "next free number in landing order: WK-12, SRC-3b, PL-8, CR-3 (build-plan r4 order; runner assigns at the migration slot)"
+    "queue_after_V15": "next free number in landing order: WK-12, SRC-3b, PL-8, CR-3 (build-plan r4 order; runner assigns at the migration slot)",
+    "V17": "WK-12 (runner 2026-11-28T18:08:49Z: assigned at the migration slot; main at V16, no open PR edits schema.rs; plan review found WK-12 heads the longest chain to 1.0)",
+    "queue_after_V17": "SRC-3b (V18), PL-8 (V19), CR-3 (V20): one migration PR at a time, in landing order"
   },
   "decisions": [
     "2026-10-22 spacing: keep Tailwind v4 default --spacing (p-4=16px); only utility steps matching the \u00a710.2 ramp are allowed; W2 extends the ban check to off-ramp steps",
@@ -12316,5 +12318,10 @@
     "held": true,
     "note": "owner hold 2026-11-25T00:16Z: no new slices. Queued for when it lifts: slot 3 X-restart-fuzz-v2, slot 2 X-gs-followups-2."
   },
-  "merge_order": []
+  "merge_order": [],
+  "next_launch": [
+    "WK-12 (critical path, first free slot)",
+    "X-help",
+    "M8-REL-2 (after X-ci-test-shard)"
+  ]
 }
