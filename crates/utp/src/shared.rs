@@ -5,36 +5,38 @@
 use std::fmt;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::socket::{Config, DualSink, PacketSink, UtpSocket};
 
-/// The sink until the port's owner attaches, and again once it detaches:
-/// sends are refused (and uTP retransmits or times out), and no family is
-/// reachable.
-#[derive(Default)]
-struct LateSink(RwLock<Option<DualSink>>);
+/// The sink until the port's owner attaches: sends are refused (and uTP
+/// retransmits or times out), and no family is reachable. A plain port is
+/// attached once, lock-free; a re-attachable one ([`SharedPort::reattachable`],
+/// X-vpn-bind) takes a read lock per packet so its owner can change.
+enum LateSink {
+    Once(OnceLock<DualSink>),
+    Swap(RwLock<Option<DualSink>>),
+}
 
 impl LateSink {
-    fn get(&self) -> std::sync::RwLockReadGuard<'_, Option<DualSink>> {
-        self.0.read().unwrap_or_else(|e| e.into_inner())
-    }
-
-    fn set(&self) -> std::sync::RwLockWriteGuard<'_, Option<DualSink>> {
-        self.0.write().unwrap_or_else(|e| e.into_inner())
+    fn with<T>(&self, f: impl FnOnce(Option<&DualSink>) -> T) -> T {
+        match self {
+            LateSink::Once(once) => f(once.get()),
+            LateSink::Swap(lock) => f(lock.read().unwrap_or_else(|e| e.into_inner()).as_ref()),
+        }
     }
 }
 
 impl PacketSink for LateSink {
     fn send_to(&self, packet: &[u8], to: SocketAddr) -> io::Result<()> {
-        match &*self.get() {
+        self.with(|sink| match sink {
             Some(sink) => sink.send_to(packet, to),
             None => Err(io::ErrorKind::NotConnected.into()),
-        }
+        })
     }
 
     fn reaches(&self, to: SocketAddr) -> bool {
-        self.get().as_ref().is_some_and(|s| s.reaches(to))
+        self.with(|sink| sink.is_some_and(|s| s.reaches(to)))
     }
 }
 
@@ -59,8 +61,20 @@ impl fmt::Debug for SharedPort {
 }
 
 impl SharedPort {
+    /// Attached once, by its one owner.
     pub fn new(config: Config) -> SharedPort {
-        let sink = Arc::new(LateSink::default());
+        SharedPort::with(LateSink::Once(OnceLock::new()), config)
+    }
+
+    /// One that a later owner can attach to once the last
+    /// [`detach`](Self::detach)es: the DHT's node made again on fresh
+    /// sockets after the crawl's interface came back (X-vpn-bind).
+    pub fn reattachable(config: Config) -> SharedPort {
+        SharedPort::with(LateSink::Swap(RwLock::new(None)), config)
+    }
+
+    fn with(sink: LateSink, config: Config) -> SharedPort {
+        let sink = Arc::new(sink);
         let socket = UtpSocket::with_sink(sink.clone(), config);
         SharedPort { socket, sink }
     }
@@ -74,22 +88,30 @@ impl SharedPort {
     /// attach while none is attached takes effect; it returns whether this
     /// one did.
     pub fn attach(&self, sink: DualSink) -> bool {
-        let mut slot = self.sink.set();
-        if slot.is_some() {
-            return false;
+        match &*self.sink {
+            LateSink::Once(once) => once.set(sink).is_ok(),
+            LateSink::Swap(lock) => {
+                let mut slot = lock.write().unwrap_or_else(|e| e.into_inner());
+                if slot.is_some() {
+                    return false;
+                }
+                *slot = Some(sink);
+                true
+            }
         }
-        *slot = Some(sink);
-        true
     }
 
-    /// The owner's sockets are gone: sends are refused again until the
-    /// next [`attach`](Self::attach).
+    /// The owner's sockets are gone: a re-attachable port refuses sends
+    /// again until the next [`attach`](Self::attach). A plain one stays
+    /// attached, as before.
     pub fn detach(&self) {
-        *self.sink.set() = None;
+        if let LateSink::Swap(lock) = &*self.sink {
+            *lock.write().unwrap_or_else(|e| e.into_inner()) = None;
+        }
     }
 
     pub fn attached(&self) -> bool {
-        self.sink.get().is_some()
+        self.sink.with(|s| s.is_some())
     }
 
     /// A datagram the owner classified as uTP ([`crate::classify`]).
@@ -127,7 +149,16 @@ mod tests {
                 .reaches("[::ffff:127.0.0.1]:9".parse().unwrap())
         );
         assert!(!port.socket().reaches(v6), "no IPv6 socket attached");
-        // The owner goes away: refused again, and the next one attaches.
+        // A plain port stays attached to its one owner.
+        port.detach();
+        assert!(port.attached());
+        // A re-attachable one: refused again, and the next owner attaches.
+        let port = SharedPort::reattachable(Config::default());
+        assert!(port.attach(DualSink {
+            v4: Some(owner.clone()),
+            v6: None,
+        }));
+        assert!(!port.attach(DualSink::default()));
         port.detach();
         assert!(!port.attached() && !port.socket().reaches(v4));
         assert!(port.attach(DualSink {

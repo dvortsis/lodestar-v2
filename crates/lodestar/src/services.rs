@@ -291,7 +291,14 @@ impl Services {
             // shares the DHT's port; the DHT attaches its sockets when it
             // binds and hands it the uTP datagrams. Off leaves both alone.
             if config.dht.utp {
-                let port = lodestar_peer_wire::utp::SharedPort::new(Default::default());
+                // With an interface set the DHT's node may be made again
+                // on fresh sockets (X-vpn-bind), so its port can be
+                // re-attached; without one it's attached once, lock-free.
+                let port = if vpn.is_some() {
+                    lodestar_peer_wire::utp::SharedPort::reattachable(Default::default())
+                } else {
+                    lodestar_peer_wire::utp::SharedPort::new(Default::default())
+                };
                 pipeline_config.fetch.transport = lodestar_peer_wire::Transport::Utp;
                 pipeline_config.fetch.utp = Some(port.socket());
                 fetch_stats.attach_utp(port.socket());

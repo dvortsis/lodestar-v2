@@ -1303,12 +1303,12 @@ impl NodeHandle {
 /// binds the address the pin gives (Windows: the interface's own).
 fn bind(
     addr: SocketAddr,
-    iface: Option<&lodestar_network_policy::iface::Interface>,
+    guard: Option<&lodestar_network_policy::iface::Guard>,
 ) -> io::Result<(UdpSocket, std::net::UdpSocket)> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
-    let addr = match iface {
-        Some(iface) => lodestar_network_policy::iface::pin(&socket, iface, addr)?,
+    let addr = match guard {
+        Some(guard) => guard.pin(&socket, addr)?,
         None => addr,
     };
     if addr.is_ipv6() {
@@ -1376,9 +1376,20 @@ impl Node {
         }
         let mut sockets = Vec::new();
         let mut utp_sink = lodestar_utp::DualSink::default();
-        let iface = config.guard.as_ref().map(|g| g.interface());
+        let guard = config.guard.as_deref();
+        let mut skipped = None;
         for addr in &config.bind {
-            let (recv, send) = bind(*addr, iface)?;
+            let (recv, send) = match bind(*addr, guard) {
+                Ok(halves) => halves,
+                // X-vpn-bind (Windows): the interface has no address of
+                // this family, so that family has no socket; the other
+                // still binds.
+                Err(e) if lodestar_network_policy::iface::is_no_family(&e) => {
+                    skipped = Some(e);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             if config.utp.is_some() {
                 let half: Arc<dyn lodestar_utp::PacketSink> = Arc::new(send.try_clone()?);
                 if addr.is_ipv4() {
@@ -1391,6 +1402,9 @@ impl Node {
                 transport::RecvSocket::Udp(recv),
                 transport::SendSocket::Udp(send),
             ));
+        }
+        if let (true, Some(e)) = (sockets.is_empty(), skipped) {
+            return Err(e);
         }
         let local_addrs = sockets
             .iter()

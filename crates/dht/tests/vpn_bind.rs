@@ -121,7 +121,7 @@ async fn utp_leaves_from_the_pinned_dht_socket_and_follows_a_rebind() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::time::timeout;
 
-    let port = SharedPort::new(lodestar_utp::Config::default());
+    let port = SharedPort::reattachable(lodestar_utp::Config::default());
     let pinned = || {
         let mut cfg = config(vec![]);
         cfg.guard = Some(Guard::new(Interface::parse("lo").unwrap()));

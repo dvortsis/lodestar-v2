@@ -116,31 +116,51 @@ impl fmt::Display for Interface {
 /// Pins `socket`, about to bind `addr`, to `iface`, and returns the
 /// address to bind. Call it before `bind` and `connect`; a socket that
 /// connects without binding binds the returned address first (Windows
-/// needs it; on Linux it's `addr` unchanged).
+/// needs it; on Linux it's `addr` unchanged). The crawl's sockets use
+/// [`Guard::pin`], which on Windows reads the guard's last check instead
+/// of listing the adapters again.
 ///
 /// Fails, and the socket must not be used, when the interface is missing
-/// (Linux: `ENODEV`), has no address of `addr`'s family (Windows), or
-/// `addr` names a specific address that isn't the interface's (Windows).
+/// (Linux: `ENODEV`), has no address of `addr`'s family (Windows,
+/// [`is_no_family`]), or `addr` names a specific address that isn't the
+/// interface's (Windows).
 pub fn pin(socket: &Socket, iface: &Interface, addr: SocketAddr) -> io::Result<SocketAddr> {
     PINS.fetch_add(1, Ordering::Relaxed);
-    pin_os(socket, iface, addr)
+    pin_os(socket, iface, addr, None)
 }
 
 #[cfg(target_os = "linux")]
-fn pin_os(socket: &Socket, iface: &Interface, addr: SocketAddr) -> io::Result<SocketAddr> {
+fn pin_os(
+    socket: &Socket,
+    iface: &Interface,
+    addr: SocketAddr,
+    _: Option<&Link>,
+) -> io::Result<SocketAddr> {
     socket.bind_device(Some(iface.name().as_bytes()))?;
     Ok(addr)
 }
 
 #[cfg(windows)]
-fn pin_os(_: &Socket, iface: &Interface, addr: SocketAddr) -> io::Result<SocketAddr> {
-    let link = windows_link(iface).map_err(Down::into_io)?;
+fn pin_os(
+    _: &Socket,
+    iface: &Interface,
+    addr: SocketAddr,
+    seen: Option<&Link>,
+) -> io::Result<SocketAddr> {
+    let listed;
+    let link = match seen {
+        Some(link) => link,
+        None => {
+            listed = windows_link(iface).map_err(Down::into_io)?;
+            &listed
+        }
+    };
     let ip = link
         .addrs
         .iter()
         .copied()
         .find(|ip| ip.is_ipv6() == addr.is_ipv6())
-        .ok_or_else(|| Down::NoAddress.into_io())?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable, NoFamily))?;
     if !addr.ip().is_unspecified() && addr.ip() != ip {
         return Err(io::Error::new(
             io::ErrorKind::AddrNotAvailable,
@@ -151,7 +171,7 @@ fn pin_os(_: &Socket, iface: &Interface, addr: SocketAddr) -> io::Result<SocketA
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-fn pin_os(_: &Socket, _: &Interface, _: SocketAddr) -> io::Result<SocketAddr> {
+fn pin_os(_: &Socket, _: &Interface, _: SocketAddr, _: Option<&Link>) -> io::Result<SocketAddr> {
     Err(Down::Unsupported.into_io())
 }
 
@@ -163,14 +183,44 @@ pub fn pins() -> u64 {
     PINS.load(Ordering::Relaxed)
 }
 
-/// Whether a socket error says the interface it's pinned to went away
-/// (`ENODEV`, `ENETDOWN`, `EADDRNOTAVAIL` or Windows' equivalents), so
-/// the guard should check again now rather than at its next tick.
+/// The interface has no address of the socket's family (Windows binds to
+/// the interface's address, so a v4-only VPN has no IPv6 socket).
+#[derive(Debug)]
+struct NoFamily;
+
+impl fmt::Display for NoFamily {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the network interface has no address of this family")
+    }
+}
+
+impl std::error::Error for NoFamily {}
+
+/// Whether a pin failed only because the interface has no address of the
+/// socket's family: that socket is skipped, and nothing is wrong with the
+/// interface.
+pub fn is_no_family(e: &io::Error) -> bool {
+    e.get_ref().is_some_and(|inner| inner.is::<NoFamily>())
+}
+
+/// Whether a socket error may mean the interface it's pinned to went away
+/// (`ENODEV`, `ENETDOWN` or Windows' equivalent), so the guard should
+/// check again now rather than at its next tick ([`Guard::trip`]).
 pub fn is_gone(e: &io::Error) -> bool {
-    matches!(
-        e.kind(),
-        io::ErrorKind::NetworkDown | io::ErrorKind::AddrNotAvailable
-    ) || (cfg!(target_os = "linux") && e.raw_os_error() == Some(19))
+    e.kind() == io::ErrorKind::NetworkDown
+        || (cfg!(target_os = "linux") && e.raw_os_error() == Some(19))
+}
+
+/// Whether a pin was refused outright: the device is missing, pinning
+/// isn't allowed (`EPERM`/`EACCES`: Linux before 5.7 without
+/// `CAP_NET_RAW`) or isn't supported here. The crawl can't use the
+/// interface, so it stays down ([`Guard::hold`]).
+pub fn is_refused(e: &io::Error) -> bool {
+    is_gone(e)
+        || matches!(
+            e.kind(),
+            io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported | io::ErrorKind::NotFound
+        )
 }
 
 /// Why the interface can't be used. [`code`](Self::code) is the stable
@@ -183,8 +233,7 @@ pub enum Down {
     Down,
     /// It has no address to bind (Windows).
     NoAddress,
-    /// A socket couldn't be pinned to it, or one pinned to it failed as
-    /// if it were gone ([`is_gone`]).
+    /// The crawl's sockets can't be pinned to it ([`Guard::hold`]).
     BindFailed,
     /// This platform can't pin a socket to an interface.
     Unsupported,
@@ -273,7 +322,11 @@ fn check_os(iface: &Interface) -> Result<Link, Down> {
 #[cfg(windows)]
 fn windows_link(iface: &Interface) -> Result<Link, Down> {
     let all = if_addrs::get_if_addrs().map_err(|_| Down::Missing)?;
-    let mine: Vec<_> = all.into_iter().filter(|i| i.name == iface.name()).collect();
+    // Windows compares adapter names without regard to case.
+    let mine: Vec<_> = all
+        .into_iter()
+        .filter(|i| i.name.eq_ignore_ascii_case(iface.name()))
+        .collect();
     if mine.is_empty() {
         return Err(Down::Missing);
     }
@@ -334,16 +387,24 @@ impl State {
 type Probe = dyn Fn(&Interface) -> Result<Link, Down> + Send + Sync;
 
 /// Watches one interface for the crawl: [`check`]s it every
-/// [`CHECK_EVERY`] ([`run`](Self::run)) and at once when a socket reports
-/// it gone ([`trip`](Self::trip)).
+/// [`CHECK_EVERY`] ([`run`](Self::run)), at once when a socket reports it
+/// may be gone ([`trip`](Self::trip)), and holds it down while the crawl's
+/// sockets can't be pinned to it ([`hold`](Self::hold)).
 pub struct Guard {
     iface: Interface,
     probe: Box<Probe>,
     state: watch::Sender<State>,
-    /// The link last seen up; `None` while down.
-    link: std::sync::Mutex<Option<Link>>,
+    seen: std::sync::Mutex<Seen>,
     generation: AtomicU64,
     trips: AtomicU64,
+}
+
+#[derive(Default)]
+struct Seen {
+    /// The link last seen usable; `None` while it isn't.
+    link: Option<Link>,
+    /// Down for this reason whatever the checks say, until released.
+    held: Option<Down>,
 }
 
 impl fmt::Debug for Guard {
@@ -370,7 +431,7 @@ impl Guard {
             iface,
             probe: Box::new(probe),
             state: watch::Sender::new(State::Down(Down::Missing)),
-            link: std::sync::Mutex::new(None),
+            seen: std::sync::Mutex::default(),
             generation: AtomicU64::new(0),
             trips: AtomicU64::new(0),
         });
@@ -390,59 +451,119 @@ impl Guard {
         self.state.subscribe()
     }
 
-    /// Times the interface went from up to down.
+    /// Times the published state went from up to down.
     pub fn trips(&self) -> u64 {
         self.trips.load(Ordering::Relaxed)
     }
 
-    fn link(&self) -> std::sync::MutexGuard<'_, Option<Link>> {
-        self.link.lock().unwrap_or_else(|e| e.into_inner())
+    fn seen(&self) -> std::sync::MutexGuard<'_, Seen> {
+        self.seen.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Checks the interface now and publishes what changed.
-    pub fn poll(&self) -> State {
-        let seen = (self.probe)(&self.iface);
-        let mut link = self.link();
-        match seen {
-            Ok(now) if link.as_ref() == Some(&now) => {}
-            Ok(now) => {
-                *link = Some(now);
-                let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-                self.state.send_replace(State::Up { generation });
-            }
-            Err(why) => self.set_down(&mut link, why),
+    /// Whether the last check found the interface usable, held or not.
+    pub fn link_up(&self) -> bool {
+        self.seen().link.is_some()
+    }
+
+    /// [`pin`] for the crawl's sockets: on Windows from the last check's
+    /// addresses (no adapter listing per socket), and refused while the
+    /// last check found the interface unusable.
+    pub fn pin(&self, socket: &Socket, addr: SocketAddr) -> io::Result<SocketAddr> {
+        PINS.fetch_add(1, Ordering::Relaxed);
+        let link = self.seen().link.clone();
+        if cfg!(windows) && link.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NetworkDown,
+                "the crawl's network interface is down",
+            ));
         }
+        pin_os(socket, &self.iface, addr, link.as_ref())
+    }
+
+    /// With `seen` locked: publishes what `seen` now says.
+    fn publish(&self, seen: &Seen) {
+        let next = match (seen.held, &seen.link) {
+            (Some(why), _) => return self.publish_state(State::Down(why)),
+            (None, Some(_)) => State::Up {
+                generation: self.generation.load(Ordering::Relaxed),
+            },
+            // Down for whatever reason the state already says.
+            (None, None) => return,
+        };
+        self.publish_state(next);
+    }
+
+    fn publish_state(&self, next: State) {
+        let was_up = self.state.borrow().is_up();
+        let changed = self.state.send_if_modified(|s| {
+            let changed = *s != next;
+            *s = next;
+            changed
+        });
+        if changed && was_up && !next.is_up() {
+            self.trips.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Checks the interface now and publishes what changed. A link that
+    /// differs from the last one seen (a new index or address) is a new
+    /// generation: the old sockets are stale.
+    pub fn poll(&self) -> State {
+        let probed = (self.probe)(&self.iface);
+        let mut seen = self.seen();
+        match probed {
+            Ok(now) => {
+                if seen.link.as_ref() != Some(&now) {
+                    seen.link = Some(now);
+                    self.generation.fetch_add(1, Ordering::Relaxed);
+                }
+                self.publish(&seen);
+            }
+            Err(why) => {
+                seen.link = None;
+                self.publish_state(State::Down(seen.held.unwrap_or(why)));
+            }
+        }
+        drop(seen);
         self.state()
     }
 
-    fn set_down(&self, link: &mut Option<Link>, why: Down) {
-        if link.take().is_some() {
-            self.trips.fetch_add(1, Ordering::Relaxed);
-        }
-        self.state.send_if_modified(|s| {
-            let changed = *s != State::Down(why);
-            *s = State::Down(why);
-            changed
-        });
-    }
-
-    /// A pinned socket failed: when the error says the interface is gone
-    /// ([`is_gone`]), the crawl goes down now, and the next
-    /// [`poll`](Self::poll) that finds the interface usable brings it up
-    /// under a new generation, so every socket is made again.
+    /// A pinned socket failed: when the error says the interface may be
+    /// gone ([`is_gone`]), it's checked now rather than at the next tick.
+    /// The check decides: gone is down; made again (a new index or address)
+    /// is a new generation, so every socket is made again.
     pub fn trip(&self, e: &io::Error) {
         if is_gone(e) {
-            self.down(Down::BindFailed);
+            self.poll();
         }
     }
 
-    /// Marks the interface down for `why` (a socket couldn't be pinned).
-    pub fn down(&self, why: Down) {
-        let mut link = self.link();
-        self.set_down(&mut link, why);
+    /// The crawl's sockets can't be pinned ([`is_refused`]): down for
+    /// `why`, whatever the checks say, until [`release`](Self::release).
+    pub fn hold(&self, why: Down) {
+        let mut seen = self.seen();
+        seen.held = Some(why);
+        self.publish(&seen);
     }
 
-    /// Checks every `every` until the last strong reference goes.
+    /// Ends a [`hold`](Self::hold): up again if the last check found the
+    /// interface usable, under the same generation.
+    pub fn release(&self) {
+        let mut seen = self.seen();
+        if seen.held.take().is_some() {
+            if seen.link.is_none() {
+                // The next check says why it's down.
+                drop(seen);
+                self.poll();
+                return;
+            }
+            self.publish(&seen);
+        }
+    }
+
+    /// Checks every `every` until the last strong reference goes. Each
+    /// check runs on the blocking pool (sysfs reads; Windows lists every
+    /// adapter).
     pub async fn run(self: Arc<Guard>, every: Duration) {
         let weak = Arc::downgrade(&self);
         drop(self);
@@ -451,7 +572,10 @@ impl Guard {
         loop {
             tick.tick().await;
             let Some(guard) = weak.upgrade() else { break };
-            guard.poll();
+            let _ = tokio::task::spawn_blocking(move || {
+                guard.poll();
+            })
+            .await;
         }
     }
 }
@@ -535,7 +659,9 @@ mod tests {
     #[test]
     fn gone_errors_are_recognised() {
         assert!(is_gone(&io::Error::from(io::ErrorKind::NetworkDown)));
-        assert!(is_gone(&io::Error::from(io::ErrorKind::AddrNotAvailable)));
+        // Out of ephemeral ports, or a family the interface lacks: not a
+        // sign the interface went.
+        assert!(!is_gone(&io::Error::from(io::ErrorKind::AddrNotAvailable)));
         assert!(!is_gone(&io::Error::from(io::ErrorKind::ConnectionRefused)));
         assert!(!is_gone(&io::Error::from(io::ErrorKind::TimedOut)));
         assert_eq!(
@@ -582,17 +708,57 @@ mod tests {
     }
 
     #[test]
-    fn a_gone_socket_trips_the_guard_until_the_next_check() {
-        let (guard, _seen) = scripted(Ok(link(3)));
+    fn a_trip_checks_now_and_the_check_decides() {
+        let (guard, seen) = scripted(Ok(link(3)));
         assert_eq!(guard.state(), State::Up { generation: 1 });
+        *seen.lock().unwrap() = Err(Down::Missing);
         guard.trip(&io::Error::from(io::ErrorKind::ConnectionReset));
-        assert!(guard.state().is_up(), "an ordinary error isn't a trip");
+        assert!(guard.state().is_up(), "an ordinary error doesn't check");
         guard.trip(&io::Error::from(io::ErrorKind::NetworkDown));
-        assert_eq!(guard.state(), State::Down(Down::BindFailed));
+        assert_eq!(guard.state(), State::Down(Down::Missing), "checked now");
         assert_eq!(guard.trips(), 1);
-        // The same link is back on the next check, under a new
-        // generation: every socket is made again.
-        assert_eq!(guard.poll(), State::Up { generation: 2 });
+        // Made again under a new index: a new generation, so every
+        // socket is made again.
+        *seen.lock().unwrap() = Ok(link(4));
+        guard.trip(&io::Error::from(io::ErrorKind::NetworkDown));
+        assert_eq!(guard.state(), State::Up { generation: 2 });
+        // Still there: a trip changes nothing.
+        guard.trip(&io::Error::from(io::ErrorKind::NetworkDown));
+        assert_eq!(guard.state(), State::Up { generation: 2 });
+    }
+
+    #[test]
+    fn a_hold_stays_down_through_checks_until_released() {
+        let (guard, seen) = scripted(Ok(link(3)));
+        guard.hold(Down::BindFailed);
+        assert_eq!(guard.state(), State::Down(Down::BindFailed));
+        for _ in 0..3 {
+            assert_eq!(guard.poll(), State::Down(Down::BindFailed), "held");
+        }
+        assert!(guard.link_up(), "the link itself is fine");
+        assert_eq!(guard.trips(), 1, "one trip for the whole hold");
+        guard.release();
+        assert_eq!(guard.state(), State::Up { generation: 1 }, "same link");
+        // Released while the interface is gone: down for that reason.
+        guard.hold(Down::BindFailed);
+        *seen.lock().unwrap() = Err(Down::Missing);
+        assert_eq!(guard.poll(), State::Down(Down::BindFailed));
+        guard.release();
+        assert_eq!(guard.state(), State::Down(Down::Missing));
+    }
+
+    #[test]
+    fn a_missing_family_is_told_apart() {
+        let e = io::Error::new(io::ErrorKind::AddrNotAvailable, NoFamily);
+        assert!(is_no_family(&e) && !is_gone(&e) && !is_refused(&e));
+        assert!(!is_no_family(&io::Error::from(
+            io::ErrorKind::AddrNotAvailable
+        )));
+        assert!(is_refused(&io::Error::from(
+            io::ErrorKind::PermissionDenied
+        )));
+        assert!(is_refused(&io::Error::from(io::ErrorKind::NetworkDown)));
+        assert!(!is_refused(&io::Error::from(io::ErrorKind::AddrInUse)));
     }
 
     #[test]

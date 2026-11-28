@@ -10,7 +10,7 @@ use lodestar_dht::node::{
 };
 #[cfg(test)]
 use lodestar_metainfo::InfoHash;
-use lodestar_network_policy::iface::{Down, State};
+use lodestar_network_policy::iface::{self, Down, State};
 use lodestar_sources::{
     BoxFuture, Consent, Endpoint, Found, Kind, LookupSession, Manifest, Network, PeerRequest,
     PluginError, Priority, Risk, SessionAdmission, SourceCtx, SourcePlugin, Terminal,
@@ -233,28 +233,61 @@ impl SourcePlugin for DhtSource {
                     paused: *paused.borrow_and_update(),
                     ..self.config.clone()
                 };
-                let node = match (
+                let (node, generation) = match (
                     Node::start(config, Some(tx.clone())).await,
                     &self.config.guard,
                 ) {
-                    (Ok(node), _) => node,
-                    (Err(e), Some(guard)) => {
-                        // Fail closed: down until the next check finds
-                        // the interface usable, then tried again.
+                    (Ok(node), _) => (node, generation),
+                    // X-vpn-bind: the interface is there but the sockets
+                    // can't be pinned to it (Linux before 5.7 without
+                    // `CAP_NET_RAW`, or it went just now). Fail closed: the
+                    // guard holds the crawl down, so the retries below don't
+                    // flap it up and down, until a start works.
+                    (Err(e), Some(guard)) if iface::is_refused(&e) => {
                         lodestar_log::log_event!(
                             crate::log_events::VPN_PIN_FAILED,
                             error = lodestar_log::Error::new(&e)
                         );
-                        guard.down(Down::BindFailed);
-                        tokio::select! {
-                            biased;
-                            _ = ctx.shutdown.requested() => return Ok(()),
-                            () = tokio::time::sleep(retry) => {}
-                        }
-                        retry = (retry * 2).min(PIN_RETRY_MAX);
-                        continue;
+                        guard.hold(Down::BindFailed);
+                        let started = loop {
+                            tokio::select! {
+                                biased;
+                                _ = ctx.shutdown.requested() => {
+                                    guard.release();
+                                    return Ok(());
+                                }
+                                () = tokio::time::sleep(retry) => {}
+                            }
+                            retry = (retry * 2).min(PIN_RETRY_MAX);
+                            if !guard.link_up() {
+                                // Gone meanwhile: wait for it as usual.
+                                break None;
+                            }
+                            let config = Config {
+                                paused: *paused.borrow_and_update(),
+                                ..self.config.clone()
+                            };
+                            match Node::start(config, Some(tx.clone())).await {
+                                Ok(node) => break Some(node),
+                                Err(e) if iface::is_refused(&e) => {}
+                                Err(e) => {
+                                    guard.release();
+                                    return Err(PluginError(format!("DHT bind failed: {e}")));
+                                }
+                            }
+                        };
+                        guard.release();
+                        let Some(node) = started else { continue };
+                        // The generation the hold ended under; one that's
+                        // already down stops this node at once (0 is
+                        // never a generation).
+                        let generation = match guard.state() {
+                            State::Up { generation } => generation,
+                            State::Down(_) => 0,
+                        };
+                        (node, Some(generation))
                     }
-                    (Err(e), None) => return Err(PluginError(format!("DHT bind failed: {e}"))),
+                    (Err(e), _) => return Err(PluginError(format!("DHT bind failed: {e}"))),
                 };
                 lodestar_log::log_event!(
                     crate::log_events::DHT_STARTED,

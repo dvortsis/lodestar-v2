@@ -194,3 +194,59 @@ async fn without_a_guard_there_is_no_vpn_status() {
     assert!(st.vpn.is_none() && !st.paused, "{st:?}");
     pipeline.shutdown().await.unwrap();
 }
+
+/// A start whose sockets can't be pinned (here: a probe that says up for
+/// an interface that doesn't exist) holds the crawl down as `bind_failed`
+/// through every later check, rather than flapping it up between retries.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pin_that_fails_holds_the_crawl_down_across_checks() {
+    let guard = Guard::with_probe(
+        Interface::parse("lsnone0").unwrap(),
+        |_| Ok(Link::default()),
+    );
+    assert!(guard.state().is_up(), "the probe says up");
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let dht = Arc::new(DhtSource::new(DhtConfig {
+        bind: vec![SocketAddr::from(([127, 0, 0, 1], 0))],
+        bootstrap: vec![],
+        allow_private: true,
+        guard: Some(guard.clone()),
+        ..DhtConfig::default()
+    }));
+    let pipeline = Pipeline::start_with(
+        PipelineConfig {
+            vpn: Some(guard.clone()),
+            ..PipelineConfig::default()
+        },
+        Store::open(&db, StoreConfig::default()).unwrap(),
+        vec![dht.clone()],
+        Arc::new(NoFetch),
+    )
+    .await
+    .unwrap();
+    let store = Arc::new(Mutex::new(
+        Store::open(&db, StoreConfig::default()).unwrap(),
+    ));
+    let control = Control::start(
+        pipeline.monitor(),
+        Some(dht.clone()),
+        store,
+        false,
+        Intensity::Balanced,
+    )
+    .await
+    .unwrap();
+    until("the hold", || {
+        control.status().vpn.unwrap().down == Some("bind_failed")
+    })
+    .await;
+    for _ in 0..5 {
+        guard.poll();
+        assert_eq!(control.status().vpn.unwrap().down, Some("bind_failed"));
+        assert!(control.status().paused && !running(&dht));
+    }
+    assert_eq!(guard.trips(), 1, "one trip, no flapping");
+    pipeline.shutdown().await.unwrap();
+}

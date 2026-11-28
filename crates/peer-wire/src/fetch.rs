@@ -404,7 +404,7 @@ async fn dial(addr: SocketAddr, opts: &FetchOptions) -> io::Result<TcpStream> {
             "the crawl's network interface is down",
         ));
     }
-    let dialed = pinned_dial(addr, guard.interface()).await;
+    let dialed = pinned_dial(addr, guard).await;
     if let Err(e) = &dialed {
         guard.trip(e);
     }
@@ -414,7 +414,7 @@ async fn dial(addr: SocketAddr, opts: &FetchOptions) -> io::Result<TcpStream> {
 /// A TCP socket pinned to `iface` before it binds or connects.
 pub(crate) async fn pinned_dial(
     addr: SocketAddr,
-    iface: &lodestar_network_policy::iface::Interface,
+    guard: &lodestar_network_policy::iface::Guard,
 ) -> io::Result<TcpStream> {
     use socket2::{Domain, Protocol, Socket, Type};
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -426,7 +426,7 @@ pub(crate) async fn pinned_dial(
         SocketAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
         SocketAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
     };
-    let local = lodestar_network_policy::iface::pin(&socket, iface, any)?;
+    let local = guard.pin(&socket, any)?;
     // Windows: the interface's own address, so the strong host model
     // keeps the connection on it. Linux: the device pin is enough.
     if !local.ip().is_unspecified() {

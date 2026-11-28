@@ -28,7 +28,7 @@ use crate::{Counts, Error, Reply, Result, check_batch, message};
 fn pinned(bind: SocketAddr, guard: &iface::Guard) -> std::io::Result<UdpSocket> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::for_address(bind), Type::DGRAM, Some(Protocol::UDP))?;
-    let bind = iface::pin(&socket, guard.interface(), bind)?;
+    let bind = guard.pin(&socket, bind)?;
     socket.set_nonblocking(true)?;
     socket.bind(&bind.into())?;
     UdpSocket::from_std(socket.into())

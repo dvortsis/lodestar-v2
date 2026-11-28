@@ -580,6 +580,21 @@ fn run_with(
                     "the coordinator's address is missing: {JOIN_AGAIN}"
                 ))
             })?;
+        // X-vpn-bind: a remote worker can't limit its crawl to one
+        // interface yet (X-vpn-bind-worker), so it refuses to start rather
+        // than crawl by the normal route with the setting ignored.
+        if config
+            .dht
+            .interface
+            .as_deref()
+            .is_some_and(|i| !i.is_empty())
+        {
+            return Err(Failure::Failed(
+                "dht.interface isn't supported by `lodestar worker` yet: remove it from this \
+                 worker's config.toml, or run the worker where its whole network is the VPN"
+                    .into(),
+            ));
+        }
         report(&format!("{CONNECTING}{addr}"));
         let settings = Settings::default();
         // The worker's fetch budget (WK-10b): dicts up to `MAX_METADATA`,

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::InfoHash;
-use lodestar_network_policy::iface::{Down, Guard, Interface, Link, State};
+use lodestar_network_policy::iface::{Down, Guard, Interface, Link};
 use lodestar_peer_wire::testing::{Accept, Behavior, FakePeer, Seed};
 use lodestar_peer_wire::{Error, FetchOptions, fetch};
 
@@ -71,8 +71,9 @@ async fn a_down_guard_refuses_before_any_packet() {
 
 /// The socket is the safety, not the probe: a probe that wrongly says the
 /// interface is up still can't make a fetch leave by the normal route.
+/// The failure makes the guard check at once; the (lying) check decides.
 #[tokio::test]
-async fn a_probe_that_lies_still_cant_leak_and_the_failure_trips_the_guard() {
+async fn a_probe_that_lies_still_cant_leak() {
     let (l, addr) = listener();
     let guard = Guard::with_probe(
         Interface::parse("lsnone0").unwrap(),
@@ -85,5 +86,5 @@ async fn a_probe_that_lies_still_cant_leak_and_the_failure_trips_the_guard() {
         "ENODEV, not a connection: {r:?}"
     );
     assert!(nothing_connected(&l));
-    assert_eq!(guard.state(), State::Down(Down::BindFailed));
+    assert!(guard.state().is_up(), "the check said up, so up");
 }

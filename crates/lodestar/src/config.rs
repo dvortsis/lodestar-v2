@@ -295,12 +295,22 @@ impl Default for Dht {
 impl Dht {
     /// `interface` checked ([`Interface::parse`]); `None` for any route.
     pub fn crawl_interface(&self) -> Result<Option<Interface>, ConfigError> {
-        match self.interface.as_deref() {
-            None | Some("") => Ok(None),
-            Some(name) => Interface::parse(name)
-                .map(Some)
-                .map_err(|e| ConfigError(format!("dht.interface: {e}"))),
+        let iface = match self.interface.as_deref() {
+            None | Some("") => return Ok(None),
+            Some(name) => {
+                Interface::parse(name).map_err(|e| ConfigError(format!("dht.interface: {e}")))?
+            }
+        };
+        // Windows binds the interface's own address, so a specific
+        // `dht.bind` address would conflict with it.
+        if cfg!(windows) && self.bind.iter().any(|a| !a.ip().is_unspecified()) {
+            return Err(ConfigError(
+                "dht.interface: on Windows, dht.bind must use the unspecified address \
+                 (0.0.0.0 or [::]) with an interface; the interface's own address is used"
+                    .into(),
+            ));
         }
+        Ok(Some(iface))
     }
 }
 

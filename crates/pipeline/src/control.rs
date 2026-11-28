@@ -1022,16 +1022,14 @@ impl Control {
         }
         // Set up between the pipeline's start (which paused the pool for
         // the hold) and now: the pool takes the setting's value here.
-        if monitor.setup_done().is_some() && !held && !paused {
-            monitor.pool().set_paused(false).await;
-        }
         // Likewise for an interface that came up since (X-vpn-bind); one
         // that's down keeps the pool paused.
-        if vpn_guard.is_some() {
-            monitor
-                .pool()
-                .set_paused(paused || held || vpn.is_some())
-                .await;
+        if (monitor.setup_done().is_some() || vpn_guard.is_some())
+            && !held
+            && !paused
+            && vpn.is_none()
+        {
+            monitor.pool().set_paused(false).await;
         }
         // What a pinning plugin was built with: the start's credentials.
         // This relies on nothing writing a credential between the plugin's
