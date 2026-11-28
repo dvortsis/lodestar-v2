@@ -11,9 +11,10 @@ name: CI
 # the branch (workflow_dispatch runs everything). A manual run tests the branch
 # head without main merged in, so if the PR run is red, push or merge main
 # instead: a passing manual run would replace the failed checks.
-# Skipped jobs show as skipped; a skipped matrix job keeps its unexpanded name
-# (`test (${{ matrix.os }})`), so branch protection requires the aggregate
-# `ci-ok` job (at the end) rather than individual matrix entries.
+# Skipped jobs show as skipped; a skipped matrix job keeps its unexpanded
+# name (`test (${{ matrix.os }}, ${{ matrix.shard }})`), so branch protection
+# requires the aggregate `ci-ok` job (at the end) rather than individual
+# matrix entries.
 
 on:
   push:
@@ -150,14 +151,28 @@ jobs:
           python3 .github/scripts/test_licenses.py
           python3 .github/scripts/licenses.py --check
 
+  # `cargo test --workspace`, split into four shards per OS (X-ci-test-shard).
+  # Each shard runs `cargo test --workspace` with target filters from
+  # .github/scripts/test_shards.py: --workspace keeps feature resolution, so
+  # every shard builds the same test binaries the whole run would, and
+  # together they run each target once. ci-ok reads the matrix's aggregate
+  # result, so one failed or cancelled shard fails it.
+  # The OS list is literal: `exclude` drops the ones changes didn't select,
+  # and can only remove entries, so runs-on never takes a value from
+  # repository code (M8-PERF-3's runner guard).
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.shard }})
     needs: changes
     if: needs.changes.outputs.test_os != '[]'
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.changes.outputs.test_os) }}
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        shard: [lib, bins, tests-a, tests-b]
+        exclude:
+          - os: ${{ !contains(fromJSON(needs.changes.outputs.test_os), 'ubuntu-latest') && 'ubuntu-latest' || 'none' }}
+          - os: ${{ !contains(fromJSON(needs.changes.outputs.test_os), 'windows-latest') && 'windows-latest' || 'none' }}
+          - os: ${{ !contains(fromJSON(needs.changes.outputs.test_os), 'macos-latest') && 'macos-latest' || 'none' }}
     runs-on: ${{ matrix.os }}
     env:
       # Debug info is most of target/ (the Linux job filled 41 GB free on
@@ -180,15 +195,42 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # The shards share one cache per OS (rust-cache keys on the job, not the
+      # matrix); `lib` builds every library's dependencies, so it saves.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ matrix.shard == 'lib' }}
+      - name: shard script tests
+        if: runner.os == 'Linux' && matrix.shard == 'lib'
+        run: python3 .github/scripts/test_test_shards.py
       # Linux never lints cfg(windows) code, so lint it here, before the tests
       # run in the same job (X-win-clippy).
       - name: clippy (Windows-only code)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.shard == 'bins'
         run: cargo clippy --workspace --all-targets -- -D warnings
       # --no-fail-fast: one failing test binary doesn't hide failures in the
       # rest; the step still fails if any test fails (X-ci-no-fail-fast).
-      - run: cargo test --workspace --no-fail-fast
+      # A shard with two invocations (tests-a's --doc) runs both, then fails
+      # if either did.
+      - name: cargo test --workspace (${{ matrix.shard }})
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then py=python; else py=python3; fi
+          # Not a process substitution: a failing script must fail the step.
+          out=$("$py" .github/scripts/test_shards.py "$SHARD")
+          mapfile -t plan <<< "$out"
+          rc=0
+          for filters in "${plan[@]}"; do
+            # An empty line would run the whole workspace on this shard.
+            if [ -z "$filters" ]; then echo "::error::empty filters for $SHARD"; exit 1; fi
+            echo "cargo test --workspace --no-fail-fast $filters"
+            # $filters is unquoted on purpose: one word per target filter
+            # (test_shards.py allows only [A-Za-z0-9_-] names).
+            cargo test --workspace --no-fail-fast $filters || rc=$?
+          done
+          exit "$rc"
       # Disk numbers for the next time this job runs short (X-ci-disk).
       - name: disk after test build
         if: always() && runner.os == 'Linux'
@@ -197,27 +239,31 @@ jobs:
           du -sh target
           du -s target/debug/deps/* 2>/dev/null | sort -rn | head -15 \
             | awk '{printf "%7.0f MB  %s\n", $1/1024, $2}'
+      # The steps below run on the `bins` shard, which builds the lodestar
+      # binary's unit tests and the integration tests they run as root.
       # The DHT's tests in their production configuration (no `testing`),
       # which the workspace run above never builds.
       # Only lodestar-crawler-sim enables the `testing` seams, so these
       # build the production types (maps, hashers, sockets).
       - name: dht and sources tests without test seams
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'bins'
         run: cargo test -p lodestar-dht -p lodestar-sources --no-fail-fast
       # DUR-26: the updater's persistence tests are Unix-only; a cfg that
-      # compiled them out must not pass as zero tests run.
+      # compiled them out must not pass as zero tests run. --workspace lists
+      # the binary the shard built and ran (X-ci-test-shard), not a rebuild.
       - name: updater tests selected
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'bins'
         run: |
-          n=$(cargo test -p lodestar --bin lodestar update:: -- --list | grep -c ': test$' || true)
+          n=$(cargo test --workspace --bin lodestar update:: -- --list | grep -c ': test$' || true)
           echo "update:: selects $n tests"
           if [ "$n" -eq 0 ]; then echo "::error::no updater tests selected"; exit 1; fi
       # The PUID/PGID drop only happens as root (tests/privdrop.rs skips
       # otherwise). Built as the runner user, so target/ stays theirs.
+      # --workspace throughout: the shard's own build, so nothing rebuilds.
       - name: privilege drop as root
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'bins'
         run: |
-          bin=$(cargo test -p lodestar --test privdrop --no-run --message-format=json \
+          bin=$(cargo test --workspace --test privdrop --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .target.name == "privdrop") | .executable')
           sudo "$bin" --test-threads=1 --nocapture 2>&1 | tee privdrop.log
           if grep -q skipping privdrop.log; then
@@ -225,21 +271,21 @@ jobs:
           fi
           # The bin's own root-only unit tests (privdrop::tests::linux: the
           # data dir tree and the witness dir hand-over).
-          unit=$(cargo test -p lodestar --bin lodestar --no-run --message-format=json \
+          unit=$(cargo test --workspace --bin lodestar --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .target.name == "lodestar" and (.target.kind | index("bin"))) | .executable')
           sudo "$unit" privdrop::tests::linux --test-threads=1 --nocapture 2>&1 | tee privdrop-unit.log
           if grep -q skipping privdrop-unit.log || ! grep -qE "test result: ok\. [1-9]" privdrop-unit.log; then
             echo "::error::the root-only privdrop unit tests skipped or failed"; exit 1
           fi
           # The maintenance commands drop root too (tests/cli.rs).
-          cli=$(cargo test -p lodestar --test cli --no-run --message-format=json \
+          cli=$(cargo test --workspace --test cli --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .target.name == "cli") | .executable')
           sudo "$cli" maintenance_runs_as_puid --exact --nocapture 2>&1 | tee cli-root.log
           if grep -q skipping cli-root.log || ! grep -q "1 passed" cli-root.log; then
             echo "::error::the root-only CLI test skipped"; exit 1
           fi
           # The worker's --data goes through the same drop (tests/worker_join.rs).
-          wj=$(cargo test -p lodestar --test worker_join --no-run --message-format=json \
+          wj=$(cargo test --workspace --test worker_join --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .target.name == "worker_join") | .executable')
           sudo "$wj" data_goes_through_the_privilege_drops_checks data_alone_is_the_folder_everything_uses \
             --exact --test-threads=1 --nocapture 2>&1 | tee worker-root.log
@@ -250,10 +296,10 @@ jobs:
       # this runner isn't root: run that one test under sudo, where it must
       # be root and see the refusal (X-cmp-privilege-refusal-ci).
       - name: companion refusal as root
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'bins'
         run: |
           # --workspace: the features the run above built, so nothing rebuilds.
-          bin=$(cargo test --workspace --no-run --message-format=json \
+          bin=$(cargo test --workspace --test supervise --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .target.name == "supervise") | .executable')
           sudo -n env LODESTAR_TEST_ROOT_RUN=1 "$bin" root_or_an_administrator_is_refused \
             --exact --nocapture 2>&1 | tee cmp-root.log

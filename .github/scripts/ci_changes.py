@@ -62,6 +62,8 @@ RUST_ALSO = re.compile(
     r"^web/src/lib/api/openapi\.json$|^web/licenses/"
     r"|^\.github/scripts/(test_)?licenses\.py$|^\.github/scripts/fixtures/licenses/"
     r"|^\.github/scripts/(test_)?log_lint\.py$"
+    # The test job's shard split (X-ci-test-shard): its tests run on the lib shard.
+    r"|^\.github/scripts/(test_)?test_shards\.py$"
     # rust.json embeds these notices; licenses.py --check runs with the Rust job.
     r"|^LICENSE$|^brand/LICENSE\.md$"
     # templates.rs checks this folder is exactly what the crate writes, and its embedded post-rules copy.

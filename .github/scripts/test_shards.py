@@ -3,8 +3,8 @@
 
     python3 .github/scripts/test_shards.py <shard>
 
-prints the target filters for that shard on one line, for example
-`--test alpha --test beta`. Every shard keeps `--workspace`, so cargo
+prints that shard's target filters, one `cargo test` invocation per line,
+for example `--test=alpha --test=beta`. Every shard keeps `--workspace`, so cargo
 resolves features exactly as a plain `cargo test --workspace` does and builds
 byte-identical test binaries; the filters only choose which ones a shard
 builds and runs (X-ci-test-shard).
@@ -12,11 +12,14 @@ builds and runs (X-ci-test-shard).
 The shards together cover every target a plain `cargo test --workspace`
 builds or runs, and each exactly once:
 
-- `lib`: every library's unit tests and doc tests (`--lib --doc`);
+- `lib`: every library's unit tests (`--lib`);
 - `bins`: every binary's unit tests, plus the integration tests the job's
   root-only steps run again under sudo (ROOT_STEP_TESTS), so those steps
   reuse this shard's build;
 - `tests-a`, `tests-b`: every other integration test, split by WEIGHTS.
+  `tests-a` also runs the doc tests (`--doc`, an invocation of its own,
+  since cargo can't mix it with other filters): they need the plain
+  libraries the integration tests build anyway, which `lib` never does.
 
 Examples are built, not run, by `cargo test`; the job builds them on the
 `bins` shard with its own step, and this script only checks they exist.
@@ -110,8 +113,8 @@ def check(found: dict[str, list[tuple[str, dict]]]) -> None:
                 raise ShardError(f"{where}: no shard covers this kind")
 
 
-def plan(metadata: dict) -> dict[str, list[str]]:
-    """The cargo target filters for every shard."""
+def plan(metadata: dict) -> dict[str, list[list[str]]]:
+    """Every shard's cargo invocations, each a list of target filters."""
     found = targets(metadata)
     check(found)
     tests = sorted({t["name"] for _, t in found.get("test", [])})
@@ -131,13 +134,14 @@ def plan(metadata: dict) -> dict[str, list[str]]:
         load[s] += weight[n]
         chosen[s].append(n)
     out = {
-        "lib": ["--lib", "--doc"],
-        "bins": ["--bins", *[f"--test={n}" for n in ROOT_STEP_TESTS]],
+        "lib": [["--lib"]],
+        "bins": [["--bins", *[f"--test={n}" for n in ROOT_STEP_TESTS]]],
     }
     for s in SPLIT:
         if not chosen[s]:
             raise ShardError(f"{s} got no tests")
-        out[s] = [f"--test={n}" for n in sorted(chosen[s])]
+        out[s] = [[f"--test={n}" for n in sorted(chosen[s])]]
+    out["tests-a"].append(["--doc"])
     return out
 
 
@@ -158,7 +162,8 @@ def main(argv: list[str]) -> int:
         print(f"usage: test_shards.py {{{'|'.join(SHARDS)}}}", file=sys.stderr)
         return 2
     try:
-        print(" ".join(plan(metadata())[argv[1]]))
+        for line in plan(metadata())[argv[1]]:
+            print(" ".join(line))
     except ShardError as e:
         print(f"::error::test_shards.py: {e}", file=sys.stderr)
         return 1
