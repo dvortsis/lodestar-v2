@@ -615,7 +615,8 @@ for (const lang of ['en', 'zh-CN'] as const) {
 				r.selectNodeContents(el);
 				return r.getBoundingClientRect().width;
 			});
-			console.log(`${lang} count text width: ${text}`);
+			// The floor in toolbar.css (384 px) must hold the text: a font change says so here.
+			expect(text).toBeLessThanOrEqual(384);
 			expect((await toolbar.boundingBox())?.height).toBe(before?.height);
 			expect((await row(page, 1).boundingBox())?.y).toBe(first);
 			expect(await page.getByLabel(/^(Sort|排序)/).boundingBox()).toEqual(sort);

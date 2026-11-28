@@ -14,7 +14,7 @@ From 128rem of window the toolbar is layout L3: `justify-content: flex-start`, s
   | en | "≈ 2.4M results · 9,999,999 hidden by filters · Show" | 360.9 px |
   | zh | "≈ 240万 个结果 · 9,999,999 个已被过滤器隐藏 · 显示" | 380.2 px |
 
-  Step 96 (384 px) holds both, so it stays. zh leaves 4 px, so a CJK fallback font wider than the one measured would show up as the e2e case failing, not as a silent shift.
+  Step 96 (384 px) holds both, so it stays. zh leaves 4 px, so the e2e case asserts the text stays within 384 px. The zh figure is measured with the container's Chinese fallback font (WenQuanYi Zen Hei, also CI's); a CJK fallback font wider than the one measured would show up as the e2e case failing, not as a silent shift.
 - **Residual.** A longer count than the worst case measured (a grouped total with a long hidden count) still pushes the controls, as X-hidden-count already says for narrow widths.
 - **Rejected: anchoring the controls independently** (e.g. `margin-inline-start: auto`). It changes L3's look, which is the owner-decided layout.
 
