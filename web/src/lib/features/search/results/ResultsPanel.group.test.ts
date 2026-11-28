@@ -57,8 +57,12 @@ const query = (word: string) => ({
 });
 
 beforeAll(() => stubLayout(600, 1000));
+// The panel's lazy imports, settled before the environment closes: a row's focus or hover starts
+// `import('$lib/features/detail/open')`, which otherwise can finish after teardown.
 afterAll(async () => {
 	await Promise.all([
+		import('$lib/features/detail/open'),
+		import('$lib/features/detail/commands'),
 		import('./RowActions.svelte'),
 		import('./commands'),
 		import('$lib/keys'),
