@@ -138,12 +138,23 @@ def label_value_problems(name, job_id, job, value):
     if not m:
         return [f"runs-on {value!r} is an expression other than matrix.<key>"]
     key = m.group(1)
-    matrix = (job.get("strategy") or {}).get("matrix")
+    strategy = job.get("strategy") or {}
+    if not isinstance(strategy, dict):
+        return [f"runs-on {value!r}: the strategy is not a mapping ({strategy!r})"]
+    matrix = strategy.get("matrix")
     if isinstance(matrix, str):
         return [f"runs-on {value!r}: the matrix is an expression ({matrix})"]
     if not isinstance(matrix, dict):
         return [f"runs-on {value!r}: the job has no matrix"]
-    raw = matrix.get(key)
+    # Expression contexts ignore case, so `OS:` could feed `matrix.os`: match
+    # keys case-insensitively, and refuse keys that differ only in case.
+    folded = [str(k).casefold() for k in matrix]
+    if len(folded) != len(set(folded)):
+        return [f"runs-on {value!r}: matrix keys differ only in case"]
+    key = key.casefold()
+    raw = next((v for k, v in matrix.items() if str(k).casefold() == key), None)
+    if any(str(k).casefold() in ("include", "exclude") and k not in ("include", "exclude") for k in matrix):
+        return [f"runs-on {value!r}: matrix include/exclude must be spelled in lower case"]
     candidates = []
     # `exclude` may be driven by expressions (ci.yml's test job drops the
     # operating systems a change doesn't need that way): it can only remove
@@ -160,8 +171,10 @@ def label_value_problems(name, job_id, job, value):
     for entry in include or []:
         if not isinstance(entry, dict):
             return [f"runs-on {value!r}: a matrix.include entry is not a mapping ({entry!r})"]
-        if key in entry:
-            candidates.append(entry[key])
+        hits = [v for k, v in entry.items() if str(k).casefold() == key]
+        if len(hits) > 1:
+            return [f"runs-on {value!r}: a matrix.include entry has keys that differ only in case"]
+        candidates.extend(hits)
     if not candidates:
         return [f"runs-on {value!r}: matrix.{key} has no values"]
     out = []

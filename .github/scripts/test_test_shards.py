@@ -150,6 +150,14 @@ class Plan(unittest.TestCase):
                 with self.assertRaises(test_shards.ShardError):
                     test_shards.plan(with_feature(change))
 
+    def test_lines_end_in_a_bare_newline(self):
+        # Windows' Python would write \r\n, and bash would pass the \r to cargo.
+        out = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import test_shards as t;"
+                              "t.metadata = lambda: __import__('json').loads(sys.argv[2]); t.main(['x', 'tests-a'])",
+                              str(HERE), __import__("json").dumps(workspace())], capture_output=True, check=True).stdout
+        self.assertNotIn(b"\r", out)
+        self.assertEqual(out.count(b"\n"), 2)
+
     def test_cli_rejects_unknown_shards(self):
         self.assertEqual(test_shards.main(["test_shards.py", "nope"]), 2)
         self.assertEqual(test_shards.main(["test_shards.py"]), 2)
@@ -172,6 +180,24 @@ class Workflow(unittest.TestCase):
                      f"shard: [{', '.join(test_shards.SHARDS)}]",
                      "runs-on: ${{ matrix.os }}", "fail-fast: false"):
             self.assertTrue(line in body, line)
+
+    def test_exclude_drops_exactly_the_operating_systems_changes_left_out(self):
+        body = self.job("test")
+        oses = ["ubuntu-latest", "windows-latest", "macos-latest"]
+        block = re.search(r"\n        exclude:\n((?:          .*\n)+)", body)
+        self.assertIsNotNone(block, "no exclude block")
+        want = "".join(f"          - os: ${{{{ !contains(fromJSON(needs.changes.outputs.test_os), '{o}') "
+                       f"&& '{o}' || 'none' }}}}\n" for o in oses)
+        self.assertEqual(block.group(1), want)
+
+    def test_every_os_ci_changes_can_pick_is_in_the_literal_list(self):
+        source = (HERE / "ci_changes.py").read_text()
+        lines = [line for line in source.splitlines() if 'out["test_os"]' in line]
+        self.assertTrue(lines)
+        picked = set()
+        for line in lines:
+            picked |= set(re.findall(r'"([a-z]+-latest)"', line))
+        self.assertEqual(picked, {"ubuntu-latest", "windows-latest", "macos-latest"})
 
     def test_the_bins_shard_builds_the_examples(self):
         body = self.job("test")

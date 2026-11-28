@@ -225,6 +225,7 @@ jobs:
           while IFS= read -r line; do plan+=("$line"); done <<< "$out"
           rc=0
           for filters in "${plan[@]}"; do
+            filters=${filters%$'\r'}  # in case Windows' Python wrote \r\n
             # An empty line would run the whole workspace on this shard.
             if [ -z "$filters" ]; then echo "::error::empty filters for $SHARD"; exit 1; fi
             echo "cargo test --workspace --no-fail-fast $filters"

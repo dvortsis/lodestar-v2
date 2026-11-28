@@ -217,6 +217,8 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2 or argv[1] not in SHARDS:
         print(f"usage: test_shards.py {{{'|'.join(SHARDS)}}}", file=sys.stderr)
         return 2
+    # Bare \n even on Windows, where bash would hand a \r on to cargo.
+    sys.stdout.reconfigure(newline="\n")
     try:
         for line in plan(metadata())[argv[1]]:
             print(" ".join(line))

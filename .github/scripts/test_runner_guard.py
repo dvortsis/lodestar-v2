@@ -128,6 +128,22 @@ class OtherWorkflows(unittest.TestCase):
             with self.subTest(exclude=x):
                 self.ok(base.replace("{x}", x), "ci.yml")
 
+    def test_matrix_keys_match_without_case(self):
+        base = ("name: x\non: push\njobs:\n  test:\n    strategy:\n      matrix:\n{m}"
+                "    runs-on: ${{ matrix.os }}\n    steps: []\n")
+        for m in ["        os: [ubuntu-latest]\n        include:\n          - OS: self-hosted\n",
+                  "        os: [ubuntu-latest]\n        include:\n          - OS: ${{ format('a{0}', 'b') }}\n",
+                  "        OS: ${{ fromJSON(needs.a.outputs.o) }}\n",
+                  "        os: [ubuntu-latest]\n        OS: [self-hosted]\n",
+                  "        os: [ubuntu-latest]\n        Include:\n          - os: self-hosted\n",
+                  "        os: [ubuntu-latest]\n        include:\n          - os: macos-latest\n            Os: x\n"]:
+            with self.subTest(m=m):
+                self.bad(base.replace("{m}", m))
+        self.ok(base.replace("{m}", "        OS: [ubuntu-latest]\n"))
+
+    def test_a_strategy_expression_fails_cleanly(self):
+        self.bad(job("${{ matrix.os }}", "    strategy: ${{ fromJSON(needs.a.outputs.s) }}\n"))
+
     def test_a_literal_matrix_still_checks_include(self):
         base = ("name: x\non: push\njobs:\n  test:\n    strategy:\n      matrix:\n"
                 "        os: [ubuntu-latest]\n{inc}    runs-on: ${{ matrix.os }}\n    steps: []\n")
