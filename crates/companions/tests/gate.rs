@@ -590,6 +590,13 @@ impl World {
     }
 }
 
+/// `p` as the OS names it: the manager canonicalises its data folder, and
+/// on Windows that is the `\\?\` form with 8.3 names expanded
+/// (`RUNNER~1`), not the temporary folder's own spelling.
+fn canonical(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+}
+
 /// Every file and folder under `dir`, relative, sorted.
 fn tree(dir: &Path) -> Vec<String> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
@@ -1597,7 +1604,7 @@ async fn an_orphan_is_killed_at_start_and_an_uninstall_leaves_nothing() {
     sup.shutdown().await;
 
     let removal = m.removal(&prowlarr()).unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(removal.folder, w.folder());
+    assert_eq!(canonical(&removal.folder), canonical(&w.folder()));
     // Every credential field it could have, whichever it has.
     assert!(
         removal
@@ -1652,7 +1659,7 @@ async fn install_smoke_installs_checks_runs_and_removes_the_test_companion() {
     let l = w.run.launched();
 
     // Checked: what runs is the archive's program, in its version folder.
-    assert_eq!(l.install, w.folder().join(VERSION));
+    assert_eq!(canonical(&l.install), canonical(&w.folder().join(VERSION)));
     assert!(l.executable.starts_with(&l.install));
     let installed = std::fs::read(&l.executable).unwrap_or_else(|e| panic!("{e}"));
     let original = std::fs::read(me()).unwrap_or_else(|e| panic!("{e}"));
