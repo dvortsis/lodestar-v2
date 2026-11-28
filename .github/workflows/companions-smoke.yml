@@ -1,0 +1,88 @@
+name: Companions smoke
+
+# CMP-G's install smoke (docs/decisions/2026-11-28-CMP-G.md): on each runner
+# OS CI tests on, the companion gate (crates/companions/tests/gate.rs)
+# installs a test companion from the test-only catalogue
+# (crates/companions/tests/data/test-catalogue/), checks it, runs it under the
+# real supervisor and sandbox, refuses a tampered download, and removes it.
+# No network beyond loopback. Not part of `ci-ok` unless the runner adds it.
+
+# Pull requests that touch what the gate builds or reads, and by hand. CI's
+# test job already runs the gate on every Rust change, so this adds only the
+# check that the smoke ran, and not on every merge to main.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      # The companions crate and every workspace crate it builds
+      # (cargo metadata), the toolchain, the manifests, and the build files
+      # the gate's release check reads.
+      - "crates/companions/**"
+      - "crates/bencode/**"
+      - "crates/integrations/**"
+      - "crates/log/**"
+      - "crates/metainfo/**"
+      - "crates/network-policy/**"
+      - "crates/peer-wire/**"
+      - "crates/sources/**"
+      - "crates/sources-feeds/**"
+      - "crates/store/**"
+      - "crates/update/**"
+      - "crates/utp/**"
+      - "crates/*/Cargo.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/release.yml"
+      - "packaging/docker/Dockerfile"
+      - "packaging/windows/build-msi.ps1"
+      - ".github/workflows/companions-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # The test companion is the gate's own test binary, packed as the
+  # artifact; line tables keep it well under the 512 MiB artifact cap.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
+jobs:
+  smoke:
+    name: companions smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: companion gate
+        run: |
+          cargo test -p lodestar-companions --test gate 2>&1 | tee gate.log
+          test "${PIPESTATUS[0]}" -eq 0
+      # A filter or a cfg that compiled the smoke out must not pass as zero
+      # tests run.
+      - name: the smoke ran
+        run: |
+          for t in install_smoke_installs_checks_runs_and_removes_the_test_companion \
+                   a_download_that_fails_its_checksum_is_refused_and_nothing_runs \
+                   the_kill_switch_stops_a_companion_whose_vpn_route_is_down \
+                   an_orphan_is_killed_at_start_and_an_uninstall_leaves_nothing; do
+            if ! grep -qE "^test $t \.\.\. ok" gate.log; then
+              echo "::error::$t did not run and pass"; exit 1
+            fi
+          done
