@@ -7,8 +7,9 @@ This amends `docs/decisions/2026-11-02-CR-SPEC.md` (CR-SPEC) for round 1 of `doc
 - `infra/fleet/steps/vm/round1-coordinator.py` ("coordinator");
 - `docs/soak/runsheets/host-round1-runsheet.md` ("run sheet").
 
-**Line numbers** refer to `main` at e174bcf7 (the merge of #1151).
+**Line numbers** refer to `main` at e174bcf7 (the merge of #1151); run sheet line numbers refer to this PR's version.
 - A rule tagged **(X-cr-round1-collect-fixes, #1151)** was added or changed by that slice to meet this file. `docs/decisions/2026-11-27-X-cr-round1-collect.md` (lines 100–120) records its items A–L.
+- A rule tagged **(X-cr-round1-spec-fixes)** lands in that slice, which answers this PR's review. Its reason names are used here.
 - The runner ruled on every mismatch the draft found (2026-11-27). §14 records each ruling.
 
 ## 1. Status and scope
@@ -24,7 +25,19 @@ This amends `docs/decisions/2026-11-02-CR-SPEC.md` (CR-SPEC) for round 1 of `doc
 - **§2.85 D3** (owner-decisions.md:828) changed CR-SPEC's host design: parallel arms on separate VPN exits, swapped daily, and mover and parity runs don't void a VM segment. The owner confirmed it explicitly at 2026-11-27T18:11Z. §2.85 D4 (politeness) doesn't bear on this file.
 - **§2.87** changes the AWS stop and the Legal Notice line. Neither touches these rules.
 - **Unchanged (§2.86):** G-v06-crawler's three tests, rule 2.2's spacing, the carry-in rules, one crawler per public IP, and §2.27 (the runner never loosens the gate).
-- **Refinements the runner flags to the owner (§2.19):** the comparator binding after the window (§10), and the leak-test ruling (§4).
+- **Refinements of owner-approved plan text, which the runner flags to the owner (§2.19):**
+  - the comparator binding after the window (§10);
+  - the leak-test ruling (§4);
+  - L2c (§5);
+  - the bound on S attempts: after `solo_confirmation_required`, or when its arm is the only one left, and at most one per candidate per round (§5);
+  - the repeat exceptions (§5);
+  - the rehearsal's 30 min warm-up and 3 h window, ended by the first decisive `drop-c` (§6);
+  - dropping C when `drop-c` is still `not_judged` at the rehearsal's end (§5);
+  - handshake classification resting on archived gluetun logs (§8);
+  - the RTT base taken on the day-1 exit (§7);
+  - the per-IP guards resting on the digest (§9);
+  - coverage counted window-wide (§7);
+  - the stricter `disk_inflight` (§7).
 - **Scope:** round 1, and any later round of this design whose declaration names this file.
   - Runs that started earlier are judged by the spec in force when they started (plan §8 item 8, line 570).
   - `gate` and `effect` keep their behaviour for those runs. `segment` without `--declaration` is unchanged.
@@ -88,7 +101,7 @@ A Lodestar segment runs the preset and switch values its declaration names (plan
   - `declared_switches`;
   - `safe_restart_on`;
   - `declared_image_digest`, compared on the part after the last `@` (698; X-cr-round1-collect-fixes, #1151).
-  - The last four void the window on a mismatch.
+  - The last four void the window on a mismatch. `gate-round` also requires every one of these checks to be present (§6 item 5).
 - **At every boundary:** `preset_stayed_declared` and `switches_stayed_declared` (651–657) read the boundary rows' settings and `api.switches`. A mismatch voids the window. The gauge is set once at start (metrics.md:879), so the start read binds.
 - **Placement:** `gate-round` requires each report's embedded entry to equal the manifest's declaration entry (`report_judged_against_another_declaration`, 2251–2252). Because entries never change, an appended attempt leaves earlier reports matching.
 
@@ -135,7 +148,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
    - **Judged against the exit in force at each reading's time** (`exit_in_force`, analyzer:2185–2195; `egress_problems`, 2197–2225) (X-cr-round1-collect-fixes, #1151):
      - **In the window:** every reading must match the exit checked last at or before the window start. A reading within ±90 s of every boundary is required.
      - **Before the window:** each reading must match the exit in force at its own time. So a reading of the server used before a repair is history, not a fault.
-     - **An exit check after the window start** makes the day `egress_assignment_missing` (2206–2207).
+     - **An exit check after the window start** fails the day (`egress_assignment_missing`, 2205–2207) only when the current exits differ from those in force at the window start. A lone first check after the window start passes: with no earlier check, it's the one in force (2192–2193).
    - The day's exits must not share a hash (2277–2278).
 3. **A leak test before and after each day,** run by the coordinator, one arm at a time:
    - `leak` holds a lock in the round's folder (`leak_lock`, 477–486) and refuses while any collector measures (498–500).
@@ -152,12 +165,12 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
   - `check-start` refuses an exit check older than the latest leak test (423–430).
   - Egress is then judged against the new check (item 2).
 - **After the start, or in an `after` test:** the failure is an `infrastructure` event (525–527), and §8 applies.
-- The run sheet says the same (lines 59, 160–162, 316) (X-cr-round1-collect-fixes, #1151).
+- The run sheet says the same (lines 59, 160–162, 319) (X-cr-round1-collect-fixes, #1151).
 
 **Reboot rule:**
 - Round-1 stacks never restart by themselves. The coordinator sets `LODESTAR_GLUETUN_RESTART=no` (coordinator:266), and Lodestar's own policy is `"no"` (`compose.yaml`:111).
 - After a host reboot, the stacks stay down and the day is invalid.
-- The repeated day starts as any day does: leak tests, then `bring-up`, then `up` (run sheet line 319).
+- The repeated day starts as any day does: leak tests, then `bring-up`, then `up` (run sheet line 322).
 
 ## 5. Layouts and attempts
 **The layouts** (`LAYOUTS`, analyzer:1788–1796; plan §6.3, lines 394–401; plan §8 item 11). `layout_problems` (2166–2177) requires each day's declared arms and exits to match exactly:
@@ -168,22 +181,32 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 | L2 | B–X, A–Y | B–Y, A–X | the drop-C rule fires, C times out in the rehearsal, or C fails |
 | L2b | B–X, C–Y | B–Y, C–X | A is dropped: a diagnostic A that times out or fails, or an authorized A out pending diagnosis |
 | L2c | A–X, C–Y | A–Y, C–X | B fails in L3 (plan line 470); A candidate, C diagnostic (1794; X-cr-round1-collect-fixes, #1151; run sheet lines 46–49) |
-| S | one arm, one exit | the same arm, a different exit | solo confirmation after demonstrated contention (O4), or B alone |
+| S | one arm, one exit | the same arm, a different exit | only as §5's attempts rules allow: a solo confirmation (O4), or the only arm left. At most one per candidate per round (X-cr-round1-spec-fixes) |
 
 **Attempts:**
 - **IDs:** each attempt has an `id` matching `^[A-Za-z0-9_.:-]{1,80}$` (`RUN_ID`, 1816), distinct within the declaration (1862–1865).
 - **Pairing:** a candidate's two days pair only within its latest attempt (`judge_candidate`, 2369–2374). The attempt must declare days 1 and 2 (`attempt_does_not_declare_two_days`, 2427–2429).
 - **Repeats:** each (attempt, day) runs repeats 0..k with no gap (`repeats_not_contiguous`, 2386–2388; coordinator `manifest`, 983–985).
   - A repeated day is the folder `day<n>-repeat<k>`.
-  - The repeat number comes from its first `leak` (run sheet line 253).
+  - The repeat number comes from its first `leak` (run sheet line 256).
 - **The retry budget:** at most 2 repeated days per round (`RETRY_BUDGET`, 1800). It's counted as the sum over every (attempt, day) of its highest repeat (2466–2473).
   - A third repeat is `retry_budget_exhausted`. That's `not_judged`, with the disposition `out_of_retries` (2514–2515).
-  - Fresh attempts are repeat 0, so they never count against the budget. This includes a solo confirmation's two days (X-cr-round1-gate reading 5).
-- **A layout change must drop an arm:** each later attempt must be a strict subset of the one before it (1906–1921).
-  - An S attempt of one arm from the attempt before it sits outside that chain.
+  - Fresh attempts the layout chain bounds (L2, L2b and L2c after a drop) are repeat 0, so they never count against the budget.
+  - An S attempt's two days don't count either (plan line 474), since S is bounded on its own (below).
+- **A layout change must drop an arm:** each later attempt that isn't S must be a strict subset of the chain's last attempt (1906–1921).
   - L2 and L2b follow L3. L2c may follow only when the chain's last attempt that isn't S is L3 (1917–1918; X-cr-round1-collect-fixes, #1151). So L3 → S → L2c is allowed.
-- **A repeat replaces only a day with an infrastructure fault:**
-  - It replaces a day that wasn't judged and whose reasons include `infrastructure_fault` or `peer_infrastructure_fault`. Otherwise it's `repeat_without_infrastructure_fault` (2420–2424).
+- **An S attempt is allowed only** in these cases (X-cr-round1-spec-fixes):
+  - (a) for a candidate whose day in the attempt just before was `solo_confirmation_required`;
+  - (b) when its arm is the only arm left (plan line 469, "S if both are gone"). Every other arm of the attempt before it has dropped, at the rehearsal or by a class 2 product failure, and that attempt's `attempt_ends` reason records the drop (`rehearsal_drop` or `product_failure:<arm>`).
+  - Each candidate gets at most one S attempt per round.
+  - Anything else makes the candidate `not_judged` with `solo_not_permitted`.
+  - Today `check_declaration` accepts any one-arm S attempt within the chain (1915–1916), so S could act as an unbudgeted retry.
+- **What a repeat may replace** (plan §6.3's "the retry rule", lines 153, 364 and 444; the budget counts repeats "whatever the cause", line 474) (X-cr-round1-spec-fixes):
+  - any `not_judged` day, except:
+    - one with `solo_confirmation_required`, which goes to S;
+    - one that is `not_judged` because of a product failure, its own or a peer's, which goes to a fresh attempt (class 2, §8).
+  - Repeating either of those is `repeat_of_a_non_repeatable_day`. It replaces today's `repeat_without_infrastructure_fault` (2420–2424), which allows only an infrastructure fault.
+  - Every repeat counts against the budget of 2.
   - Repeating a passing day is `repeat_of_a_judged_day` (2418–2419).
   - **A valid miss stands:** a judged `fail` in any attempt, or in a replaced day, makes the candidate `fail` (2491–2497).
 - **`attempt_ends`** records an attempt that ended short (`load_manifest`, 1969–1974, 1990–1994; coordinator `end-attempt`, 912–924).
@@ -203,14 +226,14 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
   - there are no host samples;
   - an arm never crawled;
   - fewer than 60 crawling minutes remain (2598–2613).
-- **After a `not_judged`** (runner's ruling; run sheet step 8c, lines 236–248):
+- **After a `not_judged`** (runner's ruling; run sheet step 8c, lines 239–251):
   - **`vcpus_differ`:** the rehearsal fails. The box or the declaration is fixed, and the rehearsal is repeated.
-  - **Any other reason:** the rehearsal keeps running, and `drop-c` runs again later (§6).
-  - **Still `not_judged` at the rehearsal's end** (§6): C is dropped (L2, or L2b if A is dropped too). C is only diagnostic, and keeping it unjudged would risk B's measurement. The reason is recorded in the round's archive.
+  - **Any other reason:** the rehearsal keeps running, and `drop-c` runs again every 15 min (§6).
+  - **Still `not_judged` at the rehearsal's end** (§6): C is dropped (L2, or S with B alone if A is dropped too). C is only diagnostic, and keeping it unjudged would risk B's measurement. The reason is recorded in the round's archive.
 
 **Solo confirmation (S), O4:**
 - **When it's required:** a contention breach outside S makes that day `not_judged` with `solo_confirmation_required`, unless the day has a class 1 or class 2 event or an unknown event (§8; analyzer:2328–2337).
-  - Every later verdict for the candidate stays `not_judged` until its latest attempt is an S attempt that didn't itself breach (2479–2482).
+  - The candidate's next attempt is then its one S attempt (case (a) above). Every later verdict stays `not_judged` until that S attempt has run without a breach of its own (2479–2482).
 - **A failed solo is terminal:**
   - A breach in S, on a day with no such event, is `solo_confirmation_failed` (2337, 2483–2485), with the disposition `out_of_retries` (2514–2515).
   - It isn't a valid miss, and there's no further retry.
@@ -224,16 +247,17 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 - **The coordinator refuses an earlier start:** `check-start`, which `up` also runs, refuses before end + 12 h (`SPACING`, coordinator:63, 401–402).
 
 **The rehearsal:**
-- **When it starts:** only after the comparator's window has ended and the comparator is bound (§10). `check-start` reads `ended_utc` from the report's binding or from `comparator-binding.json` (coordinator:396–400). Rule 2.2's 12 h doesn't apply to it.
+- **When it starts:** only after X-cr-round1-spec-fixes has merged. That slice lands the 30 min warm-up and 3 h window, the gateway check (§7) and the gluetun logs (§8).
+  - It also waits until the comparator's window has ended and the comparator is bound (§10). `check-start` reads `ended_utc` from the report's binding or from `comparator-binding.json` (coordinator:396–400). Rule 2.2's 12 h doesn't apply to it.
 - **What it runs:**
   - Every arm of `r1-L3` runs on its day-1 exit, with leak tests before and after.
-  - The collectors run `--rehearsal` with a 30 min warm-up and a 3 h window (lands in X-rehearsal-window, as `--warmup-minutes 30 --baseline-hours 3`). Today coordinator:616–617 passes `--baseline-hours 2` and no warm-up, so rule 1.1's 60 min applies (collect.py:1787–1789). Run IDs end in `-rehearsal`.
-- **How it ends (runner's ruling; plan lines 421–429; run sheet step 6, lines 200–210):**
+  - The collectors run `--rehearsal` with a 30 min warm-up and a 3 h window (X-cr-round1-spec-fixes, as `--warmup-minutes 30 --baseline-hours 3`, for the rehearsal only; measurement days keep rule 1.1's 60 min). Today coordinator:616–617 passes `--baseline-hours 2` and no warm-up, so rule 1.1's 60 min applies (collect.py:1787–1789). Run IDs end in `-rehearsal`.
+- **How it ends (runner's ruling; plan lines 421–429; run sheet step 6, lines 202–213):**
   - **Active minutes:** an arm's run from its own `crawling_from_utc` (from `drop-c`, §5) to the rehearsal's end.
-  - **`drop-c`** may be run once every arm has at least 60 active minutes. The rehearsal keeps running meanwhile.
-  - **On `keep` or `drop`,** the rehearsal may end early with the coordinator's `stop` (`cmd_stop`, coordinator:866).
-  - **On a `not_judged`** other than `vcpus_differ`, it keeps running, and `drop-c` is run again later.
-  - **Otherwise it stops** at the 3 h window's end or the 4 h cap from the first start, whichever comes first. With staggered starts the last arm's window ends about 3 h 35 min after the first start. If `drop-c` is still `not_judged`, C is dropped (§5).
+  - **`drop-c` is run first** when every arm has at least 60 active minutes. There's no optional stopping.
+  - **The first `keep` or `drop` decides the layout,** and the rehearsal then stops with the coordinator's `stop` (`cmd_stop`, coordinator:866).
+  - **Only after a `not_judged`** other than `vcpus_differ` is it run again, every 15 min, until the 3 h window's end or the 4 h cap from the first start, whichever comes first. With staggered starts the last arm's window ends about 3 h 35 min after the first start.
+  - **If no run has given `keep` or `drop` by then,** C is dropped (§5).
   - **`vcpus_differ`** fails the rehearsal, as in §5.
   - **The rehearsal report** states each arm's active minutes, derived from its `crawling_from_utc`.
   - **An arm short of 60 active minutes at the end fails the rehearsal:**
@@ -242,21 +266,22 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
     - An authorized A is out of round 1 pending diagnosis, and B proceeds in L2b.
     - If B fails, round 1 doesn't start. B's setup is diagnosed and fixed, and the rehearsal is repeated.
     - If both C and A fail, B proceeds alone in an S attempt declared at the rehearsal.
-- **Its store is deleted afterwards** (run sheet step 9, line 249).
+- **Its store is deleted afterwards** (run sheet step 9, line 252).
   - Its day is never in the manifest (`list_days`, coordinator:932–933).
   - `check-start` refuses a day whose `data` or `witness` isn't empty (419–422).
 - **Before day 1, it must show:**
-  1. **The probe target answers,** per arm, from inside its tunnel (run sheet step 4, lines 186–192). Without it, contention coverage fails (`coverage_below_98pct:tunnel`).
+  1. **The probe target answers,** per arm, from inside its tunnel (run sheet step 4, lines 188–194). Without it, contention coverage fails (`coverage_below_98pct:tunnel`).
   2. **The drops series' hourly deltas:**
-     - `host_samples.py drops` prints the rise per hour of `uplink_rx_dropped`, `uplink_tx_dropped`, `rx_missed_errors` and `rx_fifo_errors` (run sheet step 8a, lines 219–225).
+     - `host_samples.py drops` prints the rise per hour of `uplink_rx_dropped`, `uplink_tx_dropped`, `rx_missed_errors` and `rx_fifo_errors` (run sheet step 8a, lines 222–228).
      - The output decides the open item in §7.
   3. **Distinct exits:** `bring-up` passes, with no shared hash and none equal to the uplink.
   4. **Leak tests passing,** before and after, for every arm.
-  5. **The gauge showing the declared values** (run sheet step 8b, lines 226–235) (X-cr-round1-collect-fixes, #1151):
+  5. **The gauge showing the declared values** (run sheet step 8b, lines 229–238) (X-cr-round1-collect-fixes, #1151):
      - `segment <round>/rehearsal/<arm> --declaration` runs for each arm.
-     - Every `declared_*` check, `effective_switches_recorded`, `safe_restart_on`, `preset_stayed_declared` and `switches_stayed_declared` (analyzer:651, 657) must read ok.
-  6. **The drop-C verdict:** the output of `analyze_cr.py drop-c` (run sheet step 8c, lines 236–248).
-- **It also records** each arm's median tunnel RTT (`host_samples.py median`, run sheet step 8, line 212), which is the network rule's base.
+     - `declaration_entry_found` (417), every `declared_*` check, `effective_switches_recorded`, `safe_restart_on`, `preset_stayed_declared` and `switches_stayed_declared` (analyzer:651, 657) must each be present and read ok.
+     - `gate-round` makes a day with any of them missing `not_judged` (`declaration_checks_missing`) (X-cr-round1-spec-fixes). Today a missing entry emits none of the others.
+  6. **The drop-C verdict:** the output of `analyze_cr.py drop-c` (run sheet step 8c, lines 239–251).
+- **It also records** each arm's median tunnel RTT (`host_samples.py median`, run sheet step 8, line 215), which is the network rule's base.
 
 ## 7. Contention, network included
 **`CONTENTION`** (analyzer:1803–1805). A declaration may only restate it (1847–1848), and every verdict echoes it.
@@ -284,6 +309,9 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
   - `disk_inflight` is the device's I/Os in progress, reads included. The plan's line 445 says "writes in flight", so this is stricter, and accepted (runner's ruling).
 - **Uplink:** `uplink_drops_total` = `rx_dropped` + `tx_dropped` from `/sys/class/net/<uplink>/statistics`, cumulative (93–102, 192–197).
 - **Tunnel:** one ICMP echo (`-c 1`, 2 s timeout) to the arm's declared `tunnel_target`, sent from inside its gluetun namespace (`probe`, 159–170).
+  - `tunnel_target` must be the arm's WireGuard gateway (plan line 441) (X-cr-round1-spec-fixes). `bring-up` reads the gateway from inside the namespace, refuses a target that differs, and records `tunnel_target_is_gateway: true` per arm in run state and the day archive.
+  - A day whose archive lacks it, for any arm, is `not_judged` (`probe_target_unchecked`).
+  - The address itself is never in the repo or the archive. Today the coordinator only checks that it's an IPv4 address (coordinator:227–228).
 - **RTT base:** each arm's rehearsal median of answered RTTs, taken on its day-1 exit (`rehearsal_medians`, 262–269; plan line 450).
   - The same base is used for day 2 and for S days, on other exits.
   - The noise from that rotation is accepted for round 1, and a per-exit base is a 1.1 item (runner's ruling).
@@ -291,7 +319,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 **How `contention` reads them** (analyzer:2020–2110), for the candidate's window `[window_start_utc, window_end_utc)`:
 - **Slots:** every slot that starts inside the window counts. A missing slot ranks over every value (`nearest_rank`, 2007–2013), and a missing probe counts as lost.
 - **Disk slots with no completed write:** excluded when nothing is in flight, counted as over when something is.
-- **Coverage:** each series (CPU, steal, disk, the candidate's tunnel, uplink) must cover at least 98 % of the window's slots (plan line 444). Below that, contention is `not_judged` (`coverage_below_98pct:<series>`, 2071–2078).
+- **Coverage:** each series (CPU, steal, disk, the candidate's tunnel, uplink) must cover at least 98 % of the window's slots (plan line 444). Below that, contention is `not_judged` (`coverage_below_98pct:<series>`, 2071–2078), and the day goes to the retry rule: a repeat (§5).
   - The sampler's per-hour `coverage_by_hour` is reported only (host_samples.py:272–304). Its first and last hours are prorated to the part covered.
 - **Network:** checked per window hour. A final partial slot joins hour 23 (2088–2108).
 - **An uplink counter decrease** within the window makes contention `not_judged` (`uplink_counter_reset`, 2057–2059). The day is then `not_judged`, and the segment stays `valid`.
@@ -299,6 +327,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 - **A breach** is handled as §5 and §8 say.
 
 **Open item, recorded as written:** "gate-round sums rx and tx uplink drops (`uplink_drops_total`). virtio NICs can count unknown-protocol frames in rx_dropped. The rehearsal's `host_samples.py drops` output decides, before day 1, whether the drop rule reads rx+tx as now or a narrower series. If it must change, the analyzer change lands, and this file is amended, before day 1."
+- **A change needs the owner.** Any narrower series narrows the plan's "no uplink drops" (line 450), so it's a loosening. It needs the owner's approval before day 1, and until then the rule reads rx + tx as written.
 
 ## 8. Event classification (plan §6.3, lines 455–472)
 - **Where events are recorded:** in the day archive's `events` [{`class`, `arms`, `cause`, `diagnosis`}]. `arms: []` means every arm.
@@ -311,14 +340,15 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
   - A breach on a day that also has an infrastructure fault, a product failure (pending or diagnosed, the arm's own or a peer's) or an unknown event sets no `solo_confirmation_required`, nor `solo_confirmation_failed` in S.
   - The day records `contention_class` (2328–2337).
 - **Handshake events** rest on the runner's evidence (runner's ruling).
-  - The evidence is gluetun's logs, copied off the box.
-  - The runner classes these events into the archive's `events` before `gate-round` runs.
+  - The evidence is each arm's gluetun log for the day, archived as `<arm>/gluetun.log` with IPv4 and IPv6 addresses and WireGuard keys redacted, and listed with its SHA-256 in the manifest (X-cr-round1-spec-fixes).
+  - The runner's event classification is committed to the round's archive before `gate-round` runs, and before any segment report's rates are read for acceptance.
+  - A reclassification after that needs a fresh reviewer, and it's published.
   - A collector for handshakes is a 1.1 item.
 
 | Class | Evidence | That day | The round |
 |---|---|---|---|
 | **1. Infrastructure** | Evidence outside the Lodestar process:<br>• host, VM, `/data` or uplink faults;<br>• a tunnel without a handshake for more than 180 s, or handshake gaps on 2 or more tunnels;<br>• a failed leak test after the start (coordinator:525–527);<br>• a collector storage guard (`HOST_REASONS`, 76) | Every affected arm's day is invalid. The candidate's day is `not_judged` with `infrastructure_fault`, or `peer_infrastructure_fault` when only a peer was hit (2312–2313) | The whole concurrent day is repeated within the attempt, from fresh stores, with the same layout and exits. There's no solo confirmation. The repeat counts against the budget, and so does a recurrence after a repair |
-| **2. Product** | A panic, OOM kill, exit or failed health checks with no evidenced infrastructure fault. The collector reasons are `PRODUCT_REASONS` (coordinator:73–75), recorded as `pending` | Failing candidate: `product_failure_under_diagnosis`, then `product_failure` once diagnosed (2314–2316). Peers: `peer_product_failure` (2317–2318) | • The failing candidate's qualification is withheld on that digest, pending or diagnosed (2486–2490).<br>• `product` is terminal (`disposition`, 2512–2513); `pending` keeps the selection at `pending_retry`.<br>• A failed diagnostic arm (C, or a diagnostic A) is dropped on its first failure. The attempt ends, and the next attempt uses L2, L2b or S.<br>• A failed candidate: the other candidate continues in a fresh attempt with the remaining arms (L2b after A, L2c after B) |
+| **2. Product** | A panic, OOM kill, exit or failed health checks with no evidenced infrastructure fault. The collector reasons are `PRODUCT_REASONS` (coordinator:73–75), recorded as `pending` | Failing candidate: `product_failure_under_diagnosis`, then `product_failure` once diagnosed (2314–2316). Peers: `peer_product_failure` (2317–2318) | • The failing candidate's qualification is withheld on that digest, pending or diagnosed (2486–2490).<br>• `product` is terminal (`disposition`, 2512–2513); `pending` keeps the selection at `pending_retry`.<br>• A failed diagnostic arm (C, or a diagnostic A) is dropped on its first failure. The attempt ends, and the next attempt uses L2 without C, L2b without A, or S when one arm is left.<br>• A failed candidate: the other candidate continues in a fresh attempt with the remaining arms (L2b after A, L2c after B) |
 | **3. Demonstrated contention** | A CPU, steal, disk or network breach with neither of the above | `not_judged` and `solo_confirmation_required`; `solo_confirmation_failed` in S | Solo confirmation. A failed solo means `out_of_retries` and the round-1 report |
 | **4. None** | — | The day stands: `pass` or `fail` on the tests (2343) | A `fail` is a valid miss and ends the claim |
 
@@ -381,7 +411,8 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 ## 10. Comparator and network identity (plan §8 item 10)
 **Network identity:**
 - `uplink_hash`: the salted hash of the uplink's public IPv4, read outside any tunnel at each collector's launch (collect.py:2051–2058);
-- `provider` = `pia` and `protocol` = `wireguard`: the collector's defaults. The coordinator passes no other value.
+- `provider` = `pia` and `protocol` = `wireguard`: the collector's defaults, which the coordinator never overrides (`collector_argv`, coordinator:607–622).
+  - `bind-comparator` reads them from the coordinator file's `vpn_provider` and `vpn_protocol`, with the same defaults (1078–1079). Any other value there gives a binding that differs from the declaration, so the rule fails safe.
 - The declaration must name exactly these values. Every report's binding must equal them (`network_identity_differs`, 2258–2259), and so must the comparator's (`comparator_network_identity`, 2154–2155).
 
 **Changes:**
@@ -421,7 +452,7 @@ Up to three Lodestar arms run on the experiment host at once when every conditio
 X-cr-round1-collect-fixes, #1151 (analyzer:518–539; collect.py `note`, 1844–1881).
 - **The note:** an array operation is recorded with `collect.py note --category array_operation --kind mover|parity|other --pool P …`. That gives {`kind`, `pools`: [..]}, where `pools` lists every pool the operation touches; a mover run names both the cache pool and the array.
   - A round-1 run's `array_operation` note must carry `--kind` and `--pool` (collect.py:1870–1872).
-  - The run sheet's line 320 says how.
+  - The run sheet's line 323 says how.
 - **The map:** the declaration maps each pool to the devices whose storage sits on it, named as the VM's kernel sees them (the names `identity` records, such as `vdb`), not the Unraid host's.
   - The operator reports the map (run sheet step 5, line 136), and the records PR writes it into the declaration.
   - Pool names must match `[a-z0-9_]{1,32}`, the form `note --pool` accepts (collect.py:1861). `check_declaration` doesn't enforce this yet. A pool named otherwise can never match a note, so it can never spare a window: the rule fails safe.
@@ -439,7 +470,7 @@ X-cr-round1-collect-fixes, #1151 (analyzer:518–539; collect.py `note`, 1844–
 - The `Release` workflow (`.github/workflows/release.yml`) builds and pushes `ghcr.io/dvortsis/lodestar-v2:nightly` from `main` (lines 321–322, 359).
   - It runs on the daily schedule (`17 3 * * *`, 03:17Z, line 21) or on a `workflow_dispatch` on `main`.
   - The image is a multi-arch index (amd64 and arm64, line 366).
-  - Its OCI label `org.opencontainers.image.revision` is the run's commit (release.yml:372, Dockerfile:111).
+  - Its OCI label `org.opencontainers.image.revision` is the run's commit (release.yml:372, `packaging/docker/Dockerfile`:111).
 - **The round's image** is one such build whose revision is a `main` commit at or after `spec_commit`. It therefore holds CR-0w (#1134), X-dht-switch-identity (#1146), the harness (#1147, #1150) and X-cr-round1-collect-fixes (#1151).
 - **A locally built image can't be used.** It has no repo digest for the collector to record (collect.py:725–726).
 
@@ -476,11 +507,11 @@ The draft listed 25. The runner ruled on all of them on 2026-11-27. Numbers are 
 1. **The comparator had no binding:** a pre-round-1 collector writes none, and `gate-round` and the rehearsal gate needed one. → fixed in #1151: `bind-comparator` (coordinator:1025–1083), read by `load_manifest` (analyzer:1953–1967) and `check-start` (coordinator:396–400). §10.
 2. **D3's exemption:** every `array_operation` invalidated, against plan line 568 and owner-decisions.md:828. → fixed in #1151: `spares` (analyzer:518–539), `note --kind --pool` (collect.py:1844–1881), the pool map (analyzer:1849–1856). §11.
 3. **An exit re-check after a repair voided the day.** → fixed in #1151: `exit_in_force` and `egress_problems` (analyzer:2185–2225), and the check's stamp (coordinator:597–598). §4.
-4. **The run sheet's leak-test wording.** → fixed in #1151: run sheet lines 59 and 316. §4.
+4. **The run sheet's leak-test wording.** → fixed in #1151: run sheet lines 59 and 319. §4.
 5. **The classification order:** any breach set `solo_confirmation_required`, against plan lines 455 and 464. → fixed in #1151: `judge_day` (analyzer:2328–2337). §8.
 7. **`lookup_end`'s end reason:** only `values` was read, and the collector dropped `enough_values` (metrics.md:809; `crates/dht/src/node/ledger.rs`:52). → fixed in #1151: collect.py:164–167; analyzer:768–772, 951–955. §3.
-10. **The drop-C rule:** no tool computed it (plan lines 430–432). → fixed in #1151: `drop_c` (analyzer:2566–2630), run sheet step 8c (lines 236–248). §5.
-12. **The rehearsal's gauge check:** no `segment --declaration` step. → fixed in #1151: run sheet step 8b (lines 226–235). §6.
+10. **The drop-C rule:** no tool computed it (plan lines 430–432). → fixed in #1151: `drop_c` (analyzer:2566–2630), run sheet step 8c (lines 239–251). §5.
+12. **The rehearsal's gauge check:** no `segment --declaration` step. → fixed in #1151: run sheet step 8b (lines 229–238). §6.
 14. **No layout for A with C** (plan line 470). → fixed in #1151: L2c (analyzer:1794, 1917–1918). §5.
 19. **The vCPU count** was never checked (plan lines 432, 447). → fixed in #1151: `vcpus` (analyzer:1858, 2029–2030, 2598–2599; host_samples.py:315–317). §7.
 23. **The digest's form and source:** any non-empty string passed, and `release.yml` records no digest (lines 361–372). → fixed in #1151: `IMAGE_DIGEST` and `digest_part` (analyzer:1809–1813), run sheet step 1 (lines 70–80). §12.
@@ -490,12 +521,12 @@ The draft listed 25. The runner ruled on all of them on 2026-11-27. Numbers are 
 - **6.** §6.4 governs: "not measured" fails, as a valid miss. §3.4's line 153 describes reporting.
 - **8.** Accepted. An absent CR-ADM or uTP series is `missing`, published as `segment_invalid`. Either way the result is `not_judged`.
 - **9.** Accepted. The stricter rule 5.1–5.2 checks stand.
-- **11.** Each arm needs ≥ 60 active minutes. The rehearsal ends early after a `keep` or `drop`, or else at the 3 h window's end or the 4 h cap from the first start, whichever comes first. The report states each arm's active minutes (§6).
+- **11.** Each arm needs ≥ 60 active minutes. The first `keep` or `drop` from `drop-c` decides and ends the rehearsal. After a `not_judged`, `drop-c` reruns every 15 min until the 3 h window's end or the 4 h cap from the first start. The report states each arm's active minutes (§6).
 - **13.** The declaration is append-only (§2).
 - **15.** L2b is permitted (plan §8 item 11; item 2's list is incomplete). A diagnostic arm is dropped on its first product failure (§8).
 - **16.** Coverage is ≥ 98 % over the window's slots. Per-hour coverage is reported only (§7).
 - **17.** An uplink counter decrease makes contention, and so the day, `not_judged`. The segment stays `valid` (§7).
-- **18.** Handshake events rest on the runner's evidence from gluetun's logs. A collector for them is a 1.1 item (§8).
+- **18.** Handshake events rest on the runner's evidence from gluetun's logs, archived per day (X-cr-round1-spec-fixes). A collector for them is a 1.1 item (§8).
 - **20.** `disk_inflight` counts reads too. That's accepted as stricter than the plan's wording (§7).
 - **21.** The RTT base is each arm's rehearsal median on its day-1 exit, also used for day 2 and S. The rotation noise is a 1.1 item (§7).
 - **22.** The per-IP guards and the 64-query cap rest on the pinned digest (§9).
