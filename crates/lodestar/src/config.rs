@@ -303,22 +303,11 @@ impl Dht {
     fn crawl_interface_on(&self, windows: bool) -> Result<Option<Interface>, ConfigError> {
         let iface = match self.interface.as_deref() {
             None | Some("") => return Ok(None),
+            Some(_) if windows => return Err(windows_refused()),
             Some(name) => {
                 Interface::parse(name).map_err(|e| ConfigError(format!("dht.interface: {e}")))?
             }
         };
-        // X-vpn-bind: refused on Windows until X-vpn-bind-win. Binding the
-        // interface's address leaves the weak-host send path open, and
-        // closing it (`IP_UNICAST_IF`) needs `unsafe`, which the workspace
-        // forbids; the owner decides. Nothing may run with the setting there
-        // meanwhile (fail closed).
-        if windows {
-            return Err(ConfigError(
-                "dht.interface isn't supported on Windows yet (pending X-vpn-bind-win): \
-                 remove it from config.toml, or run Lodestar where its whole network is the VPN"
-                    .into(),
-            ));
-        }
         // A specific `dht.bind` address may belong to another interface
         // (Linux would then send through the VPN with that address), and
         // Windows binds the interface's own address anyway.
@@ -331,6 +320,19 @@ impl Dht {
         }
         Ok(Some(iface))
     }
+}
+
+/// X-vpn-bind: a crawl interface is refused on Windows until
+/// X-vpn-bind-win. Binding the interface's address leaves the weak-host
+/// send path open, and closing it (`IP_UNICAST_IF`) needs `unsafe`, which
+/// the workspace forbids; the owner decides. Nothing may run with the
+/// setting there meanwhile (fail closed).
+fn windows_refused() -> ConfigError {
+    ConfigError(
+        "dht.interface isn't supported on Windows yet (pending X-vpn-bind-win): \
+         remove it from config.toml, or run Lodestar where its whole network is the VPN"
+            .into(),
+    )
 }
 
 /// The crawler switches' effective values (X-dht-switch-identity), one per
