@@ -1646,6 +1646,9 @@ fn suggest_path(
     );
     // A swap: the old set serves while the new directory's set builds,
     // in its own folder as the server builds it (X-import-drain-memory).
+    // It reads through the bench's store connection, which maps the file
+    // (the server's builder reads unmapped), so file-backed pages of the
+    // store can show in this peak where the server's wouldn't.
     let swap_dir = tempfile::tempdir()?;
     let (second, swap_peak) =
         peak_rss(|| suggest::TitleSet::build_in(store, Some(swap_dir.path())));
@@ -1655,7 +1658,7 @@ fn suggest_path(
         _ => "—".to_string(),
     };
     println!(
-        "  RSS over the process before: one set {}, building it peaks at {}; a swap (old set, new set and its build) peaks at {}",
+        "  RSS over the process before: one set {}, building it peaks at {}; a swap (old set, new set and its build) peaks at {} (store read mapped, unlike the server's builder)",
         mb(steady, base),
         mb(build_peak, base),
         mb(swap_peak, base)

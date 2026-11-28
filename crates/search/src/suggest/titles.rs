@@ -40,7 +40,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -185,11 +185,16 @@ const RUN_BYTES: usize = if cfg!(test) { 512 } else { 32 << 20 };
 const ENTRY_OVERHEAD: usize = 56;
 
 /// The set file: this header, then the FST. The header is the magic,
-/// the format version, 4 reserved bytes, the title count and the FST's
+/// the format version, the FST's CRC32, the title count and the FST's
 /// length, little-endian.
 const MAGIC: &[u8; 8] = b"LDSTITLE";
 const FORMAT: u32 = 1;
 const HEADER: usize = 32;
+/// The longest spelling a run holds (its folded part is at most
+/// [`MAX_TITLE_BYTES`]; this bounds the display spelling). A longer one is
+/// left out, as a title that long is junk, and a run claiming one is
+/// corrupt rather than an allocation of up to 4 GiB.
+const MAX_SPELLING: usize = 4096;
 
 impl TitleSet {
     /// Every title in `store`, built in memory (tests and RAM indexes).
@@ -261,6 +266,9 @@ impl TitleSet {
                         continue;
                     }
                     let display = title.split_whitespace().collect::<Vec<_>>().join(" ");
+                    if key.len() + 1 + display.len() > MAX_SPELLING {
+                        continue;
+                    }
                     let mut k = Vec::with_capacity(key.len() + 1 + display.len());
                     k.extend_from_slice(key.as_bytes());
                     k.push(0);
@@ -602,7 +610,11 @@ impl RunReader {
                 n => got += n,
             }
         }
-        let mut key = vec![0u8; u32::from_le_bytes(len) as usize];
+        let len = u32::from_le_bytes(len) as usize;
+        if len > MAX_SPELLING {
+            return Err(std::io::Error::other("title run: spelling too long"));
+        }
+        let mut key = vec![0u8; len];
         self.0.read_exact(&mut key)?;
         let mut counts = [0u32; 4];
         for c in &mut counts {
@@ -667,7 +679,32 @@ impl Merge {
 /// Where the FST goes: memory, or the set file after its header.
 enum Sink {
     Mem(MapBuilder<Vec<u8>>),
-    File(MapBuilder<BufWriter<File>>),
+    File(MapBuilder<Crc<BufWriter<File>>>),
+}
+
+/// A writer that checksums what goes through it (the FST, for the
+/// header).
+struct Crc<W> {
+    inner: W,
+    crc: crc32fast::Hasher,
+}
+
+impl<W: Write> Write for Crc<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.crc.update(&buf[..n]);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests only: the build's FST write fails after this many titles.
+    static FAIL_AFTER: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 impl Sink {
@@ -677,12 +714,24 @@ impl Sink {
             Some(path) => {
                 let mut w = BufWriter::new(File::create(path).map_err(Error::Io)?);
                 w.write_all(&[0; HEADER]).map_err(Error::Io)?;
+                let w = Crc {
+                    inner: w,
+                    crc: crc32fast::Hasher::new(),
+                };
                 Sink::File(MapBuilder::new(w).map_err(fst_error)?)
             }
         })
     }
 
     fn insert(&mut self, key: &[u8], value: u64) -> Result<()> {
+        #[cfg(test)]
+        if FAIL_AFTER.with(|f| {
+            let left = f.get();
+            f.set(left.map(|n| n.saturating_sub(1)));
+            left == Some(0)
+        }) {
+            return Err(Error::Io(std::io::Error::other("test: disk full")));
+        }
         match self {
             Sink::Mem(b) => b.insert(key, value),
             Sink::File(b) => b.insert(key, value),
@@ -700,14 +749,11 @@ impl Sink {
             }
             Sink::File(b) => b,
         };
-        let mut file = b
-            .into_inner()
-            .map_err(fst_error)?
-            .into_inner()
-            .map_err(|e| Error::Io(e.into_error()))?;
+        let Crc { inner, crc } = b.into_inner().map_err(fst_error)?;
+        let mut file = inner.into_inner().map_err(|e| Error::Io(e.into_error()))?;
         let fst_len = file.stream_position().map_err(Error::Io)? - HEADER as u64;
         file.seek(SeekFrom::Start(0)).map_err(Error::Io)?;
-        file.write_all(&header(titles, fst_len))
+        file.write_all(&header(crc.finalize(), titles, fst_len))
             .map_err(Error::Io)?;
         file.sync_all().map_err(Error::Io)?;
         drop(file);
@@ -718,10 +764,11 @@ impl Sink {
     }
 }
 
-fn header(titles: u64, fst_len: u64) -> [u8; HEADER] {
+fn header(crc: u32, titles: u64, fst_len: u64) -> [u8; HEADER] {
     let mut h = [0u8; HEADER];
     h[..8].copy_from_slice(MAGIC);
     h[8..12].copy_from_slice(&FORMAT.to_le_bytes());
+    h[12..16].copy_from_slice(&crc.to_le_bytes());
     h[16..24].copy_from_slice(&titles.to_le_bytes());
     h[24..32].copy_from_slice(&fst_len.to_le_bytes());
     h
@@ -733,28 +780,49 @@ fn open_fst(bytes: OwnedBytes) -> Result<Map<OwnedBytes>> {
     ))
 }
 
-/// Maps a set file, checking its header, its length and its title count.
-/// A missing, short, foreign or mismatched file is an error, so the
-/// builder keeps the set it has and tries again later.
+/// Maps a set file, checking its header, its length, its checksum and
+/// its title count. A missing, short, foreign, damaged or mismatched file
+/// is an error, so the builder keeps the set it has and tries again
+/// later. The checks read the file through buffered reads, not the map,
+/// so checking it doesn't make it resident.
 fn open_set(path: &Path) -> Result<Map<OwnedBytes>> {
     let bad = || Error::Corrupt("title set file");
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(bad());
     };
+    let mut file = BufReader::with_capacity(64 << 10, File::open(path).map_err(Error::Io)?);
+    let len = file.get_ref().metadata().map_err(Error::Io)?.len();
+    let mut h = [0u8; HEADER];
+    if len < HEADER as u64 || file.read_exact(&mut h).is_err() {
+        return Err(bad());
+    }
+    let word = |at: usize| u64::from_le_bytes(h[at..at + 8].try_into().expect("8 bytes"));
+    if &h[..8] != MAGIC || h[8..12] != FORMAT.to_le_bytes() || word(24) != len - HEADER as u64 {
+        return Err(bad());
+    }
+    let mut crc = crc32fast::Hasher::new();
+    let mut read = 0u64;
+    loop {
+        let chunk = file.fill_buf().map_err(Error::Io)?;
+        if chunk.is_empty() {
+            break;
+        }
+        crc.update(chunk);
+        read += chunk.len() as u64;
+        let n = chunk.len();
+        file.consume(n);
+    }
+    if read != len - HEADER as u64 || crc.finalize().to_le_bytes() != h[12..16] {
+        return Err(bad());
+    }
+    drop(file);
     let all = MmapDirectory::open(dir)?
         .open_read(Path::new(name))
         .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?
         .read_bytes()
         .map_err(Error::Io)?;
-    if all.len() < HEADER {
-        return Err(bad());
-    }
-    let h = &all[..HEADER];
-    let word = |at: usize| u64::from_le_bytes(h[at..at + 8].try_into().expect("8 bytes"));
-    if &h[..8] != MAGIC
-        || h[8..12] != FORMAT.to_le_bytes()
-        || word(24) != (all.len() - HEADER) as u64
-    {
+    // The file changed between the check and the map: not ours to serve.
+    if all.len() as u64 != len {
         return Err(bad());
     }
     let fst = open_fst(all.slice(HEADER..all.len()))?;
@@ -848,7 +916,7 @@ impl BigBuilder {
                 }
                 let title = title
                     .get_or_insert_with(|| {
-                        let display = String::from_utf8_lossy(&key[folded + 1..]);
+                        let display = String::from_utf8_lossy(key.get(folded + 1..).unwrap_or(&[]));
                         Rc::new((display.into(), *packed))
                     })
                     .clone();
@@ -900,6 +968,9 @@ pub struct Titles {
     /// Where its sets are built ([`TITLES_DIR`] beside a directory
     /// index); `None` builds them in memory (a RAM index).
     dir: Option<PathBuf>,
+    /// Tests only: background builds that failed.
+    #[cfg(test)]
+    failures: AtomicU64,
 }
 
 struct State {
@@ -928,6 +999,8 @@ impl Default for Titles {
                 interval: MIN_INTERVAL,
             }),
             dir: None,
+            #[cfg(test)]
+            failures: AtomicU64::new(0),
         }
     }
 }
@@ -1044,6 +1117,12 @@ impl Titles {
         self.lock().behind
     }
 
+    /// Whether a builder thread is running (tests).
+    #[cfg(test)]
+    pub(crate) fn is_running(&self) -> bool {
+        self.lock().running
+    }
+
     fn kick(self: &Arc<Self>) {
         {
             let mut s = self.lock();
@@ -1062,10 +1141,34 @@ impl Titles {
     }
 }
 
+/// The builder's store connection: no memory map. The build reads the
+/// store once, front to back, and pages this connection mapped would
+/// count in the process's resident memory again on top of the other
+/// connections' maps of the same file (X-import-drain-memory).
+fn builder_config() -> StoreConfig {
+    StoreConfig {
+        mmap_size: 0,
+        ..StoreConfig::default()
+    }
+}
+
 /// The builder thread: builds while there are commits it hasn't seen,
 /// waiting out the interval after each build, and exits when there are
 /// none (or the index is gone).
 fn builder(titles: Weak<Titles>) {
+    // A panic mid-build mustn't leave the set marked as building forever,
+    // so no later commit could start one.
+    struct Reset<'a>(&'a Weak<Titles>);
+    impl Drop for Reset<'_> {
+        fn drop(&mut self) {
+            if std::thread::panicking()
+                && let Some(t) = self.0.upgrade()
+            {
+                t.lock().running = false;
+            }
+        }
+    }
+    let _reset = Reset(&titles);
     loop {
         let Some(t) = titles.upgrade() else {
             return;
@@ -1085,15 +1188,7 @@ fn builder(titles: Weak<Titles>) {
             return;
         };
         let started = Instant::now();
-        // No memory map: the build reads the store once, front to back,
-        // and pages this connection mapped would count in the process's
-        // resident memory again on top of the other connections' maps of
-        // the same file (X-import-drain-memory).
-        let unmapped = StoreConfig {
-            mmap_size: 0,
-            ..StoreConfig::default()
-        };
-        let built = Store::open_reader(&path, unmapped)
+        let built = Store::open_reader(&path, builder_config())
             .map_err(Error::from)
             .and_then(|store| t.build(&store));
         match built {
@@ -1111,6 +1206,8 @@ fn builder(titles: Weak<Titles>) {
                 );
                 // Try again after the interval.
                 t.lock().dirty = true;
+                #[cfg(test)]
+                t.failures.fetch_add(1, Ordering::Relaxed);
             }
         }
         drop(t);
@@ -1640,17 +1737,22 @@ mod tests {
         /// The bounded build gives the set the in-memory build gave,
         /// precomputed rankings and ties included, however the
         /// occurrences fall into runs. Few letters and their spellings
-        /// (case, an accent) make a wide prefix (every title starts with
-        /// `a`), spellings of one title split across runs, and mostly
-        /// unique titles, so the precomputed lists are cut among ties.
+        /// (case, an accent, a Cyrillic letter that stays two bytes after
+        /// folding) make two wide prefixes, `a` and `ж` (where byte and
+        /// char prefixes differ), spellings of one title split across
+        /// runs, and mostly unique titles, so the precomputed lists are
+        /// cut among ties.
         #[test]
         fn the_bounded_build_matches_the_in_memory_one(
-            occurrences in proptest::collection::vec(("[aA][aAbBé ]{6,14}", 0usize..4), 9000..12000),
+            occurrences in proptest::collection::vec(("[aAжЖ][aAbBéжЖ ]{6,14}", 0usize..4), 10000..13000),
             run in 1usize..5000,
             on_disk in proptest::bool::ANY,
         ) {
             let want = reference(&occurrences);
-            proptest::prop_assert!(!want.big.is_empty(), "the case should have wide prefixes");
+            proptest::prop_assert!(
+                want.big.contains_key("a") && want.big.contains_key("ж"),
+                "the case should have both wide prefixes"
+            );
             let dir = tempfile::tempdir().unwrap();
             let got = streamed(&occurrences, run, on_disk.then_some(dir.path()));
             assert_same(&got, &want, &probes(&occurrences));
@@ -1751,8 +1853,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let set = TitleSet::build_in(&store, Some(dir.path())).unwrap();
         let good = std::fs::read(&set.file.as_ref().unwrap().0).unwrap();
-        let path = dir.path().join("bad.fst");
-        assert!(open_set(&path).is_err(), "missing");
+        assert!(
+            open_set(&dir.path().join("missing.fst")).is_err(),
+            "missing"
+        );
         let mut cases: Vec<(&str, Vec<u8>)> = vec![
             ("short", good[..10].to_vec()),
             ("header only", good[..HEADER].to_vec()),
@@ -1766,11 +1870,19 @@ mod tests {
         patched("magic", 0, b"X");
         patched("version", 8, &2u32.to_le_bytes());
         patched("count", 16, &99u64.to_le_bytes());
+        patched("checksum", 12, &[0; 4]);
         patched("fst", HEADER, &[0xFF; 8]);
-        for (what, bytes) in cases {
+        // One flipped byte in the middle of the FST: only the checksum
+        // can tell.
+        let mid = HEADER + (good.len() - HEADER) / 2;
+        patched("a byte mid-FST", mid, &[good[mid] ^ 0x01]);
+        // Each case in its own file, never one rewritten in place.
+        for (i, (what, bytes)) in cases.into_iter().enumerate() {
+            let path = dir.path().join(format!("bad-{i}.fst"));
             std::fs::write(&path, bytes).unwrap();
             assert!(open_set(&path).is_err(), "{what}");
         }
+        let path = dir.path().join("good.fst");
         std::fs::write(&path, &good).unwrap();
         assert_eq!(open_set(&path).unwrap().len(), 2);
     }
@@ -1850,13 +1962,28 @@ mod tests {
                 found
             })
         };
+        let listing = || -> Vec<String> {
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        };
         assert!(on_disk("purgeme unique"), "the probe finds a title");
+        // A search still holding the old set across the rebuild.
+        let held = titles.current().unwrap();
         let hash = store.torrent(1).unwrap().unwrap().info_hash.0;
         store.delete_torrents(&[hash]).unwrap();
         titles.rebuild_from(&store).unwrap();
+        assert_eq!(
+            listing().len(),
+            2,
+            "the held set keeps its file: {:?}",
+            listing()
+        );
+        drop(held);
         assert!(!on_disk("purgeme unique"), "no set file holds it");
         assert!(on_disk("keeper"));
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(listing().len(), 1, "{:?}", listing());
         // A later start sweeps what this run left.
         drop(titles);
         std::fs::write(
@@ -1865,7 +1992,119 @@ mod tests {
         )
         .unwrap();
         let _again = Titles::at(dir.path().to_path_buf());
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert!(listing().is_empty(), "{:?}", listing());
+    }
+
+    /// A write that fails partway through the set file (a full disk)
+    /// leaves the folder holding only the old set, which still serves.
+    #[test]
+    fn a_failed_write_keeps_the_old_set_and_leaves_nothing() {
+        let names: Vec<String> = (0..20).map(|i| format!("Title.{i}.2001.mkv")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let store = store_of(&refs);
+        let dir = tempfile::tempdir().unwrap();
+        let titles = Titles::at(dir.path().to_path_buf());
+        titles.rebuild_from(&store).unwrap();
+        let old = titles.current().unwrap();
+        FAIL_AFTER.with(|f| f.set(Some(5)));
+        let failed = titles.rebuild_from(&store);
+        FAIL_AFTER.with(|f| f.set(None));
+        assert!(failed.is_err());
+        assert!(Arc::ptr_eq(&titles.current().unwrap(), &old));
+        assert_eq!(old.lookup("title 1", PLAIN, 30).len(), 11);
+        let listed: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(listed, [old.file.as_ref().unwrap().0.clone()]);
+    }
+
+    /// A background build that fails keeps the set dirty: the builder
+    /// tries again, and once the store reads again the set is built.
+    #[test]
+    fn a_failed_background_build_stays_dirty() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("s.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        fill(&mut store, &["Alpha.2001.1080p.mkv"]);
+        let t = Arc::new(Titles::at(dir.path().join(TITLES_DIR)));
+        t.set_interval(Duration::from_millis(1));
+        let has = |p: &str| {
+            t.current()
+                .is_some_and(|s| !s.lookup(p, PLAIN, 1).is_empty())
+        };
+        t.follow(db.clone());
+        wait_for("the first build", || has("alpha"));
+        wait_for("the builder to stop", || !t.is_running());
+        let rename = |from: &str, to: &str| {
+            store
+                .connection()
+                .execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}"))
+                .unwrap();
+        };
+        rename("torrent_parsed", "parked");
+        t.committed();
+        wait_for("a failed build", || t.failures.load(Ordering::Relaxed) > 0);
+        // Hold the next attempt, to look at the flag the failure left.
+        t.set_behind(true);
+        wait_for("the builder to stop", || !t.is_running());
+        assert!(t.lock().dirty, "a failed build stays dirty");
+        rename("parked", "torrent_parsed");
+        fill(&mut store, &["Bravo.2002.1080p.mkv"]);
+        t.set_behind(false);
+        wait_for("the build after the store reads again", || has("bravo"));
+        t.unfollow();
+    }
+
+    #[test]
+    fn a_cut_run_is_an_error() {
+        let mut work = Work::new(None).unwrap();
+        let mut held: HashMap<Spelling, [u32; 4]> = HashMap::new();
+        held.insert(spelling("Alpha").unwrap(), [1, 0, 0, 0]);
+        let Run::Mem(bytes) = work.spill(&mut held).unwrap() else {
+            unreachable!("no folder, so in memory");
+        };
+        let read = |b: &[u8]| {
+            let mut r = RunReader::open(Run::Mem(b.to_vec())).unwrap();
+            r.next().and_then(|first| Ok((first, r.next()?)))
+        };
+        let (first, end) = read(&bytes).unwrap();
+        assert!(
+            first.is_some() && end.is_none(),
+            "a whole run reads to its end"
+        );
+        assert!(read(&bytes[..2]).is_err(), "cut mid-length");
+        assert!(read(&bytes[..6]).is_err(), "cut mid-key");
+        assert!(read(&bytes[..bytes.len() - 3]).is_err(), "cut mid-counts");
+        let mut long = (MAX_SPELLING as u32 + 1).to_le_bytes().to_vec();
+        long.extend_from_slice(&[0; 32]);
+        assert!(read(&long).is_err(), "a stated length past the cap");
+    }
+
+    #[test]
+    fn the_builder_reads_the_store_unmapped() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("s.db");
+        drop(Store::open(&db, StoreConfig::default()).unwrap());
+        let store = Store::open_reader(&db, builder_config()).unwrap();
+        let mmap: i64 = store
+            .connection()
+            .pragma_query_value(None, "mmap_size", |r| r.get(0))
+            .unwrap();
+        assert_eq!(mmap, 0);
+    }
+
+    /// A prefix is precomputed only past [`SCAN_CAP`] titles: at 4,096
+    /// it's scanned, at 4,097 it's ranked in advance, the same as main's.
+    #[test]
+    fn the_scan_cap_boundary_matches() {
+        for n in [SCAN_CAP, SCAN_CAP + 1] {
+            let occ: Vec<(String, usize)> = (0..n).map(|i| (format!("Qx {i:05}"), i % 4)).collect();
+            let want = reference(&occ);
+            let got = streamed(&occ, 1000, None);
+            assert_eq!(got.big.contains_key("q"), n > SCAN_CAP);
+            assert_same(&got, &want, &probes(&occ));
+        }
     }
 
     /// Waits for `ok`, failing after 10 s with `what`.
@@ -1891,11 +2130,13 @@ mod tests {
         };
         t.follow(db.clone());
         wait_for("the first build", || has("alpha"));
-        // A drain: commits arrive while the indexer is behind.
+        wait_for("the builder to stop", || !t.is_running());
+        // A drain: commits arrive while the indexer is behind, and none
+        // of them starts a builder.
         t.set_behind(true);
         fill(&mut store, &["Bravo.2002.1080p.mkv"]);
         t.committed();
-        wait_for("the builder to stop", || !t.lock().running);
+        assert!(!t.is_running(), "no builder starts while behind");
         assert!(t.lock().dirty, "the commit isn't lost");
         assert!(!has("bravo"), "no build while behind");
         // Caught up: the build the commits wanted runs.

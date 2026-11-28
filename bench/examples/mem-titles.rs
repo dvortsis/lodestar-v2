@@ -21,7 +21,9 @@
 //! target/x86_64-unknown-linux-musl/release/examples/mem-titles 200000
 //! ```
 //!
-//! Linux only for the figures (0 elsewhere, so the check passes vacuously).
+//! Linux only for the figures. There, a run with no figures, or whose
+//! titles didn't grow from N to 2N, fails too; elsewhere the check can't
+//! measure and passes.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -180,6 +182,7 @@ fn main() {
     let mut generator = Generator::new(20261127);
     println!("torrents,titles,folder_peak_mib,memory_peak_mib,folder_build_s");
     let mut folder = Vec::new();
+    let mut counts = Vec::new();
     for torrents in [n, 2 * n] {
         add(&mut store, &mut generator, n);
         let (t, peak, secs) = measure(&db, "folder", &titles);
@@ -190,6 +193,19 @@ fn main() {
             mib(memory)
         );
         folder.push(peak);
+        counts.push(t);
+    }
+    // A run that measured nothing passes nothing (Linux, where the
+    // figures exist).
+    if cfg!(target_os = "linux") {
+        assert!(
+            folder.iter().all(|&p| p > 0),
+            "no memory figures: {folder:?}"
+        );
+        assert!(
+            counts[1] > counts[0] && counts[0] > 0,
+            "the store didn't grow its titles: {counts:?}"
+        );
     }
     let grew = folder[1].saturating_sub(folder[0]);
     println!(
