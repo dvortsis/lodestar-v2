@@ -35,19 +35,6 @@
 		margin-block-start: var(--tb-rail-h, 0);
 	}
 }
-/* L3: on a wide screen the controls follow the rows, not the far edge of the track. */
-@media (width >= 128rem) {
-	.tb {
-		justify-content: flex-start;
-		max-width: calc(var(--spacing) * 240);
-	}
-	/* The controls follow the count here, so its slot is reserved at the width of the longest note:
-	   the hidden-count note arriving then moves nothing sideways. */
-	.tb-count {
-		flex: none;
-		min-inline-size: calc(var(--spacing) * 96);
-	}
-}
 /* Reserved while the count is out, so nothing moves when it arrives. */
 .tb-count {
 	margin: 0;

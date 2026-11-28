@@ -1,25 +1,26 @@
 # X-hidden-count-wide-shift decisions
 
-Slice `X-hidden-count-wide-shift`, the follow-up X-hidden-count recorded (r24). The runner decided the points below (§2.26) and flags them to the owner (§2.19).
+Slice `X-hidden-count-wide-shift`, the follow-up X-hidden-count recorded (r24). The runner decided the points below (§2.26; L3 was the runner's layout, not an owner decision) and flags them to the owner (§2.19).
 
 ## What moved
-From 128rem of window the toolbar is layout L3: `justify-content: flex-start`, so Sort and View follow the count instead of sitting at the far edge. The count was only as wide as its text, so when "N hidden by filters · Show" arrived the controls moved right by the note's width. Below 128rem the controls are pinned to the far edge and never moved.
+From 128rem of window the toolbar was layout L3: `justify-content: flex-start` and `max-width: 960 px`, so Sort and View followed the count instead of sitting at the far edge. The count was only as wide as its text, so when "N hidden by filters · Show" arrived the controls moved right by the note's width.
 
 ## Decision
-- **The count's slot has a floor from 128rem (runner).** `.tb-count` gets `flex: none; min-inline-size: calc(var(--spacing) * 96)` (384 px) in the `>= 128rem` block of `toolbar.css`, the width equivalent of the `min-height: 1lh` it already has. L3 is unchanged: the controls still follow the count, the 960 px max-width and left alignment stay. No markup, wording or token change.
-- **Sized from the worst realistic case, not the typical one.** "≈ 2.4M results" (the approximate total) with a 7-digit hidden count and the full words, measured as the text's own width at 2,048 px in the UI font (Chromium, e2e):
+- **L3 now means: the toolbar is the rows' width and its controls end at that box's edge (runner, refines §10.4).** The `>= 128rem` block in `toolbar.css` is gone, so the toolbar behaves as it does below 128rem: `space-between` across the whole box. Sort and View sit at the rows' right edge and never move, whatever the count's length or language.
+- **Alignment checked.** At 2,048 and 2,560 px the results rows are the full track wide (1,712 and 2,224 px), not 960 px. The 960 px cap made the toolbar narrower than the rows, so the controls could not line up with the rows' end. Without the cap the toolbar box has the rows' x and width at both widths (e2e asserts it).
+- **A fixed floor on the count was tried and dropped.** A 384 px floor plus the 16 px gap plus the controls (560.7 px in en) is 960.7 px, over the 960 px cap, so every English page wrapped to a two-row toolbar. It also did not hold the real worst cases, measured at the UI font:
 
-  | Language | String | Measured text width |
-  | -------- | ------ | ------------------- |
-  | en | "≈ 2.4M results · 9,999,999 hidden by filters · Show" | 360.9 px |
-  | zh | "≈ 240万 个结果 · 9,999,999 个已被过滤器隐藏 · 显示" | 380.2 px |
+  | Case | Measured text width |
+  | ---- | ------------------- |
+  | zh "≈ 1234.6万 个结果" (totals of 10M to 100M) | 403.8 px |
+  | zh exact "199,999 个结果" | 384.1 px |
+  | en exact "12,345,678 results" | 397.9 px |
 
-  Step 96 (384 px) holds both, so it stays. zh leaves 4 px, so the e2e case asserts the text stays within 384 px. The zh figure is measured with the container's Chinese fallback font (WenQuanYi Zen Hei, also CI's); a CJK fallback font wider than the one measured would show up as the e2e case failing, not as a silent shift.
-- **Residual.** A longer count than the worst case measured (a grouped total with a long hidden count) still pushes the controls, as X-hidden-count already says for narrow widths.
-- **Rejected: anchoring the controls independently** (e.g. `margin-inline-start: auto`). It changes L3's look, which is the owner-decided layout.
+  Any width floor is fragile against text length and language.
+- **Rejected: a fixed floor and the 960 px cap** (above), and a controls anchor independent of the box (the same result as the chosen fix, with more CSS).
 
 ## Tests
-`web/e2e/search-toolbar.routes.test.ts`: the width loop no longer skips Sort's x from 2,048 px and adds 2,560 px; a new case per language (en, zh-CN) holds Sort's box, the toolbar's height and row 1's y at 2,048 px with an approximate 2.4M total and a 9,999,999 hidden count. Condition waits only.
+`web/e2e/search-toolbar.routes.test.ts`: the width loop no longer skips Sort's x from 2,048 px and adds 2,560 px. A worst-case case per language (en exact 12,345,678; zh "≈ 1234.6万", each with 9,999,999 hidden) at 2,048 and 2,560 px asserts the full text, a one-row toolbar (as tall as a dense control), the toolbar's box equal to the rows' x and width, and Sort's box, the toolbar's height and row 1's y unchanged when the note arrives. Condition waits only.
 
 ## Size
-Measured with `npm run size:ci`: Results toolbar (lazy) 5,590 → 5,610 B, so its limit moves 5.60 → 5.61 KB (the reserved width is the toolbar chunk's CSS). The CSS entry is unchanged at 19,816 B (limit 19.82 KB).
+Measured with `npm run size:ci`: no budget moves (the change removes CSS), so `.size-limit.mjs` is unchanged.

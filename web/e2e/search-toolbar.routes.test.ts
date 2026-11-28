@@ -549,8 +549,8 @@ test.describe('"N hidden · Show" under a coarse pointer', () => {
 
 // X-hidden-count (runner): the note arrives after the rows and moves nothing. Where even "N filtered
 // · Show" would wrap the count line or the controls it shows no note ("Show hidden" stays in
-// Filters). From 128rem (2,048 px) the controls follow the count (L3), so they move sideways when it
-// arrives, so the count's slot has a floor (toolbar.css) and nothing moves at any width.
+// Filters). From 128rem (2,048 px) the toolbar is as wide as the rows and its controls end at that
+// box's edge (L3, toolbar.css), so they hold their x as well.
 for (const [width, shows] of [
 	[360, false],
 	[390, true],
@@ -590,38 +590,54 @@ for (const [width, shows] of [
 	});
 }
 
-// The worst case for the count's reserved slot (toolbar.css, from 128rem): an approximate total
-// plus a 7-digit hidden count with the full words, in the two shipped languages.
-for (const lang of ['en', 'zh-CN'] as const) {
-	test.describe(`the longest count in ${lang}`, () => {
-		test.use({ locale: lang });
-		test('at 2,048 px it and its note move nothing', async ({ page, go, mock }) => {
-			await page.setViewportSize({ width: 2048, height: 900 });
-			server(mock, () => body(hits(3), { total: 2_400_000, total_approx: true }));
-			let release!: () => void;
-			const held = new Promise<void>((r) => (release = r));
-			mock.on('searchHiddenCount', async () => (await held, { hidden_total: 9_999_999 }));
-			await go('/search?q=lantern');
-			await expect(row(page, 1)).toBeVisible();
-			await expect(count(page)).toContainText('≈');
-			const toolbar = page.getByTestId('results-toolbar');
-			const before = await toolbar.boundingBox();
-			const first = (await row(page, 1).boundingBox())?.y;
-			const sort = await page.getByLabel(/^(Sort|排序)/).boundingBox();
-			release();
-			await expect(page.getByTestId('results-hidden-show')).toBeVisible();
-			const text = await count(page).evaluate((el) => {
-				const r = document.createRange();
-				r.selectNodeContents(el);
-				return r.getBoundingClientRect().width;
+// The worst cases for the count's length from 128rem: the longest approximate total
+// in zh and the longest exact total in en, each with a 7-digit hidden count and the full words.
+const WORST = [
+	{
+		lang: 'en',
+		total: { total: 12_345_678 },
+		text: '12,345,678 results · 9,999,999 hidden by filters · Show',
+		label: 'Sort'
+	},
+	{
+		lang: 'zh-CN',
+		total: { total: 12_345_678, total_approx: true },
+		text: '≈ 1234.6万 个结果 · 9,999,999 个已被过滤器隐藏 · 显示',
+		label: '排序'
+	}
+] as const;
+for (const { lang, total, text, label } of WORST) {
+	for (const width of [2048, 2560]) {
+		test.describe(`the longest count in ${lang} at ${width} px`, () => {
+			test.use({ locale: lang });
+			test('is one row, ends with the rows, and moves nothing', async ({ page, go, mock }) => {
+				await page.setViewportSize({ width, height: 900 });
+				server(mock, () => body(hits(3), total));
+				let release!: () => void;
+				const held = new Promise<void>((r) => (release = r));
+				mock.on('searchHiddenCount', async () => (await held, { hidden_total: 9_999_999 }));
+				await go('/search?q=lantern');
+				await expect(row(page, 1)).toBeVisible();
+				const toolbar = page.getByTestId('results-toolbar');
+				const before = await toolbar.boundingBox();
+				const first = await row(page, 1).boundingBox();
+				const sort = await page.getByLabel(label).boundingBox();
+				// One row (the toolbar is as tall as a dense control), as wide as the rows, with the
+				// controls ending at their edge.
+				expect(before?.height).toBe(sort?.height);
+				expect(before?.x).toBe(first?.x);
+				expect(before?.width).toBe(first?.width);
+				release();
+				await expect(page.getByTestId('results-hidden-show')).toBeVisible();
+				await expect(count(page)).toHaveText(text, { useInnerText: true });
+				const after = await page.getByLabel(label).boundingBox();
+				expect(after).toEqual(sort);
+				expect(after!.x + after!.width).toBeLessThanOrEqual(first!.x + first!.width);
+				expect((await toolbar.boundingBox())?.height).toBe(before?.height);
+				expect((await row(page, 1).boundingBox())?.y).toBe(first?.y);
 			});
-			// The floor in toolbar.css (384 px) must hold the text: a font change says so here.
-			expect(text).toBeLessThanOrEqual(384);
-			expect((await toolbar.boundingBox())?.height).toBe(before?.height);
-			expect((await row(page, 1).boundingBox())?.y).toBe(first);
-			expect(await page.getByLabel(/^(Sort|排序)/).boundingBox()).toEqual(sort);
 		});
-	});
+	}
 }
 
 test('below 46rem of toolbar Sort and View keep their names, without visible labels', async ({
