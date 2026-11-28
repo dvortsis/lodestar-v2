@@ -338,7 +338,9 @@ describe('rows', () => {
 	it('shows 0 as 0, not as never scraped', async () => {
 		handler = () => response({ newest: newest({ hits: [hit(1, { seeders: 0, leechers: 0 })] }) });
 		mount();
-		expect((await screen.findByTestId(`discover-row-${hash(1)}-seeders`)).textContent).toBe('0');
+		expect((await screen.findByTestId(`discover-row-${hash(1)}-seeders`)).textContent).toBe(
+			'0 seeders'
+		);
 	});
 
 	it('uses the raw name when title is null, and shows the raw name and method when they differ', async () => {
@@ -387,7 +389,7 @@ describe('rows', () => {
 			});
 		mount();
 		expect((await screen.findByTestId(`discover-row-${hash(1)}-seeders`)).textContent).toBe(
-			'≈\u00A012'
+			'≈\u00A012 seeders'
 		);
 		expect(screen.getByTestId(`discover-row-${hash(1)}-suspect`).textContent).toBe(
 			'Suspect seeders'

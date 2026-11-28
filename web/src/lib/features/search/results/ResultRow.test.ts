@@ -224,3 +224,22 @@ describe('ResultRow, Compact', () => {
 		expect(screen.getByTestId('r-suspect').className).toContain('sr-only');
 	});
 });
+
+describe('ResultRow, backfill (Discover only)', () => {
+	it('shows the marker only when asked, and only for a backfill discovery', () => {
+		const flagged = hit(1, { flags: ['backfill'] });
+		const { unmount } = render(ResultRow, { hit: flagged, density: 'comfortable', testid: 'r' });
+		expect(screen.queryByTestId('r-backfill')).toBeNull();
+		unmount();
+		const on = render(ResultRow, {
+			hit: flagged,
+			density: 'comfortable',
+			testid: 'r',
+			backfill: true
+		});
+		expect(text('r-backfill')).toContain('backfill');
+		on.unmount();
+		render(ResultRow, { hit: hit(2), density: 'comfortable', testid: 'r', backfill: true });
+		expect(screen.queryByTestId('r-backfill')).toBeNull();
+	});
+});
