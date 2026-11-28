@@ -3,7 +3,7 @@
 This file records the owner's answers of 2026-11-28 (owner-decisions §2.89 to §2.93), the D1 rewiring of `runner/slices.yaml` and `runner/dashboard.yaml`, and the runner's calls since r23 (#1170). The rulings are the runner's, under §2.26 and its reading of §2.85 to §2.93, except where they apply an owner answer. A ruling that only grants owns or records a slice isn't flagged. The owner can veto any flagged call.
 
 ## The owner's answers
-- **§2.89, the night rule.** No CPU load tests at night; soaks may run unsupervised. The runner reads "night" as 06:00Z–15:00Z (05:00Z–14:00Z from 2027-03-14T09:00Z to 2027-11-07T08:00Z). The test VM shares the owner's uplink ("Yes, same internet connection"), so the X-test-vm Aggressive screen is barred at night and during every measured window: the comparator, the rehearsal, CR-R1 days 1 and 2, and the drills.
+- **§2.89, the night rule.** No CPU load tests at night; soaks may run unsupervised. The runner reads "night" as 06:00Z–15:00Z (05:00Z–14:00Z from 2027-03-14T09:00Z to 2027-11-07T08:00Z). The test VM shares the owner's uplink ("Yes, same internet connection"), so (runner's reading) the X-test-vm Aggressive screen is barred at night and during every measured window: the comparator, the rehearsal, CR-R1 days 1 and 2, and the drills.
 - **§2.90, the Windows VPN binding: "Yes".** One small Windows-only `unsafe` `setsockopt` (`IP_UNICAST_IF` / `IPV6_UNICAST_IF`) in `crates/network-policy`, like the store exception (§2.35). The new slice X-vpn-bind-win needs a fresh Opus review and a `/security-review`.
 - **§2.91, six slots: "Yes, increase to 6 slots".** `limits.phase_total` goes from 4 to 6 in `runner/slices.yaml`, with a comment. The runner's speed-up commitments don't change the bar:
   - the review starts when the PR opens, beside CI;
@@ -93,7 +93,7 @@ This file records the owner's answers of 2026-11-28 (owner-decisions §2.89 to �
   - X-hidden-count-drawer-wrap (Sonnet, fill work: with the drawer open, the grouped count alone wraps the toolbar at a box of 528–840 px);
   - X-vpn-bind-win (Opus, §2.90, after X-vpn-bind-ui);
   - M8-DR-a (Opus, docs: the early design review of the screens that are already final);
-  - three flake fixes, each fixed once: X-flake-dht-spill (the spilled-cooldown proof test), X-flake-url-scrub (`url.rs` `scrub_text`'s speed test on macOS) and X-flake-core-rejudge (`core_rejudge.rs`, a range that never reads).
+  - X-flake-trio, one slice for three flakes, each fixed once: the dht spilled-cooldown proof test, `url.rs` `scrub_text`'s speed test on macOS, and `core_rejudge.rs`'s "a range that never reads".
 - **Already present:** X-row-rail, X-vpn-bind-ui, X-healthz-count-async (#1181) and M8-PERF-3 were entered earlier. X-row-rail, WK-12 and M8-PERF-3 gain notes for the runner's calls below.
 - Each new id has a placement rule.
 
@@ -149,6 +149,7 @@ This file records the owner's answers of 2026-11-28 (owner-decisions §2.89 to �
      - M8-SEC-2, M8-DOC-1, M8-DR and M8-DOC-3a on RX-2;
      - M8-DOC-3a on WK-19, D-vpn-guide and G-v06-crawler;
      - M8-DR on X-vpn-bind-ui.
+   - **X-vpn-bind-win doesn't gate the 1.0 cut.** Windows fails closed without it. It ships in 1.0 if it lands before the cut, and in 1.1 otherwise.
    - **M8-SEC-8 doesn't wait for X-vpn-bind-win.** That slice has its own `/security-review`, and G-v1-security's delta review covers whatever lands after M8-SEC-8.
    - **Track U doesn't gate M8.** The roadmap arrow tracku → m8 goes, and M8-DR doesn't wait for Track U.
    - **E-M8 keeps E-M7** (its kept parts ship) and drops E-v08.

@@ -899,7 +899,7 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
 92. **An ongoing throughput review** (owner, 2026-11-28, in the runner session).
     - **18:03Z:** "an ongoing review to ensure we're proceeding as quickly as possible, without sacrificing quality." And: "The review should continually reassess the plan and update as inefficiencies are identified or improvements in strategy are identified, always keeping the end goal in mind, along with app principals."
     - **19:45Z:** "have the recurring review also update the roadmap status dashboard's plan and estimates."
-    - **How the runner runs it:** every 6 h, as a scheduled task in the runner session. The rules are on the `runner-state` branch in `reviews/throughput.md`, with its log beside them. Each run measures CI and merge times, looks for waste, changes the plan where that's the runner's call (§2.19, §2.26), brings anything else to the owner, and refreshes the dashboard's estimates (`notes.now`, "Estimates") in the runner's next records PR.
+    - **How the runner runs it:** every 6 h, as a scheduled task in the runner session. The rules are on the `runner-state` branch in `reviews/throughput.md`, with its log beside them. Each run measures CI and merge times, looks for waste, changes the plan where that's the runner's call (§2.19, §2.26), brings anything else to the owner, and refreshes the dashboard's plan (the roadmap, slices and gates) and its estimates (`notes.now`, "Estimates") in the runner's next records PR.
     - **Unchanged:** the quality bar and the owner's numbers. "Without sacrificing quality" is part of the instruction.
 
 93. **D1's scope list is approved, and v0.5.2 isn't released** (owner, 2026-11-28 about 19:45Z, in the runner session, answering the runner's two questions).
@@ -908,13 +908,15 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
         - the unstarted v0.7 tails OUT-1, OUT-3, UN-3, UN-4, IRC-2, IRC-3, SRC-3b and ENR-13b, and the gate G-v07-scale;
         - every v0.8 slice not yet merged: PL-0, PL-1, PL-2, PL-3, PL-4, PL-5, PL-6, PL-7a, PL-7b, PL-8, CW-0, CW-1, CW-2, CW-3, NOS-3, LEM-1, ADH-0, DOC-v08 and the gate G-v08. The merged parsers (NOS-0, NOS-1, NOS-2a, NOS-2b and LEM-0) ship switched off.
       - **Kept for 1.0:** WK-12, WK-13, WK-16, WK-19 and WK-G; Track Q; all of M8; RX-2.
-      - **Track U is fill work.** Whatever of it isn't merged when `release/v1.0` is cut moves to 1.1.
       - **G-v07's safety checks fold into G-v1-audits** (outputs and enrichment never carry private, held or hidden adult items; uploads and the watch folder go through the safety floor; consent bypass). They run on the 1.0 release candidate. No separate v0.7 gate runs.
-      - **The M6 manual installs** (`ext:owner-m6-manual`, for G-m6) are done on the 1.0 release candidate.
     - **"Is v0.5.2 still going to ship?": "We don't need to ship that version as a public release. We can wait until a major version".**
-      - There is no public v0.5.2; the next public release is 1.0. `release/v0.5.2` stays untagged, and X-tokio-1541-v052, its last pre-tag PR, is closed.
+      - There is no public v0.5.2; the next public release is 1.0 (the runner's reading of "a major version"). `release/v0.5.2` stays untagged, and X-tokio-1541-v052, its last pre-tag PR, is closed.
       - The "Allow workers" setting that the runner found linked on `release/v0.5.2`, against that branch's feature manifest, is moot: nothing ships from that branch.
       - **Runner's reading:** v0.6 and v0.7 stay milestones and gates in the plan, not public releases.
+    - **The runner's calls in the same rewiring, not part of the owner's "Yes"** (flagged to the owner in queue item 46, which the owner can veto):
+      - **Track U is fill work.** Whatever of it isn't merged when `release/v1.0` is cut moves to 1.1. This goes further than the proposal's §3, which kept Track U items that are blocking design findings or already open as PRs.
+      - **The M6 manual installs** (`ext:owner-m6-manual`, for G-m6) are done on the 1.0 release candidate, so G-m6 runs after the cut. The proposal's §3 kept G-m6 as ordinary 1.0 work before the cut.
+      - **X-vpn-bind-win doesn't gate the 1.0 cut.** Windows already refuses a VPN pin and fails closed without it; it ships in 1.0 if it lands before the cut, and in 1.1 otherwise.
     - The rewiring of `runner/slices.yaml` and `runner/dashboard.yaml` is in `docs/decisions/2026-11-28-runner-records-r24.md`.
 
 ## 3. Points still open (not decided by the owner)

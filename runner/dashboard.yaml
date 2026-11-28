@@ -590,9 +590,7 @@ placement:
   - X-ci-no-fail-fast
   - X-ci-test-shard
   - X-vpn-hold-macos
-  - X-flake-dht-spill
-  - X-flake-url-scrub
-  - X-flake-core-rejudge
+  - X-flake-trio
   - X-flake-dataset-macos
   - X-flake-detect-macos
   - X-flake-address-port
@@ -1685,7 +1683,7 @@ roadmap:
     - CMP-G
   - id: m6
     label: Packaging (M6)
-    plain: Windows updates and Restart now, the release manifest, the settings CLI, the install smoke and the user guide, then the M6 exit gate.
+    plain: Windows updates and Restart now, the release manifest, the settings CLI, the install smoke and the user guide; the M6 exit gate runs on the 1.0 release candidate.
     col: 3
     row: 3
     members:
@@ -2011,7 +2009,7 @@ roadmap:
   - - unhold
     - m6
   - - m6
-    - m8
+    - v1
   - - v052
     - m7
   - - m8
@@ -2108,12 +2106,12 @@ owner_queue:
   when: Any time
 - n: 46
   type: review
-  action: 'Runner calls since r23 you may want to veto (§2.19; "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r24.md): the D1 rewiring as the runner drew it (G-v07 folded into the 1.0 audits gate, the M6 gate moved onto the 1.0 RC, the 1.0 cut waiting on Track Q''s fixes); the toolbar caps and the grouped note''s 72rem threshold; the result row''s size grants; 20 s test timeouts; WK-12''s wider worker number and purge cursor; the 10M benchmark runner''s triggers, registration and token handling, with runner-guard recommended as a required check; and the runner''s security review of any change to the CI files'
+  action: 'Runner calls since r23 you may want to veto (§2.19; "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r24.md): the D1 rewiring as the runner drew it (G-v07 folded into the 1.0 audits gate, the M6 gate moved onto the 1.0 RC, the 1.0 cut waiting on Track Q''s fixes, Track U as fill work, and the Windows VPN binding not gating the cut); the toolbar caps and the grouped note''s 72rem threshold; the result row''s size grants; 20 s test timeouts; WK-12''s wider worker number and purge cursor; the 10M benchmark runner''s triggers, registration and token handling, with runner-guard recommended as a required check; and the runner''s security review of any change to the CI files'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
 - n: 47
   type: action
-  action: 'Install the 1.0 release candidate by hand: on your Unraid server from the app template, and on Windows from the MSI, then say whether its signing looks right (M6 Q14). By your D1 (§2.93) this happens on the 1.0 release candidate, not on an earlier release. The runner gives you the steps when the candidate is tagged'
+  action: 'Install the 1.0 release candidate by hand: on your Unraid server from the app template, and on Windows from the MSI, then say whether its signing looks right (M6 Q14). By the runner''s D1 rewiring (§2.93, item 46) this happens on the 1.0 release candidate, not on an earlier release. The runner gives you the steps when the candidate is tagged'
   unblocks: The M6 exit gate (G-m6), and with it the 1.0 tag
   when: After you tag v1.0.0-rc.1
 
@@ -2176,7 +2174,7 @@ gates:
   where: docs/plan/2026-11-06-v06-workers.md
 - id: G-m6
   name: Milestone 6 exit
-  plain: Clean install, crawling and search on Docker/Unraid, Linux and Windows, with Windows updates and the guide.
+  plain: Clean install, crawling and search on Docker/Unraid, Linux and Windows, with Windows updates and the guide, on the 1.0 release candidate.
   slice: G-m6
   measure: ''
   target: architecture 14 M6 exit criteria
