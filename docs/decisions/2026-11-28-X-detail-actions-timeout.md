@@ -3,10 +3,19 @@
 - **A test's timeout exceeds the waits inside it** (runner decision, 2026-11-28Z). `web/vite.config.ts` sets `test.testTimeout: 20_000` and `test.hookTimeout: 20_000`.
   - Why: the repo's condition waits use a deadline of at least 10 s (CLAUDE.md, standards §2), but vitest's defaults give a test 5 s and a hook 10 s. So a slow wait failed as "Test timed out in 5000ms", well before its own deadline.
   - That's how `DetailActions.test.ts` "puts Open full page in the menu…" failed in a full detail run: the menu's lazy chunk (`ActionsMenu.svelte`) compiles in about 2 s cold. The test waits for it twice, and other workers compiling at the same time push it past 5 s.
-  - 20 s leaves room for a test that makes two 10 s-class waits, and it matches the most common per-file override.
+  - 20 s leaves room for a test that makes two 10 s-class waits. It's the second most common per-file override (22 files), after 30 s (32 files).
 - **Per-file `vi.setConfig({ testTimeout })` values stay as they are** (61 files: 15 s ×4, 20 s ×22, 30 s ×32, 40 s ×3). A file's own setting wins over the config.
-- **`hookTimeout` is raised too,** because one hook makes a 10 s wait: `web/src/lib/features/detail/DetailView.test.ts:39-44`, an `afterEach` that waits for the file tree. That equals the 10 s default. No other hook waits 10 s or more.
-- **The 54 files that made waits of 10 s or more but relied on the 5 s default.** These are the files with a `timeout` of 10 s or more, or a 10 s `asyncUtilTimeout` set through `configure`, and no test-level timeout. The first grep found 49; the self-review found the 5 `configure`-only ones it missed, listed last:
+- **`hookTimeout` is raised too, for every hook that makes a 10 s wait,** not one hook only. These hooks wait up to 10 s, the same as the 10 s default, and `hookTimeout: 20_000` covers them all. Don't revert it on the view that only one hook needs it.
+  - `web/src/lib/features/detail/DetailView.test.ts:39-44`: an `afterEach` waiting for the file tree.
+  - `web/src/lib/features/settings/form/SettingField.test.ts:107-113`: a `beforeEach` `waitFor`, under `asyncUtilTimeout: 10_000`.
+  - `web/src/lib/features/settings/form/LazyControl.test.ts:27-42`: a `beforeEach` that awaits `until` (10 s).
+  - `web/src/lib/features/settings/form/LazyControl.failure.test.ts:20-30`: the same.
+  - `web/src/lib/features/settings/form/SettingsForm.lazy.test.ts:16-27`: the same.
+  - `web/src/lib/features/settings/form/SettingsForm.offline.test.ts:31-42`: the same.
+  - `SettingsForm.test.ts:53`'s `beforeEach` uses `waitFor` at testing-library's default deadline, with no 10 s configured, so it isn't listed.
+- **The 49 files with tests that made waits of 10 s or more on the 5 s default.** These files have a `timeout` of 10 s or more, or a 10 s `asyncUtilTimeout` set through `configure`. Some of their tests (in `QueryBar.test.ts`, two of its four `describe`s) sit outside any per-file, per-`describe` or per-test timeout.
+  - Six files with such waits aren't listed, because every test in them is under a `describe(…, { timeout: 20_000 })`: `LazyControl`, `LazyControl.failure`, `SettingsForm.lazy`, `SettingsForm.offline`, `lazy` and `event-labels.lazy`. Their hooks are covered above.
+  - `filters/screens/screen.test.ts` sets 15 s on its `beforeAll` only, so its tests had the default.
   - `web/src/lib/features/detail/target.page.test.ts`
   - `web/src/lib/features/detail/visibility.retry.test.ts`
   - `web/src/lib/features/detail/adult/AdultEnrichment.test.ts`
@@ -36,17 +45,11 @@
   - `web/src/lib/features/discover/DiscoverPage.keys.test.ts`
   - `web/src/lib/features/upload/UploadScreen.test.ts`
   - `web/src/lib/features/filters/screens/names-late.test.ts`
-  - `web/src/lib/features/settings/form/SettingsForm.offline.test.ts`
-  - `web/src/lib/features/settings/form/lazy.test.ts`
-  - `web/src/lib/features/settings/form/LazyControl.test.ts`
   - `web/src/lib/features/settings/form/SettingsForm.messages.test.ts`
   - `web/src/lib/features/settings/form/SettingsForm.test.ts`
-  - `web/src/lib/features/settings/form/SettingsForm.lazy.test.ts`
-  - `web/src/lib/features/settings/form/LazyControl.failure.test.ts`
   - `web/src/lib/features/settings/form/SettingsForm.messages-failed.test.ts`
   - `web/src/lib/features/settings/logging/EventList.lazy.test.ts`
   - `web/src/lib/features/settings/logging/event-labels.test.ts`
-  - `web/src/lib/features/settings/logging/event-labels.lazy.test.ts`
   - `web/src/lib/features/settings/shell/SettingsShell.test.ts`
   - `web/src/lib/features/settings/screens2/Lazy.test.ts`
   - `web/src/lib/features/logs/LogsPage.test.ts`
@@ -61,3 +64,4 @@
   - `web/src/lib/features/filters/screens/names-slow.test.ts`
   - `web/src/lib/features/filters/screens/packs/packs.test.ts`
   - `web/src/lib/features/sources/SourceRow.chunk.test.ts`
+  - `web/src/lib/features/filters/screens/screen.test.ts`
