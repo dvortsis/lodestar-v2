@@ -47,9 +47,12 @@ describe('Imported badge', () => {
 		const badge = screen.getByTestId('imported-badge');
 		expect(badge.textContent).toContain('Imported');
 		expect(badge.querySelector('svg')).toBeTruthy();
-		expect(badge.getAttribute('title')).toContain("another indexer's database");
+		expect(badge.getAttribute('title')).toContain("Not checked against the torrent's hash");
 		// Read with the label, for keyboard and screen-reader users too.
-		expect(badge.querySelector('.sr-only')?.textContent).toContain("another indexer's database");
+		expect(badge.querySelector('.sr-only')?.textContent).toContain(
+			"Not checked against the torrent's hash"
+		);
+		expect(badge.getAttribute('title')).toContain('a remote worker');
 		expect(screen.queryByTestId('unverified-badge')).toBeNull();
 	});
 	it('shows Imported in place of Unverified on a card', () => {

@@ -121,7 +121,7 @@ Then run this command in the same terminal to read the one-time setup token, and
 docker compose logs lodestar
 ```
 
-Enter the setup token, read and accept the Legal Notice, then create your admin password. Sampling waits six hours after each start; search remains available.
+Enter the setup token, read and accept the Legal Notice, then create your admin password. On v0.5.1, sampling waits six hours after each start; newer builds have no wait. Search remains available either way, and the index grows over days.
 
 See [Chapter 2](docs/user/02-install-lodestar-on-unraid-and-docker.md) for the Unraid template, bind-mount permissions (`PUID` and `PGID`) and first-run setup.
 

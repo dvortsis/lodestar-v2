@@ -28,6 +28,7 @@
 | 5 | `for notification channels you set up (ntfy, Discord, email, webhooks)` | `lodestar_integrations::notify::Channel` (RSS is served, not sent) |
 | 5 | ``(by default the `logs` folder inside the data folder)`` | default `settings.logging.file_folder` in `settings/logging.rs` |
 | 5 | `keeps its restart record in a folder outside the data folder` | `default_witness_dir` in `config.rs` doesn't use the data folder |
+| 5 | `the safe-restart check, on by default, keeps its restart record`; never `optional safe-restart switch` | `safe_restart: true` in `config.rs`'s `impl Default for Dht`; if it becomes `false`, the notice must not say "on by default" |
 | 5 | `` `%SystemRoot%\Temp\lodestar-service.log` `` | `NAME` in `windows/temp_log.rs` |
 | 5 | `in your data folder, with five exceptions:` | the count of section 5's list |
 | 5 | `to the Windows Application event log, which every user of the computer can read`, `(version numbers, the step that stopped and folder paths only)` | the only Event Log writers (`eventcreate`, `ReportEvent`, `RegisterEventSource`, `EvtReport`, `Write-EventLog`, `New-EventLog`, .NET's `Diagnostics.EventLog` and `WriteEntry`, ignoring case, in `crates/*/src` and `packaging/**/*.ps1`) are `update/windows/helper.rs` and `windows/service.rs`; the only `event_log(` callers are those two and `update/windows/rollback.rs`; no Event Log crate; `windows/service.rs` builds its message with `event_log_text`; `packaging/windows/main.wxs` registers both sources ("Lodestar", "Lodestar update helper") and removes them on uninstall |

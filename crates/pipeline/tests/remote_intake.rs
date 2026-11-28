@@ -1549,6 +1549,53 @@ async fn remote_leases_survive_a_restart_and_parked_ones_go_to_the_built_in_work
     );
 }
 
+/// No lease is granted to a remote worker while the coordinator's
+/// have-filter is still filling at start (X-healthz-cold-start): a worker
+/// with no filter yet would claim and fetch keys already stored. Once the
+/// fill is marked, grants go through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_lease_is_granted_while_the_have_filter_fills() {
+    use lodestar_cluster::GrantAdmission;
+    use lodestar_pipeline::Have;
+    use lodestar_pipeline::remote::{NoStanding, Prior, RemoteParts};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("b.db"), StoreConfig::default()).unwrap();
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _hold) = tokio::sync::mpsc::channel(8);
+    let (pool, _p) = tokio::sync::mpsc::channel(8);
+    let intake = Arc::new(RemoteIntake::new(RemoteParts {
+        authority,
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: None,
+    }));
+    let sink = intake.sink(SinkParts {
+        preparer: Mutex::new(store.preparer()),
+        standing: Arc::new(NoStanding),
+        keys: test_keys(),
+        stored: Arc::new(Reader(Mutex::new(store))),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    });
+    // Unset, grants aren't held.
+    assert_eq!(sink.admit(W, 10), 10);
+    let have = Arc::new(Have::filling(1 << 10));
+    intake.wait_for_fill(&have);
+    assert_eq!(sink.admit(W, 10), 0, "granted while filling");
+    have.mark_filled();
+    assert_eq!(sink.admit(W, 10), 10);
+}
+
 /// Backpressure (§19.5): once the writer's queue reaches its high-water
 /// mark, no lease is granted however many are asked for; batches already
 /// harvested still queue, up to the intake's bound, then are refused for
@@ -2410,5 +2457,53 @@ async fn a_sealed_quarantine_reaches_the_quarantine_sealed() {
                 path.display()
             );
         }
+    }
+}
+
+/// X-remote-verified: every remote record is stored `REMOTE_UNVERIFIED`,
+/// whether or not the coordinator keeps raw dicts (`archive_raw`). The
+/// coordinator never hashes a remote record's info dict to its key (the
+/// wire never carries `pieces`), so search reads the flag as
+/// `verified:imported` (`lodestar_search::stored_verified`): the flag
+/// must hold on both sides of `build`'s `archive_raw` branch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_remote_record_is_stored_unverified_whatever_archive_raw_says() {
+    let rig = Rig::new(&[], 0).await;
+    let archiving = rig.pipeline.monitor().remote().sink(SinkParts {
+        preparer: Mutex::new(
+            Store::open_reader(
+                &rig.db,
+                StoreConfig {
+                    archive_raw: true,
+                    ..StoreConfig::default()
+                },
+            )
+            .unwrap()
+            .preparer(),
+        ),
+        standing: rig.standing.clone(),
+        keys: test_keys(),
+        stored: Arc::new(Reader(Mutex::new(reader(&rig.db)))),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    });
+    let plain = prepared(&rig.worker_store, &info("Plain.Find.2010.1080p", GIB));
+    let raw = prepared(&rig.worker_store, &info("Archived.Find.2010.1080p", GIB));
+    let keys = [plain.info_hash, raw.info_hash];
+    let tp = rig.lease(W, keys[0], 4);
+    let tr = rig.lease(W, keys[1], 4);
+    assert!(rig.sink.results(W, payload(30, vec![record(plain, tp)])));
+    assert!(archiving.results(W, payload(31, vec![record(raw, tr)])));
+    for key in &keys {
+        let id = rig.wait_stored(key).await;
+        let row = reader(&rig.db).torrent(id).unwrap().unwrap();
+        assert_ne!(
+            row.flags & lodestar_store::flags::REMOTE_UNVERIFIED,
+            0,
+            "{key:?}: flags {:#x}",
+            row.flags
+        );
+        assert_eq!(row.flags & lodestar_store::flags::IMPORTED, 0);
+        assert!(row.info_size > 0, "an info dict's size, never hashed here");
     }
 }

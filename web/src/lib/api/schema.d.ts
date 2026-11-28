@@ -3369,8 +3369,9 @@ export interface components {
         /**
          * @description A `verified:` value (§18.6): `yes`, the info dict was fetched and
          *     hashed to the key; `no`, an unverified item known only from claims;
-         *     `imported`, a stored torrent from another indexer's database, not
-         *     checked against the hash.
+         *     `imported`, a stored torrent not checked against the hash here (from
+         *     another indexer's database, or a remote worker's find not yet
+         *     re-verified).
          * @enum {string}
          */
         AstVerified: "yes" | "no" | "imported";
@@ -6769,8 +6770,8 @@ export interface components {
         /**
          * @description `GET /legal/notice`: the Legal Notice this build shows.
          * @example {
-         *       "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 5 · 2026-11-11**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
-         *       "version": 5
+         *       "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 6 · 2026-11-27**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+         *       "version": 6
          *     }
          */
         LegalNotice: {
@@ -7933,8 +7934,9 @@ export interface components {
          */
         Provenance: {
             /**
-             * @description From another indexer's database; not checked against the hash.
-             *     Present, and true, only for such an import.
+             * @description Not checked against the hash here: from another indexer's
+             *     database, or a remote worker's find not yet re-verified. Present,
+             *     and true, only for such a torrent.
              */
             imported?: boolean;
             /** @description The network tier (§18.6): `bt` for every stored torrent. */
@@ -7945,8 +7947,8 @@ export interface components {
              */
             sources: components["schemas"]["ProvenanceSource"][];
             /**
-             * @description The info dict was fetched and hashed to the key (§18.5). False for
-             *     an import (`imported`).
+             * @description The info dict was fetched and hashed to the key here (§18.5).
+             *     False for an `imported` torrent.
              */
             verified: boolean;
             /**
@@ -8706,9 +8708,10 @@ export interface components {
             /** Format: int64 */
             id: number;
             /**
-             * @description From another indexer's database; not checked against the hash (the
-             *     "Imported" badge, in place of "Unverified"). Shown by default, like
-             *     a verified torrent. On `/search` hits only, and only when true.
+             * @description Not checked against the hash here: from another indexer's database,
+             *     or a remote worker's find not yet re-verified (the "Imported"
+             *     badge, in place of "Unverified"). Shown by default, like a verified
+             *     torrent. On `/search` hits only, and only when true.
              */
             imported?: boolean;
             /**

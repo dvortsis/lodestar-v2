@@ -152,6 +152,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_pipeline_have_rebuild_failed_n,
 		m.settings_logging_ev_pipeline_have_rebuild_failed_h
 	],
+	'pipeline.have_fill_failed': [
+		m.settings_logging_ev_pipeline_have_fill_failed_n,
+		m.settings_logging_ev_pipeline_have_fill_failed_h
+	],
 	'pipeline.queue_save_failed': [
 		m.settings_logging_ev_pipeline_queue_save_failed_n,
 		m.settings_logging_ev_pipeline_queue_save_failed_h

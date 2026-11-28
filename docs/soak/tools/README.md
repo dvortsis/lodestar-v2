@@ -206,3 +206,19 @@ to use the package directory or any previous run as its evidence root. The froze
 collector's arguments are `-Exe <package>/lodestar.exe -Root <new-run> -Commit
 <recorded-source-commit> -Ui embedded -BuildRecord <package>/build-record.json`.
 Keep the default suppression, warmup, baseline duration and disk guardrails.
+
+## Round 1: `segment --declaration` and `gate-round`
+
+Round 1 of the revised path to 100 (`docs/plan/2026-11-27-revised-path-to-100.md` §5.2, §6, §8) is judged in two steps. The formats are in `docs/decisions/2026-11-27-X-cr-round1-gate.md`.
+
+```sh
+python3 docs/soak/tools/analyze_cr.py segment ARM_RUN --declaration DECLARATION.json --output ARM.json
+python3 docs/soak/tools/analyze_cr.py gate-round MANIFEST.json --output VERDICT.json
+python3 -m unittest discover -s docs/soak/tools -p test_gate_round.py -v
+```
+
+- **`segment --declaration`** judges one comb arm against its declared preset and 12 switches (at start and at every boundary), §6.1's bundle evidence for every on switch, the declared preset's query rate and outstanding cap, and fresh-store evidence. It adds the `anon` fit over `ws + 12 h` to `ws + 24 h` (`memory`). Without `--declaration`, `segment` behaves as before.
+- **`gate-round`** reads a manifest that lists every input with its SHA-256: the declaration, the booked comparator's report, and for each day every declared arm's report, the day archive (exit assignment, egress hashes, activity, leak tests, events) and the 10 s host samples. A listed file that's absent or whose hash differs stops it with exit status 2. An input the manifest doesn't list is judged missing (`not_judged`).
+- **Output:** each candidate's crawler verdict (`pass`, `fail` or `not_judged`) with its reasons per day, both per-day memory verdicts, contention per window, shipping eligibility, and the Balanced-first selection. Diagnostic arms are reported under `diagnostics` and never ship. The output is deterministic: the same archive gives the same bytes.
+- **`gate` and `effect`** keep their behaviour for historical runs (§8 item 8).
+- **Fixtures:** `fixtures/round1/make_archive.py OUT --layout L3` writes a synthetic archive (no real addresses or identifiers; hashes are of fixed labels). `fixtures/round1/l3_pass_verdict.json` is `gate-round`'s output on it.

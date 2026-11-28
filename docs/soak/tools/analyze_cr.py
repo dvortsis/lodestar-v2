@@ -11,6 +11,10 @@ and never contacts the crawler.
                                              block checks and the effect fit (rules 6.1-6.3)
   route-baseline REPORT ...                  rule 5.3: run CR-AB-ROUTE, or record the skip
   gate COMB [--comparator COMP]              rule 6.8: the v0.6 crawler gate
+  gate-round MANIFEST [--output F]           round 1: every arm's verdict and the selection
+                                             (revised path to 100 §5.2 item 5; `segment
+                                             --declaration D` judges a round-1 arm first)
+  drop-c SAMPLES --arm A=DIR ...             round 1's rehearsal: §6.3's drop-C rule, keep or drop
   checkpoint1 --utp E --adm E ...            rule 6.9: the Checkpoint 1 projection
 
 `effect`, `gate` and `checkpoint1` read the JSON reports `segment` and `effect` write.
@@ -25,6 +29,7 @@ Standard library only.
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -33,8 +38,11 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "linux"))
 import collect  # noqa: E402  (one source for label enums, switches and D6's open rule)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import analyze_cr0  # noqa: E402  (the memory gate's fit, one copy)
 
 SPEC = "docs/decisions/2026-11-02-CR-SPEC.md"
+ROUND1_SPEC = "docs/decisions/2026-11-27-CR-SPEC-round1.md"  # round 1's own spec (item L); SPEC stays for old runs
 KINDS = collect.SPEC_KINDS
 HOUR = 3600
 WARMUP = 3600                  # rule 1.1
@@ -67,6 +75,19 @@ VERIFY_SHARE = 0.05
 RATE_SLACK_SECONDS = 2.0
 A1_SLOTS = 32
 LEDGER = collect.LEDGER
+# Round 1 (docs/plan/2026-11-27-revised-path-to-100.md §5.2, §6, §8; X-cr-round1-gate).
+# Each preset's caps: Intensity::max_outstanding and CR-1c's slots (crates/dht/src/node/mod.rs).
+PRESET_OUTSTANDING = analyze_cr0.OUTSTANDING_RPCS
+PRESET_SLOTS = {"low": 32, "balanced": 80, "aggressive": 256}
+# §6.1's evidence table, the rows that are one series above 0. Proposed in the step-0 note
+# (2026-11-27); the runner freezes the names in the CR-SPEC decisions file. A gauge row is
+# read at every window scrape (its maximum); a counter row as the window's delta.
+BUNDLE_COUNTERS = {
+    "responder_hints": ("counter", "dht_hints_captured_total", {}),
+    "streaming_peers": ("counter", "fetch_stream_batches_total", {}),
+    "target_prefixes": ("counter", "dht_target_prefix_queries_total", {}),
+    "sample_backoff_escalate": ("gauge", "dht_sample_cooling_reason", {"reason": "first_failure"}),
+}
 HINT, SPLIT, SOFT = collect.HINT, collect.SPLIT, collect.SOFT
 # CR-COL-6: the hint-first tier's series every scrape of a hint segment carries, in both arms.
 HINT_SERIES = tuple(HINT.values())
@@ -352,13 +373,18 @@ def breakdown(a, b, name):
 
 
 # ----------------------------------------------------------------- one segment
-def analyze_segment(root, winners=None):
+def analyze_segment(root, winners=None, declaration=None):
+    """One segment's report. With `declaration` (round 1, revised path to 100 §5.2 items 2
+    and 9), a comb arm is judged against its declared preset and switches and §6.1's bundle
+    evidence instead of rule 5.5's Balanced preset and the per-treatment dispatch."""
     root = Path(root)
     run = read_json(root / "run.json")
     settings = run.get("settings") or {}
     kind = settings.get("run_kind")
     if kind not in KINDS:
         raise ValueError("Not a CR-SPEC run: settings.run_kind is not ab, comb or comparator")
+    if declaration is not None and kind != "comb":
+        raise ValueError("--declaration applies only to a round-1 comb arm")
     treatment = settings.get("treatment")
     winners = stack_args(kind, treatment, winners)
     result = read_json(root / "result.json") if (root / "result.json").exists() else None
@@ -381,6 +407,15 @@ def analyze_segment(root, winners=None):
     config = run.get("config") if kind != "comparator" else None
     switches = (config or {}).get("switches") or {}
     report["identity"] = identity(run, config)
+    if run.get("run_id") is not None:  # a round-1 collector's binding fields (§5.2 items 4-5, 10)
+        report["binding"] = binding(run, result)
+    entry = None
+    if declaration is not None:
+        entry = declared_entry(declaration, run)
+        report["round1"] = {"declared": entry, "placement": run.get("round1"), "analyzer_sha256": ANALYZER_SHA256,
+                            "round1_spec": ROUND1_SPEC}
+        checks.add("5.5", "declaration_entry_found", entry is not None, "invalid",
+                   None if entry else {"placement": run.get("round1")})
     if not ok:
         checks.add("6.6", "no_usable_scrape", False, "missing")
         return finish(report, checks)
@@ -480,6 +515,24 @@ def analyze_segment(root, winners=None):
     activity = load_activity(root)
     counted = [a for a in activity if a.get("category") in collect.ACTIVITY_CATEGORIES and a.get("same_boot") is True
                and not a.get("collector_finished") and p_e <= a["elapsed_seconds"] <= end_e]
+    # Round 1, D3 (plan §8 item 6; owner §2.85; runner, 2026-11-27): a mover run or parity
+    # check spares the window only when none of the pools it touches holds the arm's /data
+    # device (the declaration maps pools to the VM's kernel device names; an unmapped pool
+    # can't be cleared, and a device in no pool is never exempt).
+    # Every other entry still counts.
+    if declaration is not None:
+        pools, device = declaration.get("pools") or {}, declaration.get("backing_device")
+
+        def spares(a):
+            touched = a.get("pools")
+            return (a.get("category") == "array_operation" and a.get("kind") in D3_KINDS
+                    and isinstance(touched, list) and touched
+                    and any(device in v for v in pools.values())
+                    and all(p in pools and device not in pools[p] for p in touched))
+        exempt = [a for a in counted if spares(a)]
+        counted = [a for a in counted if a not in exempt]
+        report["activity_exempt_d3"] = [{"kind": a["kind"], "pools": a["pools"], "elapsed_seconds": a["elapsed_seconds"]}
+                                        for a in exempt]
     notes = [a for a in activity if a not in counted]
     checks.add("6.11", "no_host_activity", not counted,
                detail={"entries": [{"category": a["category"], "elapsed_seconds": a["elapsed_seconds"]} for a in counted]}
@@ -504,11 +557,16 @@ def analyze_segment(root, winners=None):
     if kind == "comparator":
         comparator_checks(checks, run, ok, bounds, complete)
     else:
-        lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatment, kind, winners)
+        lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatment, kind, winners, entry)
+    if entry is not None:
+        report["round1"]["fresh_store"] = fresh_store(ok)
+        checks.add("6.7", "fresh_store_at_start", report["round1"]["fresh_store"], "invalid")
 
     if complete:
         try:
-            report.update(measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treatment))
+            if entry is not None:
+                switches = entry["switches"]  # checked equal to the effective ones above
+            report.update(measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treatment, entry))
         except KeyError as error:  # a series absent at one end of a delta
             checks.add("6.10", "series_present_at_both_ends", False, "missing", {"series": str(error).strip("'")})
     return finish(report, checks)
@@ -542,8 +600,9 @@ def host_checklist(checks, run, kind, switches, config):
                    witness.get("host_mounted") is True and witness.get("outside_data_dir") is True)
 
 
-def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatment, kind, winners=None):
-    """Rules 5.5, 6.1 (as r5.1 amends it), 6.6 (identity) and 7.2 for a Lodestar segment."""
+def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatment, kind, winners=None, entry=None):
+    """Rules 5.5, 6.1 (as r5.1 amends it), 6.6 (identity) and 7.2 for a Lodestar segment.
+    With a round-1 declaration `entry`, rule 5.5 is the declared preset (§8 item 1)."""
     switches = (config or {}).get("switches") or {}
     api = (config or {}).get("settings_api") or {}
     # A CR-COL-3 collector records the stage-1 switches; a stacked arm needs every switch.
@@ -562,7 +621,11 @@ def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatm
     preset = api["intensity"]
     agrees = config["env_preset"] in ("unset", preset)
     checks.add("7.2", "env_and_settings_preset_agree", agrees, "missing")
-    checks.add("5.5", "balanced_preset", preset == "balanced", "void")
+    expected = entry["preset"] if entry else "balanced"
+    if entry:
+        declared_checks(checks, run, config, entry, preset)
+    else:
+        checks.add("5.5", "balanced_preset", preset == "balanced", "void")
     if kind == "ab":
         checks.add("2.3", "safe_restart_on", switches["safe_restart"] is True)
         own = collect.TREATMENT_SWITCHES[treatment]
@@ -585,7 +648,13 @@ def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatm
     every = complete and len(settings_seen) == len(calls) and len(calls) >= 1 and \
         sum(len(r["row"]["boundary"]) for r in span if r["row"].get("boundary")) == len(bounds)
     checks.add("5.5", "settings_checked_each_boundary", every, "missing")
-    checks.add("5.5", "preset_stayed_balanced", all(s.get("intensity") == "balanced" for s in settings_seen), "void")
+    checks.add("5.5", "preset_stayed_declared" if entry else "preset_stayed_balanced",
+               all(s.get("intensity") == expected for s in settings_seen), "void")
+    if entry:  # §5.2 item 2: the switches too, wherever a boundary reads them
+        seen = [c.get("switches") for c in calls if isinstance(c, dict) and c.get("switches") is not None]
+        stayed = all(isinstance(w, dict) and {k: w.get(k) for k in entry["switches"]} == entry["switches"]
+                     for w in seen)
+        checks.add("5.5", "switches_stayed_declared", stayed, "void")
     checks.add("6.5", "crawler_never_paused", all(s.get("paused") is False for s in settings_seen))
     final = calls[-1] if calls and complete else None
     imports = final.get("imports") if isinstance(final, dict) else None
@@ -602,6 +671,134 @@ def lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatm
     checks.add("5.5", "import_origin_not_rendered", not rendered, "void")
 
 
+def declared_entry(declaration, run):
+    """The declaration entry this arm's run.json `round1` placement names, or None."""
+    place = run.get("round1") or {}
+    for e in declaration["arms"]:
+        if all(e.get(k) == place.get(k) for k in ("round", "attempt", "day", "arm")):
+            return e
+    return None
+
+
+def declared_checks(checks, run, config, entry, preset):
+    """§5.2 item 2: the arm ran its declaration at start (the boundaries are checked with
+    the other settings reads). Any mismatch voids the window (§8 item 1)."""
+    effective = config.get("effective_switches")
+    have = (isinstance(effective, dict) and set(effective) == set(collect.SWITCH_ENV)
+            and all(isinstance(v, bool) for v in effective.values()))
+    if not checks.add("5.5", "effective_switches_recorded", have, "missing",
+                      None if have else {"note": "the switch gauge's 13 values (§5.1), read at start"}):
+        return
+    checks.add("5.5", "declared_preset", preset == entry["preset"], "void",
+               None if preset == entry["preset"] else {"declared": entry["preset"], "seen": preset})
+    wrong = sorted(k for k, v in entry["switches"].items() if effective[k] != v)
+    checks.add("5.5", "declared_switches", not wrong, "void", {"differ": wrong} if wrong else None)
+    checks.add("2.3", "safe_restart_on", effective["safe_restart"] is True, "void")
+    digest = run.get("image_digest")
+    checks.add("5.5", "declared_image_digest", digest_part(digest) == digest_part(entry["image_digest"]), "void")
+
+
+def fresh_store(ok):
+    """Fresh-store evidence (§6.3): the store held no torrents at the first scrape."""
+    return ok[0]["values"].get("torrents") == 0
+
+
+def binding(run, result):
+    """What `gate-round` binds a report to (§5.2 items 5 and 10): its run ID, placement,
+    host and network identities (salted hashes, never addresses) and the collector's stop
+    time, beside the window end it's checked against."""
+    return {"run_id": run.get("run_id"), "placement": run.get("round1"),
+            "host_identity": run.get("host_identity"), "network_identity": run.get("network_identity"),
+            "ended_utc": (result or {}).get("ended")}
+
+
+def counter_row(window, kind, name, labels):
+    """One §6.1 row's value over the window: a counter's delta or a gauge's maximum; None if
+    the series is absent at any scrape it's read from."""
+    if kind == "counter":
+        return optional_delta(window[0], window[-1], name, **labels)
+    seen = [get(r["snap"], name, **labels) for r in window]
+    return None if any(v is None for v in seen) else max(seen)
+
+
+def preset_caps(checks, window, preset):
+    """§6.1: an interval over the declared preset's query rate or outstanding cap voids the
+    window, in every arm. The rate bound is r5.1 A1's (rate × 1.05 × (interval + 2 s));
+    outstanding is a gauge, so each window scrape is read against the cap."""
+    rate, cap = PRESET_QUERY_RATE[preset], PRESET_OUTSTANDING[preset]
+    over_rate, over_cap, peak_rate, peak_out = [], [], None, None
+    for a, b in zip(window, window[1:]):
+        sent, seconds = optional_delta(a, b, "dht_queries_out_total"), b["e"] - a["e"]
+        if sent is None or seconds <= 0:
+            over_rate.append(round(a["e"] - window[0]["e"]))
+            continue
+        peak_rate = max(peak_rate or 0.0, sent / seconds)
+        if sent > rate * (1 + VERIFY_SHARE) * (seconds + RATE_SLACK_SECONDS):
+            over_rate.append(round(a["e"] - window[0]["e"]))
+    for r in window:
+        v = get(r["snap"], "dht_outstanding")
+        if v is None or v > cap:
+            over_cap.append(round(r["e"] - window[0]["e"]))
+        else:
+            peak_out = max(peak_out or 0, v)
+    checks.add("6.1", "query_rate_within_declared_preset", len(window) > 1 and not over_rate, "void",
+               {"intervals_over_or_unread": len(over_rate), "first_at_seconds": over_rate[0]} if over_rate else None)
+    checks.add("6.1", "outstanding_within_declared_preset", not over_cap, "void",
+               {"scrapes_over_or_unread": len(over_cap), "first_at_seconds": over_cap[0]} if over_cap else None)
+    return {"preset": preset, "queries_per_second_cap": rate, "peak_queries_per_second": peak_rate,
+            "outstanding_cap": cap, "peak_outstanding": peak_out,
+            "intervals_over_rate": len(over_rate), "scrapes_over_outstanding": len(over_cap)}
+
+
+def bundle_evidence(checks, window, switches, preset, hourly):
+    """§5.2 item 9 and §6.1's table: every declared-on switch's evidence, whatever the run
+    kind. A required check that fails, or a required series that's absent, voids the window.
+    Coordinated admission, uTP and route backoff are rules 5.1-5.3's own checks (mechanism)."""
+    rows = {}
+    for switch, (kind, name, labels) in BUNDLE_COUNTERS.items():
+        value = counter_row(window, kind, name, labels)
+        rows[switch] = {"on": bool(switches.get(switch)), "series": name, "value": value}
+        if switches.get(switch):
+            checks.add("6.1", f"{switch}_evidence", (value or 0) > 0, "void",
+                       None if (value or 0) > 0 else {"series": name, "value": value,
+                                                      "note": "absent" if value is None else "a measured zero"})
+    # lookup_end (plan §6.1): lookups ended on enough values above 0 (CR-LOOKUP-END's own end;
+    # its series absent voids), and the lookup-cost pair's checks.
+    rows["lookup_end"] = lookup_cost_pair(checks, window, switches, preset, judged=bool(switches.get("lookup_end")))
+    if switches.get("lookup_end"):
+        early = optional_delta(window[0], window[-1], LEDGER["ended"], reason=collect.LEDGER_EARLY_VALUES)
+        rows["lookup_end"]["ended_on_enough_values"] = early
+        checks.add("6.1", "lookups_end_on_enough_values", (early or 0) > 0, "void",
+                   None if (early or 0) > 0 else {"value": early, "note": "absent" if early is None else "a measured zero"})
+    # preset_slots: the slots equal the declared preset's count at every window scrape.
+    caps = [get(r["snap"], LEDGER["cap"]) for r in window]
+    want = PRESET_SLOTS[preset]
+    rows["preset_slots"] = {"on": bool(switches.get("preset_slots")), "capacity": caps[-1], "expected": want}
+    if switches.get("preset_slots"):
+        good = all(c == want for c in caps)
+        checks.add("6.1", "preset_slots_capacity", good, "void",
+                   None if good else {"expected": want, "seen": sorted({c for c in caps if c != want}, key=str)})
+    rows["hint_first"] = hint_first(checks, window, switches, bool(switches.get("hint_first")))
+    split = sampler_split(checks, window, switches, hourly, bool(switches.get("sampler_cooldown_split")))
+    if split["on"] and split["absent"]:  # "counter absent": void, not "not exercised"
+        checks.add("6.1", "sampler_split_series_present", False, "void", {"absent": split["absent"]})
+    soft = soft_timeout(window, switches)
+    if soft["on"]:  # a count of 0 is a result, never a void (the existing rule)
+        rendered = "soft" not in soft["absent"]
+        checks.add("5", "soft_timeout_counter_rendered", rendered, "void",
+                   None if rendered else {"series": SOFT["soft"]})
+    rows["caps"] = preset_caps(checks, window, preset)
+    return {"bundle": rows, "hint_first": rows["hint_first"], "sampler_split": split, "soft_timeout": soft}
+
+
+def memory_window(ok, t_s, hours, bounds):
+    """§5.2 item 6: the `anon` fit over `ws + 12 h` to `ws + 24 h`, from the window's own
+    scrapes (Docker mode records the cgroup's anonymous memory as `private_bytes`)."""
+    hour_s = (bounds[-1]["e"] - t_s["e"]) / hours if hours else HOUR
+    points = [(r["e"], r["row"].get("private_bytes")) for r in ok if r["e"] >= t_s["e"]]
+    return analyze_cr0.measured_window_fit(points, t_s["e"], hours, hour_s)
+
+
 def comparator_checks(checks, run, ok, bounds, complete):
     """Rule 5.4 (rule 2.2's spacing is checked across runs, in `gate` and `checkpoint1`)."""
     checks.add("5.4", "image_pinned_by_digest", bool(run.get("image_digest")), "void")
@@ -613,7 +810,7 @@ def comparator_checks(checks, run, ok, bounds, complete):
     checks.add("6.6", "comparator_identity_recorded", bool((run.get("comparator") or {}).get("query")), "missing")
 
 
-def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treatment=None):
+def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treatment=None, entry=None):
     """Rules 1.5-1.7, 3, 4, 5.1-5.3 and 7.1 over a complete window."""
     t_s, end = bounds[0], bounds[-1]
     window = [r for r in ok if t_s["e"] <= r["e"] <= end["e"]]
@@ -682,22 +879,26 @@ def measure(kind, ok, bounds, t_open, span_ok, p_e, switches, checks, run, treat
     out["guardrails"] = guardrails(t_s, end)
     out["mechanism"] = mechanism(checks, window, span_ok, t_s, end, switches)
     preset = ((run.get("config") or {}).get("settings_api") or {}).get("intensity")
-    if treatment == "lc":
-        out["mechanism"]["lookup_cost_pair"] = lookup_cost_pair(checks, window, switches, preset)
-    # CR-COL-6: stage 3's mechanisms, checked in a hint or split segment's treatment arm;
-    # reported in every segment, their series listed absent where the binary lacks them.
-    out["hint_first"] = hint_first(checks, window, switches, treatment == "hint")
-    out["sampler_split"] = sampler_split(checks, window, switches, hourly, treatment == "split")
-    if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair over sampling minutes, reported
-        out["soft_timeout"] = soft = soft_timeout(window, switches)
-        # X-soft-absent-void: with the switch on, a binary without CR-SOFT-TIMEOUT (#1091)
-        # renders no soft counter at all, and the arm ran as the control (rule 5). A count
-        # of 0 is a result, never a void.
-        if soft["on"]:
-            rendered = "soft" not in soft["absent"]
-            checks.add("5", "soft_timeout_counter_rendered", rendered, "void",
-                       None if rendered else {"series": SOFT["soft"],
-                                              "note": "absent with the switch on: the binary predates the soft timeout"})
+    if entry is not None:  # round 1: §6.1's table for every on switch, whatever the run kind
+        out.update(bundle_evidence(checks, window, switches, entry["preset"], hourly))
+        out["memory"] = memory_window(ok, t_s, len(bounds) - 1, bounds)
+    else:
+        if treatment == "lc":
+            out["mechanism"]["lookup_cost_pair"] = lookup_cost_pair(checks, window, switches, preset)
+        # CR-COL-6: stage 3's mechanisms, checked in a hint or split segment's treatment arm;
+        # reported in every segment, their series listed absent where the binary lacks them.
+        out["hint_first"] = hint_first(checks, window, switches, treatment == "hint")
+        out["sampler_split"] = sampler_split(checks, window, switches, hourly, treatment == "split")
+        if treatment == "soft":  # X-soft-key: CR-SOFT-TIMEOUT's pair over sampling minutes, reported
+            out["soft_timeout"] = soft = soft_timeout(window, switches)
+            # X-soft-absent-void: with the switch on, a binary without CR-SOFT-TIMEOUT (#1091)
+            # renders no soft counter at all, and the arm ran as the control (rule 5). A count
+            # of 0 is a result, never a void.
+            if soft["on"]:
+                rendered = "soft" not in soft["absent"]
+                checks.add("5", "soft_timeout_counter_rendered", rendered, "void",
+                           None if rendered else {"series": SOFT["soft"],
+                                                  "note": "absent with the switch on: the binary predates the soft timeout"})
     # CR-LEDGER's W, q and y; absent series are reported absent (older binaries).
     out["ledger"] = {"window": ledger(t_s, end),
                      "hourly": [ledger(a, b) for a, b in zip(bounds, bounds[1:])]}
@@ -748,7 +949,10 @@ def ledger(a, b):
         "peer_lookups_answered": optional_delta(a, b, "dht_peer_lookups_answered_total"),
     }
     reasons = [optional_delta(a, b, LEDGER["ended"], reason=r) for r in collect.LEDGER_VALUE_REASONS]
-    parts["ended_on_values"] = None if any(r is None for r in reasons) else sum(reasons)
+    # CR-LOOKUP-END's early end is an end on values too. Older binaries don't render it, so
+    # it counts as 0 there and their numbers are unchanged (X-cr-round1-collect-fixes).
+    early = optional_delta(a, b, LEDGER["ended"], reason=collect.LEDGER_EARLY_VALUES)
+    parts["ended_on_values"] = None if any(r is None for r in reasons) else sum(reasons) + (early or 0)
     ended, answered = parts["lookups_ended"], parts["peer_lookups_answered"]
 
     def per(value, count):
@@ -756,10 +960,12 @@ def ledger(a, b):
     return {"W_seconds": per(parts["residence_seconds"], ended), "q": per(parts["peer_lookup_queries"], ended),
             "y": per(parts["stored"], ended),
             "seconds_per_answered": per(parts["peer_lookup_seconds"], answered), **parts,
-            "absent": sorted(k for k, v in parts.items() if v is None)}
+            "absent": sorted(k for k, v in parts.items() if v is None),
+            # Only where rendered, so an older run's report is unchanged.
+            **({"ended_on_enough_values": early} if early is not None else {})}
 
 
-def lookup_cost_pair(checks, window, switches, preset):
+def lookup_cost_pair(checks, window, switches, preset, judged=None):
     """r5.1 A1: with both switches on, lookups end on values, the slots go above 32 at
     least once, and the query rate stays within the preset; otherwise the segment is void."""
     led = ledger(window[0], window[-1])
@@ -780,7 +986,7 @@ def lookup_cost_pair(checks, window, switches, preset):
            "slots_capacity": get(window[-1]["snap"], LEDGER["cap"]),
            "peak_queries_per_second": peak, "preset_queries_per_second": rate,
            "intervals_over_rate": len(over)}
-    if out["on"]:
+    if out["on"] if judged is None else judged:
         checks.add("A1", "lookups_end_on_values", (led["ended_on_values"] or 0) > 0, "void")
         checks.add("A1", "slots_exceed_32_once", (out["max_slots_occupied"] or 0) > A1_SLOTS, "void",
                    {"max_slots_occupied": out["max_slots_occupied"]})
@@ -1573,6 +1779,944 @@ def gate(comb, comparator=None):
     return out
 
 
+# ----------------------------------------------------------------- round 1 (gate-round)
+# docs/plan/2026-11-27-revised-path-to-100.md §5.2 items 2, 4-6, 9-12, §6.2-§6.4 and §8;
+# the formats and every reading of an open rule are in docs/decisions/2026-11-27-X-cr-round1-gate.md.
+ROUND_SWITCHES = EXPERIMENT_SWITCHES  # the 12 a declaration names (safe_restart is on in every arm)
+ROLES = ("candidate", "diagnostic")
+# §6.3's permitted layouts: arm → exit label on each day. S is one arm on two different exits.
+LAYOUTS = {
+    "L3": {1: {"B": "X", "A": "Y", "C": "Z"}, 2: {"B": "Y", "A": "Z", "C": "X"}},
+    "L2": {1: {"B": "X", "A": "Y"}, 2: {"B": "Y", "A": "X"}},
+    "L2b": {1: {"B": "X", "C": "Y"}, 2: {"B": "Y", "C": "X"}},
+    # §6.3: a candidate B that fails in L3 leaves A (candidate) and C (diagnostic), which go
+    # on in a fresh attempt with the remaining arms (item G); only after an L3 attempt.
+    "L2c": {1: {"A": "X", "C": "Y"}, 2: {"A": "Y", "C": "X"}},
+    "S": None,
+}
+EXIT_LABELS = ("X", "Y", "Z")
+SELECTION_ORDER = ["B", "A"]  # O2: B Balanced first, A Aggressive the authorized fallback
+DIAGNOSES = (None, "pending", "product", "infrastructure")  # an event's diagnosis (§6.3)
+RETRY_BUDGET = 2  # §6.3: repeated days per round, not counting a solo confirmation's own
+# An attempt's recorded end (the manifest's attempt_ends `reason`, comma-separated tokens)
+# names the arms that dropped out of it: `rehearsal_drop:<arm>` before its first day, or
+# `product_failure:<arm>` after a class 2 failure there (CR-SPEC-R1 §5, X-cr-round1-spec-fixes).
+DROP_TOKEN = re.compile(r"^(rehearsal_drop|product_failure):([A-Z])$")
+# The declaration checks `segment --declaration` writes, each of which must be present and ok
+# in every arm's report of a day (CR-SPEC-R1 §6; run sheet 8b).
+DECLARATION_CHECKS = ("declaration_entry_found", "effective_switches_recorded", "declared_preset", "declared_switches",
+                      "declared_image_digest", "safe_restart_on", "preset_stayed_declared", "switches_stayed_declared")
+# A not_judged day a repeat may not replace (the runner's ruling on CR-SPEC-R1's review):
+# contention goes to a solo confirmation, a product failure (or an event not yet classed) to
+# its diagnosis and a fresh attempt; a failed solo confirmation is terminal.
+NOT_REPEATABLE = {"product_failure", "product_failure_under_diagnosis", "peer_product_failure", "unknown_event"}
+# §6.3's contention thresholds, as proposed; the CR-SPEC decisions file freezes them and a
+# declaration's `contention` block may only restate them (gate-round refuses other values).
+CONTENTION = {"interval_seconds": 10, "coverage_min": 0.98, "cpu_p95_max": 0.80, "steal_p95_max": 0.05,
+              "disk_write_p99_ms_max": 50.0, "tunnel_loss_max": 0.01, "tunnel_rtt_p95_over_rehearsal_max": 2.0,
+              "uplink_drops_max": 0}
+HASH = re.compile(r"^[0-9a-f]{16,128}$")  # a salted hash, never an address
+# The declaration's image: `name@sha256:<hex>` (runner, 2026-11-27). The collector records
+# Docker's repo digest without the repository, so reports are compared on the part after `@`.
+IMAGE_DIGEST = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+
+
+def digest_part(value):
+    return str(value).rsplit("@", 1)[-1] if value else None
+# The analyzer's own SHA-256, in every round-1 output, so a reproduction pins its version.
+ANALYZER_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+RUN_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def require(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+
+def check_declaration(decl):
+    """The declaration's schema (§8 item 1). A malformed declaration is an error, never a
+    verdict: it's frozen before the rehearsal, so a bad one is fixed, not judged."""
+    require(isinstance(decl, dict) and decl.get("schema") == 1 and decl.get("kind") == "cr_round1_declaration",
+            "declaration: schema 1, kind cr_round1_declaration")
+    require(isinstance(decl.get("round"), int) and decl["round"] >= 1, "declaration: round")
+    for key in ("spec_commit", "image_digest", "host_identity"):
+        require(isinstance(decl.get(key), str) and decl[key], f"declaration: {key}")
+    require(IMAGE_DIGEST.fullmatch(decl["image_digest"]) is not None,
+            "declaration: image_digest is name@sha256:<64 hex> (pulled by tag, recorded by its repo digest)")
+    require(HASH.fullmatch(decl["host_identity"]) is not None, "declaration: host_identity must be a salted hash")
+    require(isinstance(decl.get("backing_device"), str) and re.fullmatch(r"[a-z0-9_-]{1,32}", decl["backing_device"])
+            is not None, "declaration: backing_device (the /data device's kernel name, §6.3)")
+    net = decl.get("network_identity")
+    require(isinstance(net, dict) and HASH.fullmatch(str(net.get("uplink_hash"))) is not None
+            and isinstance(net.get("provider"), str) and isinstance(net.get("protocol"), str),
+            "declaration: network_identity {uplink_hash, provider, protocol}")
+    comp = decl.get("comparator")
+    require(isinstance(comp, dict) and RUN_ID.fullmatch(str(comp.get("run_id"))) is not None,
+            "declaration: comparator.run_id (the booked comparator)")
+    # O2: Balanced first. The order is the owner's, so a declaration may only restate it.
+    require(decl.get("selection_order", SELECTION_ORDER) == SELECTION_ORDER,
+            "declaration: selection_order must be B then A (O2, Balanced first)")
+    thresholds = decl.get("contention", CONTENTION)
+    require(thresholds == CONTENTION, "declaration: contention thresholds differ from the frozen ones")
+    pools = decl.get("pools", {})
+    require(isinstance(pools, dict) and all(isinstance(k, str) and isinstance(v, list)
+                                            and all(isinstance(x, str) for x in v) for k, v in pools.items()),
+            "declaration: pools maps a pool name to its devices' kernel names (D3)")
+    # Runner, 2026-11-27: the map lists the VM's kernel device names (the names identity
+    # records), so the declared /data device must sit in exactly one pool, by exact name.
+    require(not pools or sum(decl.get("backing_device") in v for v in pools.values()) == 1,
+            "declaration: backing_device must be listed in exactly one pool (D3)")
+    # Item J: the thresholds are shares of the declared vCPUs (8); host samples must match.
+    require(decl.get("vcpus") == DECLARED_VCPUS, f"declaration: vcpus must be {DECLARED_VCPUS} (the box's, §6.3)")
+    attempts = decl.get("attempts")
+    require(isinstance(attempts, list) and attempts, "declaration: attempts")
+    ids = set()
+    for a in attempts:
+        require(isinstance(a, dict) and RUN_ID.fullmatch(str(a.get("id"))) is not None and a["id"] not in ids,
+                "declaration: each attempt has a distinct id")
+        ids.add(a["id"])
+        require(a.get("layout") in LAYOUTS, f"declaration: attempt {a['id']}'s layout must be one of {sorted(LAYOUTS)}")
+        require(isinstance(a.get("candidate_digests"), dict), f"declaration: attempt {a['id']}'s candidate_digests")
+    arms = decl.get("arms")
+    require(isinstance(arms, list) and arms, "declaration: arms")
+    seen = set()
+    for e in arms:
+        require(isinstance(e, dict), "declaration: each arm entry is an object")
+        key = (e.get("round"), e.get("attempt"), e.get("day"), e.get("arm"))
+        require(key not in seen, f"declaration: duplicate entry {key}")
+        seen.add(key)
+        require(e.get("round") == decl["round"] and e.get("attempt") in ids and e.get("day") in (1, 2)
+                and isinstance(e.get("arm"), str) and e["arm"], f"declaration: entry {key}'s placement")
+        require(e.get("role") in ROLES, f"declaration: entry {key}'s role")
+        require(e.get("preset") in collect.PRESETS, f"declaration: entry {key}'s preset")
+        sw = e.get("switches")
+        require(isinstance(sw, dict) and set(sw) == set(ROUND_SWITCHES) and all(isinstance(v, bool) for v in sw.values()),
+                f"declaration: entry {key} names exactly the 12 switches, each true or false")
+        require(e.get("exit") in EXIT_LABELS, f"declaration: entry {key}'s exit label")
+        require(isinstance(e.get("image_digest"), str) and IMAGE_DIGEST.fullmatch(e["image_digest"]) is not None,
+                f"declaration: entry {key}'s image digest (name@sha256:<64 hex>)")
+    # §6.1's arms: B and A all-on but route_backoff (O3), B Balanced and A Aggressive; C the
+    # explicit all-off Balanced control, diagnostic. A is a candidate only if O2 authorized it.
+    all_on = {s: s != "route_backoff" for s in ROUND_SWITCHES}
+    table = {"B": (("candidate",), "balanced", all_on), "A": (ROLES, "aggressive", all_on),
+             "C": (("diagnostic",), "balanced", {s: False for s in ROUND_SWITCHES})}
+    for e in arms:
+        require(e["arm"] in table, f"declaration: arm {e['arm']} isn't one of §6.1's arms (B, A, C)")
+        roles, preset, switches = table[e["arm"]]
+        require(e["role"] in roles and e["preset"] == preset and e["switches"] == switches,
+                f"declaration: arm {e['arm']}'s role, preset or switches differ from §6.1's table")
+    for e in arms:  # a role is the arm's for the whole round
+        require(all(o["role"] == e["role"] for o in arms if o["arm"] == e["arm"]),
+                f"declaration: arm {e['arm']} has one role")
+        # §6.3: one pinned image, the same digest for every arm and day.
+        require(e["image_digest"] == decl["image_digest"],
+                f"declaration: entry {e['arm']} day {e['day']} of {e['attempt']} names another image digest")
+        if e["role"] == "candidate":  # each attempt records its candidates' digests (§6.3)
+            att = next(a for a in attempts if a["id"] == e["attempt"])
+            require(att["candidate_digests"].get(e["arm"]) == decl["image_digest"],
+                    f"declaration: attempt {att['id']} records candidate {e['arm']}'s digest as the round's image")
+    # Runner, 2026-11-27: layouts only shrink (L3 → L2 or L2b → S), so each later attempt that
+    # isn't a solo confirmation drops an arm, and the round can't loop through fresh attempts.
+    # A solo confirmation (S) is one arm from the attempt before it, outside that chain.
+    # L2c follows the chain's L3 attempt (B dropped); a solo confirmation between them is
+    # outside the chain, so L3 → S → L2c holds.
+    arms_of = {a["id"]: {e["arm"] for e in arms if e["attempt"] == a["id"]} for a in attempts}
+    chain, chain_layout = None, None
+    for a in attempts:
+        own = arms_of[a["id"]]
+        if chain is not None and a["layout"] == "S" and len(own) == 1 and own <= chain:
+            continue
+        require(a["layout"] != "L2c" or chain_layout == "L3",
+                f"declaration: attempt {a['id']}'s layout L2c follows only an L3 attempt (B dropped)")
+        require(chain is None or own < chain,
+                f"declaration: attempt {a['id']} must drop an arm from the attempt before it (layouts only shrink)")
+        chain, chain_layout = own, a["layout"]
+    return decl
+
+
+def load_manifest(path):
+    """The manifest (§5.2 item 12): every input file with its SHA-256. A listed file that's
+    absent or whose hash differs is an error; an input the manifest doesn't list is judged
+    missing. Returns the loaded inputs and each path's hash, in manifest order."""
+    path = Path(path)
+    man = read_json(path)
+    require(isinstance(man, dict) and man.get("schema") == 1 and man.get("kind") == "cr_round1_manifest",
+            "manifest: schema 1, kind cr_round1_manifest")
+    base = path.resolve().parent
+    hashes = {}
+
+    def raw(ref):
+        require(isinstance(ref, dict) and isinstance(ref.get("path"), str) and isinstance(ref.get("sha256"), str),
+                "manifest: each input is {path, sha256}")
+        rel = Path(ref["path"])
+        target = (base / rel).resolve()
+        require(not rel.is_absolute() and target.is_relative_to(base), f"manifest: {ref['path']} is outside the archive")
+        data = target.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        require(digest == ref["sha256"], f"manifest: {ref['path']}'s SHA-256 differs from the manifest's")
+        hashes[ref["path"]] = digest
+        return data
+
+    def load(ref):
+        return json.loads(raw(ref).decode("utf-8"))
+
+    out = {"declaration": check_declaration(load(man.get("declaration"))),
+           "comparator": load(man["comparator"]) if man.get("comparator") is not None else None, "days": []}
+    # Runner, 2026-11-27 (§2.19, flagged to the owner): a comparator run by a collector that
+    # predates round 1 has no binding; the coordinator binds it after its window
+    # (`bind-comparator`), and the manifest carries that binding. A report's own binding wins.
+    out["comparator_binding"] = None
+    if man.get("comparator_binding") is not None:
+        bind = load(man["comparator_binding"])
+        require(isinstance(bind, dict) and bind.get("kind") == "cr_round1_comparator_binding"
+                and bind.get("bound_after_window") is True and RUN_ID.fullmatch(str(bind.get("run_id"))) is not None
+                and HASH.fullmatch(str(bind.get("host_identity"))) is not None
+                and isinstance(bind.get("network_identity"), dict) and isinstance(bind.get("ended_utc"), str),
+                "manifest: comparator_binding {kind cr_round1_comparator_binding, run_id, host_identity, "
+                "network_identity, ended_utc, bound_after_window: true}")
+        out["comparator_binding"] = bind
+        if out["comparator"] is not None and not (out["comparator"].get("binding") or {}).get("run_id"):
+            out["comparator"] = dict(out["comparator"], binding={
+                "run_id": bind["run_id"], "host_identity": bind["host_identity"],
+                "network_identity": bind["network_identity"], "ended_utc": bind["ended_utc"],
+                "placement": None, "bound_after_window": True})
+    declared = {a["id"] for a in out["declaration"]["attempts"]}
+    ends = man.get("attempt_ends") or {}
+    require(isinstance(ends, dict) and all(k in declared and isinstance(v, dict) and isinstance(v.get("reason"), str)
+                                           and isinstance(v.get("days_run"), list)
+                                           and all(type(x) is int for x in v["days_run"])
+                                           and v["days_run"] in ([], [1], [1, 2]) for k, v in ends.items()),
+            "manifest: attempt_ends maps a declared attempt to {reason, days_run: [], [1] or [1, 2]}")
+    out["attempt_ends"] = ends
+    for d in man.get("days") or []:
+        require(isinstance(d, dict) and d.get("day") in (1, 2) and isinstance(d.get("attempt"), str)
+                and type(d.get("repeat", 0)) is int and d.get("repeat", 0) >= 0,
+                "manifest: each day has its attempt, day and repeat (an integer from 0)")
+        require(d["attempt"] in declared, f"manifest: attempt {d['attempt']} isn't in the declaration")
+        out["days"].append({
+            "attempt": d["attempt"], "day": d["day"], "repeat": d.get("repeat", 0),
+            "reports": {arm: load(ref) for arm, ref in sorted((d.get("reports") or {}).items())},
+            "archive": load(d["archive"]) if d.get("archive") is not None else None,
+            "contention": load(d["contention"]) if d.get("contention") is not None else None,
+            # Each arm's redacted gluetun log, the handshake evidence (X-cr-round1-spec-fixes
+            # item 6): checked by hash here, read by the runner, never by the gate.
+            "gluetun_logs": {arm: hashlib.sha256(raw(ref)).hexdigest()
+                             for arm, ref in sorted((d.get("gluetun_logs") or {}).items())}})
+    listed = {(d["attempt"], d["day"]) for d in out["days"]}
+    # Runner (2026-11-27): days_run lists the days the attempt ran, each listed; [] means it
+    # never started, so no day of it may be listed. The verdict echoes each entry, and the
+    # manifest's hash makes the claim auditable against the run log.
+    for k, v in ends.items():
+        require(all((k, day) in listed for day in v["days_run"]),
+                f"manifest: attempt_ends says {k} ran days {v['days_run']}, but not all are listed")
+        require(v["days_run"] or not any(a == k for a, _ in listed),
+                f"manifest: attempt_ends says {k} never started, but days of it are listed")
+    out["inputs"] = hashes
+    out["manifest_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return out
+
+
+def utc(text):
+    try:
+        return parse_utc(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def nearest_rank(values, p):
+    """Nearest-rank percentile (§6.3); None stands for a missing interval and ranks over any value."""
+    ordered = sorted(values, key=lambda v: (v is None, v if v is not None else 0))
+    if not ordered:
+        return None
+    v = ordered[max(0, math.ceil(p * len(ordered)) - 1)]
+    return math.inf if v is None else v
+
+
+DECLARED_VCPUS = 8
+D3_KINDS = ("mover", "parity")  # array operations D3 exempts on an ssd_apps window
+
+
+def contention(samples, arm, ws, we, device, vcpus=DECLARED_VCPUS):
+    """§6.3's contention verdict for one candidate window [ws, we): `ok`, `breach` or
+    `not_judged` (a series under 98 % coverage). Every 10 s interval is read; a missing one
+    counts over the threshold. Uplink drops are a cumulative counter, read as each hour's delta."""
+    c = CONTENTION
+    if not isinstance(samples, dict) or samples.get("interval_seconds") != c["interval_seconds"]:
+        return {"verdict": "not_judged", "reasons": ["contention_samples_missing"]}
+    if samples.get("backing_device") != device:  # §6.3: /data latency on the declared device
+        return {"verdict": "not_judged", "reasons": ["backing_device_differs"]}
+    if samples.get("vcpus") != vcpus:  # item J: the CPU shares are of the declared vCPUs
+        return {"verdict": "not_judged", "reasons": ["vcpus_differ"]}
+    step = c["interval_seconds"]
+    # Every interval that starts inside the window, the last one possibly partial (a window is
+    # boundary scrape to boundary scrape, rarely a multiple of 10 s).
+    n = math.ceil((we - ws).total_seconds() / step)
+    slots = [None] * n
+    for s in samples.get("samples") or []:
+        t = utc(s.get("utc"))
+        if t is None or not ws <= t < we:
+            continue
+        k = min(n - 1, int((t - ws).total_seconds() // step))
+        if slots[k] is None:
+            slots[k] = s
+    median = (samples.get("rehearsal_rtt_median_ms") or {}).get(arm)
+
+    def series(read):
+        vals = [None if s is None else read(s) for s in slots]
+        return vals, sum(v is not None for v in vals) / n if n else 0.0
+
+    def num(v):
+        return v if number(v) else None
+    cpu, cpu_cov = series(lambda s: num(s.get("cpu")))
+    steal, steal_cov = series(lambda s: num(s.get("steal")))
+    tunnel = [None if s is None else (s.get("tunnels") or {}).get(arm) for s in slots]
+    tun_cov = sum(isinstance(t, dict) and isinstance(t.get("lost"), bool) for t in tunnel) / n if n else 0.0
+    up, up_cov = series(lambda s: num(s.get("uplink_drops_total")))
+    # A counter that goes down was reset: the drops across the reset can't be read.
+    readings = [v for v in up if v is not None]
+    if any(b < a for a, b in zip(readings, readings[1:])):
+        return {"verdict": "not_judged", "reasons": ["uplink_counter_reset"], "intervals": n}
+    # Disk: no completed write in an interval is excluded with nothing in flight, over otherwise.
+    disk, disk_seen = [], 0
+    for s in slots:
+        if s is None or not number(s.get("disk_inflight")):
+            disk.append(None)
+            continue
+        disk_seen += 1
+        if number(s.get("disk_write_ms")):
+            disk.append(s["disk_write_ms"])
+        elif s["disk_inflight"] > 0:
+            disk.append(None)
+    coverage = {"cpu": cpu_cov, "steal": steal_cov, "disk": disk_seen / n if n else 0.0,
+                "tunnel": tun_cov, "uplink": up_cov}
+    out = {"intervals": n, "coverage": coverage}
+    low = sorted(k for k, v in coverage.items() if v < c["coverage_min"])
+    if low or not number(median) or median <= 0:
+        out.update(verdict="not_judged", reasons=["coverage_below_98pct:" + k for k in low]
+                   + ([] if number(median) and median > 0 else ["rehearsal_rtt_median_missing"]))
+        return out
+    out.update(cpu_p95=nearest_rank(cpu, 0.95), steal_p95=nearest_rank(steal, 0.95),
+               disk_write_p99_ms=nearest_rank(disk, 0.99) if disk else 0.0)
+    breaches = []
+    if out["cpu_p95"] > c["cpu_p95_max"]:
+        breaches.append("cpu")
+    if out["steal_p95"] > c["steal_p95_max"]:
+        breaches.append("steal")
+    if out["disk_write_p99_ms"] > c["disk_write_p99_ms_max"]:
+        breaches.append("disk")
+    # The window's hours: a final partial interval (the boundary scrape's lag) joins hour 23.
+    per_hour = 3600 // step
+    count = max(1, round(n * step / 3600))
+    hours = []
+    for h in range(count):
+        lo, hi = h * per_hour, n if h == count - 1 else (h + 1) * per_hour
+        part = tunnel[lo:hi]
+        lost = sum(not (isinstance(t, dict) and t.get("lost") is False) for t in part)
+        rtts = [t.get("rtt_ms") if isinstance(t, dict) and t.get("lost") is False and number(t.get("rtt_ms"))
+                else None for t in part]
+        # The counter from the hour's last reading before it (or its first) to its last.
+        drops = [v for v in up[max(0, lo - 1):hi] if v is not None]
+        rec = {"hour": h, "loss": lost / len(part), "rtt_p95_ms": nearest_rank(rtts, 0.95),
+               "uplink_drops": sum(max(0, b - a) for a, b in zip(drops, drops[1:])) if len(drops) >= 2 else None}
+        rec["ok"] = (rec["loss"] <= c["tunnel_loss_max"]
+                     and rec["rtt_p95_ms"] <= c["tunnel_rtt_p95_over_rehearsal_max"] * median
+                     and rec["uplink_drops"] is not None and rec["uplink_drops"] <= c["uplink_drops_max"])
+        hours.append(rec)
+    if not all(h["ok"] for h in hours):
+        breaches.append("network")
+    out["network_hours_breached"] = [h["hour"] for h in hours if not h["ok"]]
+    out.update(verdict="breach" if breaches else "ok", reasons=breaches)
+    return out
+
+
+def crawler_tests(report):
+    """§6.4's three tests on one valid window (the existing gate's arithmetic: the mean and
+    hours net of carry-in; the latency cohort keeps carry-in and charges dropped samples)."""
+    g = gate(report)
+    return {"mean_net_per_min": g["mean_net_per_min"], "mean_passes": g["mean_passes"],
+            "worst_hour_net_per_min": g["worst_hour_net_per_min"], "every_hour_passes": g["every_hour_passes"],
+            "p95": g["p95"], "p95_seconds": g["p95_seconds"], "coverage": g["coverage"],
+            "passes": g["mean_passes"] and g["every_hour_passes"] and g["p95"] == "pass"}
+
+
+def memory_verdict(report):
+    fit = report.get("memory") if isinstance(report, dict) else None
+    meets = (fit or {}).get("meets_bar")
+    out = {"verdict": "pass" if meets is True else ("fail" if meets is False else "not_judged")}
+    if fit:
+        out.update(slope_mib_per_hour=fit.get("slope_mib_per_hour"), ci95_mib_per_hour=fit.get("ci95_mib_per_hour"),
+                   refused=fit.get("refused"), window_complete=fit.get("window_complete"))
+    else:
+        out["refused"] = "no_fit"
+    return out
+
+
+def comparator_problems(comp, decl):
+    """§5.2 item 10: the booked, valid, complete, uninterrupted comparator on the expected
+    host and network."""
+    if comp is None:
+        return ["comparator_missing"]
+    out = []
+    want = decl["comparator"]
+    b = comp.get("binding") or {}
+    t = comp.get("timeline") or {}
+    if b.get("run_id") != want["run_id"]:
+        out.append("comparator_not_booked")
+    if comp.get("kind") != "comparator":
+        out.append("comparator_kind")
+    if comp.get("verdict") != "valid":
+        out.append("comparator_" + str(comp.get("verdict")))
+    if comp.get("rehearsal") or comp.get("window_hours") != 24:
+        out.append("comparator_not_a_24h_window")
+    if b.get("host_identity") != want.get("host_identity", decl["host_identity"]):
+        out.append("comparator_host_identity")
+    if b.get("network_identity") != want.get("network_identity", decl["network_identity"]):
+        out.append("comparator_network_identity")
+    end, ended = utc(t.get("window_end_utc")), utc(b.get("ended_utc"))
+    if end is None or ended is None or ended < end:
+        out.append("comparator_interrupted")
+    return out
+
+
+def day_entries(decl, attempt, day):
+    return {e["arm"]: e for e in decl["arms"] if e["attempt"] == attempt and e["day"] == day}
+
+
+def layout_problems(attempt, decl, day):
+    """§6.3: the day's declared arms and exits are the attempt's layout exactly."""
+    entries = day_entries(decl, attempt["id"], day)
+    placed = {arm: e["exit"] for arm, e in entries.items()}
+    layout = LAYOUTS[attempt["layout"]]
+    if layout is None:  # S: the candidate alone, on a different exit each day
+        other = day_entries(decl, attempt["id"], 3 - day)
+        if len(placed) != 1 or len(other) != 1 or set(placed) != set(other) \
+                or next(iter(placed.values())) == next(iter(other.values()))["exit"]:
+            return ["layout_S_is_one_arm_on_two_exits"]
+        return []
+    return [] if placed == layout[day] else ["layout_" + attempt["layout"] + "_not_as_declared"]
+
+
+def arm_window(report):
+    t = (report or {}).get("timeline") or {}
+    return utc(t.get("window_start_utc")), utc(t.get("window_end_utc"))
+
+
+def exit_in_force(archive, exit_label, at):
+    """The exit's hash as checked last at or before `at` (the archive's `exit_checks`, a timed
+    history: a repair before the start can re-check a server); the archive's `exits` without one."""
+    checks = [c for c in (archive.get("exit_checks") or []) if isinstance(c, dict) and utc(c.get("utc")) is not None]
+    before = [c for c in checks if utc(c["utc"]) <= at] if at is not None else []
+    if before:
+        return (before[-1].get("exits") or {}).get(exit_label)
+    if checks:
+        return (checks[0].get("exits") or {}).get(exit_label)
+    return ((archive or {}).get("exits") or {}).get(exit_label)
+
+
+def egress_problems(archive, arm, exit_label, report):
+    """§5.2 item 4: the arm's salted egress hash equals its exit's at every boundary of its window.
+    Each reading is judged against the exit in force at its time; inside the window, that's the
+    exit checked last before the window's start (X-cr-round1-collect-fixes, item C)."""
+    ws, we = arm_window(report)
+    if ws is None or we is None:
+        return ["egress_window_unknown"]
+    exits = (archive or {}).get("exits") or {}
+    want = exit_in_force(archive or {}, exit_label, ws)
+    if not isinstance(want, str) or not HASH.fullmatch(want) or exits.get(exit_label) != want:
+        return ["egress_assignment_missing"]
+    readings = ((archive.get("arms") or {}).get(arm) or {}).get("egress") or []
+    hours = report.get("window_hours") or 24
+    hour = (we - ws) / hours
+    out = []
+    for k in range(hours + 1):
+        b = ws + k * hour
+        got = [r.get("hash") for r in readings if (t := utc(r.get("utc"))) is not None
+               and b - timedelta(seconds=BOUNDARY_LATE) <= t <= b + timedelta(seconds=BOUNDARY_LATE)]
+        if not got:
+            out.append("egress_unchecked_at_a_boundary")
+        elif any(g != want for g in got):
+            out.append("egress_differs_from_declared_exit")
+    for r in readings:
+        t = utc(r.get("utc"))
+        expected = want if t is None or t >= ws else exit_in_force(archive, exit_label, t)
+        if r.get("hash") != expected:
+            out.append("egress_differs_from_declared_exit")
+    return sorted(set(out))
+
+
+def judge_day(cand, attempt, decl, day, comparator_ok):
+    """One candidate's day: `judged` (with its tests) or `not_judged`, with reasons; also
+    whether contention calls for a solo confirmation."""
+    reports, archive = day["reports"], day["archive"] or {}
+    entries = day_entries(decl, attempt["id"], day["day"])
+    reasons = list(layout_problems(attempt, decl, day["day"]))
+    out = {"attempt": attempt["id"], "day": day["day"], "repeat": day["repeat"], "solo_confirmation_required": False}
+    rep = reports.get(cand)
+    if rep is None:
+        out.update(status="not_judged", reasons=sorted(set(reasons + ["candidate_report_missing"])))
+        return out
+    out["run_id"] = (rep.get("binding") or {}).get("run_id")
+    entry = entries.get(cand)
+    # Validity (§6.4): a valid, non-rehearsal 24 h comb window, bound to its declaration.
+    if rep.get("kind") != "comb" or rep.get("rehearsal") or rep.get("window_hours") != 24:
+        reasons.append("not_a_24h_comb_window")
+    if rep.get("verdict") != "valid":
+        reasons.append("segment_" + str(rep.get("verdict")))
+    b = rep.get("binding") or {}
+    place = b.get("placement") or {}
+    want = {"round": decl["round"], "attempt": attempt["id"], "day": day["day"], "arm": cand}
+    if entry is None or {k: place.get(k) for k in want} != want or place.get("repeat", 0) != day["repeat"]:
+        reasons.append("report_not_bound_to_its_declaration")
+    if (rep.get("round1") or {}).get("declared") != entry:
+        reasons.append("report_judged_against_another_declaration")
+    ident = rep.get("identity") or {}
+    if ident.get("spec_commit") != decl["spec_commit"]:
+        reasons.append("spec_commit_differs")
+    if b.get("host_identity") != decl["host_identity"]:
+        reasons.append("host_identity_differs")
+    if b.get("network_identity") != decl["network_identity"]:
+        reasons.append("network_identity_differs")
+    if not RUN_ID.fullmatch(str(b.get("run_id"))):
+        reasons.append("run_id_missing")
+    digest = attempt["candidate_digests"].get(cand)
+    if digest_part(ident.get("image_digest")) != digest_part(decl["image_digest"]) \
+            or (digest is not None and digest != decl["image_digest"]):
+        reasons.append("image_digest_differs")
+    if (rep.get("round1") or {}).get("fresh_store") is not True:
+        reasons.append("no_fresh_store_evidence")
+    # The layout held: every declared arm reported, none beyond them, each on its own exit,
+    # active from the candidate's ws through its final boundary, with its leak tests passing.
+    ws, we = arm_window(rep)
+    if set(reports) != set(entries):
+        reasons.append("roster_differs_from_declaration")
+    arms = archive.get("arms") or {}
+    if not archive:
+        reasons.append("day_archive_missing")
+    exits = archive.get("exits") or {}
+    if len(set(exits.values())) != len(exits):
+        reasons.append("exits_share_an_egress_hash")
+    for arm, e in sorted(entries.items()):
+        info = arms.get(arm) or {}
+        if arm != cand and arm not in reports:
+            reasons.append("peer_report_missing")
+        active_from, active_through = utc(info.get("active_from_utc")), utc(info.get("active_through_utc"))
+        if ws is None or we is None or active_from is None or active_through is None \
+                or active_from > ws or active_through < we:
+            reasons.append("peer_not_active_through_candidate_window" if arm != cand else "activity_evidence_missing")
+        leak = info.get("leak_test") or {}
+        if leak.get("before") != "pass" or leak.get("after") != "pass":
+            reasons.append("leak_test_not_passed")
+        if info.get("tunnel_target_is_gateway") is not True:  # §7: the probe pinged the WireGuard gateway
+            reasons.append("probe_target_unchecked")
+        # §8: the handshake evidence, each arm's gluetun log, listed and the archive's own.
+        log = (day.get("gluetun_logs") or {}).get(arm)
+        if log is None or log != info.get("gluetun_log_sha256"):
+            reasons.append("handshake_evidence_missing")
+        if arm in reports:
+            got = {c.get("check"): c.get("ok") for c in reports[arm].get("checks") or [] if isinstance(c, dict)}
+            if any(got.get(name) is not True for name in DECLARATION_CHECKS):
+                reasons.append("declaration_checks_missing")
+            reasons += egress_problems(archive, arm, e["exit"], reports[arm])
+            pb = reports[arm].get("binding") or {}
+            pp = pb.get("placement") or {}
+            if arm != cand and ({k: pp.get(k) for k in want} != dict(want, arm=arm)
+                                or pp.get("repeat", 0) != day["repeat"] or not RUN_ID.fullmatch(str(pb.get("run_id")))):
+                reasons.append("peer_report_not_bound")
+    runs = [(r.get("binding") or {}).get("run_id") for r in reports.values()]
+    if len(set(runs)) != len(runs):
+        reasons.append("duplicate_run_in_day")
+    # Events (§6.3's classification): an infrastructure fault invalidates the affected arms'
+    # day; a product failure on any arm breaks the layout for its peers.
+    # A product failure is terminal only once diagnosed as one; a diagnosis that finds an
+    # infrastructure cause reclassifies it (§6.2, §6.3). An unknown class is never ignored.
+    out["product_failure"] = False
+    for ev in archive.get("events") or []:
+        hit, cls, diag = ev.get("arms") or [], ev.get("class"), ev.get("diagnosis")
+        if diag not in DIAGNOSES or cls not in ("infrastructure", "product") or not isinstance(hit, list):
+            reasons.append("unknown_event")
+            continue
+        if cls == "product" and diag == "infrastructure":
+            cls = "infrastructure"
+        if cls == "infrastructure":  # the whole concurrent day is repeated
+            reasons.append("infrastructure_fault" if (not hit or cand in hit) else "peer_infrastructure_fault")
+        elif cand in hit:
+            reasons.append("product_failure" if diag == "product" else "product_failure_under_diagnosis")
+            out["product_failure"] = out["product_failure"] or diag == "product"
+        else:
+            reasons.append("peer_product_failure")
+    if not comparator_ok:
+        reasons.append("comparator_not_valid")
+    # Contention for this window (O4): a breach isn't a valid miss.
+    if ws is not None and we is not None:
+        out["contention"] = contention(day["contention"], cand, ws, we, decl["backing_device"], decl["vcpus"])
+    else:
+        out["contention"] = {"verdict": "not_judged", "reasons": ["window_unknown"]}
+    if out["contention"]["verdict"] == "not_judged":
+        reasons.append("contention_not_judged")
+    elif out["contention"]["verdict"] == "breach":
+        reasons.append("contention_breach")
+        # §6.3: the first class that applies decides. A day with an evidenced infrastructure
+        # fault (class 1) or a product failure (class 2) is that, not demonstrated contention,
+        # so it calls for no solo confirmation (and a breach in layout S isn't its failure).
+        classed = {"infrastructure_fault", "peer_infrastructure_fault", "product_failure",
+                   "product_failure_under_diagnosis", "peer_product_failure", "unknown_event"} & set(reasons)
+        out["contention_class"] = "infrastructure_or_product" if classed else "demonstrated_contention"
+        out["solo_confirmation_required"] = not classed and attempt["layout"] != "S"
+        out["solo_confirmation_failed"] = not classed and attempt["layout"] == "S"
+    out["tests"] = crawler_tests(rep)
+    out["memory"] = memory_verdict(rep)
+    out["window"] = {"start_utc": (rep.get("timeline") or {}).get("window_start_utc"),
+                     "end_utc": (rep.get("timeline") or {}).get("window_end_utc")}
+    out["reasons"] = sorted(set(reasons))
+    out["status"] = "not_judged" if reasons else ("pass" if out["tests"]["passes"] else "fail")
+    return out
+
+
+def candidate_days(inputs, decl, attempt, cand):
+    """Every manifest day of `attempt` the candidate is declared in: {day: [versions by repeat]}."""
+    out = {}
+    for d in inputs["days"]:
+        if d["attempt"] == attempt["id"] and cand in day_entries(decl, attempt["id"], d["day"]):
+            out.setdefault(d["day"], []).append(d)
+    return {k: sorted(v, key=lambda d: d["repeat"]) for k, v in sorted(out.items())}
+
+
+# Problems that keep any day from counting, a valid miss included: the arm can't qualify, or
+# the comparator or spacing that every window of the round depends on isn't there.
+UNJUDGEABLE = ("not_authorized", "spacing", "retry_budget_exhausted", "earlier_attempt_incomplete",
+               "repeats_not_contiguous", "run_id_reused")
+
+
+def solo_problems(cand, decl, inputs, attempts, judged_days):
+    """§6.3's S attempts, bounded (CR-SPEC-R1 §5, X-cr-round1-spec-fixes item 2): an S
+    attempt of the candidate is allowed only (a) after the attempt just before it gave the
+    candidate a day with `solo_confirmation_required`, or (b) when the candidate is the only
+    arm left: every other arm of that attempt dropped out, as its recorded end says, at the
+    rehearsal (before its first day, and only the round's first attempt) or by a product failure the day archives show. At most
+    one S attempt per candidate per round. Returns the problems, [] when it's allowed."""
+    solos = [a for a in attempts if a["layout"] == "S"]
+    if not solos:
+        return []
+    if len(solos) > 1:
+        return ["more_than_one_solo_attempt"]
+    # "The attempt just before" is the candidate's own previous attempt: with two candidates,
+    # a host-wide breach calls for both solo confirmations, one after the other.
+    i = attempts.index(solos[0])
+    if i == 0:
+        return ["solo_without_a_preceding_attempt"]
+    before = attempts[i - 1]
+    if any(j["attempt"] == before["id"] and j.get("solo_confirmation_required") for j in judged_days):
+        return []  # (a)
+    others = {e["arm"] for e in decl["arms"] if e["attempt"] == before["id"]} - {cand}
+    end = (inputs.get("attempt_ends") or {}).get(before["id"])
+    if cand not in {e["arm"] for e in decl["arms"] if e["attempt"] == before["id"]} or not others or end is None:
+        return ["solo_not_after_a_drop"]
+    dropped = set()
+    for token in str(end["reason"]).split(","):
+        m = DROP_TOKEN.fullmatch(token.strip())
+        if not m:
+            continue
+        if m[1] == "rehearsal_drop" and not end["days_run"] and before["id"] == decl["attempts"][0]["id"]:
+            dropped.add(m[2])
+        elif m[1] == "product_failure" and any(
+                ev.get("class") == "product" and ev.get("diagnosis") != "infrastructure"
+                and m[2] in (ev.get("arms") or [])
+                for d in inputs["days"] if d["attempt"] == before["id"]
+                for ev in (d["archive"] or {}).get("events") or []):
+            dropped.add(m[2])
+    return [] if others <= dropped else ["solo_not_after_a_drop"]  # (b)
+
+
+def judge_candidate(cand, inputs):
+    """§5.2 item 5: one candidate's crawler verdict, its per-day memory verdicts and
+    shipping eligibility. Its two days pair only within its latest attempt; a valid miss in
+    any attempt, or in a day a repeat followed, still ends the claim (§6.2, §6.4)."""
+    decl = inputs["declaration"]
+    entries = [e for e in decl["arms"] if e["arm"] == cand]
+    out = {"arm": cand, "role": entries[0]["role"] if entries else None, "reasons": []}
+    attempts = [a for a in decl["attempts"] if any(e["attempt"] == a["id"] for e in entries)]
+    if not attempts:
+        out.update(crawler="not_judged", memory="not_judged", shipping_eligible=False, reasons=["not_declared"])
+        return out
+    attempt = attempts[-1]
+    out["attempt"], out["layout"] = attempt["id"], attempt["layout"]
+    reasons = []
+    if out["role"] != "candidate":
+        reasons.append("not_authorized")  # a diagnostic arm is never eligible (§6.2, §6.4)
+    comp = comparator_problems(inputs["comparator"], decl)
+    out["comparator_problems"] = comp
+    reasons += comp
+    ok_comp = not comp
+    # Every attempt's days must be in the manifest: an earlier attempt's declared days, or the
+    # days its recorded end says ran; and each (attempt, day)'s repeats run 0..k.
+    for a in attempts:
+        listed = candidate_days(inputs, decl, a, cand)
+        for k, vs in listed.items():
+            if [d["repeat"] for d in vs] != list(range(len(vs))):
+                reasons.append("repeats_not_contiguous")
+        if a is attempt:
+            continue
+        end = inputs.get("attempt_ends", {}).get(a["id"])
+        need = set(end["days_run"]) if end else {e["day"] for e in entries if e["attempt"] == a["id"]}
+        if not need <= set(listed):
+            reasons.append("earlier_attempt_incomplete")
+
+    # Earlier attempts: reported, and a valid miss in one still counts.
+    earlier = []
+    for a in attempts[:-1]:
+        for k, versions in candidate_days(inputs, decl, a, cand).items():
+            earlier += [dict(judge_day(cand, a, decl, d, ok_comp), layout=a["layout"],
+                             digest=a["candidate_digests"].get(cand)) for d in versions]
+    out["earlier_attempts"] = [{"attempt": j["attempt"], "day": j["day"], "repeat": j["repeat"],
+                                "status": j["status"], "reasons": j["reasons"]} for j in earlier]
+    out["attempt_ends"] = {a["id"]: inputs["attempt_ends"][a["id"]] for a in attempts
+                           if a["id"] in inputs.get("attempt_ends", {})}
+    # This attempt: a repeated day replaces the one it repeats only if that one wasn't judged
+    # (§6.3 repeats a day after an evidenced fault); a judged miss stays a miss.
+    versions = candidate_days(inputs, decl, attempt, cand)
+    replaced, judged, days = [], [], {}
+    for k, vs in versions.items():
+        if len({d["repeat"] for d in vs}) != len(vs):
+            reasons.append("repeat_supplied_twice")
+        js = [dict(judge_day(cand, attempt, decl, d, ok_comp), layout=attempt["layout"],
+                   digest=attempt["candidate_digests"].get(cand)) for d in vs]
+        replaced += js[:-1]
+        judged.append(js[-1])
+        days[k] = vs[-1]
+    if any(j["status"] == "pass" for j in replaced):
+        reasons.append("repeat_of_a_judged_day")
+    # §6.3's retry rule repeats any not_judged day (a coverage miss, an uplink counter reset, a
+    # void segment, an infrastructure fault), within the budget, except one whose answer is
+    # elsewhere: contention (a solo confirmation), a product failure, its own or a peer's, or
+    # an event not yet classed (a diagnosis and a fresh attempt), and a failed solo
+    # confirmation (terminal). A judged miss stays a miss (below).
+    if any(j["status"] == "not_judged" and (j.get("solo_confirmation_required") or j.get("solo_confirmation_failed")
+                                            or NOT_REPEATABLE & set(j["reasons"])) for j in replaced):
+        reasons.append("repeat_of_a_non_repeatable_day")
+    out["replaced_days"] = [{"day": j["day"], "repeat": j["repeat"], "status": j["status"], "reasons": j["reasons"]}
+                            for j in replaced]
+    declared_days = sorted({e["day"] for e in entries if e["attempt"] == attempt["id"]})
+    if declared_days != [1, 2]:
+        reasons.append("attempt_does_not_declare_two_days")
+    if sorted(days) != [1, 2]:
+        reasons.append("day_missing")
+    # Binding across the two days: distinct runs, separate windows, two different exits.
+    runs = [j.get("run_id") for j in judged]
+    if len(runs) == 2 and (runs[0] == runs[1] or None in runs):
+        reasons.append("duplicate_run")
+    if len(judged) == 2:
+        w = [(utc(j["window"]["start_utc"]), utc(j["window"]["end_utc"])) if "window" in j else (None, None)
+             for j in judged]
+        if any(x is None for pair in w for x in pair) or not w[0][1] <= w[1][0]:
+            reasons.append("windows_overlap_or_out_of_order")
+        exits = [day_entries(decl, attempt["id"], k)[cand]["exit"] for k in (1, 2)]
+        hashes = [((days[k]["archive"] or {}).get("exits") or {}).get(exits[k - 1]) for k in (1, 2)]
+        if exits[0] == exits[1] or hashes[0] is None or hashes[0] == hashes[1]:
+            reasons.append("repeated_exit")
+    # Rule 2.2 spacing against every Lodestar window in the round, from the comparator's
+    # timeline.window_end_utc (never result.json's `ended`).
+    if inputs["comparator"] is not None:
+        timelines = [r.get("timeline") or {} for d in inputs["days"] for r in d["reports"].values()]
+        problems = spacing(inputs["comparator"], timelines)
+        # §6.3: the round follows its comparator. Every Lodestar process and window starts at
+        # or after the comparator's window end + 12 h (a comparator after the round is no use).
+        cend = utc((inputs["comparator"].get("timeline") or {}).get("window_end_utc"))
+        if cend is None or any(utc(t.get(k)) is None or utc(t.get(k)) < cend + timedelta(seconds=COMPARATOR_CLEAR)
+                               for t in timelines for k in ("process_start_utc", "window_start_utc")):
+            problems = sorted(set(problems) | {"lodestar_before_comparator_end_plus_12h"})
+        out["spacing_problems"] = problems
+        if problems:
+            reasons.append("spacing")
+    # §6.3: at most two repeated days per round, whatever the cause (a solo confirmation's
+    # own two days are attempts of their own, repeat 0, so they never count).
+    # Run IDs are unique across the whole manifest, the comparator's included.
+    ids = [(r.get("binding") or {}).get("run_id") for d in inputs["days"] for r in d["reports"].values()]
+    ids += [((inputs["comparator"] or {}).get("binding") or {}).get("run_id")] if inputs["comparator"] else []
+    if len(set(ids)) != len(ids):
+        reasons.append("run_id_reused")
+    # A day listed only as repeat k still implies k repeats (the gap itself is not judged).
+    top = {}
+    for d in inputs["days"]:
+        top[(d["attempt"], d["day"])] = max(top.get((d["attempt"], d["day"]), 0), d["repeat"])
+    repeats = sum(top.values())
+    out["retry_budget_exhausted"] = repeats > RETRY_BUDGET
+    if out["retry_budget_exhausted"]:
+        reasons.append("retry_budget_exhausted")
+    out["days"] = judged
+    every = earlier + replaced + judged
+    solo = solo_problems(cand, decl, inputs, attempts, every)
+    if solo:
+        out["solo_problems"] = solo
+        reasons.append("solo_not_permitted")
+    # History across attempts (§6.3). A breach outside S needs a solo confirmation after it;
+    # a failed solo confirmation has no further retry; a product failure on this digest,
+    # diagnosed or pending, withholds qualification (a fix makes a new candidate).
+    breached = {j["attempt"] for j in every if j.get("solo_confirmation_required")}
+    out["solo_confirmation_required"] = bool(breached) and not (attempt["layout"] == "S" and attempt["id"] not in breached)
+    if out["solo_confirmation_required"]:
+        reasons.append("solo_confirmation_required")
+    out["solo_confirmation_failed"] = any(j.get("solo_confirmation_failed") for j in every)
+    if out["solo_confirmation_failed"]:
+        reasons.append("solo_confirmation_failed")
+    digest = attempt["candidate_digests"].get(cand)
+    same = [j for j in every if j["digest"] == digest]
+    out["product_failure"] = any(j.get("product_failure") for j in same)
+    if any("product_failure" in j["reasons"] or "product_failure_under_diagnosis" in j["reasons"] for j in same):
+        reasons.append("product_failure_on_this_digest")
+    misses = [j for j in every if j["status"] == "fail"]
+    out["valid_misses"] = [{"attempt": j["attempt"], "day": j["day"], "repeat": j["repeat"]} for j in misses]
+    status = [j["status"] for j in judged]
+    if any(r in UNJUDGEABLE for r in reasons) or comp:
+        crawler = "not_judged"
+    elif misses:  # a valid miss on either day ends the claim (§6.4), whatever is still missing
+        crawler = "fail"
+    elif reasons:
+        crawler = "not_judged"
+    else:
+        crawler = "pass" if status == ["pass", "pass"] else "not_judged"
+    out["reasons"] = sorted(set(reasons))
+    out["crawler"] = crawler
+    mem = [j["memory"]["verdict"] for j in judged if "memory" in j]
+    out["memory"] = "pass" if mem == ["pass", "pass"] and len(days) == 2 else ("fail" if "fail" in mem else "not_judged")
+    out["shipping_eligible"] = crawler == "pass" and out["memory"] == "pass"
+    return out
+
+
+def disposition(c):
+    """§6.2: whether a candidate's outcome is terminal, and what it is."""
+    if c.get("product_failure"):
+        return "product_failure"
+    if c.get("retry_budget_exhausted") or c.get("solo_confirmation_failed"):
+        return "out_of_retries"
+    if c["shipping_eligible"]:
+        return "shipping_eligible"
+    if c["crawler"] == "pass" and c["memory"] == "fail":
+        return "crawler_accepted_memory_fails"
+    if c["crawler"] == "fail":
+        return "valid_miss"
+    return None  # incomplete: the retry rule (§6.3)
+
+
+def select(candidates, order):
+    """§6.2's Balanced-first selection: the first choice's disposition must be terminal
+    before the next is read; a diagnostic's result only selects, it never ships."""
+    trail = []
+    for arm in order:
+        c = candidates.get(arm)
+        if c is None:
+            continue
+        d = disposition(c)
+        trail.append({"arm": arm, "disposition": d or "incomplete", "authorized": c["role"] == "candidate"})
+        if c["role"] != "candidate":
+            # Not authorized: its result only selects; if the owner then chooses it, it needs
+            # a fresh two-day run (§6.2).
+            trail[-1]["selects_only"] = True
+            continue
+        if d is None:
+            return {"ships": None, "state": "pending_retry", "waiting_on": arm, "trail": trail}
+        if d == "shipping_eligible":
+            return {"ships": arm, "state": "ships", "trail": trail}
+    return {"ships": None, "state": "round1_report", "trail": trail}
+
+
+def gate_round(inputs):
+    """§5.2 items 5 and 12: every arm's verdict and the selection, from one manifest's inputs."""
+    decl = inputs["declaration"]
+    arms = sorted({e["arm"] for e in decl["arms"]})
+    judged = {arm: judge_candidate(arm, inputs) for arm in arms}
+    out = {"schema": 1, "kind": "cr_round1_verdict", "spec": SPEC, "round1_spec": ROUND1_SPEC,
+           "plan": "docs/plan/2026-11-27-revised-path-to-100.md",
+           "round": decl["round"], "manifest_sha256": inputs["manifest_sha256"], "analyzer_sha256": ANALYZER_SHA256,
+           "inputs": dict(sorted(inputs["inputs"].items())), "contention_thresholds": CONTENTION,
+           "attempt_ends": dict(sorted(inputs.get("attempt_ends", {}).items())),
+           "comparator_bound_after_window": bool(((inputs.get("comparator") or {}).get("binding") or {})
+                                                 .get("bound_after_window")),
+           "candidates": {a: j for a, j in judged.items() if j["role"] == "candidate"},
+           "diagnostics": {a: j for a, j in judged.items() if j["role"] != "candidate"}}
+    out["selection"] = select(judged, SELECTION_ORDER)
+    return out
+
+
+# §6.3's drop-C rule (plan lines 430-432), frozen in CR-SPEC-R1: tighter than contention's.
+DROP_C = {"cpu_p95_max": 0.70, "steal_p95_max": 0.03, "minutes": 60, "crawling_lookback_minutes": 10}
+
+
+def crawling_from(rows):
+    """The first scrape from which the arm is crawling: sampling (suppression 0) and its store
+    grew in the 10 min before. None if it never is."""
+    look = timedelta(minutes=DROP_C["crawling_lookback_minutes"])
+    seen = []
+    for r in rows:
+        t, vals = utc(r.get("time")), r.get("values") or {}
+        if t is None or not r.get("metrics_ok") or not number(vals.get("torrents")):
+            continue
+        seen.append((t, vals["torrents"]))
+        before = [v for u, v in seen if u <= t - look]
+        if vals.get("dht_sample_suppression_seconds") == 0 and before and vals["torrents"] > before[-1]:
+            return t
+    return None
+
+
+def drop_c(samples, arms):
+    """§6.3's drop-C rule on the rehearsal: the last 60 min, starting only once every arm is
+    crawling. C is dropped if host CPU p95 is over 70 % of the declared 8 vCPU or steal p95 over
+    3 % (nearest rank over every 10 s slot; a missing slot ranks over). `samples` is the
+    rehearsal's host samples (host_samples.py's lines or its assembled JSON); `arms` maps an
+    arm to its rehearsal collector's samples.jsonl rows."""
+    rows = samples.get("samples") if isinstance(samples, dict) else samples
+    if isinstance(samples, dict):
+        vcpus = {samples.get("vcpus")}
+    else:  # the sampler's header lines: one per start, each naming the vCPUs it saw
+        vcpus = {r.get("vcpus") for r in rows or [] if isinstance(r, dict) and r.get("kind") == "header"}
+    rows = sorted((r for r in rows or [] if utc(r.get("utc")) is not None), key=lambda r: r["utc"])
+    out = {"thresholds": DROP_C, "arms": {}}
+    if vcpus != {DECLARED_VCPUS}:  # the shares are of the declared 8 vCPU, or they mean nothing
+        return dict(out, decision="not_judged", reasons=["vcpus_differ"])
+    if not rows:
+        return dict(out, decision="not_judged", reasons=["no_host_samples"])
+    end = utc(rows[-1]["utc"]) + timedelta(seconds=CONTENTION["interval_seconds"])
+    starts = {}
+    for arm, arm_rows in sorted(arms.items()):
+        starts[arm] = crawling_from(arm_rows)
+        out["arms"][arm] = {"crawling_from_utc": iso(starts[arm]) if starts[arm] else None}
+    if not arms or any(v is None for v in starts.values()):
+        return dict(out, decision="not_judged", reasons=["an_arm_never_crawled"])
+    start = max(end - timedelta(minutes=DROP_C["minutes"]), max(starts.values()))
+    minutes = (end - start).total_seconds() / 60
+    out.update(interval_start_utc=iso(start), interval_end_utc=iso(end), interval_minutes=round(minutes, 2))
+    if minutes < DROP_C["minutes"]:
+        return dict(out, decision="not_judged", reasons=["fewer_than_60_crawling_minutes"])
+    step = CONTENTION["interval_seconds"]
+    n = math.ceil((end - start).total_seconds() / step)
+    slots = [None] * n
+    for r in rows:
+        t = utc(r["utc"])
+        if start <= t < end:
+            k = int((t - start).total_seconds() // step)
+            slots[k] = slots[k] or r
+    cpu = [s.get("cpu") if s and number(s.get("cpu")) else None for s in slots]
+    steal = [s.get("steal") if s and number(s.get("steal")) else None for s in slots]
+    p_cpu, p_steal = nearest_rank(cpu, 0.95), nearest_rank(steal, 0.95)
+    over = {"cpu": p_cpu > DROP_C["cpu_p95_max"], "steal": p_steal > DROP_C["steal_p95_max"]}
+    # A missing slot ranks over every value, so a p95 that lands on one is over (shown as null).
+    out.update(slots=n, missing_slots=sum(s is None for s in slots),
+               cpu_p95=None if math.isinf(p_cpu) else p_cpu, steal_p95=None if math.isinf(p_steal) else p_steal,
+               decision="drop" if any(over.values()) else "keep", reasons=[k for k, v in over.items() if v])
+    return out
+
+
+def read_jsonl(path):
+    out = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
 def cr0_worst_ratio(report):
     """CR-0 final's worst hour ÷ mean, from analyze_cr0.py's baseline (stored rate)."""
     hourly = (report.get("phases") or {}).get("baseline", {}).get("hourly") or {}
@@ -1683,6 +2827,7 @@ def main(argv=None):
     p.add_argument("--output", type=Path, help="New JSON report path, outside the run directory")
     p.add_argument("--publish", type=Path, help="New directory for the publishable bundle (rule 7)")
     p.add_argument("--winners", help="From stage 2: JSON file naming the earlier winners (r5.1 A2)")
+    p.add_argument("--declaration", type=Path, help="Round 1: the round's declaration (judges the arm against it)")
     p = sub.add_parser("effect")
     p.add_argument("--treatment", choices=sorted(collect.TREATMENT_SWITCHES), required=True)
     p.add_argument("--block", nargs=4, action="append", required=True, metavar="REPORT")
@@ -1696,6 +2841,14 @@ def main(argv=None):
     p = sub.add_parser("gate")
     p.add_argument("comb")
     p.add_argument("--comparator")
+    p = sub.add_parser("gate-round")
+    p.add_argument("manifest", type=Path, help="Round 1's manifest: every input with its SHA-256")
+    p.add_argument("--output", type=Path)
+    p = sub.add_parser("drop-c")
+    p.add_argument("samples", type=Path, help="The rehearsal's host samples (host-samples.jsonl or its assembled JSON)")
+    p.add_argument("--arm", action="append", default=[], metavar="ARM=RUN_DIR",
+                   help="Each rehearsal arm's collector run directory (repeat for every arm)")
+    p.add_argument("--output", type=Path)
     p = sub.add_parser("checkpoint1")
     p.add_argument("--utp", required=True)
     p.add_argument("--adm", required=True)
@@ -1708,7 +2861,8 @@ def main(argv=None):
             for path in (args.output, args.publish):
                 if path and path.resolve().is_relative_to(args.root.resolve()):
                     parser.error("Reports go outside the run directory")
-            report = analyze_segment(args.root, load_winners(args.winners) if args.winners else None)
+            report = analyze_segment(args.root, load_winners(args.winners) if args.winners else None,
+                                     check_declaration(read_json(args.declaration)) if args.declaration else None)
             if args.publish:
                 publish(report, args.publish)
             write(report, args.output)
@@ -1718,6 +2872,16 @@ def main(argv=None):
                   args.output)
         elif args.command == "route-baseline":
             write(route_baseline([load_report(p) for p in args.reports]), None)
+        elif args.command == "drop-c":
+            text = args.samples.read_text(encoding="utf-8")
+            samples = json.loads(text) if args.samples.suffix == ".json" else read_jsonl(args.samples)
+            arms = {}
+            for item in args.arm:
+                arm, _, run_dir = item.partition("=")
+                arms[arm] = read_jsonl(Path(run_dir) / "samples.jsonl")
+            write(drop_c(samples, arms), args.output)
+        elif args.command == "gate-round":
+            write(gate_round(load_manifest(args.manifest)), args.output)
         elif args.command == "gate":
             write(gate(refuse_noise_floor(load_report(args.comb)),
                        load_report(args.comparator) if args.comparator else None), None)

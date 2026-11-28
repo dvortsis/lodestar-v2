@@ -1,7 +1,7 @@
 # Lodestar v2 build plan: v0.5.1 → 1.0, with helper-agent orchestration
 
 > First written 2026-10-22, after M3. It plans the order of work and who does it: the main session or a helper agent, per the delegation policy in `CLAUDE.md`.
-> **§0 (2026-11-12, r4) is the current plan.** It replaces the 2026-11-02 r3 status, ladder, owner queue and next actions, which the build had outrun; the track tables, the crawler program and the gate definitions keep their r3 text. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.60, on the runner's choices in `docs/decisions/2026-10-30-master-plan.md`, `docs/decisions/2026-11-02-master-plan-r2.md` and `docs/decisions/2026-11-02-master-plan-r3.md`, and on `docs/decisions/2026-11-12-master-plan-r4.md` and `docs/decisions/2026-11-13-master-plan-r4-reviews.md` (r4.1). **r5 (2026-11-20, owner)** replaces the crawler's build order and testing in §0.5 ("Path to 100"), with matching lines in §0.1, §0.2, §0.7 and §0.9 (`docs/decisions/2026-11-20-path-to-100.md`). **r5.1 (same day, owner)** makes the host A/B faster without weakening it: the lookup-cost pair is one treatment, controls stack on earlier winners, and each stage's image is ready before the previous one is decided (`docs/decisions/2026-11-20-path-to-100-cr-spec.md`, amending CR-SPEC before any data).
+> **§0 (2026-11-12, r4) is the current plan.** It replaces the 2026-11-02 r3 status, ladder, owner queue and next actions, which the build had outrun; the track tables, the crawler program and the gate definitions keep their r3 text. It rests on the owner's answers in `docs/owner-decisions.md` §2.25–§2.60, on the runner's choices in `docs/decisions/2026-10-30-master-plan.md`, `docs/decisions/2026-11-02-master-plan-r2.md` and `docs/decisions/2026-11-02-master-plan-r3.md`, and on `docs/decisions/2026-11-12-master-plan-r4.md` and `docs/decisions/2026-11-13-master-plan-r4-reviews.md` (r4.1). **r5 (2026-11-20, owner)** replaces the crawler's build order and testing in §0.5 ("Path to 100"), with matching lines in §0.1, §0.2, §0.7 and §0.9 (`docs/decisions/2026-11-20-path-to-100.md`). **r5.1 (same day, owner)** makes the host A/B faster without weakening it: the lookup-cost pair is one treatment, controls stack on earlier winners, and each stage's image is ready before the previous one is decided (`docs/decisions/2026-11-20-path-to-100-cr-spec.md`, amending CR-SPEC before any data). **r6 (2026-11-26, owner)** is [`docs/plan/2026-11-26-fastest-1.0-proposal.md`](plan/2026-11-26-fastest-1.0-proposal.md) (owner-decisions §2.85): performance first, the 1.0 scope freeze, `lodestar-host` as the experiment host and D13 B. **Its crawler sequence is amended (2026-11-27, owner)** by [`docs/plan/2026-11-27-revised-path-to-100.md`](plan/2026-11-27-revised-path-to-100.md) (§2.86): round 1 (CR-R1) replaces the r5/r5.1 serial stages and Checkpoint 1 (§0.5). The rest of §0 still reads as r5.1 until the runner's r6 follow-up brings it in line; where they differ, the two plans win.
 > **Picking this up from another session or agent?** Start at [`docs/handoff.md`](handoff.md).
 
 ## 0. Status and plan
@@ -61,7 +61,7 @@ So: **the host is never idle, and build slots never wait for it.**
    - companions: X-cmp-egress-api → X-cmp-egress-ui; CMP-12; CMP-D, D-companions-guide → **CMP-G**;
    - M6: **G-m6** waits only on the owner's manual installs; the two Windows rollback slices follow up and don't hold it;
    - small: ENR-G (ready), X-consent-gate-lift (building).
-4. **The crawler** (Track C; r5, owner 2026-11-20, §0.5 "Path to 100"). **On the owner's host, in stages (r5.1):** CR-AB-ADM → CR-AB-4, back to back → CR-CP1 (Checkpoint 1, the runner's, the same day) → CR-AB-LC (CR-LOOKUP-END with CR-1c) → CR-AB-1 (CR-HINT-FIRST, then X-sampler-cooldown-split, then what the ledger still justifies) → CR-5 → CR-COMB → **G-v06-crawler**. Each stage's control has the earlier winners on. **In build slots, now, alongside the host runs:** CR-LEDGER and CR-COL-5 first, then CR-LOOKUP-END → CR-HINT-FIRST and CR-1c, with X-sampler-cooldown-split and X-crawler-sim-calibrate in parallel where `owns` allow. Each stage's image is built and rehearsed while the previous stage runs. **The v0.6 tag follows P4 in §3 until the owner answers:** the crawler gate passes (or the owner re-decides at Checkpoint 1) and the cluster chaos and transport tests stay green; each feature's own gate (SRC-G, passed; WK-G; CMP-G) decides whether that feature ships in v0.6. **Question for the owner:** does the tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? §2.25 and §2.27 say only that the crawler gate "gates the v0.6 tag".
+4. **The crawler** (Track C; r5, owner 2026-11-20, §0.5 "Path to 100"). **r6 as amended 2026-11-27 (owner, §2.85 and §2.86): after the comparator (cr-ab-comp-2), the harness slices (X-dht-switch-identity, X-cr-round1-collect, X-cr-round1-gate) and CR-SPEC-R1, round 1 (CR-R1) replaces CR-AB-ADM, CR-AB-4, CR-CP1, CR-AB-LC, CR-AB-1 and CR-5 before CR-COMB; per-switch attribution moves to 1.1. The r5.1 text that follows is kept for 1.1.** *Superseded r5.1 order:* **On the owner's host, in stages (r5.1):** CR-AB-ADM → CR-AB-4, back to back → CR-CP1 (Checkpoint 1, the runner's, the same day) → CR-AB-LC (CR-LOOKUP-END with CR-1c) → CR-AB-1 (CR-HINT-FIRST, then X-sampler-cooldown-split, then what the ledger still justifies) → CR-5 → CR-COMB → **G-v06-crawler**. Each stage's control has the earlier winners on. **In build slots, now, alongside the host runs:** CR-LEDGER and CR-COL-5 first, then CR-LOOKUP-END → CR-HINT-FIRST and CR-1c, with X-sampler-cooldown-split and X-crawler-sim-calibrate in parallel where `owns` allow. Each stage's image is built and rehearsed while the previous stage runs. **The v0.6 tag follows P4 in §3 until the owner answers:** the crawler gate passes (or the owner re-decides at Checkpoint 1) and the cluster chaos and transport tests stay green; each feature's own gate (SRC-G, passed; WK-G; CMP-G) decides whether that feature ships in v0.6. **Question for the owner:** does the tag wait on the crawler gate only (P4), or also on WK-G, CMP-G and G-m6? §2.25 and §2.27 say only that the crawler gate "gates the v0.6 tag".
 5. **v0.7 / M7.** It doesn't wait for the v0.6 tag:
    - grouping and regex: GS-2 → GS-3, GS-4, RX-1; GS-3 → GS-5; RX-1 → ENR-11 → OUT-1 → OUT-3;
    - enrichment: ENR-14 → the twelve plug-ins (ENR-tmdb, -tvdb, -anilist, -anidb, -mb, -ol, -igdb, -discogs, -steam, -srrdb, -predb, -debrid), which run side by side; ENR-13;
@@ -74,7 +74,7 @@ So: **the host is never idle, and build slots never wait for it.**
 6. **Import pilots** (Track I), in the gaps between crawler runs: G-import-1M → G-import-10M and G-rebuild-10M → G-import-50M → the owner approves the numbers → CR-3 and the full library.
 7. **v0.8:** the parsers and transports first, since they wait on no gate (NOS-0, NOS-2a, LEM-0, ADH-0, then NOS-1, NOS-2b, NOS-3, LEM-1); plug-ins and companions on workers (PL-0 to PL-8, CW-0 to CW-3) after WK-G and CMP-G; PL-7b after the owner approves the per-worker consent wording; then DOC-v08 and **G-v08**.
 8. **M8 hardening:** what waits on no gate starts now (M8-SEC-0, then the security reviews as each surface settles; M8-REL-1, M8-REL-2; M8-PERF-1, M8-PERF-3; M8-DOC-2); after WK-G: M8-CHAOS-1 to M8-CHAOS-4, then M8-PERF-2 and M8-CI, which need M8-CHAOS-1; after G-m6, G-v07 and G-v08: M8-POL, M8-PURGE, M8-DR, the other M8-DOC slices and the last security reviews. Each slice's exact `deps` are in `runner/slices.yaml`.
-9. **The 1.0 release candidate:** R-v1-cut, the owner tags the rc, the eleven G-v1-* gates run on it, then **G-v1** and the owner tags v1.0.0.
+9. **The 1.0 release candidate:** R-v1-cut, the owner tags the rc, the twelve G-v1-* gates run on it, then **G-v1** and the owner tags v1.0.0.
 10. **Backlog and polish** (Track B) in whatever slots remain. The cloud operator slices and their gate OP-G run in the cloud-testing slots (§2.64) and, where cloud testing needs them, ahead of the ladder (§2.62), once the owner finishes the operator setup.
 
 After 1.0: the Unraid Community Apps submission and package installers (owner), then v1.1 I2P, v1.2 eD2k and v1.3 IPFS (§3 below, architecture §14).
@@ -150,10 +150,10 @@ Each track below lists its steps in order. "Owner" marks a step only the owner c
 | C2 Experiment host ready (one node, one public IP, no imports, not the Windows PC that ran CR-0): **the Unraid box, DHT port not forwarded** (§2.51), and **no per-run booking** (§2.68): a run never overlaps another run, a comparator day, an import pilot or a soak (§0.7 calendar) | **owner** | `ext:experiment-host` |
 | C3 Pinned bitmagnet comparator, 24 h, fresh data, its own day | owner runs, runner analyses | C0a, C0b, C2 |
 | C4 Live ABBA A/B, 6 h measured × ≥ 2 reps per arm: CR-ADM, then CR-4 uTP; route backoff only if a baseline shows `fetch_no_route_total{family="ipv6"} > 0` (CR-4's own gate), otherwise recorded as skipped | owner runs, runner analyses | C0a, C0b, C1, C3 |
-| C5 **Checkpoint 1**: projection to the gate, reported to the owner | runner → **owner** | C3, C4 |
+| C5 **Checkpoint 1**: projection to the gate, reported to the owner. *r6 (§2.86): replaced by round 1 (CR-R1) and its report; C4 to C7 move to 1.1 attribution* | runner → **owner** | C3, C4 |
 | C6 A/B runs for CR-1a-S, CR-1a-H, CR-1b; build CR-1c (cap sized to the intensity preset) | Opus + owner host | C5 |
 | C7 CR-5: profile, then either tune or record a reasoned skip in its decisions file. Either outcome completes it, so CR-COMB can depend on it | Opus | C6 |
-| C8 CR-COMB: winning switches default on, 24 h acceptance on the gate metric (G-v06-crawler) | Opus + owner host | C6, C7 |
+| C8 CR-COMB: winning switches default on, 24 h acceptance on the gate metric (G-v06-crawler). *r6 (§2.86): the round-1 qualified candidate's switches, by the defaults-only transfer* | Opus + owner host | C6, C7 (r6: CR-R1) |
 
 **Track I: imports to scale.** Gates in §0.6.
 
@@ -289,6 +289,12 @@ Every question the earlier plans raised was answered, except rows 13, 15 and 20 
 
 **Reading.** The gate needs about **8×**. The failure mix points at H3 (reachability and transport: TCP timeouts are what uTP-only and NATed peers look like) and H2 (admission churn), more than H1 (lookup latency). So the order is: CR-ADM and CR-4 first, then the H1 candidates.
 
+**Path to 100, r6 (owner 2026-11-26 and 2026-11-27, owner-decisions §2.85 and §2.86).** The crawler sequence is [`docs/plan/2026-11-27-revised-path-to-100.md`](plan/2026-11-27-revised-path-to-100.md), which amends §4 of [`docs/plan/2026-11-26-fastest-1.0-proposal.md`](plan/2026-11-26-fastest-1.0-proposal.md):
+- **Round 1 (CR-R1) replaces CR-AB-ADM, CR-AB-4, CR-CP1, CR-AB-LC, CR-AB-1 and CR-5 before CR-COMB.** On `lodestar-host`: all-on Balanced (B) first, Aggressive (A) as the authorized fallback, an all-off control (C), each arm on its own VPN exit, two valid 24 h days (plan §6).
+- **Before it:** the comparator cr-ab-comp-2, the harness slices X-dht-switch-identity, X-cr-round1-collect and X-cr-round1-gate (plan §5), and CR-SPEC-R1 (plan §8), merged before the rehearsal. The slot isn't booked until the harness fixtures pass.
+- **The round-1 report replaces Checkpoint 1** (plan §3.4). CR-COMB defaults on the qualified candidate's switches by the defaults-only transfer (plan §6.5); its 24 h acceptance can be round 1's two days.
+- **Per-switch attribution moves to 1.1.** The r5 and r5.1 text below, the stages table and steps 3 to 6 of the order, are kept for it; they no longer run before the gate.
+
 **Path to 100 (r5, owner 2026-11-20).** The owner adopted the path in `docs/reviews/2026-11-20-path-to-100-review.md`, which reviews the 2026-11-17 plan beside it (`docs/decisions/2026-11-20-path-to-100.md`). It replaces the "Reading" above as the basis for the build order. The live order and Checkpoint 1 stay as the owner set them (§2.27).
 
 *The ledger, from CR-0's 24 h* (hourly snapshots, n = 76; a Windows host, before any switch):
@@ -412,7 +418,7 @@ Checkpoint 1's report carries the measured ledger and this build's state as the 
 | G-v07-scale, G-v07 | architecture §14 and §18.9, plan `2026-11-05-v07-m7.md` | open |
 | G-v08 | architecture §19.8 and §18.9, plan `2026-11-06-v08.md` | open |
 | §20.8 filter budget (50 µs) | architecture §20.8, owner §2.20 | held; the Neutralize case is reported, not held, at ~55 µs on Intel 8573C runners. Checked on the reference CPU in G-v1-audits |
-| G-v1 and the eleven G-v1-* gates (CI on the rc, relevance, 10M performance and size, crawler re-measured, Windows soak, Linux soak, chaos, audits, security, design, UI) | architecture §17, plan `2026-11-06-m8-hardening.md` | open; relevance has a synthetic NDCG@10 of 0.9186 |
+| G-v1 and the twelve G-v1-* gates (CI on the rc, relevance, 10M performance and size, crawler re-measured, Windows soak, Linux soak, chaos, audits, security, design, UI, better than bitmagnet) | architecture §17, plan `2026-11-06-m8-hardening.md` | open; relevance has a synthetic NDCG@10 of 0.9186 |
 
 ### 0.7 Dependencies and serial points
 ```mermaid
@@ -517,6 +523,7 @@ In ladder order, as slots allow (§0.2; no two with overlapping `owns`):
 - **2026-11-12:** r4 (`docs/decisions/2026-11-12-master-plan-r4.md`). The status (§0.1), the ladder (§0.2), the owner queue (§0.3), the gate table (§0.6) and the next actions (§0.9) are rewritten from `main`, the dashboard and `runner-state`; §0.4 and §0.7 are brought up to date. The r3 text of those sections is in git history.
 - **2026-11-13:** r4.1 (`docs/decisions/2026-11-13-master-plan-r4-reviews.md`): the header, the "not yet recorded" notes for §2.62 to §2.64 (now recorded), §0.2 (the owner's B1 and B2 priority and the review tracks Q and U), §0.3 (nine questions for the owner, the veto list and the closing sentence), §0.9 (item 3 and a new item 10) and §1.2's cap line.
 - **2026-11-20:** r5 (`docs/decisions/2026-11-20-path-to-100.md`, owner): §0.5 gains "Path to 100" (the CR-0 ledger, the build order and the testing each change needs); §0.1, §0.2 rung 4, §0.5 step 5, §0.7 (the flowchart and a calendar at CR-SPEC's two blocks per treatment) and §0.9 item 7a follow. The same day, r5.1 (`docs/decisions/2026-11-20-path-to-100-cr-spec.md`, owner) amends CR-SPEC's design: the lookup-cost pair as one treatment, stacked controls, and the next stage ready before each decision. §0.2, §0.5 and §0.7 (about 16.5–28.5 host-days) carry it.
+- **2026-11-27:** r6 (`docs/decisions/2026-11-27-runner-records-r19.md`; owner-decisions §2.85 and §2.86): the header, §0.2 rung 4, §0.5 and Track C's C5 and C8 rows gain the r6 notes; round 1 replaces the r5.1 stages and Checkpoint 1 on the crawler path. The rest of §0 follows in the runner's r6 follow-up.
 
 ---
 
@@ -644,7 +651,7 @@ Feature work on workers, companions and sources continues in parallel; only the 
 ### P7: M8 hardening → 1.0
 - **[M]**
   - The relevance judgment set and `relevance` bin, with an NDCG@10 gate.
-  - 10M performance and size gates on a dedicated runner, plus the owner-approved 50M import-scale numbers (§0.6).
+  - 10M performance and size gates on a dedicated runner. The owner-approved 50M import-scale numbers (§0.6) move to 1.0.x unless the host has spare time in weeks 2–4 and the import runs then (owner-decisions §2.85 D5).
   - The crawler gate re-measured on the release candidate.
   - The Windows soak test.
   - A full-system security review.

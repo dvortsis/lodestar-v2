@@ -723,7 +723,11 @@ impl SearchIndex {
             .schema(file_schema)
             .settings(files::settings())
             .open_or_create(wrap(file.clone(), &files_dir))?;
-        SearchIndex::wrap(index, fields, file_index, file_fields, vec![main, file])
+        let mut s = SearchIndex::wrap(index, fields, file_index, file_fields, vec![main, file])?;
+        s.titles = Arc::new(crate::suggest::Titles::at(
+            dir.join(crate::suggest::titles::TITLES_DIR),
+        ));
+        Ok(s)
     }
 
     /// Opens the existing index in `dir` with the schema it was built
@@ -767,6 +771,9 @@ impl SearchIndex {
             return Ok(None);
         }
         let mut s = SearchIndex::wrap(index, fields, file_index, file_fields, vec![main, file])?;
+        s.titles = Arc::new(crate::suggest::Titles::at(
+            dir.join(crate::suggest::titles::TITLES_DIR),
+        ));
         s.read_only = compat == Compat::ReadOnly;
         if s.read_only {
             s.population = Arc::new(RwLock::new(PopView::new(

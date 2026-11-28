@@ -42,8 +42,8 @@ Common environment variables (the update settings have their own `LODESTAR_UPDAT
 | `LODESTAR_LOG` | `error`, `warn`, `info`, `debug` or a `tracing` filter. While it's set, **Settings → Logging** is read-only; leave it unset to change logging in the app | `info` |
 | `LODESTAR_WATCH_DIR` | Newer than v0.5.1. The watch folder for `.torrent` files, as a full path (inside the container in Docker), the same as `[watch] folder` in `config.toml`. Use a folder of its own outside the data directory; one that is the data directory, inside it or holds it is never read. While it's set, the watch folder setting in the app is read-only; empty counts as unset. A relative path stops Lodestar at start; a missing folder pauses the watch until it's there. Setup: user guide [section 2.4](user/02-install-lodestar-on-unraid-and-docker.md#add-a-watch-folder-optional-newer-than-v051) | Unset (off) |
 | `LODESTAR_EXIT_ON_NETWORK_LOSS` | Newer than v0.5.1; Linux only, ignored elsewhere with one log line. `true` makes Lodestar stop and exit with status 75 when only the loopback interface and no default route have been left for 30 seconds, so a restart policy starts it again inside the network of the container it shares, such as gluetun after gluetun restarts. Lodestar's gluetun templates set it; never set it on a native install | `false` |
-| `LODESTAR_DHT_SAFE_RESTART` | Development only; unavailable in v0.5.1. `true` lets a clean restart skip the six-hour sampling wait (`[dht] safe_restart`, CR-0d) | `false` |
-| `LODESTAR_DHT_WITNESS_DIR` | Development only; unavailable in v0.5.1. The restart record folder, outside the data directory and never backed up with it. The Docker image and the systemd unit set `/var/lib/lodestar-witness`; the Windows service uses `%ProgramData%\Lodestar-witness` | Native: `$XDG_STATE_HOME/lodestar` (or `~/.local/state/lodestar`) on Linux, `%LOCALAPPDATA%\Lodestar\witness` on Windows |
+| `LODESTAR_DHT_SAFE_RESTART` | Newer than v0.5.1, which has no switch and waits six hours after every start. `true` lets a clean restart restore per-node restrictions so it doesn't re-ask nodes it already has samples from (`[dht] safe_restart`, CR-0d). No start waits for sampling either way: a failed proof just restores nothing. `false` turns the restore off | `true` |
+| `LODESTAR_DHT_WITNESS_DIR` | Newer than v0.5.1, which has no restart record. The restart record folder, outside the data directory and never backed up with it. In Docker it lives inside the container, so an image update loses one run's restored restrictions. The Docker image and the systemd unit set `/var/lib/lodestar-witness`; the Windows service uses `%ProgramData%\Lodestar-witness` | Native: `$XDG_STATE_HOME/lodestar` (or `~/.local/state/lodestar`) on Linux, `%LOCALAPPDATA%\Lodestar\witness` on Windows |
 
 Everything else is in `config.toml` (`--config <path>`, or
 `$LODESTAR_DATA_DIR/config.toml`). Unknown keys are rejected. The variables
@@ -204,7 +204,7 @@ steps, and `packaging/windows/README.md` for every option.
 4. The token is generated fresh at each start while no admin exists, and is
    not stored. Once the admin password is set, no token is printed or needed.
 
-In v0.5.1, do not assume setup keeps the crawler offline. Sampling waits six hours after each start, and the index grows over days.
+In v0.5.1, do not assume setup keeps the crawler offline. Sampling waits six hours after each start, and the index grows over days. Newer builds have no start wait: sampling begins once the DHT has found its first nodes, and the index still grows over days and weeks.
 Search remains available. The development behavior that waits for setup before starting the crawler is not in this release.
 
 ## 4. Networking

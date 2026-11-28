@@ -466,17 +466,67 @@ async fn a_refused_spawn_needs_attention_at_once() {
     sup.shutdown().await;
 }
 
-#[cfg(unix)]
+/// Set by CI's Linux root step (`.github/workflows/ci.yml`, "companion
+/// refusal as root"), which runs [`root_or_an_administrator_is_refused`]
+/// alone under `sudo`: the run then must be root, so the refusal is
+/// asserted.
+const ROOT_RUN: &str = "LODESTAR_TEST_ROOT_RUN";
+
+/// Whether this run must be privileged, so the refusal below can't quietly
+/// stop being asserted: CI's root step on Linux, and GitHub's Windows
+/// runners, which are administrators.
+fn must_be_privileged() -> bool {
+    let root_run = std::env::var_os(ROOT_RUN).is_some_and(|v| v == "1");
+    let windows_ci =
+        cfg!(windows) && std::env::var_os("GITHUB_ACTIONS").is_some_and(|v| v == "true");
+    root_run || windows_ci
+}
+
+/// `spawn` refuses to start a companion while Lodestar runs as root or an
+/// administrator, and starts nothing: no folder, no record, no process.
+/// Only `allow_privileged`, honoured only in test builds (`testing`), lets
+/// the other tests here run on an administrator's Windows runner.
 #[tokio::test(flavor = "multi_thread")]
-async fn root_is_refused_unless_a_test_allows_it() {
+async fn root_or_an_administrator_is_refused() {
+    let privileged = process::privileged();
+    if must_be_privileged() {
+        #[cfg(unix)]
+        assert!(
+            rustix::process::geteuid().is_root(),
+            "{ROOT_RUN}=1 but not running as root"
+        );
+        assert_eq!(
+            privileged,
+            Ok(true),
+            "this run must be root or an administrator"
+        );
+    }
     let data = data_dir();
     let mut s = spec(data.path(), "prowlarr", "hang", &[]);
     s.allow_privileged = false;
     let got = process::spawn(&s, &NoHook);
-    if rustix::process::geteuid().is_root() {
-        assert_eq!(got.err(), Some(process::SpawnError::Privileged));
-    } else if let Ok(mut started) = got {
-        let _ = started.child.kill().await;
+    match privileged {
+        Ok(true) => {
+            assert_eq!(got.err(), Some(process::SpawnError::Privileged));
+            let left: Vec<_> = std::fs::read_dir(data.path())
+                .unwrap_or_else(|e| panic!("{e}"))
+                .collect();
+            assert!(left.is_empty(), "a refused spawn left {left:?}");
+            println!("refused: privileged, nothing started");
+        }
+        // Unknown fails closed. Windows asks again after a failed probe,
+        // so the second answer may be the definite one.
+        Err(_) => assert!(
+            matches!(
+                got.err(),
+                Some(process::SpawnError::PrivilegeUnknown | process::SpawnError::Privileged)
+            ),
+            "spawn didn't fail closed"
+        ),
+        Ok(false) => {
+            let mut started = got.unwrap_or_else(|e| panic!("{e}"));
+            let _ = started.child.kill().await;
+        }
     }
 }
 

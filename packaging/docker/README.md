@@ -77,7 +77,7 @@ compose project a network with `enable_ipv6: true` and an IPv6 subnet. With
 | `LODESTAR_DHT_ENABLED` | `true`            | `false` turns the DHT off.                 |
 | `LODESTAR_INTENSITY`   | `balanced`        | `low`, `balanced` or `aggressive`.         |
 | `LODESTAR_LOG`         | `info`            | Log filter (`error`, `warn`, `info`, `debug`). While it's set, Settings → Logging is read-only; leave it unset to change logging in the app. |
-| `LODESTAR_DHT_WITNESS_DIR` | `/var/lib/lodestar-witness` | Leave as it is. Where the restart check keeps its record, outside `/data` (used only when the restart check is on: `[dht] safe_restart` or `LODESTAR_DHT_SAFE_RESTART=true`). |
+| `LODESTAR_DHT_WITNESS_DIR` | `/var/lib/lodestar-witness` | Leave as it is. Where the restart check keeps its record, outside `/data` (used only when the restart check is on, which is the default: `[dht] safe_restart` or `LODESTAR_DHT_SAFE_RESTART`; v0.5.1 has no restart check). |
 | `PUID`                 | `65532`           | User ID Lodestar runs as. See below.       |
 | `PGID`                 | `65532`           | Group ID Lodestar runs as. See below.      |
 | `LODESTAR_ALLOW_ROOT`  |                   | Leave unset. `1` allows running as root, which is unsafe. |
@@ -150,10 +150,11 @@ starts any work, Lodestar:
 4. hands the restart record folder (`LODESTAR_DHT_WITNESS_DIR`) to
    `PUID:PGID`: only that folder and the `.gen` files directly in it,
    never through a link, and only if it holds nothing else. If it can't,
-   it carries on: the crawler then just waits the full six hours before
-   sampling after a restart. The folder is in the container, not a
-   volume, so an image update (which recreates the container) also
-   starts without it and waits the six hours once;
+   it carries on: newer builds then sample at once without the restored
+   restrictions. (v0.5.1 has no restart record and waits six hours after
+   every start.) The folder is in the container, not a volume, so an
+   image update (which recreates the container) also starts without it,
+   and loses only that run's restored restrictions;
 5. drops root, blocks any later way back (`no_new_privs`), and checks it
    can't get root back. If any step fails, it stops instead of running.
 

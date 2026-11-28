@@ -496,6 +496,48 @@ fn data_folder_exceptions_match_section_5() {
     );
 }
 
+/// Section 5 says the safe-restart check is "on by default" (owner §2.87)
+/// only while `[dht] safe_restart` defaults to on (CR-0w). The default is
+/// the `Dht` default in the binary's config, read from source; a file or
+/// `LODESTAR_DHT_SAFE_RESTART` can still turn it off, which the notice
+/// doesn't contradict.
+#[test]
+fn safe_restart_default_matches_section_5() {
+    let n = read(NOTICE);
+    let s5 = "5 (Your data)";
+    let cfg = read("crates/lodestar/src/config.rs");
+    let dht = item(&cfg, "impl Default for Dht {");
+    let on = dht.contains("            safe_restart: true,\n");
+    let off = dht.contains("            safe_restart: false,\n");
+    assert!(
+        on != off,
+        "can't read `safe_restart`'s default in config.rs's `impl Default for Dht`; update \
+         tests/legal_facts.rs"
+    );
+    let phrase = "the safe-restart check, on by default, keeps its restart record";
+    if on {
+        require(
+            &n,
+            s5,
+            phrase,
+            "config.rs Dht::default().safe_restart is true",
+        );
+    } else {
+        forbid(
+            &n,
+            s5,
+            phrase,
+            "config.rs Dht::default().safe_restart is now false",
+        );
+    }
+    forbid(
+        &n,
+        s5,
+        "optional safe-restart switch",
+        "safe restart has been on by default since CR-0w (owner §2.87)",
+    );
+}
+
 /// The source files under `dir` (recursively) with the extension `ext`, as
 /// paths relative to the repository root with `/` separators.
 fn files(dir: &str, ext: &str) -> Vec<String> {

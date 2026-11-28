@@ -253,11 +253,12 @@ pub struct Provenance {
     /// The sources that found it: the first one first, then by id.
     /// Empty for a torrent stored before provenance was recorded.
     pub sources: Vec<ProvenanceSource>,
-    /// The info dict was fetched and hashed to the key (§18.5). False for
-    /// an import (`imported`).
+    /// The info dict was fetched and hashed to the key here (§18.5).
+    /// False for an `imported` torrent.
     pub verified: bool,
-    /// From another indexer's database; not checked against the hash.
-    /// Present, and true, only for such an import.
+    /// Not checked against the hash here: from another indexer's
+    /// database, or a remote worker's find not yet re-verified. Present,
+    /// and true, only for such a torrent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub imported: Option<bool>,

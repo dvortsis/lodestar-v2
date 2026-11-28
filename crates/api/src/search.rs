@@ -124,8 +124,9 @@ impl BaseQuery {
     }
 }
 
-/// Whether a stored torrent's metadata came from another indexer's
-/// database and was never hashed here, read as the index reads it
+/// Whether a stored torrent's metadata was never hashed here (from
+/// another indexer's database, or a remote worker's find not yet
+/// re-verified), read as the index reads it
 /// ([`lodestar_search::stored_verified`]): its import record, for an
 /// imported row only.
 pub(crate) fn is_import(
@@ -762,9 +763,10 @@ async fn run_search(
                 hit.others = others.get(i).copied();
                 enrich(&mut hit, enrichment);
                 if let Some((viewer, catalogue)) = &provenance {
-                    // `torrents` holds verified metadata and imports from
-                    // another indexer's database, read as the index reads
-                    // them (`stored_verified`, X-import-verified-no).
+                    // `torrents` holds verified metadata, imports and
+                    // remote workers' unverified finds, read as the index
+                    // reads them (`stored_verified`, X-import-verified-no,
+                    // X-remote-verified).
                     let imported = is_import(&store, &row).map_err(internal)?;
                     hit.verified = Some(!imported);
                     hit.imported = imported.then_some(true);

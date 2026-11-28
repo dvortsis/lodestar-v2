@@ -38,6 +38,14 @@
 # <name>`, `count <name> <int>`); the control side drops anything else. `skip`
 # marks a check that can't be judged (the tunnel-up checks when the WireGuard
 # handshake never completed), never a pass. Exit 0 only when every check passed.
+#
+# One arm of several (round 1, X-cr-round1-collect): LODESTAR_ARM=<letter> (a-z)
+# with LODESTAR_UI_PORT=<its port> tests that arm's stack alone: containers
+# gluetun-<arm> and lodestar-<arm>, Compose project lodestar-<arm> (its own
+# bridge), probe containers and every rule tag suffixed -<arm>, and the endpoint
+# block scoped to the arm's bridge. Cleanup, failure cleanup included, removes
+# only rules with the arm's own tags, so another arm's guards, egress and tunnel
+# are never touched. Unset (the cloud lane), every command is as before.
 set -uo pipefail
 work=${1:?workdir}
 STACK=${2:-/home/lodestar/lodestar}  # tests pass a temporary stack; the bootstrap never does
@@ -45,7 +53,17 @@ PIA_RUN=${3:-/run/lodestar-pia}
 BLOCK=${4:-/var/lib/lodestar-block}
 HOST_HELD=${5:-}
 CONF=$STACK/secrets/wg0.conf
-ECHO_URL=http://checkip.amazonaws.com
+ARM=${LODESTAR_ARM:-}
+SUF=""
+[[ -n $ARM ]] && SUF=-$ARM
+GLUETUN=gluetun$SUF
+PROJECT=lodestar$SUF
+compose_project=()  # empty for the cloud lane: Compose takes the file's own name (bash 4.4+: "${a[@]}" of an empty array under set -u)
+[[ -n $ARM ]] && compose_project=(-p "$PROJECT")
+GUARD_TAG=lodestar-leak-guard$SUF
+EGRESS_TAG=lodestar-leak-egress$SUF
+ECHO_HOST=checkip.amazonaws.com
+ECHO_URL=http://$ECHO_HOST
 V6_URL='http://[2606:4700:4700::1111]/'
 # The probes run from a throwaway container in gluetun's namespace (plan 0d), so
 # they never depend on the kill switch's own image: PROBE_IMAGE, netshoot v0.16
@@ -53,7 +71,9 @@ V6_URL='http://[2606:4700:4700::1111]/'
 # endpoint's validation (IPV4, endpoint_read) and the host guard are there too.
 # shellcheck source=block-lib.sh
 . "$work/block-lib.sh"
+HOST_TAG=lodestar-leak-host$SUF  # block-lib's host guard, under this arm's own tag
 NOT_RUN=222  # a probe whose container never ran its command: never counts as blocked
+HELD_UNSENT=223  # a held probe that never tried to send: its attempt is never clean
 fails=0
 block=""
 guard_rule=()   # the recreate guard (DOCKER-USER), once the endpoint is known
@@ -65,8 +85,8 @@ released_bad=""
 host_set=""
 counter=""
 flow=""
-FLOW=lodestar-leak-flow
-DRIVE=lodestar-leak-drive
+FLOW=lodestar-leak-flow$SUF
+DRIVE=lodestar-leak-drive$SUF
 # The stop window's traffic: a slow download through the tunnel, so the far
 # side keeps sending (and resending) through the stop.
 DRIVE_URL=https://speed.cloudflare.com/__down?bytes=200000000
@@ -76,6 +96,7 @@ in_cap_pid=""
 stuck=()  # captures stop_capture couldn't stop: cleanup tries each once more
 drive=""
 not_run=""
+held_frozen=""  # set while gluetun is paused for a phase B retry (held_hold); cleanup resumes it
 
 pass() { echo "ok $1"; }
 bad() { echo "fail $1"; fails=$((fails + 1)); }
@@ -93,6 +114,8 @@ cleanup() {
   for pid in "$cap_pid" "$host_cap_pid" "$in_cap_pid" "${stuck[@]}"; do  # a last try at any left running
     [[ -n $pid ]] && ours "$pid" && env kill -s KILL "$pid" 2>/dev/null
   done
+  # gluetun never stays frozen after the test: a signal mid-retry left it paused.
+  [[ -z $held_frozen ]] || held_thaw || echo "fail gluetun_resumed"
   [[ -n $drive ]] && timeout 30 docker rm -f "$DRIVE" >/dev/null 2>&1
   # The endpoint block never outlives the test, whatever ended it.
   [[ -n $flow ]] && timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1
@@ -131,7 +154,7 @@ probe_in() {
   local extra=() out rc
   while [[ $1 != -- ]]; do extra+=("$1"); shift; done
   shift
-  out=$(timeout 40 docker run --rm --network container:gluetun --cap-drop ALL "${extra[@]}" "$PROBE_IMAGE" \
+  out=$(timeout 40 docker run --rm --network "container:$GLUETUN" --cap-drop ALL "${extra[@]}" "$PROBE_IMAGE" \
     sh -c '"$@"; printf "\nprobe_rc=%s\n" "$?"' probe "$@" 2>/dev/null)
   rc=$(printf '%s\n' "$out" | sed -n 's/^probe_rc=\([0-9]\{1,3\}\)$/\1/p' | tail -n 1)
   if [[ -z $rc ]]; then not_run=1; return "$NOT_RUN"; fi
@@ -142,7 +165,7 @@ probe() { probe_in -- "$@"; }
 # resolves name timeout [@server]: an address came back. Only an address line
 # counts: on a timeout dig prints ";; ... timed out" on stdout too.
 resolves() { probe sh -c "dig +short +time=$2 +tries=1 $1 ${3:-} | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}\$'"; }
-healthy() { [[ "$(docker inspect --type container -f '{{.State.Health.Status}}' gluetun 2>/dev/null)" == "healthy" ]]; }
+healthy() { [[ "$(docker inspect --type container -f '{{.State.Health.Status}}' "$GLUETUN" 2>/dev/null)" == "healthy" ]]; }
 wait_healthy() {
   local i
   for ((i = 0; i < 60; i++)); do healthy && return 0; sleep 2; done
@@ -151,7 +174,7 @@ wait_healthy() {
 echo_ip() { probe curl -4 -s -m "$1" "$ECHO_URL" 2>/dev/null | tr -d '\r\n' | head -c 64; }
 read_iface() {  # the VPN interface gluetun's config names; the image's own default is tun0
   local i
-  i=$(docker inspect --type container -f '{{range .Config.Env}}{{println .}}{{end}}' gluetun 2>/dev/null \
+  i=$(docker inspect --type container -f '{{range .Config.Env}}{{println .}}{{end}}' "$GLUETUN" 2>/dev/null \
     | sed -n 's/^VPN_INTERFACE=//p' | tail -n 1)
   printf '%s\n' "${i:-tun0}"
 }
@@ -174,7 +197,8 @@ tunnel_up() {
   local rc i ready=""
   guard_set=1  # before the insert: a signal in between still has cleanup look for it
   iptables -I DOCKER-USER 1 "${guard_rule[@]}" 2>/dev/null || { bad recreate_guarded; return 1; }
-  LODESTAR_IMAGE=unused DOCKER_GID=unused docker compose -f "$STACK/compose.yaml" --project-directory "$STACK" \
+  LODESTAR_IMAGE=unused DOCKER_GID=unused LODESTAR_ARM_SUFFIX=$SUF docker compose "${compose_project[@]}" \
+    -f "$STACK/compose.yaml" --project-directory "$STACK" \
     up -d --force-recreate gluetun >/dev/null 2>&1
   rc=$?
   if ((rc == 0)); then
@@ -222,24 +246,24 @@ POST_RULES_CHECK='for t in "$1" "$1-nft" "$1-legacy"; do
   [ -n "$acc" ] && [ -n "$mark" ] && [ -n "$drop" ] && [ -n "$icmp" ] || continue
   [ "$mark" -lt "$acc" ] && [ "$drop" -lt "$acc" ] && [ "$icmp" -lt "$acc" ] && exit 0
 done; exit 1'
-post_rules_on() { timeout 10 docker exec gluetun sh -c "$POST_RULES_CHECK" rules "$1" "$2"; }
+post_rules_on() { timeout 10 docker exec "$GLUETUN" sh -c "$POST_RULES_CHECK" rules "$1" "$2"; }
 # A connection opened through the tunnel that keeps sending through both
 # down phases (an unprivileged ping), so the leak gluetun's post-rules close
 # is exercised every run, not only when gluetun happens to hold one open.
 flow_start() {
   timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1  # one left by a run that died
-  timeout 60 docker run -d --rm --name "$FLOW" --network container:gluetun --cap-drop ALL "$PROBE_IMAGE" \
+  timeout 60 docker run -d --rm --name "$FLOW" --network "container:$GLUETUN" --cap-drop ALL "$PROBE_IMAGE" \
     ping -q -i 0.5 1.1.1.1 >/dev/null 2>&1
 }
 # The host-side counter: packets the compose bridge forwards out of the egress
 # interface. It sits just below the endpoint block, so the endpoint's own UDP
 # (dropped there) is the only thing it leaves out.
 start_counter() {
-  counter="-i $bridge -o $egress -m comment --comment lodestar-leak-egress"
+  counter="-i $bridge -o $egress -m comment --comment $EGRESS_TAG"
   iptables -I DOCKER-USER 2 $counter 2>/dev/null || counter=""
 }
 read_counter() {  # the counter's packets, or nothing when it can't be read
-  iptables -L DOCKER-USER -v -x -n 2>/dev/null | awk '/\/\* lodestar-leak-egress \*\// {print $1; exit}' | grep -E '^[0-9]{1,12}$'
+  iptables -L DOCKER-USER -v -x -n 2>/dev/null | awk -v tag="/* $EGRESS_TAG */" 'index($0, tag) {print $1; exit}' | grep -E '^[0-9]{1,12}$'
 }
 # Stopping a capture (X-leak-test-capture-kill): TERM, then up to
 # CAPTURE_STOP_WAIT seconds (at least 10) for it to go, then KILL and as long
@@ -376,14 +400,24 @@ judge_capture() {  # $1: phase. The capture must have run through every probe, t
 }
 down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer it); $3: refute, or held (phase B)
   local judge=${3:-refute}
-  "$judge" "ipv4_blocked_$1" probe curl -4 -s -m 8 "$ECHO_URL"
+  if [[ $judge == held ]]; then
+    held --pin "ipv4_blocked_$1" ipv4_probe
+  else
+    "$judge" "ipv4_blocked_$1" probe curl -4 -s -m 8 "$ECHO_URL"
+  fi
   "$judge" "tcp_literal_blocked_$1" probe nc -z -w 5 1.1.1.1 443  # no DNS needed
   "$judge" "ipv6_blocked_$1" probe curl -6 -s -m 8 "$V6_URL"
-  "$judge" "dns_blocked_$1" resolves "$2" 3
-  "$judge" "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
   if [[ $judge == held ]]; then
+    # Phase B: the held probes first, then the one that's never held (the
+    # runner): gluetun's own forwarder, whose live retries can't use up the
+    # phase's deadline before the others get theirs. The direct query never
+    # reaches the forwarder, so the name is still new to its cache.
+    held "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
     held - probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53'  # the capture judges it
+    held --live "dns_blocked_$1" resolves "$2" 3
   else
+    "$judge" "dns_blocked_$1" resolves "$2" 3
+    "$judge" "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
     probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53' >/dev/null 2>&1  # the capture judges it
   fi
 }
@@ -393,8 +427,9 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
 # moment; then the attempt is discarded and run again with the interface
 # taken down first, for as long as the phase's own deadline allows
 # (X-leaktest-wg0-flake: a fixed three tries ran out while gluetun kept
-# restarting). No pause between attempts: each one starts with an interface
-# check, and every check and probe is a container start. A probe that never
+# restarting), with gluetun held still for the retry (held_hold). No wait
+# between attempts: each one starts with an interface check, and every check
+# and probe is a container start. A probe that never
 # gets a clean attempt by the deadline is skipped and fails
 # vpn_interface_held_down, a harness failure of its own, with counts saying
 # why (held_report). A probe that gets out is a leak whatever the interface
@@ -412,8 +447,34 @@ held_until="" # the phase's own deadline (held_start), well inside the step's 90
 held_ups=0    # how many times phase B found the interface back up
 held_was_up=unknown # 1: the last check read it up; empty: down. A return counts once, and only after a down read
 held_skipped=() # "<name> <attempts>" for each probe that got no clean attempt
+held_clean=()   # "<live|held> <name>" for each probe that got one: which kind it was
 held_need=""  # the time a retry needs before it may start (held_start, then the slowest seen)
 held_retry="" # set while a retry runs: its interface checks are capped at the time left
+# A retry holds gluetun (X-leaktest-vpn-held-down). With the endpoint blocked,
+# gluetun's startup health check (6 s) fails on every tunnel it brings up, and
+# each failure restarts its VPN: the interface is deleted and made again, up,
+# with a new ifindex, every few seconds, which is less than one attempt takes.
+# So a retry pauses gluetun (docker pause: its processes frozen, its kernel
+# state, the firewall included, left as it is) from before the first interface
+# check to after the last, and resumes it before the verdict. The probes still
+# run in its namespace. Each probe's first attempt runs with gluetun live,
+# until one probe needs a held retry: from then on the later probes' first
+# attempts are held too (hold_from_first, the runner's call), since the
+# restart loop would only discard them.
+# dns_blocked is never held (held --live, the runner's call): it asks gluetun's
+# own DNS forwarder, and a paused forwarder proves nothing.
+held_hold() {  # 0: frozen, or not frozen and running as before; 1: it may be frozen and won't resume
+  held_frozen=1  # before the pause: a signal in between still has cleanup resume it
+  timeout 30 docker pause "$GLUETUN" >/dev/null 2>&1 && return 0
+  held_thaw  # a pause that failed may still have frozen it; resumed, the retry runs live
+}
+held_thaw() {  # 0: gluetun runs (or was never frozen); 1: it may still be frozen
+  [[ -n $held_frozen ]] || return 0
+  timeout 30 docker unpause "$GLUETUN" >/dev/null 2>&1 \
+    || [[ $(timeout 30 docker inspect --type container -f '{{.State.Paused}}' "$GLUETUN" 2>/dev/null) == false ]] \
+    || return 1
+  held_frozen=""
+}
 held_start() {
   local wait=${HELD_PHASE_WAIT:-180} need=${HELD_ATTEMPT_MIN:-30}
   [[ $wait =~ ^(0|[1-9][0-9]{0,3})$ ]] || wait=180  # no leading zero: (( )) would read it as octal
@@ -434,8 +495,47 @@ held_seen() {  # $1: an interface check's result; counts each return of the inte
     held_was_up=""
   fi
 }
-held() {  # $1: the probe's line, or - for one only the capture judges; the rest: the probe
-  local n=$1 rc after try=0 saved index index_rc start same
+# ipv4_blocked's probe. Live, it asks gluetun's forwarder for the echo host,
+# as phase A does. Held, the forwarder is frozen, so it goes to the address
+# the live forwarder gave just before the pause (held_pin; never printed).
+# A held curl that had no address or couldn't resolve (exit 6) never tried
+# to send: HELD_UNSENT, never a clean attempt (the runner).
+# The address comes from a lookup made while the tunnel was up (held_early,
+# the runner's call), or failing that, from one just before the pause.
+held_addr=""
+held_early=""
+held_pin() {  # the forwarder's answer for ECHO_HOST, into held_addr; an aid, never a verdict
+  local saved=$not_run
+  held_addr=$(probe sh -c 'dig +short +time=3 +tries=1 "$1" | grep -E "^[0-9]{1,3}(\.[0-9]{1,3}){3}\$" | head -n 1' pin "$ECHO_HOST" 2>/dev/null | tr -d '\r\n')
+  held_routable "$held_addr" || held_addr=""
+  not_run=$saved  # a lookup that never ran proves nothing either way
+  return 0
+}
+# An address a probe can really send to: not 0.0.0.0/8, 127.0.0.0/8 or
+# 169.254.0.0/16, where curl is refused without sending (the runner).
+held_routable() {
+  [[ $1 =~ $IPV4 ]] || return 1
+  case $1 in 0.*|127.*|169.254.*) return 1 ;; esac
+}
+# A curl that couldn't resolve (exit 6) sent nothing, live or held: never a
+# clean attempt. A live one is retried held, at the pinned address (the runner).
+ipv4_probe() {
+  local rc
+  if [[ -n $held_frozen ]]; then
+    held_routable "$held_addr" || return "$HELD_UNSENT"
+    probe curl -4 -s -m 8 --resolve "$ECHO_HOST:80:$held_addr" "$ECHO_URL"; rc=$?
+  else
+    probe curl -4 -s -m 8 "$ECHO_URL"; rc=$?
+  fi
+  ((rc == 6)) && return "$HELD_UNSENT"
+  return "$rc"
+}
+held_always=""  # set once a probe needed a held retry: later probes' first attempts are held too
+held() {  # [--live] (never hold gluetun) or [--pin] (held_pin before a hold); $1: the probe's line, or - for one only the capture judges; the rest: the probe
+  local n rc after try=0 saved index index_rc start same live="" pin="" kind
+  [[ $1 == --live ]] && { live=1; shift; }
+  [[ $1 == --pin ]] && { pin=1; shift; }
+  n=$1
   shift
   while :; do
     # No deadline set is no deadline kept: fail closed, for every probe.
@@ -447,6 +547,15 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
     try=$((try + 1))
     start=$SECONDS
     saved=$not_run
+    # Held: a retry, or any attempt once a probe in the phase needed one (the
+    # restart loop is running, so a live first attempt would only be discarded).
+    if [[ -z $live ]] && [[ -n $held_retry || -n $held_always ]]; then
+      if [[ -z $held_always ]]; then held_always=1; echo "count hold_from_first 1"; fi
+      held_addr=$held_early
+      [[ -n $pin && -z $held_addr ]] && held_pin
+      held_hold || { held_dead=1; break; }
+    fi
+    kind=live; [[ -n $held_frozen ]] && kind=held  # a refused pause runs live
     held_down; rc=$?
     if ((rc == 0)); then
       index=$(iface_index); index_rc=$?
@@ -454,21 +563,28 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
       iface_seen_up >/dev/null 2>&1; after=$?
       held_seen "$after"
       held_retry=""
-      if [[ $n != - ]] && ((rc == 0)); then bad "$n"; return; fi
+      if [[ $n != - ]] && ((rc == 0)); then held_thaw || held_dead=1; bad "$n"; return; fi
       # Down both times and the same interface: gluetun didn't recreate it
       # in between (its ifindex would differ).
       same=""
       ((after == 1 && index_rc == 0)) && [[ $(iface_index) == "$index" ]] && same=1
+      ((rc == HELD_UNSENT)) && same=""  # it never tried to send, held or live: nothing was tested
+      # gluetun runs again before any verdict; one that won't resume ends the phase.
+      held_thaw || { held_dead=1; break; }
       held_took "$start"
       if [[ -n $same ]]; then
+        # Which kind passed, for the report: a probe that never ran isn't counted.
+        ((rc != NOT_RUN)) && if [[ $n == - ]]; then held_clean+=("$kind udp_ifdown"); else held_clean+=("$kind $n"); fi
         [[ $n == - ]] && return
         if ((rc != NOT_RUN)); then pass "$n"; else bad "$n"; fi
         return
       fi
       ((after == NOT_RUN)) && { held_dead=1; break; }
     elif ((rc == NOT_RUN)); then
+      held_thaw
       held_dead=1; break  # its deadline already passed: not_run stays set
     else
+      held_thaw || { held_dead=1; break; }
       held_took "$start"
     fi
     not_run=$saved  # a discarded attempt's unrun probe is no verdict either
@@ -476,6 +592,12 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
   held_retry=""
   held_bad=1
   if [[ $n == - ]]; then held_skipped+=("udp_ifdown $try"); else held_skipped+=("$n $try"); echo "skip $n"; fi
+}
+held_clean_report() {  # counts only: which kind of attempt was each probe's clean one
+  local s
+  for s in "${held_clean[@]}"; do
+    echo "count clean_${s% *}_${s#* } 1"
+  done
 }
 held_report() {  # counts only: each skipped probe's attempts, and the interface's returns
   local s
@@ -585,6 +707,9 @@ for tool in docker iptables tcpdump ip python3; do
 done
 type -P kill >/dev/null 2>&1 || { bad tool_missing_kill; finish; }  # the program, not the builtin
 [[ -z $HOST_HELD || $HOST_HELD == held ]] || { bad args_valid; finish; }
+if [[ -n $ARM ]]; then  # an arm needs its own port: the default 8090 would take another arm's
+  [[ $ARM =~ ^[a-z]$ && ${LODESTAR_UI_PORT:-} =~ ^[1-9][0-9]{3,4}$ ]] || { bad args_valid; finish; }
+fi
 [[ -s $CONF ]] || { bad wg_conf_present; finish; }
 endpoint_read "$CONF" || { bad endpoint_valid; finish; }
 pass endpoint_valid
@@ -600,14 +725,16 @@ esac
 block_procs; rc=$?
 if ((rc == 2)); then bad block_check; finish; fi
 if ((rc == 0)); then bad block_running; finish; fi
+# One arm: its own Lodestar must be down (leak tests run only while no window is open).
+if [[ -n $ARM ]] && running "lodestar$SUF"; then bad block_running; finish; fi
 
 # The tunnel.
-install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" || { bad compose_installed; finish; }
-guard_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment lodestar-leak-guard -j DROP)
+install -m 0644 -- "$work/compose.yaml" "$STACK/compose.yaml" 2>/dev/null || { bad compose_installed; finish; }
+guard_rule=(-s "$ep_ip/32" -p udp --sport "$ep_port" -m comment --comment "$GUARD_TAG" -j DROP)
 host_guard_rule
 # A killed run can have left a recreate guard behind, for this endpoint or an
 # earlier one: every rule with its tag goes first.
-clear_tagged DOCKER-USER lodestar-leak-guard || { bad recreate_guard_lifted; finish; }
+clear_tagged DOCKER-USER "$GUARD_TAG" || { bad recreate_guard_lifted; finish; }
 if [[ -n $HOST_HELD ]]; then
   # start-block's guard for its block, for this same endpoint: checked, never
   # duplicated, and left in place when the test ends.
@@ -689,16 +816,19 @@ else
 fi
 refute ipv6_blocked_up probe curl -6 -s -m 10 "$V6_URL"
 check dns_local probe grep -qx 'nameserver 127.0.0.1' /etc/resolv.conf
+# Phase B's held ipv4_blocked: the echo host's address, looked up while the
+# tunnel is up, kept in a variable only (never printed or written).
+held_pin; held_early=$held_addr; held_addr=""
 # The flow starts either way: with no handshake its packets still go into wg0.
 if flow_start; then flow=1; pass flow_started; else bad flow_started; fi
 
 # Down, phase A: the endpoint dropped in DOCKER-USER (gluetun keeps running).
-idx=$(docker exec gluetun cat /sys/class/net/eth0/iflink 2>/dev/null | tr -dc '0-9')
+idx=$(docker exec "$GLUETUN" cat /sys/class/net/eth0/iflink 2>/dev/null | tr -dc '0-9')
 veth=$(ip -o link 2>/dev/null | awk -F': ' -v i="$idx" '$1 == i {print $2}' | cut -d@ -f1 | head -n 1)
 if [[ -z $idx || ! $veth =~ ^veth[0-9a-f]{1,12}$ ]]; then bad veth_found; finish; fi
 pass veth_found
 # The container's own MAC: what it sends carries it as the Ethernet source.
-cmac=$(docker exec gluetun cat /sys/class/net/eth0/address 2>/dev/null | tr -d '\r\n')
+cmac=$(docker exec "$GLUETUN" cat /sys/class/net/eth0/address 2>/dev/null | tr -d '\r\n')
 [[ $cmac =~ ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$ ]] || { bad container_mac; finish; }
 # The compose bridge (the veth's master) and the host's egress interface.
 bridge=$(ip -o link show dev "$veth" 2>/dev/null | sed -n 's/.* master \([^ ]*\) .*/\1/p' | head -n 1)
@@ -706,6 +836,7 @@ egress=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\) .*/\1/
 if [[ ! $bridge =~ $IFNAME || ! $egress =~ $IFNAME || $bridge == "$egress" ]]; then bad egress_found; finish; fi
 pass egress_found
 block="-d $ep_ip/32 -p udp --dport $ep_port -j DROP"
+[[ -n $ARM ]] && block="-i $bridge $block"  # one arm's tunnel only: its own bridge
 if ! iptables -I DOCKER-USER 1 $block 2>/dev/null; then block=""; bad endpoint_blocked; finish; fi
 pass endpoint_blocked
 start_counter
@@ -728,6 +859,7 @@ down_probes ifdown example.edu held
 # Every probe ran with the interface down (held): one that never got a clean
 # attempt fails here, apart from any leak line.
 if [[ -z $held_bad ]]; then pass vpn_interface_down_during_probes; else held_report; bad vpn_interface_held_down; fi
+held_clean_report
 judge_capture ifdown
 judge_counter ifdown
 # The blocked endpoint makes gluetun restart its VPN in phase B: its post-rules
@@ -761,11 +893,11 @@ stopped=""
 win=${STOP_WINDOW:-75}
 [[ $win =~ ^[0-9]{1,4}$ ]] && ((win >= 60)) || win=60
 timeout 30 docker rm -f "$DRIVE" >/dev/null 2>&1
-if timeout 60 docker run -d --rm --name "$DRIVE" --network container:gluetun --cap-drop ALL "$PROBE_IMAGE" \
+if timeout 60 docker run -d --rm --name "$DRIVE" --network "container:$GLUETUN" --cap-drop ALL "$PROBE_IMAGE" \
   curl -s -o /dev/null --limit-rate 64k --max-time 600 "$DRIVE_URL" >/dev/null 2>&1; then
   drive=1
 fi
-if timeout 60 docker stop -t 10 gluetun >/dev/null 2>&1; then stopped=1; pass gluetun_stopped; else bad gluetun_stopped; fi
+if timeout 60 docker stop -t 10 "$GLUETUN" >/dev/null 2>&1; then stopped=1; pass gluetun_stopped; else bad gluetun_stopped; fi
 # Counted only from after the stop: the download's own packets before it
 # don't show that the endpoint kept sending to a stopped gluetun.
 if [[ -n $stopped ]]; then
@@ -783,7 +915,7 @@ fi
 if [[ -n $drive ]] && timeout 30 docker rm -f "$DRIVE" >/dev/null 2>&1; then drive=""; fi
 if [[ -z $stopped ]]; then
   :  # already failed; a gluetun that wouldn't stop isn't started again
-elif ! timeout 60 docker start gluetun >/dev/null 2>&1; then
+elif ! timeout 60 docker start "$GLUETUN" >/dev/null 2>&1; then
   bad gluetun_started
 elif [[ -n $no_handshake ]]; then
   pass gluetun_started; echo "skip tunnel_back_after_stop"
@@ -803,7 +935,7 @@ judge_host_capture
 # IPv6 address. With these, the public IPv6 every Linode has can't carry
 # Lodestar's traffic around the tunnel.
 check host_ipv6_not_forwarded grep -qx 0 "${IPV6_FORWARDING:-/proc/sys/net/ipv6/conf/all/forwarding}"
-check bridge_ipv6_off test "$(docker network inspect -f '{{.EnableIPv6}}' lodestar_default 2>/dev/null)" = false
+check bridge_ipv6_off test "$(docker network inspect -f '{{.EnableIPv6}}' "${PROJECT}_default" 2>/dev/null)" = false
 refute namespace_no_global_ipv6 probe sh -c 'ip -6 -o addr show scope global | grep -q .'
 
 # PIA delivery's work directory is gone (this step holds the VM's lock).
