@@ -8,11 +8,8 @@ import { expectNoA11yViolations } from './a11y';
 import { snapshotName } from './support/policy';
 import { ROUTES } from './support/routes';
 import { expectPageSnapshot, freezeClock } from './snapshot';
+import { settle } from './support/settle';
 import { expect, test } from './support/test';
-import type { Page } from '@playwright/test';
-
-/** Every loading placeholder on the page: a busy region or a skeleton. None is left once settled. */
-const placeholders = (page: Page) => page.locator('[aria-busy="true"], [data-testid="skeleton"]');
 
 for (const route of ROUTES) {
 	test(`smoke ${route.name}`, async ({ page, go, mock, themeId, colorMode, density, shots }) => {
@@ -21,11 +18,8 @@ for (const route of ROUTES) {
 		await go(route.path);
 		await expect(page.locator('html')).toHaveAttribute('data-theme', themeId);
 		await expect(page.locator('html')).toHaveCSS('color-scheme', colorMode);
-		if (route.heading)
-			await expect(page.getByRole('heading', { name: route.heading })).toBeVisible();
 		// Settled before axe and the shot: a still skeleton passes the snapshot's stability check.
-		await route.ready?.(page);
-		await expect(placeholders(page)).toHaveCount(0, { timeout: 10_000 });
+		await settle(page, route);
 		await expectNoA11yViolations(page);
 		const name = snapshotName(route, { shots, density, themeId });
 		if (name) await expectPageSnapshot(page, name);
