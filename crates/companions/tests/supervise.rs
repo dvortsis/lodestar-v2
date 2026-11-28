@@ -484,8 +484,8 @@ fn must_be_privileged() -> bool {
 
 /// `spawn` refuses to start a companion while Lodestar runs as root or an
 /// administrator, and starts nothing: no folder, no record, no process.
-/// Only `allow_privileged`, honoured under the `testing` feature alone,
-/// lets the other tests here run on an administrator's Windows runner.
+/// Only `allow_privileged`, honoured only in test builds (`testing`), lets
+/// the other tests here run on an administrator's Windows runner.
 #[tokio::test(flavor = "multi_thread")]
 async fn root_or_an_administrator_is_refused() {
     let privileged = process::privileged();

@@ -1,4 +1,4 @@
-# X-cmp-privilege-refusal-ci decisions
+# X-cmp-privilege-refusal-ci decisions (#1163)
 
 - **CI asserts the companion privilege refusal on both OSes.** `spawn` (`crates/companions/src/supervise/process.rs`) refuses to start a companion as root or an administrator, but its only test was Unix-only and asserted only as root, and no CI runner was both (found in CMP-G's review, #1161). The test `root_or_an_administrator_is_refused` (`crates/companions/tests/supervise.rs`) now runs on every OS. Product code is unchanged: `allow_privileged` is still honoured only under `testing`, and no new override was added.
 - **The run must be privileged where CI says so.** With `LODESTAR_TEST_ROOT_RUN=1` the test fails unless it runs as root; on Windows with `GITHUB_ACTIONS=true` it fails unless `privileged()` is `Ok(true)` (GitHub's Windows runners are administrators). So a runner change can't quietly turn the assertion into a no-op. Elsewhere it asserts the refusal whenever `privileged()` is true. macOS CI runs aren't root, so they take the unprivileged branch; the brief covers Linux and Windows only.
