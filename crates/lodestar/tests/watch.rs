@@ -77,7 +77,10 @@ fn start() -> Server {
     let mut child = Command::new(env!("CARGO_BIN_EXE_lodestar"))
         .env("LODESTAR_DATA_DIR", data.path())
         .env("LODESTAR_HTTP_BIND", common::ANY_PORT)
-        .env("LODESTAR_DHT_PORT", "0")
+        // The watch doesn't need the DHT; on, a CI runner joins the live
+        // DHT and stores real torrents the test doesn't control
+        // (X-watch-search-wait).
+        .env("LODESTAR_DHT_ENABLED", "false")
         .env("LODESTAR_LOG", "info")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -165,6 +168,58 @@ fn until_within(what: &str, deadline: Duration, mut f: impl FnMut() -> bool) {
     }
 }
 
+/// Waits until a search for `token` (a word no other torrent has) finds
+/// exactly one torrent, named `name`: the condition the live indexer
+/// meets once its commit is searchable. On a timeout it fails with the
+/// last response, the system page and the server's log, so the cause
+/// shows (X-watch-search-wait).
+fn until_found(s: &Server, token: &str, name: &str) {
+    let deadline = Duration::from_secs(60);
+    let start = Instant::now();
+    loop {
+        let last = exchange(
+            s.port,
+            &format!(
+                "GET /api/v1/search?q={token} HTTP/1.0\r\nCookie: {}",
+                s.cookie
+            ),
+            b"",
+        );
+        if last.as_deref().is_some_and(|r| found(r, name)) {
+            return;
+        }
+        if start.elapsed() >= deadline {
+            let system = exchange(
+                s.port,
+                &format!("GET /api/v1/system HTTP/1.0\r\nCookie: {}", s.cookie),
+                b"",
+            );
+            panic!(
+                "timed out waiting for search to find {name:?}\n\
+                 last response: {last:?}\nsystem: {system:?}\nlog:\n{}",
+                s.log.lock().unwrap()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Whether `response` is a 200 whose results are exactly one torrent,
+/// named `name`.
+fn found(response: &str, name: &str) -> bool {
+    let Some(("HTTP/1.0 200 OK", rest)) = response.split_once("\r\n") else {
+        return false;
+    };
+    let Some((_, body)) = rest.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let hits = v["hits"].as_array().map(Vec::as_slice).unwrap_or_default();
+    v["total"] == 1 && hits.len() == 1 && hits[0]["name"] == name
+}
+
 fn names(dir: &Path) -> Vec<String> {
     let mut v: Vec<String> = std::fs::read_dir(dir)
         .map(|r| {
@@ -175,6 +230,10 @@ fn names(dir: &Path) -> Vec<String> {
     v.sort();
     v
 }
+
+/// The good file's torrent. `Qzvxkr` is one token no crawled torrent
+/// has, so a search for it finds this one torrent and nothing else.
+const WATCHED: &str = "Qzvxkr Watched Cut 2022 1080p.mkv";
 
 #[test]
 fn a_served_instance_takes_files_from_its_watch_folder() {
@@ -189,11 +248,7 @@ fn a_served_instance_takes_files_from_its_watch_folder() {
     let r = set_folder(&s, folder.path());
     assert!(r.starts_with("HTTP/1.0 200"), "{r}");
 
-    std::fs::write(
-        folder.path().join("Zq9Good Cut.torrent"),
-        torrent("Watched Cut 2022 1080p.mkv"),
-    )
-    .unwrap();
+    std::fs::write(folder.path().join("Zq9Good Cut.torrent"), torrent(WATCHED)).unwrap();
     let broken = Instant::now();
     std::fs::write(folder.path().join("Zq9Broken.torrent"), b"not bencode").unwrap();
     until("the good file taken", || {
@@ -211,17 +266,7 @@ fn a_served_instance_takes_files_from_its_watch_folder() {
         broken.elapsed()
     );
     // Stored and found, as an upload is.
-    until("search finds it", || {
-        exchange(
-            s.port,
-            &format!(
-                "GET /api/v1/search?q=Watched%20Cut HTTP/1.0\r\nCookie: {}",
-                s.cookie
-            ),
-            b"",
-        )
-        .is_some_and(|r| r.contains("\"total\":1"))
-    });
+    until_found(&s, "Qzvxkr", WATCHED);
     // The poll logs once its moves are done, and the log reaches us
     // through the reader thread.
     until("the log lines", || {
@@ -230,6 +275,7 @@ fn a_served_instance_takes_files_from_its_watch_folder() {
     });
     let log = s.log.lock().unwrap().clone();
     assert!(!log.contains("Zq9"), "no file name in the log: {log}");
+    assert!(!log.contains("Qzvxkr"), "no torrent name in the log: {log}");
 }
 
 /// X-watch-stall-retry: a copy that stalls looks complete to the watch,
@@ -239,6 +285,8 @@ fn a_served_instance_takes_files_from_its_watch_folder() {
 /// been read: both are read on the same poll, in name order.
 #[test]
 fn a_stalled_copy_that_finishes_is_taken_not_failed() {
+    /// One token no crawled torrent has, as [`WATCHED`]'s.
+    const STALLED: &str = "Qzvxst Stalled Copy 2023 1080p.mkv";
     let s = start();
     let folder = tempfile::tempdir().unwrap();
     {
@@ -248,7 +296,7 @@ fn a_stalled_copy_that_finishes_is_taken_not_failed() {
     let r = set_folder(&s, folder.path());
     assert!(r.starts_with("HTTP/1.0 200"), "{r}");
 
-    let whole = torrent("Stalled Copy 2023 1080p.mkv");
+    let whole = torrent(STALLED);
     let stalled = folder.path().join("Zq9A Stalled.torrent");
     let written = Instant::now();
     // The first half arrives, then the copy stalls.
@@ -280,17 +328,7 @@ fn a_stalled_copy_that_finishes_is_taken_not_failed() {
         names(&folder.path().join("added")) == ["Zq9A Stalled.torrent", "Zq9B Marker.torrent"]
     });
     assert!(names(&folder.path().join("failed")).is_empty());
-    until("search finds it", || {
-        exchange(
-            s.port,
-            &format!(
-                "GET /api/v1/search?q=Stalled%20Copy HTTP/1.0\r\nCookie: {}",
-                s.cookie
-            ),
-            b"",
-        )
-        .is_some_and(|r| r.contains("\"total\":1"))
-    });
+    until_found(&s, "Qzvxst", STALLED);
 }
 
 #[test]
