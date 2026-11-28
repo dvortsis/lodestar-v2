@@ -24,6 +24,16 @@ use lodestar_network_policy::iface::{self, State};
 
 use crate::{Counts, Error, Reply, Result, check_batch, message};
 
+/// X-vpn-bind: the address of a tracker named by one; no lookup outside
+/// the interface, so one named by host isn't asked. An IPv4-mapped IPv6
+/// literal is taken as the IPv4 address it carries: a v6 socket would
+/// send IPv4, so the family the interface is checked for must be v4.
+fn literal_target(host: &str, port: u16) -> Result<SocketAddr> {
+    let literal = host.trim_start_matches('[').trim_end_matches(']');
+    let ip: std::net::IpAddr = literal.parse().map_err(|_| Error::Resolve)?;
+    Ok(SocketAddr::new(ip.to_canonical(), port))
+}
+
 /// A UDP socket pinned to the guard's interface before it binds.
 fn pinned(bind: SocketAddr, guard: &iface::Guard) -> std::io::Result<UdpSocket> {
     use socket2::{Domain, Protocol, Socket, Type};
@@ -304,11 +314,7 @@ impl UdpTracker {
         if stale {
             self.socket = None;
             let addrs: Vec<SocketAddr> = if self.cfg.guard.is_some() {
-                // X-vpn-bind: no lookup outside the interface; a tracker
-                // named by host isn't asked.
-                let literal = self.host.trim_start_matches('[').trim_end_matches(']');
-                let ip: std::net::IpAddr = literal.parse().map_err(|_| Error::Resolve)?;
-                vec![SocketAddr::new(ip, self.port)]
+                vec![literal_target(&self.host, self.port)?]
             } else {
                 crate::looked_up();
                 tokio::net::lookup_host((self.host.as_str(), self.port))
@@ -366,6 +372,24 @@ impl UdpTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_literal_target_is_canonical_and_a_name_is_not_resolved() {
+        let t = |h: &str| literal_target(h, 6969);
+        assert_eq!(
+            t("[::ffff:203.0.113.9]").unwrap(),
+            "203.0.113.9:6969".parse().unwrap()
+        );
+        assert_eq!(
+            t("[2001:db8::66]").unwrap(),
+            "[2001:db8::66]:6969".parse().unwrap()
+        );
+        assert_eq!(
+            t("203.0.113.9").unwrap(),
+            "203.0.113.9:6969".parse().unwrap()
+        );
+        assert!(matches!(t("tracker.example"), Err(Error::Resolve)));
+    }
 
     fn reply(action: u32, tid: u32, body: &[u8]) -> Vec<u8> {
         let mut p = action.to_be_bytes().to_vec();

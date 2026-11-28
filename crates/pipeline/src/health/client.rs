@@ -256,6 +256,16 @@ impl ClientTask {
         for chunk in hashes.chunks(per_request) {
             let ready = self.pacer.ready_at();
             tokio::time::sleep_until(self.clock.at(ready)).await;
+            // X-vpn-bind: again after the wait, which can be most of a
+            // round; the HTTP client is pinned to the device only, so a
+            // drop or a lost family meanwhile must stop the request here.
+            if self.vpn_down() || self.off_family() {
+                if answers.is_empty() {
+                    return (answers, Outcome::Skipped, 0);
+                }
+                let asked = answers.len();
+                return (answers, Outcome::Ok, asked);
+            }
             let now = self.clock.now();
             self.pacer.start(now);
             match self.tracker.scrape(chunk).await {
@@ -395,6 +405,65 @@ mod tests {
         assert_eq!(t.pacer.failures(), 0, "not a failure");
         let v4 = task_for(guard, http("http://203.0.113.9:6969/announce"));
         assert!(!v4.off_family(), "a family it has: asked");
+    }
+
+    /// X-vpn-bind: the guard is checked again before each request, not
+    /// only at the job's start: the wait for a tracker's next slot can be
+    /// most of a round, and the HTTP client is pinned to the device only.
+    /// Losing the tracker's family after the first request stops the rest.
+    #[tokio::test]
+    async fn an_http_job_stops_when_the_interface_loses_the_trackers_family() {
+        use lodestar_network_policy::iface::{Guard, Interface, Link};
+        let both = Link {
+            index: Some(1),
+            addrs: vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()],
+        };
+        let link = Arc::new(Mutex::new(both));
+        let l = link.clone();
+        let guard = Guard::with_probe(Interface::parse("wg0").unwrap(), move |_| {
+            Ok(l.lock().unwrap().clone())
+        });
+        guard.poll();
+        let fake = lodestar_tracker_scrape::testing::http_tracker().await;
+        let client = lodestar_tracker_scrape::http::client(None, None).unwrap();
+        let url = lodestar_tracker_scrape::TrackerUrl::parse(&fake.url(false)).unwrap();
+        let tracker = Tracker::new(&url, Default::default(), Default::default(), &client).unwrap();
+        let per_request = tracker.max_hashes();
+        let mut t = task_for(guard.clone(), tracker);
+        // Far enough apart that the change below lands between the two.
+        t.pacer = Pacer::new(Duration::from_secs(5), t.clock.now());
+        let hashes: Vec<InfoHash> = (0..per_request + 8)
+            .map(|i| InfoHash([i as u8; 20]))
+            .collect();
+        let job = Job {
+            round: 1,
+            hashes: Arc::from(hashes),
+            deadline_ms: u64::MAX,
+        };
+        let state = fake.state.clone();
+        let drop_v4 = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while state.scrapes.load(Ordering::SeqCst) == 0 {
+                assert!(tokio::time::Instant::now() < deadline, "no first request");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            *link.lock().unwrap() = Link {
+                index: Some(1),
+                addrs: vec!["::1".parse().unwrap()],
+            };
+            guard.poll();
+        });
+        let (answers, outcome, asked) = t.scrape(&job).await;
+        drop_v4.await.unwrap();
+        assert_eq!(
+            (answers.len(), outcome, asked),
+            (per_request, Outcome::Ok, per_request)
+        );
+        assert_eq!(
+            fake.state.scrapes.load(Ordering::SeqCst),
+            1,
+            "the second chunk wasn't requested"
+        );
     }
 
     #[test]

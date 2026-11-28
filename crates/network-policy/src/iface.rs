@@ -597,8 +597,11 @@ impl Guard {
 
     /// Whether the last check found an address of `ip`'s family on the
     /// interface: a connection to `ip` through it would otherwise carry
-    /// another interface's source address. False while it's down.
+    /// another interface's source address. False while it's down. An
+    /// IPv4-mapped IPv6 address counts as the IPv4 address it carries (a
+    /// v6 socket sends it as IPv4).
     pub fn has_family(&self, ip: IpAddr) -> bool {
+        let ip = ip.to_canonical();
         self.seen()
             .link
             .as_ref()
@@ -997,6 +1000,10 @@ mod tests {
         guard.poll();
         assert!(guard.has_family("203.0.113.9".parse().unwrap()));
         assert!(!guard.has_family("2001:db8::66".parse().unwrap()));
+        assert!(
+            guard.has_family("::ffff:203.0.113.9".parse().unwrap()),
+            "IPv4-mapped: IPv4 on the wire"
+        );
         *seen.lock().unwrap() = Err(Down::Down);
         guard.poll();
         assert!(!guard.has_family("203.0.113.9".parse().unwrap()), "down");
@@ -1006,6 +1013,7 @@ mod tests {
     /// whatever made a caller try: a device up with no address would
     /// otherwise send with another interface's source address. It's a
     /// wait, not a hold.
+    #[cfg(any(target_os = "linux", windows))]
     #[test]
     fn a_pin_while_the_guard_is_down_is_refused_as_a_wait() {
         let guard = Guard::with_probe(Interface::parse("lo").unwrap(), |_| Err(Down::NoAddress));
