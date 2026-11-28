@@ -640,7 +640,7 @@ for (const { lang, total, text, label } of WORST) {
 				await expect(count(page)).toHaveText(text, { useInnerText: true });
 				// One row: as tall as a dense control. The box is capped (L3, 1,152 px).
 				expect(before?.height).toBe(sort?.height);
-				expect(before!.width).toBeLessThanOrEqual(1152);
+				expect(before!.width).toBe(1152);
 				// The longest line and the controls leave at least 48 px of room in the box.
 				const room = await toolbar.evaluate((el) => {
 					const r = document.createRange();
@@ -666,21 +666,21 @@ for (const { lang, total, text, label } of WORST) {
 	}
 }
 
-// A grouped count ("N groups · N torrents") is a long line, so its hidden note shows only from 71rem
-// of toolbar (1,136 px) and not at all below it; the controls keep their labels. Nothing moves when
+// A grouped count ("N groups · N torrents") is a long line, so its hidden note shows only from 72rem
+// of toolbar (1,152 px) and not at all below it; the controls keep their labels. Nothing moves when
 // the note arrives, at any width, in either language.
 const GROUPED = [
 	{
 		lang: 'en',
 		label: 'Sort',
 		extra: {
-			total: 12_345_678,
+			total: 123_456_789,
 			total_approx: true,
 			collapsed: true,
-			groups: 12_345_678,
+			groups: 123_456_789,
 			groups_approx: true
 		},
-		text: '≈ 12.3M groups · ≈ 12.3M torrents · 9,999,999 hidden by filters · Show'
+		text: '≈ 123.5M groups · ≈ 123.5M torrents · 9,999,999 hidden by filters · Show'
 	},
 	{
 		lang: 'en',
@@ -707,7 +707,16 @@ const GROUPED = [
 		text: '150,000 个组 · 199,999 个种子 · 9,999,999 个已被过滤器隐藏 · 显示'
 	}
 ] as const;
-const FULL_FROM = 71 * 16; // 71rem of toolbar, in px
+const FULL_FROM = 72 * 16; // 72rem of toolbar, in px
+// Where the note shows with the drawer closed: the box is 688, 745, 1,030, 1,264, then the 1,152 cap.
+const SHOWS_AT: Record<number, boolean> = {
+	900: false,
+	1024: false,
+	1366: false,
+	1600: true,
+	2048: true,
+	2560: true
+};
 for (const { lang, label, extra, text } of GROUPED) {
 	for (const [width, drawer] of [
 		[900, false],
@@ -737,15 +746,28 @@ for (const { lang, label, extra, text } of GROUPED) {
 					await expect(page.getByTestId('drawer')).toBeVisible();
 				}
 				const toolbar = page.getByTestId('results-toolbar');
-				// The toolbar settles once the drawer has made room (or not).
-				await expect.poll(async () => (await toolbar.boundingBox())?.height).toBe(32);
+				// The toolbar settles (the drawer making room): its box is the same two frames running.
+				// A count this long can wrap a narrow line by itself; the note must not change that.
+				let last = '';
+				await expect(async () => {
+					await page.evaluate(
+						() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+					);
+					const b = JSON.stringify(await toolbar.boundingBox());
+					const same = b === last;
+					last = b;
+					expect(same).toBe(true);
+				}).toPass({ timeout: 10_000 });
 				const before = await toolbar.boundingBox();
 				const first = (await row(page, 1).boundingBox())?.y;
 				const sort = await page.getByLabel(label).boundingBox();
 				release();
 				const show = page.getByTestId('results-hidden-show');
 				await expect(show).toHaveCount(1);
-				if (before!.width >= FULL_FROM) {
+				const shows = drawer ? before!.width >= FULL_FROM : SHOWS_AT[width];
+				// The rule is the box's: the measured width and the expectation agree.
+				expect(before!.width >= FULL_FROM).toBe(shows);
+				if (shows) {
 					await expect(show).toBeVisible();
 					await expect(page.getByTestId('results-count')).toHaveText(text, { useInnerText: true });
 				} else {

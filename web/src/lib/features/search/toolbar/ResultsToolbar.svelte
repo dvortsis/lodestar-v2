@@ -64,11 +64,12 @@
 	const shut = (e: MouseEvent) =>
 		(e.currentTarget as HTMLElement).closest<HTMLElement>('[popover]')?.hidePopover();
 
-	// The count names groups and torrents (a long line): the hidden note only fits it from 71rem of
+	// The count names groups and torrents (a long line): the hidden note only fits it from 72rem of
 	// toolbar (toolbar.css), so it is told apart by a class.
 	const isGroups = $derived(
 		results.status === 'ready' &&
 			results.hits.length > 0 &&
+			results.total > 0 &&
 			results.grouped.collapsed &&
 			results.grouped.groups !== undefined
 	);

@@ -75,13 +75,13 @@
 	}
 }
 /* A grouped count ("N groups · N torrents") is a long line: with the note and the controls it needs
-   up to 1,088 px (measured, en, "≈ 12.3M" with 9,999,999 hidden), so the note shows from 71rem of
+   up to 1,102 px (measured, en, "≈ 123.5M" with 9,999,999 hidden), so the note shows from 72rem of
    toolbar and not at all below it ("Show hidden" stays in Filters), whatever the plain count's rule
    above says. Sort and View keep their labels. */
 .tb-grp .tb-hid {
 	display: none;
 }
-@container tb (width >= 71rem) {
+@container tb (width >= 72rem) {
 	.tb-grp .tb-hid {
 		display: inline;
 	}

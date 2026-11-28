@@ -20,8 +20,6 @@ From 128rem of window the toolbar was layout L3: `justify-content: flex-start` a
 - **Rejected: a fixed floor on the count.** A 384 px floor plus the gap plus the controls is 960.7 px, over the old cap, so every English page wrapped to two rows, and it missed the longer counts anyway (zh "≈ 1234.6万" 403.8 px, zh exact 384.1 px). Any width floor is fragile against text length and language.
 - **Rejected: removing the cap** (controls at the full track's end). It puts the controls about 1,700 px from the text at 2,560 px, the L3 finding above.
 
-- **Later change:** X-hidden-count-grouped raised the cap to 1,152 px (`calc(var(--spacing) * 288)`) for grouped counts; see `2026-11-28-X-hidden-count-grouped.md`.
-
 ## Tests
 `web/e2e/search-toolbar.routes.test.ts`: the width loop no longer skips Sort's x from 2,048 px and adds 2,560 px. Four worst-case cases (en approximate "≈ 123.5M", en exact 199,999, zh "≈ 1234.6万", zh exact 199,999, each with 9,999,999 hidden) at 2,048 and 2,560 px assert the full text, a one-row toolbar, its width at most the cap, the 48 px of room, and Sort's box, the toolbar's height and row 1's y unchanged when the note arrives. Condition waits only.
 

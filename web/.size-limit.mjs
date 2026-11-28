@@ -1888,7 +1888,7 @@ export default [
 	// and its narrow form "N filtered · Show", its request (POST /search/hidden, after the rows render,
 	// aborted by a newer query), its messages, and the container queries that keep it from moving
 	// anything (toolbar.css).
-	// runner §2.26 (X-hidden-count-grouped): 5.60 → 5.65 KB, measured 5,646 B: the grouped count's own
+	// runner §2.26 (X-hidden-count-grouped): 5.60 → 5.65 KB, measured 5,647 B: the grouped count's own
 	// note rule (a class from the count's kind, and its container queries in toolbar.css).
 	entry('Results toolbar (lazy)', toolbarLazy, '5.65 KB'),
 	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
