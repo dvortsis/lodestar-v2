@@ -193,6 +193,16 @@
 	let recoverFailed = $state(false);
 	let Recover = $state<typeof import('./Recover.svelte').default>();
 	let Index = $state<typeof import('./IndexState.svelte').default>();
+	// The rescue (X-zero-rescue): its chunk loads only for an empty answer.
+	let Rescue = $state<typeof import('./Rescue.svelte').default>();
+	let rescuing = $state(false);
+	let rescueSettled = $state(false);
+	let rescueFailed = $state(false);
+	// A new query starts the rescue over: the hint waits for it again.
+	$effect(() => {
+		void search.q;
+		rescueSettled = false;
+	});
 	let indexFailed = $state(false);
 	$effect(() => {
 		if (suggested && !Recover && !recoverFailed)
@@ -201,6 +211,11 @@
 				() => (recoverFailed = true)
 			);
 		if ((banner || fullCold) && !Index) void ensureIndex();
+		if (results.status === 'ready' && results.hits.length === 0 && search.q.trim() && !Rescue)
+			void import('./Rescue.svelte').then(
+				(mod) => (Rescue = mod.default),
+				() => (rescueFailed = true)
+			);
 	});
 	/** The banner chunk; a failed load leaves the page without the banner, never without rows. */
 	const ensureIndex = () =>
@@ -660,9 +675,10 @@
 						{/each}
 					</ul>
 					<Button onclick={() => void clearFilters()}>{m.search_results_none_clear()}</Button>
-				{:else if !results.notices.includes('adult_hidden')}
+				{:else if !results.notices.includes('adult_hidden') && !rescuing && (!search.q.trim() || rescueSettled || rescueFailed)}
 					<p>{m.search_results_none_words()}</p>
 				{/if}
+				{#if Rescue}<Rescue bind:suggesting={rescuing} bind:settled={rescueSettled} />{/if}
 			</div>
 		{:else}
 			<!-- Delegated handlers for the grid's rows (focus, hover prefetch, Shift+F10): the rows are

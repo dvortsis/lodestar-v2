@@ -15,6 +15,7 @@
 	import { attach, type Editor } from './editor';
 	import { ensureSearchPath } from './path';
 	import { errorRange } from './spans';
+	import { isUnfinished } from './unfinished';
 	import type { SearchState, SyntaxComponent } from './types';
 
 	interface Props {
@@ -33,6 +34,8 @@
 	const s = $derived(searchState ?? search);
 
 	let editor: Editor | undefined;
+	/** The caret while the suggestions are open (Assist reports it), else null. */
+	let suggestCaret = $state<number | null>(null);
 
 	function setText(text: string) {
 		ensureSearchPath();
@@ -42,6 +45,7 @@
 	/** The text Enter last searched; Assist, mounting later, must not treat it as fresh typing. */
 	let submittedText: string | null = null;
 	function submit() {
+		suggestCaret = null; // Enter shows an error at once
 		submittedText = editor?.text ?? s.text;
 		ensureSearchPath();
 		void s.submit().then(() => {
@@ -146,8 +150,14 @@
 	const blank = $derived(!s.text.trim());
 	/** Still the text that was parsed: on an error W5 keeps the raw text in the URL. */
 	const settled = $derived(!s.parsing && s.text === s.q);
-	const syntax = $derived(
+	const syntaxAny = $derived(
 		!blank && settled && s.parseError?.code === 'query_syntax' ? s.parseError : null
+	);
+	// A token still being typed, with its suggestions open, is not an error yet.
+	const syntax = $derived(
+		syntaxAny && isUnfinished(errorRange(s.text, syntaxAny.start, syntaxAny.end), suggestCaret)
+			? null
+			: syntaxAny
 	);
 	// Any other failure (network, 5xx) is a banner; a 401 is the shell's (it goes to sign-in).
 	const unchecked = $derived(
@@ -349,6 +359,7 @@
 		accept={acceptText}
 		{announce}
 		hidden={() => s.hidden}
+		onsuggest={(caret) => (suggestCaret = caret)}
 		submitted={() => submittedText !== null && submittedText === (editor?.text ?? '')}
 	/>
 {/if}

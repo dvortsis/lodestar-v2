@@ -1096,6 +1096,8 @@ const tableOnDemand = [/search\/table\/(ResultsTable|ColumnChooser)\.svelte$/];
 const bulkOnDemand = [/search\/bulk\/(BulkBar|RowPick)\.svelte$/, /search\/bulk\/ops\.ts$/];
 const recoverOnDemand = [/search\/results\/Recover\.svelte$/];
 const indexStateOnDemand = [/search\/results\/IndexState\.svelte$/];
+// X-zero-rescue: "Did you mean" and the natural-phrasing chips load for an empty answer only.
+const rescueOnDemand = [/search\/results\/Rescue\.svelte$/, /search\/assist\/rescue\.ts$/];
 // After a Block applies, the list keeps its place (X-web-polish-1101d): loaded on that press only.
 const settleOnDemand = [/search\/results\/settle\.ts$/];
 // GS-5: a group's rows and their logic load when a group is first opened ("+N other versions").
@@ -1110,6 +1112,7 @@ const resultsOnDemand = [
 	...bulkOnDemand,
 	...recoverOnDemand,
 	...indexStateOnDemand,
+	...rescueOnDemand,
 	...settleOnDemand,
 	...collapseOnDemand
 ];
@@ -1172,6 +1175,14 @@ const recoverLazy = [
 const settleLazy = [
 	...new Set(
 		ownChunk('src/lib/features/search/results/settle.ts', [], false, [
+			...engagedSearch,
+			...resultsLoaded
+		])
+	)
+];
+const rescueLazy = [
+	...new Set(
+		ownChunk('src/lib/features/search/results/Rescue.svelte', [], false, [
 			...engagedSearch,
 			...resultsLoaded
 		])
@@ -1455,7 +1466,8 @@ if (flowsCarried.length)
 	);
 
 export default [
-	entry('Search route JS (initial)', search.js, '45 KB'),
+	// X-zero-rescue (runner §2.26): 45,000 → 45,056 B, measured 45,002 B (+2 B), rounded up to 64 B: the bar reports the caret to the error line while its suggestions are open.
+	entry('Search route JS (initial)', search.js, '45056 B'),
 	// LEGAL-1 (runner §2.26): +64 B for the Legal Notice's box and its token (measured 19.67 KB on
 	// the tree with main merged, residue 16 B, rounded up to 64 B). Still under the §10.1 20 KB.
 	// X-results-drawer-adaptive (runner §2.26): +2 B for --results-min-width-drawer (19,722 B).
@@ -1833,7 +1845,8 @@ export default [
 	// the row carried into it (no re-set on mount), less the reset to row 1 for a new query's rows.
 	// X-import-verified-no (runner §2.26): 43.76 → 44.09 KB, measured 44,089 B (+329 B): the Imported badge and its help.
 	// UX-start (runner §2.26): 44.09 -> 44.224 KB, measured 44,195 B (one trim round, compacting pillState's branches, saved nothing): shell/status.ts, which this chunk carries, gained the "warming up" branch and the found/stored fields.
-	entry('Search results (lazy)', resultsFirst, '44.224 KB'),
+	// X-zero-rescue (runner §2.26): 44,224 → 44,416 B, measured 44,377 B (+153 B), rounded up to 64 B: the panel's lazy mount of the rescue chunk and the hint it hides. The rescue itself is its own entry below.
+	entry('Search results (lazy)', resultsFirst, '44416 B'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1846,6 +1859,8 @@ export default [
 	// Alerts -1.58 KB, drawer -0.23 KB).
 	entry('Search index-state banners (on demand)', indexStateLazy, '4.1 KB'),
 	entry('Search Block settle (on demand)', settleLazy, '0.6 KB'),
+	// X-zero-rescue: measured 2,162 B (the chunk with the modules only it reaches), rounded up to 0.01 KB.
+	entry('Search zero-result rescue (on demand)', rescueLazy, '2.17 KB'),
 	// runner §2.26, SRC-17: the Source facet and Show unverified (16,800 B → 17,696 B, the measured 831 B over rounded up to 64 B).
 	// X-labels (runner §2.26): 17,635 → 18,825 B, the value names (codecs, HDR, languages, types),
 	// and Find matching the code as well as the label (review).

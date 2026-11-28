@@ -8,7 +8,7 @@
 	"search_query_label": "搜索种子",
 	"search_query_placeholder": "按名称搜索，或添加筛选条件，例如 res:1080p",
 	"search_query_placeholder_short": "搜索，或筛选：res:1080p",
-	"search_query_error_lead": "无法读取此查询：",
+	"search_query_error_lead": "请检查查询：",
 	"search_query_check_failed": "无法检查查询",
 	"search_query_check_failed_body": "检查未能完成。请确认 Lodestar 正在运行，然后重试。",
 	"search_query_retry": "重试",
@@ -200,5 +200,11 @@
 	"search_assist_builder_apply": "应用",
 	"search_assist_builder_fields_failed": "无法加载字段列表。",
 	"search_assist_builder_retry": "重试",
-	"search_assist_builder_stale": "检查期间查询已更改。请重试。"
+	"search_assist_builder_stale": "检查期间查询已更改。请重试。",
+	"search_rescue_didyoumean": "你是不是要输入 {query}？",
+	"search_rescue_natural": "这些词可以读作过滤器：",
+	"search_rescue_chips": "这些词对应的过滤器",
+	"search_rescue_chips_ready_one": "在你的词中找到 1 个过滤器。可以应用它或修改搜索。",
+	"search_rescue_chips_ready_other": "在你的词中找到 {count} 个过滤器。可以应用它们或修改搜索。",
+	"search_rescue_apply": "应用"
 }
