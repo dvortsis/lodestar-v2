@@ -34,12 +34,12 @@ for (const [name, viewport] of [
 			await go('/search');
 			const pill = page.getByTestId('status-pill');
 			await expect(pill).toHaveAttribute('data-state', 'crawling');
-			events.send('crawler', crawlerEvent({ paused: true }));
+			await events.send('crawler', crawlerEvent({ paused: true }));
 			await expect(pill).toHaveAttribute('data-state', 'paused');
 			await expect(page.getByTestId('status-pill-text')).toHaveText('Paused');
 			await expect(page.getByTestId('status-pill-count')).toHaveText('· 1.2M searchable');
 			await expectPillFits(page, viewport.width);
-			events.send('crawler', crawlerEvent({ paused: false }));
+			await events.send('crawler', crawlerEvent({ paused: false }));
 			await expect(pill).toHaveAttribute('data-state', 'crawling');
 		});
 
@@ -48,7 +48,7 @@ for (const [name, viewport] of [
 			await go('/search');
 			const pill = page.getByTestId('status-pill');
 			await expect(pill).toHaveAttribute('data-state', 'crawling');
-			events.send('rebuild', {
+			await events.send('rebuild', {
 				done: 1500,
 				error: 'disk full',
 				from: 'v3',
