@@ -854,10 +854,9 @@ mod literal_bootstrap_tests {
             .collect();
         assert_eq!(got, want, "literals first, then each router once");
         assert_eq!(lookups(), before, "nothing looked up");
-        assert_eq!(
-            super::super::BOOTSTRAP_LITERALS.len(),
-            super::super::DEFAULT_BOOTSTRAP.len(),
-            "one address per default router"
+        assert!(
+            super::super::BOOTSTRAP_LITERALS.len() >= super::super::DEFAULT_BOOTSTRAP.len(),
+            "an address for each default router"
         );
     }
 }

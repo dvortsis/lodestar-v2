@@ -112,12 +112,15 @@ pub const DEFAULT_BOOTSTRAP: &[&str] = &[
 ];
 
 /// X-vpn-bind: [`DEFAULT_BOOTSTRAP`]'s routers by address, in the same
-/// order. With an interface set ([`Config::guard`]) no name is looked
-/// up, since the system resolver would ask outside the interface; a
-/// node with no saved table joins through these instead.
-/// Checked against DNS: unverified (the build container has no DNS).
+/// order (dht.transmissionbt.com has two). With an interface set
+/// ([`Config::guard`]) no name is looked up, since the system resolver
+/// would ask outside the interface; a node with no saved table joins
+/// through these instead. A stale address only fails to answer.
+/// A records checked 2026-11-28; the ports are the routers' published
+/// ones, not from DNS.
 pub const BOOTSTRAP_LITERALS: &[&str] = &[
     "67.215.246.10:6881",
+    "212.129.33.59:6881",
     "87.98.162.88:6881",
     "82.221.103.244:6881",
     "185.157.221.247:25401",
