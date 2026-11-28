@@ -8,4 +8,8 @@
 - **Order is Compare's** (`ATTRIBUTE_ORDER`), with `sample`, `version`, `platform` and `arch` before `flags`. Year, season, episode and absolute are held back while the identity rows load, so nothing appears and then vanishes.
 - **zh strings are machine-drafted** and need a human pass.
 - **Glossary:** `release_list`, `pack`, `release_group`, `container_format` (Container) and `release_tags` (Flags), worded as Compare words them.
-- **Size** (accepted by the runner under §2.26; measured, rounded up to 64 B; main passes all three at its own limits): Detail sections 47.52 KB → 50,560 B (measured 50,514 B, +3.0 kB: Compare's shared label tables and messages come with the shared wording; the version with its own labels cost +1.48 kB and read differently), Detail drawer 28.27 KB → 28,352 B (28,301 B), /t/[hash] 15.71 KB → 15,744 B (15,718 B).
+- **Size** (accepted by the runner under §2.26; measured, rounded up to 64 B; main passes all three at its own limits): Detail sections 47.52 KB → 50,624 B (measured 50,577 B, +3.0 kB: Compare's shared label tables and messages come with the shared wording; the version with its own labels cost +1.48 kB and read differently), Detail drawer 28.27 KB → 28,352 B (28,301 B), /t/[hash] 15.71 KB → 15,744 B (15,725 B).
+- **Known gaps (follow-ups).**
+  - §10.5.3 asks for provenance on each item ("from: name / files / …"). The server sends none per key, so the list shows none; the title row above it keeps its "Resolved via" line.
+  - `edition`, `flags` and `platform` show the parser's slugs ("directors-cut", "xboxone"), as Compare does. Words for them belong in `format/label-release.ts` with the follow-up that moves `bits`, `pack` and `service` there.
+  - The title row is held back until the search hit lookup is done, so it doesn't flash on a direct `/t/` link.

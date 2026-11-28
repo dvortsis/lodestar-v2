@@ -1,4 +1,5 @@
 import { attributeLabel } from '$lib/format/label-release';
+import { own } from '$lib/format/label-shared';
 import { m } from '$lib/paraglide/messages.js';
 
 // The Release list (§10.5.3): the parsed attributes of `TorrentDetail.attributes`, one plain label
@@ -39,7 +40,8 @@ const LABELS: Record<string, () => string> = {
 };
 // Compare's story order (compare/model.ts ATTRIBUTE_ORDER), with the music, software and platform keys
 // before the release flags.
-const ORDER = Object.keys(LABELS);
+/** Every key the list can show, in order (a test holds it to Compare's `ATTRIBUTE_ORDER` and #1172's keys). */
+export const ORDER = Object.keys(LABELS);
 
 /** The keys Parsed's identity rows show (the title's spans across versions). */
 export const SPAN_KEYS = ['year', 'season', 'episode', 'absolute'] as const;
@@ -71,7 +73,7 @@ function format(key: string, value: string, locale: string): string {
 		case 'pack':
 			return value === 'yes' ? m.detail_attr_pack_yes() : value;
 		case 'service':
-			return SERVICES[value] ?? value;
+			return own(SERVICES, value) ?? value;
 		default:
 			return attributeLabel(key, value, locale);
 	}
@@ -90,8 +92,9 @@ export function releaseRows(
 	if (!attributes) return [];
 	const out: { key: string; label: string; value: string }[] = [];
 	for (const key of ORDER) {
-		const value = attributes[key];
-		if (!value || hidden.has(key)) continue;
+		const value = own(attributes, key);
+		// A value is a string by contract; anything else (a build that drifted) is dropped, not thrown on.
+		if (typeof value !== 'string' || !value || hidden.has(key)) continue;
 		if (key === 'title' && value === resolvedTitle) continue;
 		out.push({ key, label: LABELS[key]!(), value: format(key, value, locale) });
 	}

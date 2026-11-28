@@ -24,8 +24,8 @@ fixes the words.
 | `release_list` | Release | The list in a torrent's Parsed metadata of what the name says about this release: codecs, languages, group and the rest, worded as Compare words them. | 发布信息 (TBD) |
 | `pack` | Pack | A season pack, complete series, collection or discography: one torrent that holds many episodes or albums. | 合集 (TBD) |
 | `release_group` | Release group | The team or person who packaged the release, as written in its name ("GROUP" in `Show.S01.1080p-GROUP`). Not the uploader and not a Lodestar group. | 发布组 (TBD) |
-| `container_format` | Container | The kind of file the release is (mkv, mp4, epub, flac), taken from its name or its files. | 文件格式 (TBD) |
-| `release_tags` | Flags | Words in a release name that say how it was made or changed, such as proper, repack, internal or dubbed. | 发布标记 (TBD) |
+| `container_format` | Container | The kind of file the release is (mkv, mp4, epub, flac), taken from its name or its files. | 封装 (TBD) |
+| `release_tags` | Flags | Words in a release name that say how it was made or changed, such as proper, repack, internal or dubbed. | 标记 (TBD) |
 | `raw_name` | Raw name | The torrent's own `name` field, decoded, shown in mono when it differs from the resolved title. | 原始名称 (TBD) |
 | `discovered` | Discovered | When Lodestar first saw the torrent's key, not when it was created. Torrents first seen during the warm-up window carry "First seen during backfill". | 发现时间 (TBD) |
 | `last_seen` | Last seen | The latest time the torrent's key was seen active in the DHT. | 最后出现 (TBD) |

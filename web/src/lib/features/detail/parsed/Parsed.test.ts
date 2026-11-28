@@ -107,6 +107,31 @@ describe('Parsed', () => {
 });
 
 describe('Parsed: the Release list', () => {
+	it('drops values that are not strings and treats a prototype name as a service as sent', () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		const bad = {
+			year: 2008,
+			lang: ['en'],
+			res: '1080p',
+			service: 'constructor'
+		} as unknown as Record<string, string>;
+		render(Parsed, { hash: HASH, hit: searchHit(), attributes: bad });
+		expect(text('detail-release-res')).toBe('1080p');
+		expect(text('detail-release-service')).toBe('constructor');
+		expect(screen.queryByTestId('detail-release-lang')).toBeNull();
+		expect(screen.queryByTestId('detail-release-year')).toBeNull();
+	});
+
+	it('holds the title back until the hit lookup is done', () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		const props = { hash: HASH, hit: null, attributes: { title: 'Other' } };
+		const { unmount } = render(Parsed, { ...props, hitDone: false });
+		expect(screen.queryByTestId('detail-release-title')).toBeNull();
+		unmount();
+		render(Parsed, { ...props, hitDone: true });
+		expect(text('detail-release-title')).toBe('Other');
+	});
+
 	const attrs = {
 		res: '1080p',
 		vcodec: 'h265',

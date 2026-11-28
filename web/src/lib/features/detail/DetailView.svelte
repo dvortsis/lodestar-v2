@@ -129,7 +129,13 @@
 		>
 			<div role="heading" aria-level={level} id="detail-h-parsed">{m.detail_section_parsed()}</div>
 			{#if Parsed}
-				<Parsed hash={detail.hash} {hit} attributes={detail.attributes} {level} />
+				<Parsed
+					hash={detail.hash}
+					{hit}
+					attributes={detail.attributes}
+					hitDone={model.hitDone}
+					{level}
+				/>
 			{:else}
 				<Skeleton lines={3} />
 			{/if}

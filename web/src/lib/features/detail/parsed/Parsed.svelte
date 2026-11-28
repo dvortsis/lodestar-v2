@@ -17,9 +17,11 @@
 		hash: string;
 		hit: SearchHit | null;
 		attributes?: Record<string, string> | null;
+		/** False while the search hit is still being looked up: the title row is held back until then. */
+		hitDone?: boolean;
 		level?: number;
 	}
-	let { hash, hit, attributes = null, level = 2 }: Props = $props();
+	let { hash, hit, attributes = null, hitDone = true, level = 2 }: Props = $props();
 
 	let identity = $state<Identity | null>(null);
 	let status = $state<'loading' | 'ready' | 'error' | 'withheld'>('loading');
@@ -75,7 +77,10 @@
 			attributes,
 			currentLocale(),
 			hit?.title,
-			new Set(status === 'loading' ? SPAN_KEYS : rows.map((r) => SPAN_ROWS[r[2]]!))
+			new Set<string>([
+				...(hitDone ? [] : ['title']),
+				...(status === 'loading' ? SPAN_KEYS : rows.map((r) => SPAN_ROWS[r[2]]!))
+			])
 		)
 	);
 	const type = $derived(hit?.content_type ? contentTypeLabel(hit.content_type) : null);
