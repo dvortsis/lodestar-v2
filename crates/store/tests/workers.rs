@@ -303,6 +303,76 @@ fn a_step_never_passes_the_cap() {
     assert_eq!((second.deleted.len(), second.done), (3, true));
 }
 
+/// Ruling 4 (c): the rows a pre-V17 build's workers wrote, with
+/// `REMOTE_UNVERIFIED` and no `torrent_worker` row, are counted and purged
+/// on their own; local rows and attributed remote rows stay.
+#[test]
+fn unattributed_remote_rows_are_purged_alone() {
+    let mut store = mem();
+    let src = dht(&mut store);
+    let ps: Vec<_> = (0..9).map(|i| prepared(&store, &format!("t{i}"))).collect();
+    let write = |store: &mut Store, p: &Prepared, remote: bool, by: &[u32]| {
+        let t = PreparedTorrent {
+            extra_flags: if remote { flags::REMOTE_UNVERIFIED } else { 0 },
+            ..pt(p, src)
+        };
+        store
+            .write(&WriteBatch {
+                prepared: &[t],
+                prepared_by: by,
+                ..WriteBatch::default()
+            })
+            .unwrap()
+            .prepared[0]
+            .id()
+    };
+    // As a v0.5.2 coordinator stored them: flagged, no worker recorded.
+    let old: Vec<i64> = ps[..5]
+        .iter()
+        .map(|p| write(&mut store, p, true, &[]))
+        .collect();
+    let attributed: Vec<i64> = ps[5..7]
+        .iter()
+        .map(|p| write(&mut store, p, true, &[4]))
+        .collect();
+    let local: Vec<i64> = ps[7..]
+        .iter()
+        .map(|p| write(&mut store, p, false, &[]))
+        .collect();
+    assert_eq!(
+        store.unattributed_remote_torrents().unwrap(),
+        WorkerTorrents {
+            torrents: 5,
+            with_claims: 0
+        }
+    );
+    let mut deleted = Vec::new();
+    loop {
+        let s = store.purge_unattributed_remote_step(2).unwrap();
+        assert!(s.deleted.len() <= 2);
+        deleted.extend(s.deleted);
+        if s.done {
+            break;
+        }
+    }
+    assert_eq!(deleted, old);
+    for id in &old {
+        assert!(store.torrent(*id).unwrap().is_none());
+    }
+    for id in attributed.iter().chain(&local) {
+        assert!(store.torrent(*id).unwrap().is_some(), "{id} kept");
+    }
+    assert_eq!(store.worker_torrents(4).unwrap().torrents, 2);
+    assert_eq!(
+        store.unattributed_remote_torrents().unwrap(),
+        WorkerTorrents::default()
+    );
+    assert_eq!(count(&store, "SELECT count(*) FROM snapshot_deletions"), 5);
+    let logged = ids(&store, "SELECT torrent_id FROM reindex_log");
+    assert!(old.iter().all(|id| logged.contains(id)));
+    assert!(store.purge_unattributed_remote_step(2).unwrap().done);
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(48))]
 

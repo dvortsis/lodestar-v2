@@ -34,6 +34,18 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{Error, Result, Store, begin_write};
 
+/// The condition on a `torrents` row (`$id` its id, `?1` the remote flag)
+/// that it's a remote worker's with no `torrent_worker` row.
+macro_rules! unattributed {
+    ($id:literal) => {
+        concat!(
+            "flags & ?1 != 0 AND NOT EXISTS (SELECT 1 FROM torrent_worker w WHERE w.torrent_id = ",
+            $id,
+            ")"
+        )
+    };
+}
+
 /// The most torrents one [`Store::purge_worker_step`] deletes: a step holds
 /// the write lock for at most about 250 ms on a typical machine (measured
 /// in the decisions file), since the writer's latency comes first.
@@ -134,29 +146,103 @@ impl Store {
             .collect::<rusqlite::Result<_>>()?;
         let done = ids.len() <= limit;
         let ids = &ids[..ids.len().min(limit)];
-        {
-            // Cached: the delete carries Insights' trigger (V11) and the
-            // snapshot journal's (V12), which SQLite would otherwise
-            // compile again for every row.
-            let mut delete = tx.prepare_cached("DELETE FROM torrents WHERE id = ?1")?;
-            let mut log = tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
-            for id in ids {
-                if delete.execute([id])? != 1 {
-                    // `ON DELETE CASCADE` keeps every row's torrent.
-                    return Err(Error::Corrupt("torrent_worker row without its torrent"));
-                }
-                log.execute([id])?;
-            }
+        let deleted = delete_ids(&tx, ids, None)?;
+        if deleted.len() != ids.len() {
+            // `ON DELETE CASCADE` keeps every row's torrent.
+            return Err(Error::Corrupt("torrent_worker row without its torrent"));
         }
         tx.commit()?;
-        if !ids.is_empty() {
+        if !deleted.is_empty() {
             self.scrub_wal();
         }
-        Ok(WorkerPurgeStep {
-            deleted: ids.to_vec(),
-            done,
+        Ok(WorkerPurgeStep { deleted, done })
+    }
+
+    /// Stored torrents a remote worker wrote with no record of which one:
+    /// [`flags::REMOTE_UNVERIFIED`](crate::flags::REMOTE_UNVERIFIED) and no
+    /// `torrent_worker` row. Only a build before V17 that ran workers
+    /// (`release/v0.5.2` with "Allow workers" on) writes them; nothing
+    /// after V17 does. For the purge preview. A full scan of `torrents`:
+    /// read it once for the preview, not per step.
+    pub fn unattributed_remote_torrents(&self) -> Result<WorkerTorrents> {
+        let (torrents, with_claims): (i64, i64) = self
+            .conn
+            .prepare_cached(concat!(
+                "SELECT count(*), count(*) FILTER (WHERE EXISTS (
+                     SELECT 1 FROM torrent_claims c WHERE c.torrent_id = t.id))
+                 FROM torrents t WHERE ",
+                unattributed!("t.id")
+            ))?
+            .query_row([REMOTE], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(WorkerTorrents {
+            torrents: torrents as u64,
+            with_claims: with_claims as u64,
         })
     }
+
+    /// One step of purging the unattributed remote torrents
+    /// ([`Store::unattributed_remote_torrents`]), as
+    /// [`Store::purge_worker_step`] purges one worker's: the same bounded,
+    /// cursor-free steps and the same deletion path (index log, rollups,
+    /// snapshot journal, cascades, `secure_delete`). Built-in-worker,
+    /// imported and attributed rows are never touched. A torrent that
+    /// WK-13's re-verification has cleared of `REMOTE_UNVERIFIED` is no
+    /// longer one of them.
+    ///
+    /// The candidates are read before the write lock is taken (that read
+    /// scans `torrents`, which has no index on `flags`), then each is
+    /// deleted only if it still qualifies, checked in the write
+    /// transaction. So the lock is held for the deletes alone, and the
+    /// scope is exact even if a row changed in between.
+    pub fn purge_unattributed_remote_step(&mut self, limit: usize) -> Result<WorkerPurgeStep> {
+        let limit = limit.clamp(1, MAX_WORKER_PURGE_STEP);
+        let ids: Vec<i64> = self
+            .conn
+            .prepare_cached(concat!(
+                "SELECT t.id FROM torrents t WHERE ",
+                unattributed!("t.id"),
+                " ORDER BY t.id LIMIT ?2"
+            ))?
+            .query_map(params![REMOTE, limit as i64 + 1], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let done = ids.len() <= limit;
+        let ids = &ids[..ids.len().min(limit)];
+        let tx = begin_write(&mut self.conn)?;
+        let deleted = delete_ids(&tx, ids, Some(REMOTE))?;
+        tx.commit()?;
+        if !deleted.is_empty() {
+            self.scrub_wal();
+        }
+        Ok(WorkerPurgeStep { deleted, done })
+    }
+}
+
+/// `REMOTE_UNVERIFIED`, as SQL takes it.
+const REMOTE: i64 = crate::flags::REMOTE_UNVERIFIED;
+
+/// Deletes `ids` from `torrents`, each with its `reindex_log` row, in
+/// `tx`; with `unattributed` set (the remote flag), only rows that still
+/// qualify ([`Store::unattributed_remote_torrents`]). The ids deleted.
+fn delete_ids(tx: &Connection, ids: &[i64], unattributed: Option<i64>) -> Result<Vec<i64>> {
+    // Cached: the delete carries Insights' trigger (V11) and the snapshot
+    // journal's (V12), which SQLite would otherwise compile again for
+    // every row.
+    let mut delete = match unattributed {
+        None => tx.prepare_cached("DELETE FROM torrents WHERE id = ?2 AND ?1 IS NULL")?,
+        Some(_) => tx.prepare_cached(concat!(
+            "DELETE FROM torrents WHERE id = ?2 AND ",
+            unattributed!("?2")
+        ))?,
+    };
+    let mut log = tx.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?;
+    let mut deleted = Vec::with_capacity(ids.len());
+    for &id in ids {
+        if delete.execute(params![unattributed, id])? == 1 {
+            log.execute([id])?;
+            deleted.push(id);
+        }
+    }
+    Ok(deleted)
 }
 
 #[cfg(test)]
