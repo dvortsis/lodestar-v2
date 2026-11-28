@@ -901,6 +901,10 @@ pub(crate) async fn hidden_count(
 /// Adult while it's hidden, nor unverified items "Show" wouldn't bring
 /// back. Quarantined and dropped torrents are never in the index.
 ///
+/// Each count reads the index serving at the time; a commit between two
+/// of them can move the answer by what it added, as a search a moment
+/// later would.
+///
 /// 0 without running the query when the index holds no hidden torrent
 /// at all; `None` when there's nothing to offer (`v.hidden`, or the query
 /// names `hidden` itself), past `budget` (the route's is
@@ -923,7 +927,9 @@ fn count_hidden(
         value: true,
     };
     let deadline = cancel.with_budget(budget);
-    let count = |node: &Node| -> Result<Option<usize>, SearchError> {
+    // A lease for `node`, as a search takes one (its stem fallback
+    // included); `None` past the budget.
+    let lease = |node: &Node| -> Result<Option<Lease>, SearchError> {
         match Lease::new_at(
             index.clone(),
             node,
@@ -932,23 +938,42 @@ fn count_hidden(
             Sort::Relevance,
             &deadline,
         ) {
-            Ok(lease) => {
-                let t = lease.total();
-                Ok((!t.approx).then_some(t.value))
-            }
+            Ok(lease) => Ok(Some(lease)),
             Err(SearchError::OutOfTime) => Ok(None),
             Err(e) => Err(e),
         }
     };
+    let exact = |l: &Lease| Some(l.total()).filter(|t| !t.approx).map(|t| t.value);
     // Nothing hidden anywhere: no need to run the query (one posting list).
-    if count(&flag)? == Some(0) {
+    let Some(any) = lease(&flag)? else {
+        return Ok(None);
+    };
+    if exact(&any) == Some(0) {
         return Ok(Some(0));
     }
-    let base = base_query(ast, Visibility { hidden: true, ..v });
-    let only_hidden = Node::And {
-        of: vec![base.node.clone(), flag],
+    // What "Show" adds, by definition: the `hidden=true` search's total
+    // less the search's own. Each lease takes its own stem fallback (§8),
+    // as each search would, so a few matches that only stems find are
+    // counted only where the search shown would find them.
+    let shown = base_query(ast, v);
+    let with_hidden = base_query(ast, Visibility { hidden: true, ..v });
+    let Some(visible) = lease(&shown.query())? else {
+        return Ok(None);
     };
-    count(&base.restrict(only_hidden))
+    let Some(all) = lease(&with_hidden.query())? else {
+        return Ok(None);
+    };
+    if let (Some(a), Some(b)) = (exact(&all), exact(&visible)) {
+        return Ok(a.checked_sub(b));
+    }
+    // Past the exact range (100,000) neither search falls back to stems,
+    // so the hidden ones alone are counted, unless that count would.
+    let only_hidden = Node::And {
+        of: vec![with_hidden.node.clone(), flag],
+    };
+    Ok(lease(&with_hidden.restrict(only_hidden))?
+        .filter(|l| !l.stemmed())
+        .and_then(|l| exact(&l)))
 }
 
 /// Zero-result recovery for `ast` on `lease`'s snapshot: each removable

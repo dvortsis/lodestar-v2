@@ -108,7 +108,7 @@
 	"search_toolbar_count_one": "1 个结果",
 	"search_toolbar_count_other": "{count} 个结果",
 	"search_toolbar_count_about": "≈ {count} 个结果",
-	"search_toolbar_hidden": "{count} 个已隐藏",
+	"search_toolbar_hidden": "{count} 个已被过滤器隐藏",
 	"search_toolbar_hidden_show": "显示",
 	"search_toolbar_sort": "排序",
 	"search_toolbar_sort_relevance": "相关度",

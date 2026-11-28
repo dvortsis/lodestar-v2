@@ -61,17 +61,19 @@ test('"N hidden · Show" counts what a filter rule hid, and Show adds them (P7)'
 	await expect(count(page)).toHaveText('3 results');
 	const box = await count(page).boundingBox();
 	release();
-	await expect(count(page)).toHaveText('3 results · 2 hidden · Show');
+	await expect(count(page)).toHaveText('3 results · 2 hidden by filters · Show');
 	// The line keeps its height: nothing under it moves.
 	expect((await count(page).boundingBox())?.height).toBe(box?.height);
 	const sent = mock.calls('searchHiddenCount').map((r) => r.postDataJSON());
 	expect(sent).toHaveLength(1);
 	expect(sent[0]).toMatchObject({ hidden: false, ast: toAst('lantern') });
 	const show = page.getByRole('button', { name: 'Show', exact: true });
-	await expect(show).toHaveAccessibleDescription('2 hidden');
+	await expect(show).toHaveAccessibleDescription('2 hidden by filters');
 	await show.click();
 	await expect.poll(() => new URL(page.url()).searchParams.get('hidden')).toBe('1');
 	await expect(count(page)).toHaveText('5 results');
+	// Focus goes to the results it opened, not the page.
+	await expect(page.locator('#results')).toBeFocused();
 	await expect(page.getByTestId('results-hidden-show')).toHaveCount(0);
 	await expectNoA11yViolations(page);
 });
@@ -504,5 +506,41 @@ test.describe('the Filters button at 390 px never covers other content', () => {
 		await expect(alert).toBeVisible();
 		const filters = page.getByTestId('facet-open');
 		expect(overlaps((await filters.boundingBox())!, (await alert.boundingBox())!)).toBe(false);
+	});
+});
+
+test.describe('"N hidden · Show" under a coarse pointer', () => {
+	test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 800 } });
+
+	test('Show is a 44 px target and its arrival leaves the count line as it was', async ({
+		page,
+		go,
+		mock
+	}) => {
+		server(mock, () => body(hits(3), { total: 3 }));
+		let release!: () => void;
+		const held = new Promise<void>((r) => (release = r));
+		mock.on('searchHiddenCount', async () => (await held, { hidden_total: 2 }));
+		await go('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		await expect(count(page)).toHaveText('3 results');
+		const before = await count(page).boundingBox();
+		const first = await row(page, 1).boundingBox();
+		release();
+		const show = page.getByTestId('results-hidden-show');
+		await expect(show).toBeVisible();
+		const after = await count(page).boundingBox();
+		expect(after?.height).toBe(before?.height);
+		expect((await row(page, 1).boundingBox())?.y).toBe(first?.y);
+		const target = await show.evaluate((el) => {
+			const r = el.getBoundingClientRect();
+			const s = getComputedStyle(el);
+			const pad = (a: string, b: string) => parseFloat(s[a as never]) + parseFloat(s[b as never]);
+			return { w: r.width, h: r.height, py: pad('paddingTop', 'paddingBottom') };
+		});
+		// Padding taken back by a negative margin: the box is at least 44 px, the line unchanged.
+		expect(target.w).toBeGreaterThanOrEqual(44);
+		expect(target.h).toBeGreaterThanOrEqual(44);
+		expect(target.py).toBeGreaterThan(0);
 	});
 });

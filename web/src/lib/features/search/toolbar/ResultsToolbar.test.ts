@@ -73,12 +73,17 @@ describe('ResultsToolbar', () => {
 		await waitFor(() => expect(screen.getByTestId('results-hidden-show')).toBeTruthy(), WAIT);
 		expect(asked()).toHaveLength(1);
 		expect(asked()[0]![1].body).toMatchObject({ ast: lantern.ast, hidden: false });
-		expect(count()?.replace(/\s+/g, ' ')).toBe('1,284 results · 1,200 hidden · Show');
+		expect(count()?.replace(/\s+/g, ' ')).toBe('1,284 results · 1,200 hidden by filters · Show');
 		const show = screen.getByRole('button', { name: 'Show' });
 		const described = document.getElementById(show.getAttribute('aria-describedby')!);
-		expect(described?.textContent).toBe('1,200 hidden');
+		expect(described?.textContent).toBe('1,200 hidden by filters');
+		const region = document.body.appendChild(
+			Object.assign(document.createElement('div'), { id: 'results' })
+		);
 		await fireEvent.click(show);
 		expect(search.setHidden).toHaveBeenCalledWith(true);
+		expect(document.activeElement).toBe(region);
+		region.remove();
 	});
 
 	it('drops a late answer for rows no longer shown, and aborts its request', async () => {
@@ -100,11 +105,26 @@ describe('ResultsToolbar', () => {
 		expect(signals[0]!.aborted).toBe(true);
 		answer({ hidden_total: 999 });
 		await waitFor(
-			() => expect(screen.getByTestId('results-hidden').textContent).toBe('3 hidden'),
+			() => expect(screen.getByTestId('results-hidden').textContent).toBe('3 hidden by filters'),
 			WAIT
 		);
 		await tick();
-		expect(screen.getByTestId('results-hidden').textContent).toBe('3 hidden');
+		expect(screen.getByTestId('results-hidden').textContent).toBe('3 hidden by filters');
+	});
+
+	it('hides the count while a new query loads or fails, so Show never applies to it', async () => {
+		post.mockResolvedValue({ hidden_total: 3 });
+		results.query = lantern;
+		render(ResultsToolbar);
+		await waitFor(() => expect(screen.getByTestId('results-hidden-show')).toBeTruthy(), WAIT);
+		// The next query has no rows to keep: the store says loading, the rows' query stays.
+		results.status = 'loading';
+		await tick();
+		expect(screen.queryByTestId('results-hidden-show')).toBeNull();
+		results.status = 'error';
+		await tick();
+		expect(screen.queryByTestId('results-hidden-show')).toBeNull();
+		results.status = 'ready';
 	});
 
 	it('offers nothing for none, an unknown count, a failure, or hidden already shown', async () => {
@@ -118,7 +138,11 @@ describe('ResultsToolbar', () => {
 			post.mockImplementation(answer);
 			results.query = shown;
 			const { unmount } = render(ResultsToolbar);
-			if (!shown.hidden) await waitFor(() => expect(asked()).toHaveLength(1), WAIT);
+			if (!shown.hidden) {
+				await waitFor(() => expect(asked()).toHaveLength(1), WAIT);
+				// Settled, so nothing can still arrive after the check.
+				await (post.mock.results[0]!.value as Promise<unknown>).catch(() => {});
+			}
 			await tick();
 			expect(screen.queryByTestId('results-hidden')).toBeNull();
 			expect(screen.queryByTestId('results-hidden-show')).toBeNull();

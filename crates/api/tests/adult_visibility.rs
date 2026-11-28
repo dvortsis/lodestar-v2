@@ -347,6 +347,13 @@ async fn the_hidden_count_never_counts_adult_while_it_is_hidden() {
     assert_eq!(hidden(&f, &c, json!({ "hidden": true })).await, Value::Null);
     // A query that matches only the adult one counts nothing.
     assert_eq!(hidden(&f, &c, json!({ "q": "studio" })).await, 0);
+    // A word only stems match ("movies" for "Movie"): the count follows
+    // the searches' own stem fallback, so it's what "Show" adds.
+    let (_, plain) = json_call(&f.app, get("/api/v1/search?q=movies", &c)).await;
+    let (_, shown) = json_call(&f.app, get("/api/v1/search?q=movies&hidden=true", &c)).await;
+    let added = shown["total"].as_u64().unwrap() - plain["total"].as_u64().unwrap();
+    assert_eq!(hidden(&f, &c, json!({ "q": "movies" })).await, added);
+    assert_eq!(added, 1, "{plain} {shown}");
     // A query naming `hidden` itself gets no count.
     assert_eq!(
         hidden(&f, &c, json!({ "q": "hidden:yes" })).await,
