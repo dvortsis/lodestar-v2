@@ -1,4 +1,4 @@
-# runner-records-r23 decisions (#PR)
+# runner-records-r23 decisions (#1170)
 
 This file records the runner's calls since r22 (#1164). The rulings are the runner's, under §2.26 and its reading of §2.85–§2.88. A ruling that only grants owns or records a slice isn't flagged. The owner can veto any flagged call.
 
