@@ -580,7 +580,7 @@ fn run_with(
                     "the coordinator's address is missing: {JOIN_AGAIN}"
                 ))
             })?;
-        refuse_crawl_interface(&config)?;
+        refuse_crawl_interface(config)?;
         report(&format!("{CONNECTING}{addr}"));
         let settings = Settings::default();
         // The worker's fetch budget (WK-10b): dicts up to `MAX_METADATA`,
