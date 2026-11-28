@@ -211,7 +211,7 @@ $runArgs = @('ec2', 'run-instances',
     '--instance-type', $instanceType,
     '--network-interfaces', $networkInterface,
     '--metadata-options', 'HttpTokens=required',
-    '--block-device-mappings', "DeviceName=/dev/sda1,Ebs={VolumeSize=$RootVolumeGiB,Encrypted=true}",
+    '--block-device-mappings', "DeviceName=/dev/sda1,Ebs={VolumeSize=$RootVolumeGiB,Encrypted=true,DeleteOnTermination=true}",
     '--tag-specifications', "ResourceType=instance,Tags=[$tags]", "ResourceType=volume,Tags=[$tags]",
     '--iam-instance-profile', "Arn=$instanceProfileArn",
     '--profile', 'lodestar-provisioner', '--region', $region, '--output', 'json')
