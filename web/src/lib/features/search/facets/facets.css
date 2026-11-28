@@ -172,3 +172,29 @@
 	outline: var(--focus-ring-width) solid var(--color-primary);
 	outline-offset: var(--focus-ring-offset);
 }
+.fr-dates {
+	display: flex;
+	flex-wrap: wrap;
+	gap: calc(var(--spacing) * 2);
+}
+.fr-date {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) / 2);
+	color: var(--color-muted-text);
+}
+.fr-date-input {
+	min-height: calc(var(--spacing) * 9);
+	padding-inline: calc(var(--spacing) * 2);
+	border: var(--border) solid var(--color-field-border);
+	border-radius: var(--radius-field);
+	background: var(--color-base-100);
+	color: var(--color-base-content);
+	font: inherit;
+}
+.fr-date-input[aria-invalid='true'] {
+	border-color: var(--color-error);
+}
+.fr-error {
+	color: var(--color-error);
+}

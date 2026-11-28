@@ -18,9 +18,7 @@ describe('ResultRow, Comfortable', () => {
 		expect(text('r-raw')).toBe('Lantern.Keeper.7');
 		expect(text('r-size')).toBe('2.00 GiB');
 		expect(text('r-files')).toBe('5 files');
-		expect(text('r-seeders')).toBe('12');
-		expect(text('r-leechers')).toBe('3');
-		expect(text('r-trackers')).toContain('4 / 20');
+		expect(text('r-seeders')).toBe('12 seeders');
 		expect(text('r-dominant')).toBe('82% video');
 		expect(screen.getByRole('img', { name: /82% video, 11% audio/i })).toBeTruthy();
 		expect(screen.getByTestId('r').dataset.density).toBe('comfortable');
@@ -60,22 +58,34 @@ describe('ResultRow, Comfortable', () => {
 		expect(screen.queryByTestId('r-raw')).toBeNull();
 		expect(text('r-composition')).toBe('Not classified yet');
 		expect(screen.getByTestId('r-never-scraped').getAttribute('aria-label')).toBe('Never scraped');
-		expect(
-			screen.getByTestId('r-trackers').querySelector('[aria-label="Never scraped"]')
-		).toBeTruthy();
 		expect(text('r-files')).toBe('1 file');
 	});
 
-	it('marks estimated counts with ≈, and a suspect swarm and a backfill in words', () => {
+	it('says one seeder in the singular and marks an estimate with ≈', () => {
+		const { unmount } = render(ResultRow, {
+			hit: hit(9, { seeders: 1 }),
+			density: 'comfortable',
+			testid: 'r'
+		});
+		expect(text('r-seeders')).toBe('1 seeder');
+		unmount();
 		render(ResultRow, {
-			hit: hit(9, { seeders_approx: true, swarm_suspect: true, flags: ['backfill'] }),
+			hit: hit(9, { seeders_approx: true, swarm_suspect: true }),
 			density: 'comfortable',
 			testid: 'r'
 		});
 		expect(text('r-seeders')).toContain('≈');
-		expect(text('r-leechers')).toContain('≈');
 		expect(text('r-suspect')).toContain('Suspect seeders');
-		expect(screen.getByTestId('r-backfill')).toBeTruthy();
+	});
+
+	it('leaves the technical facts to the drawer: leechers, trackers, backfill', () => {
+		render(ResultRow, {
+			hit: hit(9, { flags: ['backfill', 'v2', 'hybrid'] }),
+			density: 'comfortable',
+			testid: 'r'
+		});
+		for (const gone of ['r-leechers', 'r-trackers', 'r-backfill'])
+			expect(screen.queryByTestId(gone)).toBeNull();
 	});
 
 	it('shows bidirectional controls in a name as markers', () => {
@@ -88,25 +98,69 @@ describe('ResultRow, Comfortable', () => {
 		expect(text('r-raw')).not.toContain('‮');
 	});
 
-	it('shows at most five badges: the type (or the adult kind), then the flags', () => {
+	it('shows up to five badges and collapses the rest into a +N chip', () => {
 		render(ResultRow, {
 			hit: hit(4, {
-				content_type: 'adult',
-				adult_kind: 'vr',
-				flags: ['private', 'v2', 'hybrid', 'imported', 'backfill']
+				content_type: 'movie',
+				resolution: '1080p',
+				flags: ['private', 'imported', 'v2', 'hybrid']
 			}),
 			density: 'comfortable',
 			testid: 'r'
 		});
-		const badges = screen.getByTestId('r-badges').querySelectorAll('.rr-badge');
-		expect([...badges].map((b) => b.getAttribute('data-testid'))).toEqual([
-			'r-badge-type',
-			'r-badge-private',
-			'r-badge-v2',
-			'r-badge-hybrid',
-			'r-badge-imported'
-		]);
+		// Six facts (type, res, private, imported, v2, hybrid): four show, the chip counts two.
+		const chip = screen.getByTestId('r-badges-more');
+		expect(chip.tagName).toBe('BUTTON');
+		expect(chip.getAttribute('aria-label')).toMatch(/more facts/);
+		expect(chip.textContent).toBe('+2');
+		expect(screen.getByTestId('r-badge-type')).toBeTruthy();
+		expect(screen.queryByTestId('r-badge-hybrid')).toBeNull();
+	});
+
+	it('never collapses safety or verification into the chip', () => {
+		render(ResultRow, {
+			hit: hit(4, {
+				content_type: 'movie',
+				resolution: '1080p',
+				flags: ['private', 'v2', 'hybrid'],
+				verified: false,
+				swarm_suspect: true
+			}),
+			density: 'comfortable',
+			testid: 'r'
+		});
+		expect(screen.getByTestId('unverified-badge')).toBeTruthy();
+		expect(screen.getByTestId('r-suspect')).toBeTruthy();
+		expect(screen.getByTestId('r-badges-more').textContent).toBe('+3');
+	});
+
+	it('shows the adult kind as the type badge', () => {
+		render(ResultRow, {
+			hit: hit(4, { content_type: 'adult', adult_kind: 'vr' }),
+			density: 'comfortable',
+			testid: 'r'
+		});
 		expect(text('r-badge-type')).toBe('VR');
+	});
+
+	it('makes badges buttons only where the row can filter (it has actions)', () => {
+		const actions = createRawSnippet<[SearchHit]>(() => ({ render: () => '<span></span>' }));
+		const plain = render(ResultRow, {
+			hit: hit(1, { content_type: 'movie' }),
+			density: 'comfortable',
+			testid: 'r'
+		});
+		expect(screen.getByTestId('r-badge-type').tagName).toBe('SPAN');
+		plain.unmount();
+		render(ResultRow, {
+			hit: hit(1, { content_type: 'movie' }),
+			density: 'comfortable',
+			testid: 'r',
+			actions
+		});
+		const b = screen.getByTestId('r-badge-type');
+		expect(b.tagName).toBe('BUTTON');
+		expect(b.getAttribute('aria-label')).toBe('Filter by Movie');
 	});
 
 	it('has no badges for an unclassified torrent without flags', () => {
@@ -165,13 +219,8 @@ describe('ResultRow, Compact', () => {
 			expect(screen.queryByTestId(gone)).toBeNull();
 	});
 
-	it('keeps the suspect and backfill words for screen readers', () => {
-		render(ResultRow, {
-			hit: hit(9, { swarm_suspect: true, flags: ['backfill'] }),
-			density: 'compact',
-			testid: 'r'
-		});
+	it('keeps the suspect words for screen readers', () => {
+		render(ResultRow, { hit: hit(9, { swarm_suspect: true }), density: 'compact', testid: 'r' });
 		expect(screen.getByTestId('r-suspect').className).toContain('sr-only');
-		expect(screen.getByTestId('r-backfill').textContent).toContain('backfill');
 	});
 });

@@ -14,6 +14,7 @@
 	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import SourceFacets from '../unverified/SourceFacets.svelte';
 	import { wholeDays } from './bins';
+	import DateFields from './DateFields.svelte';
 	import RangeGroup from './RangeGroup.svelte';
 	import SwarmGroup from './SwarmGroup.svelte';
 	import TermGroup from './TermGroup.svelte';
@@ -70,7 +71,6 @@
 	};
 	const FLAGS = new Set(['private', 'v2', 'ambiguous', 'imported', 'backfill']);
 	const MORE = [
-		'lang',
 		'group',
 		'codec',
 		'audio',
@@ -126,6 +126,19 @@
 		const r = rangeOf(ast, field);
 		return r && r.hi === null ? r.lo : null;
 	};
+	// A brush or typed dates: whole days, the clause is printed as days, so finer edges wouldn't
+	// survive the URL.
+	function setDiscovered(brushed: { lo: number | null; hi: number | null } | null) {
+		const r = wholeDays(brushed);
+		onchange(
+			setDate(
+				ast,
+				'discovered',
+				r?.lo == null ? null : { at: r.lo },
+				r?.hi == null ? null : { at: r.hi }
+			)
+		);
+	}
 	let histogram = $state<HTMLElement>();
 	let custom = $state(false);
 </script>
@@ -176,7 +189,38 @@
 			</p>
 		{/if}
 		{@render term('type')}
-		<SourceFacets {data} {ast} {onchange} />
+		{@render term('res')}
+		{@const size = data.histograms.size}
+		{#if size}
+			<RangeGroup
+				name="size"
+				title={m.search_facets_size()}
+				hist={size}
+				range={sizeRange}
+				onrange={(r) => onchange(setRange(ast, 'size', r?.lo ?? null, r?.hi ?? null))}
+			/>
+		{:else if blocked('size')}
+			{@render unavailable('size', m.search_facets_size())}
+		{/if}
+		<SwarmGroup
+			name="seeders"
+			title={m.search_facets_seeders()}
+			bucket={data.buckets.seeders}
+			atLeast={atLeast('seeders')}
+			onatleast={(n) => onchange(setRange(ast, 'seeders', n, null))}
+		/>
+		{@render term('lang')}
+		{@const year = data.histograms.year}
+		{#if year}
+			<!-- Release years: bins are [y, y + 1), the clause's bounds are years. -->
+			<RangeGroup
+				name="year"
+				title={m.search_facets_year()}
+				hist={year}
+				range={rangeOf(ast, 'year')}
+				onrange={(r) => onchange(setRange(ast, 'year', r?.lo ?? null, r?.hi ?? null))}
+			/>
+		{/if}
 		{@const disc = data.histograms.discovered}
 		{#if disc}
 			<div bind:this={histogram}>
@@ -185,18 +229,7 @@
 					title={m.search_facets_discovered()}
 					hist={disc}
 					range={discoveredRange}
-					onrange={(brushed) => {
-						// Whole days: the clause is printed as days, so finer edges wouldn't survive the URL.
-						const r = wholeDays(brushed);
-						onchange(
-							setDate(
-								ast,
-								'discovered',
-								r?.lo == null ? null : { at: r.lo },
-								r?.hi == null ? null : { at: r.hi }
-							)
-						);
-					}}
+					onrange={setDiscovered}
 				>
 					{#snippet presets()}
 						<div
@@ -227,56 +260,30 @@
 								}}>{m.search_facets_custom()}</button
 							>
 						</div>
-						{#if custom}<p class="fr-muted" id="fr-custom-hint">
-								{m.search_facets_custom_hint()}
-							</p>{/if}
+						{#if custom || (discovered && preset === null)}
+							<DateFields range={discoveredRange} onrange={setDiscovered} />
+							<p class="fr-muted" id="fr-custom-hint">{m.search_facets_custom_hint()}</p>
+						{/if}
 					{/snippet}
 				</RangeGroup>
 			</div>
 		{:else if blocked('discovered')}
 			{@render unavailable('discovered', m.search_facets_discovered())}
 		{/if}
-		{@const size = data.histograms.size}
-		{#if size}
-			<RangeGroup
-				name="size"
-				title={m.search_facets_size()}
-				hist={size}
-				range={sizeRange}
-				onrange={(r) => onchange(setRange(ast, 'size', r?.lo ?? null, r?.hi ?? null))}
-			/>
-		{:else if blocked('size')}
-			{@render unavailable('size', m.search_facets_size())}
-		{/if}
-		{@render term('ext')}
-		{@render term('res')}
-		{#each ['seeders', 'trackers'] as const as name (name)}
-			<SwarmGroup
-				{name}
-				title={name === 'seeders' ? m.search_facets_seeders() : m.search_facets_trackers()}
-				bucket={data.buckets[name]}
-				atLeast={atLeast(name)}
-				onatleast={(n) => onchange(setRange(ast, name, n, null))}
-			/>
-		{/each}
-		{@const year = data.histograms.year}
-		{#if moreShown.length || year}
-			<details class="fr-more" data-testid="facet-more">
-				<summary>{m.search_facets_more_filters()}</summary>
-				<div class="fr-more-body">
-					{#if year}
-						<!-- Release years: bins are [y, y + 1), the clause's bounds are years. -->
-						<RangeGroup
-							name="year"
-							title={m.search_facets_year()}
-							hist={year}
-							range={rangeOf(ast, 'year')}
-							onrange={(r) => onchange(setRange(ast, 'year', r?.lo ?? null, r?.hi ?? null))}
-						/>
-					{/if}
-					{#each moreShown as name (name)}{@render term(name)}{/each}
-				</div>
-			</details>
-		{/if}
+		<details class="fr-more" data-testid="facet-more">
+			<summary>{m.search_facets_more_filters()}</summary>
+			<div class="fr-more-body">
+				<SourceFacets {data} {ast} {onchange} />
+				{@render term('ext')}
+				<SwarmGroup
+					name="trackers"
+					title={m.search_facets_trackers()}
+					bucket={data.buckets.trackers}
+					atLeast={atLeast('trackers')}
+					onatleast={(n) => onchange(setRange(ast, 'trackers', n, null))}
+				/>
+				{#each moreShown as name (name)}{@render term(name)}{/each}
+			</div>
+		</details>
 	{/if}
 </div>

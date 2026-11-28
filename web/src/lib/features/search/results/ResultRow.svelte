@@ -20,9 +20,7 @@
 	// user imports: a lazily imported component's own <style> would load with /search's route.
 	// Opening the row (click, Enter) is the list's (VirtualList onActivate): no links inside a row.
 	import type { Snippet } from 'svelte';
-	import ArrowDown from '~icons/ph/arrow-down-bold';
 	import ArrowUp from '~icons/ph/arrow-up-bold';
-	import History from '~icons/ph/clock-counter-clockwise-bold';
 	import Warning from '~icons/ph/warning-bold';
 	import CategoryBar from '$lib/charts/CategoryBar.svelte';
 	import { formatShare } from '$lib/format';
@@ -31,6 +29,7 @@
 	import UnverifiedBadge from '../unverified/UnverifiedBadge.svelte';
 	import Mono from '$lib/ui/labels/Mono.svelte';
 	import RelativeTime from '$lib/ui/labels/RelativeTime.svelte';
+	import { badgesOf, collapseBadges, ROW_FILTER } from './badges';
 	import { composition } from './composition';
 
 	interface Props {
@@ -68,26 +67,30 @@
 					m.search_results_resolved_via_other({ method: hit.resolved_via }))
 	);
 
-	// Up to 5 badges (§10.4): what the torrent is, then the flags people filter by.
-	const FLAG: [string, () => string][] = [
-		['private', m.search_results_flag_private],
-		['v2', m.search_results_flag_v2],
-		['hybrid', m.search_results_flag_hybrid],
-		['imported', m.search_results_flag_imported]
-	];
-	const badges = $derived.by(() => {
-		const out: { key: string; label: string }[] = [];
-		const kind = hit.content_type === 'adult' && hit.adult_kind ? ADULT[hit.adult_kind] : undefined;
-		const type = kind ?? (hit.content_type ? TYPE[hit.content_type] : undefined);
-		if (type) out.push({ key: 'type', label: type() });
-		for (const [flag, label] of FLAG)
-			if (hit.flags.includes(flag)) out.push({ key: flag, label: label() });
-		return out.slice(0, 5);
-	});
+	// Up to 5 badges (§10.4): safety and verification never give way; the rest collapse into "+N".
+	const all = $derived(
+		badgesOf(hit, {
+			type: (key, adult) =>
+				(key === 'adult' && adult ? ADULT[adult] : undefined)?.() ?? TYPE[key]?.(),
+			private: m.search_results_flag_private(),
+			imported: m.search_results_flag_imported(),
+			v2: m.search_results_flag_v2(),
+			hybrid: m.search_results_flag_hybrid()
+		})
+	);
+	const collapsed = $derived(collapseBadges(all));
+	// Compact has no badge line: only what must never go missing (unverified, suspect) shows.
+	const shown = $derived(comfortable ? collapsed.shown : all.filter((b) => b.keep));
+	// Search passes row actions and so can filter; Discover and Alerts rows show plain tags.
+	const filterable = $derived(actions !== undefined);
+	// The filter itself is the facet host's (it owns the pending edit and the AST path): the row only
+	// says which facet and value, so a Discover or Alerts page never loads the search state for it.
+	function filterBy(facet: string, value: string, event: MouseEvent) {
+		event.stopPropagation(); // not the row's activation (it would open the drawer)
+		window.dispatchEvent(new CustomEvent(ROW_FILTER, { detail: { facet, value } }));
+	}
 
 	const comp = $derived(composition(hit.composition, formatShare, locale));
-	const backfill = $derived(hit.flags.includes('backfill'));
-	const scraped = $derived(hit.trackers_reporting !== null && hit.trackers_checked !== null);
 	const matchedCount = $derived(hit.matched_files?.length ?? 0);
 </script>
 
@@ -108,11 +111,44 @@
 		<div class="rr-facts">
 			<!-- A feature's own fact first. One that doesn't fit drops whole (row.css), never mid-word. -->
 			{#if extra}<span class="rr-fact rr-extra">{@render extra()}</span>{/if}
-			{#if comfortable && badges.length}
+			{#if shown.length}
 				<span class="rr-badges" data-testid="{id}-badges">
-					{#each badges as b (b.key)}<span class="rr-badge" data-testid="{id}-badge-{b.key}"
-							>{b.label}</span
-						>{/each}
+					{#each shown as b (b.key)}
+						{#if b.kind === 'unverified'}
+							<UnverifiedBadge imported={hit.imported === true} />
+						{:else if b.kind === 'suspect'}
+							<span class="rr-badge" title={m.swarm_suspect()} data-testid="{id}-suspect-badge">
+								<Warning class="rr-icon" aria-hidden="true" />
+								<span class={comfortable ? '' : 'sr-only'} data-testid="{id}-suspect"
+									>{m.swarm_suspect()}</span
+								>
+							</span>
+						{:else if filterable && b.filter}
+							{@const f = b.filter}
+							<button
+								type="button"
+								class="rr-badge rr-badge-btn rr-optional"
+								tabindex="-1"
+								aria-label={m.search_results_badge_filter({ label: b.label })}
+								data-testid="{id}-badge-{b.key}"
+								onclick={(e) => filterBy(f.facet, f.value, e)}>{b.label}</button
+							>
+						{:else}
+							<span class="rr-badge rr-optional" data-testid="{id}-badge-{b.key}">{b.label}</span>
+						{/if}
+					{/each}
+					{#if comfortable && collapsed.hidden !== null}
+						<!-- Opens the row (the click bubbles to the list's activation): the drawer holds the rest. -->
+						<button
+							type="button"
+							class="rr-badge rr-badge-btn rr-optional"
+							tabindex="-1"
+							aria-label={m.search_results_badges_more({
+								count: formatCount(collapsed.hidden, locale)
+							})}
+							data-testid="{id}-badges-more">+{formatCount(collapsed.hidden, locale)}</button
+						>
+					{/if}
 				</span>
 			{/if}
 			{#if comfortable}
@@ -140,80 +176,28 @@
 				>
 			{/if}
 			<span class="rr-fact rr-swarm" data-testid="{id}-swarm">
-				<span class="sr-only">{m.seeders()}: </span><ArrowUp class="rr-icon" aria-hidden="true" />
+				{#if !comfortable || hit.seeders === null}
+					<span class="sr-only">{m.seeders()}: </span>
+				{/if}
+				{#if !comfortable}<ArrowUp class="rr-icon" aria-hidden="true" />{/if}
 				{#if hit.seeders === null}
 					<span role="img" aria-label={m.never_scraped()} data-testid="{id}-never-scraped">—</span>
 				{:else}
 					<span data-testid="{id}-seeders"
-						>{formatCount({ value: hit.seeders, approx: hit.seeders_approx }, locale)}</span
+						>{comfortable
+							? (hit.seeders === 1 ? m.search_results_seeders_one : m.search_results_seeders_other)(
+									{
+										count: formatCount({ value: hit.seeders, approx: hit.seeders_approx }, locale)
+									}
+								)
+							: formatCount({ value: hit.seeders, approx: hit.seeders_approx }, locale)}</span
 					>
-				{/if}
-				{#if comfortable}
-					<span class="rr-leechers">
-						<span class="sr-only">{m.leechers()}: </span><ArrowDown
-							class="rr-icon"
-							aria-hidden="true"
-						/>
-						{#if hit.leechers === null}
-							<span
-								role="img"
-								aria-label={m.never_scraped()}
-								data-testid="{id}-leechers-never-scraped">—</span
-							>
-						{:else}
-							<span data-testid="{id}-leechers"
-								>{formatCount({ value: hit.leechers, approx: hit.seeders_approx }, locale)}</span
-							>
-						{/if}
-					</span>
-				{/if}
-				{#if hit.verified === false}
-					<UnverifiedBadge imported={hit.imported === true} />
-				{/if}
-				{#if hit.swarm_suspect}
-					<span class="rr-fact" title={m.swarm_suspect()}>
-						<Warning class="rr-icon" aria-hidden="true" />
-						<span class={comfortable ? '' : 'sr-only'} data-testid="{id}-suspect"
-							>{m.swarm_suspect()}</span
-						>
-					</span>
 				{/if}
 			</span>
 			<span class="rr-fact rr-discovered">
 				<span class="sr-only">{m.discovered()}: </span>
 				<span data-testid="{id}-discovered"><RelativeTime seconds={hit.discovered_at} /></span>
-				{#if backfill}
-					<span class="rr-fact" title={m.backfill()} data-testid="{id}-backfill">
-						<History class="rr-icon" aria-hidden="true" />
-						<span class={comfortable ? '' : 'sr-only'}>{m.backfill()}</span>
-					</span>
-				{/if}
 			</span>
-			<!-- Technical (§10.4): last, so the first to drop on a narrow row. -->
-			{#if comfortable}
-				<span class="rr-fact" data-testid="{id}-trackers">
-					<span class="sr-only">{m.trackers_reporting()}: </span>
-					{#if scraped}
-						<span aria-hidden="true"
-							>{m.search_results_trackers_of({
-								reporting: formatCount(hit.trackers_reporting, locale),
-								checked: formatCount(hit.trackers_checked, locale)
-							})}</span
-						><span class="sr-only"
-							>{m.search_results_trackers_reporting({
-								reporting: formatCount(hit.trackers_reporting, locale),
-								checked: formatCount(hit.trackers_checked, locale)
-							})}</span
-						>
-					{:else}
-						<span
-							role="img"
-							aria-label={m.never_scraped()}
-							data-testid="{id}-trackers-never-scraped">—</span
-						>
-					{/if}
-				</span>
-			{/if}
 		</div>
 		{#if comfortable && matched}
 			<div class="rr-matched" data-testid="{id}-matched">

@@ -151,14 +151,21 @@ describe('FacetRail', () => {
 	});
 
 	describe('the swarm groups', () => {
-		it('say "not available yet" before swarm indexing, never zeros', () => {
-			render(FacetRail, props());
+		it('offer the presets without counts before swarm indexing, never zeros', async () => {
+			const onchange = vi.fn();
+			render(FacetRail, props({ onchange }));
 			for (const name of ['seeders', 'trackers']) {
-				expect(screen.getByTestId(`facet-${name}-unavailable`).textContent).toContain(
-					'Not available yet'
-				);
+				expect(screen.queryByTestId(`facet-${name}-unavailable`)).toBeNull();
 				expect(screen.queryByTestId(`facet-${name}-1-count`)).toBeNull();
+				expect(screen.getByTestId(`facet-${name}-1`)).toBeTruthy();
 			}
+			for (const n of [1, 5, 50]) expect(screen.getByTestId(`facet-seeders-${n}`)).toBeTruthy();
+			expect(screen.queryByTestId('facet-trackers-5')).toBeNull();
+			await fireEvent.click(screen.getByTestId('facet-seeders-50'));
+			expect(onchange).toHaveBeenLastCalledWith({
+				op: 'and',
+				of: [word('lantern'), { op: 'range', field: 'seeders', lo: 50, hi: null }]
+			});
 		});
 
 		it('offer the presets with the server’s counts once it sends them', async () => {
@@ -220,9 +227,8 @@ describe('FacetRail', () => {
 			}
 		});
 		render(FacetRail, props({ data, onchange }));
-		expect(
-			screen.getByTestId('facet-more').querySelector('[data-testid="facet-year"]')
-		).toBeTruthy();
+		expect(screen.getByTestId('facet-more').querySelector('[data-testid="facet-year"]')).toBeNull();
+		expect(screen.getByTestId('facet-year')).toBeTruthy();
 		expect(screen.getByTestId('facet-year-missing').textContent).toContain('12');
 	});
 
