@@ -11133,14 +11133,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T15:46:29Z",
+    "updated": "2026-11-28T16:42:43Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-healthz-count-async",
         "role": "build",
         "agent": "session_01MMjhn8NdgJe3D7wFtABUPJ",
-        "doing": "building (healthz count async)",
+        "doing": "#1181 review + analyzer fix",
         "since": "2026-11-28T14:32:02Z"
       },
       {
@@ -11148,23 +11148,23 @@
         "slice": "X-vpn-bind-ui",
         "role": "build",
         "agent": "session_01MMjhnC3xNhSWndkRCVWCzd",
-        "doing": "step 0",
+        "doing": "local build; pill waits for #1181",
         "since": "2026-11-28T15:46:29Z"
       },
       {
         "slot": 3,
-        "slice": "X-smoke-torrent-flake",
+        "slice": "X-all-themes-settle",
         "role": "build",
         "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
-        "doing": "prove the /t smoke race, then fix",
-        "since": "2026-11-28T15:41:40Z"
+        "doing": "shared settle helper for all-themes",
+        "since": "2026-11-28T16:42:43Z"
       },
       {
         "slot": 4,
         "slice": "X-hidden-count-wide-shift",
         "role": "build",
         "agent": "session_01MMjhnC5ux8vDCYL2oNoj1y",
-        "doing": "building: .tb-count floor from 128rem",
+        "doing": "#1179 ce7f83b0 CI",
         "since": "2026-11-28T15:17:30Z"
       }
     ],
