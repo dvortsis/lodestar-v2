@@ -1,4 +1,4 @@
-# X-watch-search-wait decisions
+# X-watch-search-wait decisions (#1166)
 
 On #1161's CI (ubuntu-latest), `crates/lodestar/tests/watch.rs`, `a_served_instance_takes_files_from_its_watch_folder`, timed out at its search wait: for over a minute after the good file was taken, a search for `Watched Cut` never answered `"total":1`. `main` was green and a re-run passed. These decisions change only the test; no product code and no spec section is affected.
 

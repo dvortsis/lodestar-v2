@@ -168,7 +168,7 @@ describe('the query bar', () => {
 		await typeText(editor, 'a ( b');
 		await fireEvent.keyDown(editor, { key: 'Enter' });
 		await waitFor(() => expect(editor.getAttribute('aria-invalid')).toBe('true'));
-		expect(message().textContent).toContain("Can't read this query:");
+		expect(message().textContent).toContain('Check your query:');
 		expect(message().textContent).toContain("missing ')'");
 		expect(editor.querySelector('.qt-error')?.textContent).toBe('(');
 		await typeText(editor, 'a ( bc');

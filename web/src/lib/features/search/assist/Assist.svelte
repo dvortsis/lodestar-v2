@@ -31,8 +31,10 @@
 		hidden?: () => boolean;
 		/** The bar's text was already searched and not edited since (Enter beat this chunk's load). */
 		submitted?: () => boolean;
+		/** The caret while the suggestions are open, else null: an unfinished token is not an error. */
+		onsuggest?: (caret: number | null) => void;
 	}
-	let { el, text, accept, announce, hidden, submitted }: Props = $props();
+	let { el, text, accept, announce, hidden, submitted, onsuggest }: Props = $props();
 
 	const uid = $props.id();
 	const LISTBOX = `search-assist-${uid}`;
@@ -93,6 +95,7 @@
 	function oninput() {
 		show();
 		typed = true;
+		caretAt = caret();
 		if (current.trim()) suggester.request(current, charPos(current, caret()));
 		else {
 			suggester.cancel();
@@ -100,8 +103,21 @@
 		}
 	}
 
+	// Reported only while the list is on screen: no list, no "unfinished token".
+	let caretAt = $state<number | null>(null);
+	$effect(() => {
+		const at = shown ? caretAt : null;
+		untrack(() => onsuggest?.(at));
+	});
+
+	/** The caret moved without typing (arrows, a click): the token it is in may have changed. */
+	function moved() {
+		if (open) caretAt = caret();
+	}
+
 	function close() {
 		open = false;
+		caretAt = null;
 		active = -1;
 		typed = false;
 		suggester.cancel();
@@ -164,6 +180,8 @@
 		el.addEventListener('input', oninput);
 		el.addEventListener('focus', onfocus);
 		el.addEventListener('blur', close);
+		el.addEventListener('keyup', moved);
+		el.addEventListener('pointerup', moved);
 		if (document.activeElement === el && !submitted?.()) {
 			if (text()) oninput();
 			else show();
@@ -173,10 +191,13 @@
 		if (!text()) show();
 	}
 	onDestroy(() => {
+		onsuggest?.(null);
 		el.removeEventListener('keydown', onkeydown, true);
 		el.removeEventListener('input', oninput);
 		el.removeEventListener('focus', onfocus);
 		el.removeEventListener('blur', close);
+		el.removeEventListener('keyup', moved);
+		el.removeEventListener('pointerup', moved);
 		suggester.cancel();
 		el.setAttribute('aria-expanded', 'false');
 		el.removeAttribute('aria-controls');
@@ -232,7 +253,10 @@
 				class="assist-option"
 				onclick={() => pick(o)}
 			>
-				<span class="assist-kind">{KIND[o.kind]()}</span>
+				{#if o.kind !== 'value'}<span class="assist-kind">{KIND[o.kind]()}</span>{:else}<span
+						class="assist-kind"
+						aria-hidden="true"
+					></span>{/if}
 				<span class="assist-text" class:assist-mono={o.kind !== 'title' && o.kind !== 'saved'}
 					>{o.text}</span
 				>

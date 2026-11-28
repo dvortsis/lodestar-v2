@@ -5,6 +5,7 @@ export const HASH = '0123456789abcdef0123456789abcdef01234567';
 
 export function torrentDetail(over: Partial<TorrentDetail> = {}): TorrentDetail {
 	return {
+		attributes: null,
 		completed: 12,
 		dht_peers: null,
 		dht_seeds: null,

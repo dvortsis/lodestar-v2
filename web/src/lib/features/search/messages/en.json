@@ -8,7 +8,7 @@
 	"search_query_label": "Search torrents",
 	"search_query_placeholder": "Search by name, or add a filter such as res:1080p",
 	"search_query_placeholder_short": "Search, or filter: res:1080p",
-	"search_query_error_lead": "Can't read this query:",
+	"search_query_error_lead": "Check your query:",
 	"search_query_check_failed": "Couldn't check the query",
 	"search_query_check_failed_body": "The check didn't go through. Check that Lodestar is running, then try again.",
 	"search_query_retry": "Retry",
@@ -203,5 +203,11 @@
 	"search_state_growing": "Index still growing: {count} searchable.",
 	"search_state_growing_rate": "Index still growing: {count} searchable, +{rate}.",
 	"search_state_cold_body": "{count} searchable torrents so far. Older content appears over time.",
-	"search_state_cold_body_rate": "{count} searchable torrents so far, +{rate}. Older content appears over time."
+	"search_state_cold_body_rate": "{count} searchable torrents so far, +{rate}. Older content appears over time.",
+	"search_rescue_didyoumean": "Did you mean {query}?",
+	"search_rescue_natural": "These words read as filters:",
+	"search_rescue_chips": "Filters these words mean",
+	"search_rescue_chips_ready_one": "1 filter found in your words. Apply it or change the search.",
+	"search_rescue_chips_ready_other": "{count} filters found in your words. Apply them or change the search.",
+	"search_rescue_apply": "Apply"
 }

@@ -80,7 +80,8 @@ describe('ResultsPanel with a query', () => {
 		const { unmount } = render(ResultsPanel, { focusBar: () => {} });
 		await screen.findByTestId('results-none', {}, WAIT);
 		expect(await screen.findByTestId('results-recover', {}, WAIT)).toBeTruthy();
-		expect(screen.getByText('Try fewer or different words.')).toBeTruthy();
+		// The hint waits for the rescue to settle (X-zero-rescue), so it is a condition, not an instant.
+		expect(await screen.findByText('Try fewer or different words.', {}, WAIT)).toBeTruthy();
 		expect(screen.queryByText('Remove a filter to widen the search:')).toBeNull();
 		unmount();
 	});

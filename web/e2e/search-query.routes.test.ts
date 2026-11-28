@@ -129,7 +129,7 @@ test('a parse error is marked in the bar and explained under it', async ({ page,
 	await page.keyboard.press('Enter');
 	await expect(editor(page)).toHaveAttribute('aria-invalid', 'true');
 	const message = page.locator('#search-query-message');
-	await expect(message).toHaveText(/Can't read this query:\s+unclosed quote/);
+	await expect(message).toHaveText(/Check your query:\s+unclosed quote/);
 	await expect(editor(page).locator('.qt-error')).toHaveText(['"', 'buck']);
 	await expectQuery(page, 'big "buck'); // the raw text stays in the URL
 });

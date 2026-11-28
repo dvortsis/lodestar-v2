@@ -68,7 +68,7 @@ test('sig: with too few digits shows the server’s message, marked in the bar',
 	await page.keyboard.press('Enter');
 	await expect(bar(page)).toHaveAttribute('aria-invalid', 'true');
 	await expect(page.locator('#search-query-message')).toContainText(
-		/Can't read this query:\s+sig: use all 16 hex digits of a payload signature/
+		/Check your query:\s+sig: use all 16 hex digits of a payload signature/
 	);
 	await expect(bar(page).locator('.qt-error')).toHaveText('7a9f3c12');
 });
