@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T18:08:49Z",
+  "updated_at": "2026-11-28T18:12:29Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11159,7 +11159,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T18:01:42Z",
+    "updated": "2026-11-28T18:12:29Z",
     "items": [
       {
         "slot": 1,
@@ -11203,11 +11203,11 @@
       },
       {
         "slot": 6,
-        "slice": "X-row-rail",
+        "slice": "WK-12",
         "role": "build",
-        "agent": "session_01MMjhnD4mmgLjAzYmDkubFy",
-        "doing": "step 0: plan and size grants",
-        "since": "2026-11-28T18:01:42Z"
+        "agent": "session_01MMjhnA47F9wbEE636t4gME",
+        "doing": "step 0: V17 design (critical path)",
+        "since": "2026-11-28T18:12:29Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
@@ -12320,8 +12320,17 @@
   },
   "merge_order": [],
   "next_launch": [
-    "WK-12 (critical path, first free slot)",
-    "X-help",
-    "M8-REL-2 (after X-ci-test-shard)"
-  ]
+    "X-row-rail (resume, fill)",
+    "X-help (fill)",
+    "M8-REL-2 (after X-ci-test-shard)",
+    "X-hidden-count-drawer-wrap (fill)",
+    "dht proof spill-filter flake fix (once)"
+  ],
+  "paused_slices": {
+    "X-row-rail": {
+      "agent": "session_01MMjhnD4mmgLjAzYmDkubFy",
+      "since": "2026-11-28T18:12:29Z",
+      "why": "fill work; slot given to WK-12 (critical path). Step 0 rulings stand; relaunch at the next free fill slot."
+    }
+  }
 }

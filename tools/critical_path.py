@@ -53,8 +53,21 @@ print(f"Remaining to {target}: {sum(1 for i in seen if i in by and not done(i))}
 print("  " + " -> ".join(c))
 on_path = [i for i in c if i in ready]
 print(f"Ready on the longest chain (start these first): {on_path}")
-lens = sorted(((len(chain(i)), i) for i in ready), reverse=True)
-print("Ready slices by the chain length behind them (higher = more urgent):")
+# Urgency: the longest chain of unfinished nodes from i up to the target.
+users = {}
+for i in seen:
+    for d in deps(i):
+        users.setdefault(d, set()).add(i)
+
+@lru_cache(None)
+def ahead(i):
+    if i == target:
+        return 1
+    ups = [u for u in users.get(i, ()) if not done(u)]
+    return 1 + max((ahead(u) for u in ups), default=0)
+
+lens = sorted(((ahead(i), i) for i in ready), reverse=True)
+print("Ready slices by the chain still ahead of them to the target (higher = more urgent):")
 for l, i in lens[:15]:
     print(f"  {l:3d}  {i}  {by[i].get('title','')[:70]}")
 print(f"External conditions still in the way ({len(ext)}): {sorted(ext)}")
