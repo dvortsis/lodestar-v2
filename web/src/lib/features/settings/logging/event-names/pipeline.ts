@@ -48,6 +48,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_pipeline_vpn_up_n,
 		m.settings_logging_ev_pipeline_vpn_up_h
 	],
+	'pipeline.vpn_trackers_skipped': [
+		m.settings_logging_ev_pipeline_vpn_trackers_skipped_n,
+		m.settings_logging_ev_pipeline_vpn_trackers_skipped_h
+	],
 	'pipeline.starting': [
 		m.settings_logging_ev_pipeline_starting_n,
 		m.settings_logging_ev_pipeline_starting_h

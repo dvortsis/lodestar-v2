@@ -20,9 +20,9 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_dht_socket_buffers_n,
 		m.settings_logging_ev_dht_socket_buffers_h
 	],
-	'dht.bootstrap_name_skipped': [
-		m.settings_logging_ev_dht_bootstrap_name_skipped_n,
-		m.settings_logging_ev_dht_bootstrap_name_skipped_h
+	'dht.bootstrap_names_skipped': [
+		m.settings_logging_ev_dht_bootstrap_names_skipped_n,
+		m.settings_logging_ev_dht_bootstrap_names_skipped_h
 	],
 	'dht.bootstrap_unreachable': [
 		m.settings_logging_ev_dht_bootstrap_unreachable_n,
