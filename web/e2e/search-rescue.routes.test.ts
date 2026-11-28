@@ -2,14 +2,16 @@
 // "Did you mean", words that read as filters offer their chips, and each is one explicit click.
 // Name ends in `routes.test.ts` so the `core` project runs it.
 import { body, expect, hits, row, server, toAst } from './search-results.fixtures';
+import type { Request } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
 import { test } from './support/test';
 
-const field = (name: string, operators: string[]) => ({
+type Operator = 'eq' | 'gt' | 'gte' | 'lt' | 'lte';
+const field = (name: string, operators: Operator[]) => ({
 	name,
 	aliases: [],
 	facetable: false,
-	type: 'number',
+	type: 'number' as const,
 	operators
 });
 
