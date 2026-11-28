@@ -9,7 +9,7 @@
 - The operator may still end it early with `stop` once drop-c says keep or drop.
 
 **The change:**
-1. In the rehearsal branch of the collector argv, change `--baseline-hours 2` to `3`. Also fix the comment ("the 2 h rehearsal") and any usage or docstring text that says 2 h.
+1. In the rehearsal branch of the collector argv, pass `--warmup-minutes 30 --baseline-hours 3` (was `--baseline-hours 2`). Today `comb` defaults to the spec warm-up of 60 min (collect.py `SPEC_WARMUP_MINUTES`, ~1787–1789), and 60 + 180 min would reach the 4 h cap before any stagger. If collect.py refuses a shorter warm-up for a spec kind even with `--rehearsal`, tell the runner before changing collect.py (it would be granted for the rehearsal case only). Measurement days keep the 60 min warm-up: test that a non-rehearsal argv carries no `--warmup-minutes`. Also fix the comment ("the 2 h rehearsal") and any usage or docstring text that says 2 h.
 2. Check that nothing else assumes a 2 h rehearsal, and fix whatever does:
    - `collect.py`'s rehearsal handling;
    - `analyze_cr.py`'s rehearsal checks (`window_hours`);
@@ -20,9 +20,9 @@
    - Compute the worst case from the stagger the coordinator uses, and state it in the decisions file.
    - If the worst case can pass 4 h, have `watch` stop every arm at the cap measured from the first start, and add a test for that.
 4. **Tests:**
-   - the rehearsal argv carries `--baseline-hours 3`;
+   - the rehearsal argv carries `--warmup-minutes 30 --baseline-hours 3`;
    - any changed end-time computation;
-   - a mutation back to 2 must fail a test.
+   - a mutation back to 2 h, or dropping the 30 min warm-up, must fail a test.
    - No fixed sleeps.
 5. **Decisions file:** `docs/decisions/2026-11-28-X-rehearsal-window.md`, one short section.
 
