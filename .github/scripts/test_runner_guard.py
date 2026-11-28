@@ -11,7 +11,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Appended, not first: a module in this folder must never shadow the standard library here.
+sys.path.append(str(Path(__file__).resolve().parent))
 import runner_guard as g  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -380,6 +381,16 @@ class DynamicChain(unittest.TestCase):
         problems = self.problems(ci=CI.replace(anchor, anchor + "      - run: echo hi\n        env:\n"
                                                "          X: y\n"))
         self.assertTrue(any("steps before step c changed" in p for p in problems), problems)
+        # A removed step and a swapped pair.
+        smoke = "      - run: python3 -m unittest discover -s docs/operations/imports/pilots/smoke -p 'test_*.py'\n"
+        conc = "      - run: python3 .github/scripts/test_workflow_concurrency.py\n"
+        self.assertIn(smoke, CI)
+        self.assertIn(conc, CI)
+        swapped = CI.replace(smoke, "@S@").replace(conc, smoke).replace("@S@", conc)
+        for ci in [CI.replace(smoke, ""), swapped]:
+            problems = self.problems(ci=ci)
+            self.assertTrue(any("steps before step c changed" in p for p in problems), problems)
+            self.assertTrue(any("owner-review" in p for p in problems), problems)
 
     def test_a_later_step_naming_the_env_or_path_files(self):
         anchor = '| tee -a "$GITHUB_OUTPUT"\n'
@@ -465,11 +476,29 @@ class Repo(unittest.TestCase):
         self.assertTrue(any(p.startswith("X.YML") for p in problems), problems)
         self.assertTrue(any(p.startswith(".github/workflows/notes.txt") for p in problems), problems)
 
+    def test_a_module_shadowing_the_standard_library_is_caught(self):
+        for rel in ["selectors.py", ".github/scripts/selectors.py", ".github/scripts/json.py",
+                    ".github/scripts/yaml.py", ".github/scripts/re.cpython-313-x86_64-linux-gnu.so",
+                    "argparse.py", "unittest/__init__.py", "docs/operations/imports/pilots/smoke/pathlib.py",
+                    ".github/scripts/ast.pyc"]:
+            with self.subTest(rel=rel):
+                root = self.tree({".github/workflows/bench-10m.yml": BENCH_OK, rel: "x = 1\n"})
+                self.assertTrue(any("shadows the module" in p for p in g.check(root)), g.check(root))
+        # Not module-shaped, or not a standard name: fine.
+        root = self.tree({".github/workflows/bench-10m.yml": BENCH_OK, "json.md": "x\n", "unittest/notes.txt": "x\n",
+                          ".github/scripts/ci_changes.py": "x = 1\n", "docs/json/x.py": "x\n"})
+        self.assertFalse(any("shadows" in p for p in g.check(root)), g.check(root))
+
+    def test_an_undecodable_file_is_reported(self):
+        root = self.tree({".github/workflows/bench-10m.yml": BENCH_OK})
+        (root / ".github/notes.bin").write_bytes("lodestar-bench-10m".encode("utf-16"))
+        self.assertTrue(any("isn't UTF-8" in p for p in g.check(root)), g.check(root))
+
     def test_a_script_naming_the_label_is_caught(self):
         root = self.tree({".github/workflows/bench-10m.yml": BENCH_OK,
-                          ".github/scripts/os.py": 'print(\'["lodestar-bench-10m"]\')\n',
+                          ".github/scripts/print_os.py": 'print(\'["lodestar-bench-10m"]\')\n',
                           ".github/actions/x/action.yml": "runs:\n  using: composite\n"})
-        self.assertEqual(g.check(root), [".github/scripts/os.py: names the bench runner's label 'lodestar-bench-10m'"])
+        self.assertEqual(g.check(root), [".github/scripts/print_os.py: names the bench runner's label 'lodestar-bench-10m'"])
 
     def test_main_exit_status(self):
         root = self.tree({".github/workflows/bench-10m.yml": BENCH_OK})

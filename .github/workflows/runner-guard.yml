@@ -9,9 +9,10 @@ name: Runner guard
 # main ruleset (recommended, docs/operations/bench-runner.md step 3), a red
 # guard also stops a merge. It's a tripwire, not a wall: a pull request runs
 # its own workflows and its own copy of the guard. Until ci.yml's test matrix
-# is literal, the owner reviews any diff to the guard's files, ci.yml's
-# changes or test job, ci_changes.py or a module it imports, and anything the
-# changes job runs before it (including docs/operations/imports/pilots/smoke/).
+# is literal, the owner reviews: any change to .github/workflows/ci.yml; any
+# new or changed file in .github/scripts/ or in
+# docs/operations/imports/pilots/smoke/; any new Python file at the top of the
+# repository; and any change to CHAIN_BEFORE_SHA256.
 
 on:
   pull_request:
@@ -38,5 +39,7 @@ jobs:
           persist-credentials: false
       # The image's own Python and PyYAML: nothing is downloaded.
       - run: python3 -c "import yaml; print('PyYAML', yaml.__version__)"
-      - run: python3 .github/scripts/test_runner_guard.py
-      - run: python3 .github/scripts/runner_guard.py
+      # -I: isolated, so nothing in the checkout (a yaml.py, a re.py) loads in
+      # place of the real module, and no PYTHON* variable applies.
+      - run: python3 -I .github/scripts/test_runner_guard.py
+      - run: python3 -I .github/scripts/runner_guard.py

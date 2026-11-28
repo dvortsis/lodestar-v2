@@ -94,7 +94,7 @@ Each job runs in a fresh container that registers itself for **one** job, with o
 2. Find the current runner version and its checksum: open `github.com/actions/runner/releases`, take the newest release's version number (for example `2.330.0`, without the `v`), and copy the **SHA-256** listed in its notes for `actions-runner-linux-x64-<version>.tar.gz`.
 3. Build the image with both:
    ```sh
-   sudo docker build --build-arg RUNNER_VERSION=<version> --build-arg RUNNER_SHA256=<sha-256> \
+   sudo docker build --progress=plain --build-arg RUNNER_VERSION=<version> --build-arg RUNNER_SHA256=<sha-256> \
      -t lodestar-bench-runner /srv/bench-runner
    ```
    **Result:** the build shows `runner.tar.gz: OK` on the way, and ends with `naming to docker.io/library/lodestar-bench-runner` (or `Successfully tagged lodestar-bench-runner:latest` on older Docker). A checksum mismatch stops the build: don't work around it, check the version and checksum again.
@@ -137,10 +137,11 @@ The benchmark runs on pushes to release lines: branches named like `release/v1.0
 
 **Recommended: make `runner-guard` a required check.** In the `main` ruleset, under **Require status checks to pass**, add `runner-guard`. Otherwise a pull request can merge while the guard is red, because only `ci-ok` is required today. The trade-off: every pull request waits for one more check, about a minute.
 - **Its limit:** a pull request runs its own workflows and its own copy of the guard, so the guard is a tripwire, not a wall. Until a planned change makes one CI setting fixed, review these yourself before they merge:
-  - the guard's own files (`.github/scripts/runner_guard.py`, its test, `runner-guard.yml`);
-  - `ci.yml`'s `changes` or `test` job;
-  - `.github/scripts/ci_changes.py`, or any file it imports from `.github/scripts/`;
-  - anything the `changes` job runs before `ci_changes.py`, including any new or changed file under `docs/operations/imports/pilots/smoke/`.
+  - any change to `.github/workflows/ci.yml`;
+  - any new or changed file in `.github/scripts/`;
+  - any new or changed file in `docs/operations/imports/pilots/smoke/`;
+  - any new Python file at the top of the repository;
+  - any change to `CHAIN_BEFORE_SHA256` in `.github/scripts/runner_guard.py`.
 
 **Undo:** set the ruleset's **Enforcement status** to **Disabled**, or delete it.
 
@@ -152,7 +153,7 @@ The benchmark runs on pushes to release lines: branches named like `release/v1.0
 
 **Result:** a pull request from someone else's fork shows **Approve and run workflows** and runs nothing until you approve it.
 
-**The rule: while the bench runner is registered, don't approve any fork pull request's workflow run.** A fork's change to almost any file that CI runs (a test, a script, not only `.github/`) can make a workflow reach the bench machine, and you can't check all of that by eye. To test a contributor's change, copy it to a branch of your own after reading it. As an extra check, a fork pull request that changes anything under `.github/` is never approved.
+**The rule: while the bench runner is registered, don't approve any fork pull request's workflow run.** A fork's change to almost any file that CI runs (a test, a script, not only `.github/`) can make a workflow reach the bench machine, and you can't check all of that by eye. To test a contributor's change, copy it to a branch of your own after reading it.
 
 **Why it matters:** this is the only safeguard against strangers. Without it, a first-time contributor's pull request could run a workflow that names the label.
 

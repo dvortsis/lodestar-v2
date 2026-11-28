@@ -15,8 +15,10 @@ check fails when:
   names `self-hosted`, uses a `group:`/`labels:` mapping, names anything but
   a GitHub-hosted image, or is an expression that isn't `matrix.<key>` over
   a literal matrix. The one dynamic matrix allowed is DYNAMIC_OK, ci.yml's
-  test job; check_dynamic_chain pins everything that feeds it (the changes
-  job's output and step, and how ci_changes.py sets test_os);
+  test job; check_dynamic_chain pins what it can see of what feeds it (the
+  changes job's output and steps, and how ci_changes.py sets test_os);
+- a module that would shadow the standard library (or PyYAML) sits where
+  the changes job's Python, or this guard's, would import it first;
 - a job calls a reusable workflow from another repository (its jobs pick
   their own runners, out of sight of this check);
 - bench-10m.yml itself could run code from a pull request or a fork, or
@@ -24,13 +26,16 @@ check fails when:
 
 Known limit: under pull_request a PR controls its own workflows and its own
 copy of this guard, so the guard is a tripwire, not a wall. The chain check
-reads ci_changes.py's syntax, not what it does at run time, and can't see
-what the steps before it run (the import smoke tests, for one). Until ci.yml's
-test matrix is literal (a follow-up X-ci-test-shard owns), these are
-owner-review items: the guard's own files; ci.yml's changes or test job;
-ci_changes.py or any module it imports from .github/scripts/; and anything
-the changes job runs before ci_changes.py, including any new or changed file
-under docs/operations/imports/pilots/smoke/ (docs/decisions/2026-11-28-M8-PERF-3.md).
+reads ci_changes.py's syntax (the common forms, not every one), not what it
+does at run time, and can't see what the steps before it run (the import
+smoke tests, for one). Until ci.yml's test matrix is literal (a follow-up X-ci-test-shard owns),
+these are owner-review items:
+- any change to .github/workflows/ci.yml;
+- any new or changed file in .github/scripts/;
+- any new or changed file in docs/operations/imports/pilots/smoke/;
+- any new Python file at the top of the repository;
+- any change to CHAIN_BEFORE_SHA256
+(docs/decisions/2026-11-28-M8-PERF-3.md).
 
 It is a detector, not a barrier: a pushed branch runs its workflows at the
 same time as this check (OQ1). The barriers are the isolated, ephemeral
@@ -42,6 +47,7 @@ Exit status 0 when clean, 1 with one line per problem.
 """
 
 import ast
+import importlib.machinery
 import re
 import sys
 from pathlib import Path
@@ -455,16 +461,44 @@ def check_dynamic_chain(ci_text, script_source):
     if steps_fingerprint(before) != CHAIN_BEFORE_SHA256:
         out.append(f"{name}: job changes: the steps before step c changed (fingerprint "
                    f"{steps_fingerprint(before)}). They run before ci_changes.py: review them, then update "
-                   "CHAIN_BEFORE_SHA256 in runner_guard.py")
+                   "CHAIN_BEFORE_SHA256 in runner_guard.py (that update is itself an owner-review change)")
     for st in steps[cs[0] + 1:]:
         if CHAIN_WORDS.search(" ".join(walk_strings(st))):
             out.append(f"{name}: job changes: a step after c mentions test_os, ci_changes or a GITHUB_ file")
     return out + check_chain_script(script_source)
 
 
+# Folders a CI Python process puts first on its import path: the repository
+# root (python3 -m unittest discover), the script folder (ci_changes.py, this
+# guard) and the import smoke tests' folder (their discover -s).
+SHADOW_DIRS = (".", ".github/scripts", "docs/operations/imports/pilots/smoke")
+SHADOW_NAMES = frozenset(sys.stdlib_module_names) | {"yaml", "_yaml"}
+IMPORT_SUFFIXES = tuple(importlib.machinery.all_suffixes()) + (".pyw", ".pyd")
+
+
+def shadow_problems(root):
+    """A module named like the standard library's (or PyYAML) in a folder
+    that's first on a CI import path loads in place of the real one."""
+    out = []
+    for d in SHADOW_DIRS:
+        folder = Path(root) / d
+        if not folder.is_dir():
+            continue
+        for entry in sorted(folder.iterdir()):
+            top = entry.name.split(".")[0]
+            if top not in SHADOW_NAMES:
+                continue
+            module = entry.is_file() and entry.name.endswith(IMPORT_SUFFIXES)
+            package = entry.is_dir() and (entry / "__init__.py").exists()
+            if module or package:
+                rel = entry.relative_to(root).as_posix()
+                out.append(f"{rel}: shadows the module {top!r} for CI's Python")
+    return out
+
+
 def check(root):
     root = Path(root)
-    out = []
+    out = shadow_problems(root)
     wf_dir = root / ".github" / "workflows"
     names = sorted(p.name for p in wf_dir.iterdir() if p.is_file() and p.suffix.lower() in {".yml", ".yaml"})
     if BENCH not in names:
@@ -486,6 +520,7 @@ def check(root):
         try:
             body = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
+            out.append(f"{rel}: isn't UTF-8 text, so it can't be checked for the label")
             continue
         if LABEL in body.lower():
             out.append(f"{rel}: names the bench runner's label {LABEL!r}")
