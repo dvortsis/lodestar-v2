@@ -550,7 +550,7 @@ test.describe('"N hidden · Show" under a coarse pointer', () => {
 // X-hidden-count (runner): the note arrives after the rows and moves nothing. Where even "N filtered
 // · Show" would wrap the count line or the controls it shows no note ("Show hidden" stays in
 // Filters). From 128rem (2,048 px) the controls follow the count (L3), so they move sideways when it
-// arrives: the known follow-up X-hidden-count-wide-shift, so only vertical positions are held there.
+// arrives, so the count's slot has a floor (toolbar.css) and nothing moves at any width.
 for (const [width, shows] of [
 	[360, false],
 	[390, true],
@@ -558,7 +558,8 @@ for (const [width, shows] of [
 	[900, true],
 	[1024, true],
 	[1366, true],
-	[2048, true]
+	[2048, true],
+	[2560, true]
 ] as const) {
 	test(`at ${width} px the hidden count ${shows ? 'shows' : 'stays out'} and nothing moves`, async ({
 		page,
@@ -585,7 +586,40 @@ for (const [width, shows] of [
 		expect((await row(page, 1).boundingBox())?.y).toBe(first);
 		const after = await page.getByLabel('Sort').boundingBox();
 		expect(after?.y).toBe(sort?.y);
-		if (width < 2048) expect(after?.x).toBe(sort?.x);
+		expect(after?.x).toBe(sort?.x);
+	});
+}
+
+// The worst case for the count's reserved slot (toolbar.css, from 128rem): an approximate total
+// plus a 7-digit hidden count with the full words, in the two shipped languages.
+for (const lang of ['en', 'zh-CN'] as const) {
+	test.describe(`the longest count in ${lang}`, () => {
+		test.use({ locale: lang });
+		test('at 2,048 px it and its note move nothing', async ({ page, go, mock }) => {
+			await page.setViewportSize({ width: 2048, height: 900 });
+			server(mock, () => body(hits(3), { total: 2_400_000, total_approx: true }));
+			let release!: () => void;
+			const held = new Promise<void>((r) => (release = r));
+			mock.on('searchHiddenCount', async () => (await held, { hidden_total: 9_999_999 }));
+			await go('/search?q=lantern');
+			await expect(row(page, 1)).toBeVisible();
+			await expect(count(page)).toContainText('≈');
+			const toolbar = page.getByTestId('results-toolbar');
+			const before = await toolbar.boundingBox();
+			const first = (await row(page, 1).boundingBox())?.y;
+			const sort = await page.getByLabel(/^(Sort|排序)/).boundingBox();
+			release();
+			await expect(page.getByTestId('results-hidden-show')).toBeVisible();
+			const text = await count(page).evaluate((el) => {
+				const r = document.createRange();
+				r.selectNodeContents(el);
+				return r.getBoundingClientRect().width;
+			});
+			console.log(`${lang} count text width: ${text}`);
+			expect((await toolbar.boundingBox())?.height).toBe(before?.height);
+			expect((await row(page, 1).boundingBox())?.y).toBe(first);
+			expect(await page.getByLabel(/^(Sort|排序)/).boundingBox()).toEqual(sort);
+		});
 	});
 }
 
