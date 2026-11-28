@@ -647,10 +647,11 @@ case "$1" in
       # GLUETUN_RESTARTS: gluetun v3.41.3's own loop. With the endpoint blocked,
       # its 6 s startup health check fails on every tunnel it brings up, and each
       # failure restarts the VPN: the interface deleted and made again, up, with
-      # a new ifindex. Every phase B probe outlasts that, so each one gluetun is
-      # running for sees a restart; a paused gluetun can't restart.
+      # a new ifindex. A restart lands in every live attempt whose probe outlasts
+      # that with its checks (curl -m 8, nc -w 5); =all: in every live attempt
+      # (a slow host). A paused gluetun can't restart.
       if [ -e "$STUB/ifdown" ] && [ -n "$GLUETUN_RESTARTS" ] && [ ! -e "$STUB/paused" ]; then
-        restart=1; recreate=1
+        case "$GLUETUN_RESTARTS:$*" in all:*|*:"curl -"*|*:"nc -z"*) restart=1; recreate=1 ;; esac
       fi
       # LEAK_PAUSED: the probe gets out while gluetun is paused.
       if [ -e "$STUB/ifdown" ] && [ -e "$STUB/paused" ] && [ -n "$LEAK_PAUSED" ]; then leak=1; fi ;;
@@ -1844,10 +1845,11 @@ class VMScripts(unittest.TestCase):
     def test_phase_b_holds_gluetun_still_for_a_retry(self):
         """X-leaktest-vpn-held-down: gluetun's own restart loop (a failed 6 s health
         check restarts the VPN, which makes the interface again, up, with a new
-        ifindex) lands inside every attempt while gluetun runs. Each probe's first
-        attempt runs with gluetun live and is discarded; the retry pauses gluetun
-        from its first interface check to its last, gets its clean attempt, and
-        gluetun runs again before the verdict. Before the fix, no probe ever got one."""
+        ifindex) lands in every live attempt of the probes that outlast it. Each
+        probe's first attempt runs with gluetun live and is discarded; the retry
+        pauses gluetun from its first interface check to its last, gets its clean
+        attempt, and gluetun runs again before the verdict. Before the fix, those
+        probes never got one."""
         rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
         self.assertEqual(rc, 0, raw)
         self.assertIn("ok vpn_interface_down_during_probes", lines)
@@ -1856,23 +1858,50 @@ class VMScripts(unittest.TestCase):
         self.assertFalse([l for l in lines if l.startswith("count held_")], lines)
         self.assertFalse((self.stub / "paused").exists())  # running again
         self.assertFalse((self.stub / "recreated_paused").exists())
-        # One pause per probe (its one retry), each holding a whole attempt: the
-        # interface checks, the take-down, both ifindex reads and the probe.
+        # Which kind of attempt each probe passed on, in counts only, after the verdict.
+        clean = [l for l in lines if l.startswith("count clean_")]
+        self.assertEqual(sorted(clean), sorted(
+            [f"count clean_held_{p}_ifdown 1" for p in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked")]
+            + [f"count clean_live_{p}_ifdown 1" for p in ("dns_blocked", "dns_direct_blocked", "udp")]))
+        self.assertGreater(lines.index(clean[0]), lines.index("ok vpn_interface_down_during_probes"))
+        # One pause per retry, each holding a whole attempt: the interface
+        # checks, the take-down, both ifindex reads and the probe.
         spans = self.held_spans()
-        self.assertEqual(len(spans), 6)
-        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 6)
-        for span, probe in zip(spans, ("curl -4", "nc -z", "curl -6", "sh -c dig", "sh -c dig", "sh -c echo probe")):
+        self.assertEqual(len(spans), 3)
+        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 3)
+        for span, probe in zip(spans, ("curl -4", "nc -z", "curl -6")):
             cmds = [ln.split(" probe ", 1)[1] for ln in span]
             self.assertTrue(cmds[0].startswith("sh -c ip -o link show up"), cmds)  # it starts with a check
             self.assertTrue(cmds[-1].startswith("sh -c cat"), cmds)  # and ends with the second ifindex read
             self.assertEqual(sum(c.startswith(probe) for c in cmds), 1, cmds)
-        # Every first attempt ran with gluetun live: six leak probes before the first pause.
+        # The first attempt ran with gluetun live.
         log = self.log()
-        down = log.index("ip link set dev wg0 down")
-        live = log[down:log.index("docker pause gluetun")]
+        live = log[log.index("ip link set dev wg0 down"):log.index("docker pause gluetun")]
         self.assertEqual(live.count("probe curl -4 -s -m 8"), 1)
-        # Nothing ran in gluetun while it was paused but probe containers.
-        self.assertNotIn("docker exec", "\n".join(sum(spans, [])))
+        self.assertNotIn("docker exec", "\n".join(sum(spans, [])))  # nothing but probes while paused
+
+    def test_dns_blocked_is_never_held(self):
+        """The runner's call: dns_blocked asks gluetun's own forwarder, so it never
+        runs under a hold. On a slow host every live attempt meets a restart:
+        every other probe passes held, dns_blocked keeps running live, gets no
+        clean attempt and fails vpn_interface_held_down, as before the fix."""
+        rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS="all", HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertIn("skip dns_blocked_ifdown", lines)
+        self.assertGreater(int(next(l for l in lines if l.startswith("count held_attempts_dns_blocked_ifdown ")).split()[2]), 1)
+        self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
+        # The three before it passed held. Its live retries used the phase up, so
+        # the two after it got only their (discarded) first attempts.
+        clean = sorted(l for l in lines if l.startswith("count clean_"))
+        self.assertEqual(clean, sorted(f"count clean_held_{p}_ifdown 1" for p in
+                                       ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked")))
+        self.assertIn("skip dns_direct_blocked_ifdown", lines)
+        self.assertIn("count held_attempts_dns_direct_blocked_ifdown 1", lines)
+        spans = self.held_spans()
+        self.assertEqual(len(spans), 3)
+        self.assertNotIn("dig", "\n".join(sum(spans, [])))  # the forwarder's query never ran held
+        self.assertFalse((self.stub / "paused").exists())
 
     def test_phase_b_without_the_hold_still_fails_held_down(self):
         """A pause Docker refuses: the retry runs with gluetun live, as before the

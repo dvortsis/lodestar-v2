@@ -401,7 +401,11 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
   "$judge" "ipv4_blocked_$1" probe curl -4 -s -m 8 "$ECHO_URL"
   "$judge" "tcp_literal_blocked_$1" probe nc -z -w 5 1.1.1.1 443  # no DNS needed
   "$judge" "ipv6_blocked_$1" probe curl -6 -s -m 8 "$V6_URL"
-  "$judge" "dns_blocked_$1" resolves "$2" 3
+  if [[ $judge == held ]]; then
+    held --live "dns_blocked_$1" resolves "$2" 3  # gluetun's own forwarder: never held (the runner)
+  else
+    "$judge" "dns_blocked_$1" resolves "$2" 3
+  fi
   "$judge" "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
   if [[ $judge == held ]]; then
     held - probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53'  # the capture judges it
@@ -435,6 +439,7 @@ held_until="" # the phase's own deadline (held_start), well inside the step's 90
 held_ups=0    # how many times phase B found the interface back up
 held_was_up=unknown # 1: the last check read it up; empty: down. A return counts once, and only after a down read
 held_skipped=() # "<name> <attempts>" for each probe that got no clean attempt
+held_clean=()   # "<live|held> <name>" for each probe that got one: which kind it was
 held_need=""  # the time a retry needs before it may start (held_start, then the slowest seen)
 held_retry="" # set while a retry runs: its interface checks are capped at the time left
 # A retry holds gluetun (X-leaktest-vpn-held-down). With the endpoint blocked,
@@ -445,6 +450,8 @@ held_retry="" # set while a retry runs: its interface checks are capped at the t
 # state, the firewall included, left as it is) from before the first interface
 # check to after the last, and resumes it before the verdict. The probes still
 # run in its namespace. Each probe's first attempt runs with gluetun live.
+# dns_blocked is never held (held --live, the runner's call): it asks gluetun's
+# own DNS forwarder, and a paused forwarder proves nothing.
 held_hold() {  # 0: frozen, or not frozen and running as before; 1: it may be frozen and won't resume
   held_frozen=1  # before the pause: a signal in between still has cleanup resume it
   timeout 30 docker pause "$GLUETUN" >/dev/null 2>&1 && return 0
@@ -477,8 +484,10 @@ held_seen() {  # $1: an interface check's result; counts each return of the inte
     held_was_up=""
   fi
 }
-held() {  # $1: the probe's line, or - for one only the capture judges; the rest: the probe
-  local n=$1 rc after try=0 saved index index_rc start same
+held() {  # [--live] (never hold gluetun); $1: the probe's line, or - for one only the capture judges; the rest: the probe
+  local n rc after try=0 saved index index_rc start same live="" kind
+  [[ $1 == --live ]] && { live=1; shift; }
+  n=$1
   shift
   while :; do
     # No deadline set is no deadline kept: fail closed, for every probe.
@@ -490,7 +499,8 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
     try=$((try + 1))
     start=$SECONDS
     saved=$not_run
-    if [[ -n $held_retry ]]; then held_hold || { held_dead=1; break; }; fi
+    if [[ -n $held_retry && -z $live ]]; then held_hold || { held_dead=1; break; }; fi
+    kind=live; [[ -n $held_frozen ]] && kind=held  # a refused pause runs live
     held_down; rc=$?
     if ((rc == 0)); then
       index=$(iface_index); index_rc=$?
@@ -507,6 +517,8 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
       held_thaw || { held_dead=1; break; }
       held_took "$start"
       if [[ -n $same ]]; then
+        # Which kind passed, for the report: a probe that never ran isn't counted.
+        ((rc != NOT_RUN)) && if [[ $n == - ]]; then held_clean+=("$kind udp_ifdown"); else held_clean+=("$kind $n"); fi
         [[ $n == - ]] && return
         if ((rc != NOT_RUN)); then pass "$n"; else bad "$n"; fi
         return
@@ -524,6 +536,12 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
   held_retry=""
   held_bad=1
   if [[ $n == - ]]; then held_skipped+=("udp_ifdown $try"); else held_skipped+=("$n $try"); echo "skip $n"; fi
+}
+held_clean_report() {  # counts only: which kind of attempt was each probe's clean one
+  local s
+  for s in "${held_clean[@]}"; do
+    echo "count clean_${s% *}_${s#* } 1"
+  done
 }
 held_report() {  # counts only: each skipped probe's attempts, and the interface's returns
   local s
@@ -782,6 +800,7 @@ down_probes ifdown example.edu held
 # Every probe ran with the interface down (held): one that never got a clean
 # attempt fails here, apart from any leak line.
 if [[ -z $held_bad ]]; then pass vpn_interface_down_during_probes; else held_report; bad vpn_interface_held_down; fi
+held_clean_report
 judge_capture ifdown
 judge_counter ifdown
 # The blocked endpoint makes gluetun restart its VPN in phase B: its post-rules
