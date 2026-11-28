@@ -57,11 +57,13 @@ const query = (word: string) => ({
 });
 
 beforeAll(() => stubLayout(600, 1000));
-// The panel's lazy imports, settled before the environment closes: a row's focus or hover starts
-// `import('$lib/features/detail/open')`, which otherwise can finish after teardown.
+// The panel's lazy imports, settled before the environment closes. A row's focus or hover imports
+// the mocked `$lib/features/detail/open`, and vitest still fetches the real module's own imports
+// (section.svelte, visibility), which can outlast the file. Awaiting the mock doesn't wait for
+// them; loading the real module does. It only declares module state, and no test runs after this.
 afterAll(async () => {
 	await Promise.all([
-		import('$lib/features/detail/open'),
+		vi.importActual('$lib/features/detail/open'),
 		import('$lib/features/detail/commands'),
 		import('./RowActions.svelte'),
 		import('./commands'),
