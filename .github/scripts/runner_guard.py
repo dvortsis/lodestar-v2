@@ -14,9 +14,8 @@ check fails when:
 - a job in another workflow could reach a self-hosted runner: `runs-on`
   names `self-hosted`, uses a `group:`/`labels:` mapping, names anything but
   a GitHub-hosted image, or is an expression that isn't `matrix.<key>` over
-  a literal matrix. The one dynamic matrix allowed is DYNAMIC_OK, ci.yml's
-  test job; check_dynamic_chain pins what it can see of what feeds it (the
-  changes job's output and steps, and how ci_changes.py sets test_os);
+  a literal matrix (`exclude:`, which can only remove entries, is the one
+  part of a matrix that may be an expression);
 - a module that would shadow the standard library (or PyYAML) sits where
   the changes job's Python, or this guard's, would import it first;
 - a job calls a reusable workflow from another repository (its jobs pick
@@ -25,17 +24,7 @@ check fails when:
   holds more than it needs (see check_bench).
 
 Known limit: under pull_request a PR controls its own workflows and its own
-copy of this guard, so the guard is a tripwire, not a wall. The chain check
-reads ci_changes.py's syntax (the common forms, not every one), not what it
-does at run time, and can't see what the steps before it run (the import
-smoke tests, for one). Until ci.yml's test matrix is literal (a follow-up X-ci-test-shard owns),
-these are owner-review items:
-- any change to .github/workflows/ci.yml;
-- any new or changed file in .github/scripts/;
-- any new or changed file in docs/operations/imports/pilots/smoke/;
-- any new Python file at the top of the repository;
-- any change to CHAIN_BEFORE_SHA256
-(docs/decisions/2026-11-28-M8-PERF-3.md).
+copy of this guard, so the guard is a tripwire, not a wall.
 
 It is a detector, not a barrier: a pushed branch runs its workflows at the
 same time as this check (OQ1). The barriers are the isolated, ephemeral
@@ -46,7 +35,6 @@ Usage: python3 .github/scripts/runner_guard.py [ROOT]
 Exit status 0 when clean, 1 with one line per problem.
 """
 
-import ast
 import importlib.machinery
 import re
 import sys
@@ -65,34 +53,6 @@ NAMES_LABEL = {
 # GitHub-hosted images, by name. A self-hosted runner registered with
 # --no-default-labels answers to none of these.
 HOSTED = re.compile(r"^(ubuntu|windows|macos)-(latest|\d+(\.\d+)?(-arm)?|\d+-(large|xlarge|arm64))$")
-# The one runs-on allowed to come from a job output, as (workflow, job):
-# ci.yml's test matrix is ci_changes.py's test_os, which names hosted images
-# only (it's scanned for the label like every file under .github/).
-DYNAMIC_OK = {("ci.yml", "test", "os"): "${{ fromJSON(needs.changes.outputs.test_os) }}"}
-# What feeds it, pinned exactly (check_dynamic_chain).
-CHAIN_OUTPUT = "${{ steps.c.outputs.test_os }}"
-CHAIN_RUN = 'python3 .github/scripts/ci_changes.py "$EVENT" "$BASE" "$HEAD" "$LABELS" | tee -a "$GITHUB_OUTPUT"'
-CHAIN_SCRIPT = ".github/scripts/ci_changes.py"
-# Anything else in the changes job that mentions one of these could rewrite
-# the output or the script before step c runs.
-CHAIN_WORDS = re.compile(r"test_os|GITHUB_OUTPUT|GITHUB_ENV|GITHUB_PATH|ci_changes", re.I)
-CHAIN_ENV = {
-    "EVENT": "${{ github.event_name }}",
-    "BASE": "${{ github.event.pull_request.base.sha }}",
-    "HEAD": "${{ github.event.pull_request.head.sha }}",
-    "LABELS": "${{ toJSON(github.event.pull_request.labels.*.name) }}",
-}
-CHAIN_TOP_ENV = {"CARGO_TERM_COLOR", "CARGO_INCREMENTAL"}
-# The steps before step c in ci.yml's changes job (checkout, the merge-guard
-# syntax check, the import smoke tests, the concurrency test, the lineage
-# guard), hashed as parsed. Any change, including what they run, is an
-# owner-review item: update this only after reading the new steps.
-CHAIN_BEFORE_SHA256 = "aa10f6ebf2a22764e3c5d9bb5482840d168eb5d6e9c400c061c34d84406303a9"
-# Builtins (bare names) and attributes in ci_changes.py that run built code
-# or reach around the json check. re.compile is an attribute, so it's fine.
-UNSAFE_NAMES = {"exec", "eval", "compile", "__import__", "__doc__", "globals", "setattr", "getattr", "vars",
-                "__builtins__"}
-UNSAFE_ATTRS = {"__import__", "__dict__", "__builtins__", "__globals__", "__doc__"}
 MATRIX_REF = re.compile(r"^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$")
 
 BENCH_TRIGGERS = {"push", "schedule", "workflow_dispatch"}
@@ -178,18 +138,29 @@ def label_value_problems(name, job_id, job, value):
     if not m:
         return [f"runs-on {value!r} is an expression other than matrix.<key>"]
     key = m.group(1)
-    matrix = (job.get("strategy") or {}).get("matrix")
+    strategy = job.get("strategy") or {}
+    if not isinstance(strategy, dict):
+        return [f"runs-on {value!r}: the strategy is not a mapping ({strategy!r})"]
+    matrix = strategy.get("matrix")
     if isinstance(matrix, str):
         return [f"runs-on {value!r}: the matrix is an expression ({matrix})"]
     if not isinstance(matrix, dict):
         return [f"runs-on {value!r}: the job has no matrix"]
-    raw = matrix.get(key)
-    dynamic = False
+    # Expression contexts ignore case, so `OS:` could feed `matrix.os`: match
+    # keys case-insensitively, and refuse keys that differ only in case.
+    folded = [str(k).casefold() for k in matrix]
+    if len(folded) != len(set(folded)):
+        return [f"runs-on {value!r}: matrix keys differ only in case"]
+    key = key.casefold()
+    raw = next((v for k, v in matrix.items() if str(k).casefold() == key), None)
+    if any(str(k).casefold() in ("include", "exclude") and k not in ("include", "exclude") for k in matrix):
+        return [f"runs-on {value!r}: matrix include/exclude must be spelled in lower case"]
     candidates = []
+    # `exclude` may be driven by expressions (ci.yml's test job drops the
+    # operating systems a change doesn't need that way): it can only remove
+    # entries, so it's never read here. Everything that adds one is.
     if isinstance(raw, str) and "${{" in raw:
-        if DYNAMIC_OK.get((name, job_id, key)) != raw.strip():
-            return [f"runs-on {value!r}: matrix.{key} is an expression ({raw.strip()})"]
-        dynamic = True  # written by ci_changes.py, which is scanned for the label
+        return [f"runs-on {value!r}: matrix.{key} is an expression ({raw.strip()})"]
     elif isinstance(raw, list):
         candidates.extend(raw)
     elif raw is not None:
@@ -200,9 +171,11 @@ def label_value_problems(name, job_id, job, value):
     for entry in include or []:
         if not isinstance(entry, dict):
             return [f"runs-on {value!r}: a matrix.include entry is not a mapping ({entry!r})"]
-        if key in entry:
-            candidates.append(entry[key])
-    if not candidates and not dynamic:
+        hits = [v for k, v in entry.items() if str(k).casefold() == key]
+        if len(hits) > 1:
+            return [f"runs-on {value!r}: a matrix.include entry has keys that differ only in case"]
+        candidates.extend(hits)
+    if not candidates:
         return [f"runs-on {value!r}: matrix.{key} has no values"]
     out = []
     for c in candidates:
@@ -320,154 +293,6 @@ def check_workflow(name, text):
     return out
 
 
-def check_chain_script(source):
-    """ci_changes.py may set test_os only as `X["test_os"] = json.dumps(L)`,
-    L a literal list of hosted images or a conditional between two, with a
-    plain `import json` that nothing rebinds, and no way to write the output
-    file or run built code."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError as e:
-        return [f"{CHAIN_SCRIPT}: does not parse ({e.msg})"]
-    out, allowed = [], set()
-    where = CHAIN_SCRIPT
-    doc = tree.body[0].value if tree.body and isinstance(tree.body[0], ast.Expr) else None
-
-    def literal_images(node):
-        if isinstance(node, ast.IfExp):
-            return literal_images(node.body) and literal_images(node.orelse)
-        return isinstance(node, ast.List) and all(
-            isinstance(e, ast.Constant) and isinstance(e.value, str) and HOSTED.match(e.value) for e in node.elts)
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
-                if (isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)
-                        and t.slice.value == "test_os"):
-                    allowed.add(id(t.slice))
-                    v = node.value
-                    ok = (len(node.targets) == 1 and isinstance(v, ast.Call) and not v.keywords
-                          and len(v.args) == 1 and isinstance(v.func, ast.Attribute) and v.func.attr == "dumps"
-                          and isinstance(v.func.value, ast.Name) and v.func.value.id == "json"
-                          and literal_images(v.args[0]))
-                    if not ok:
-                        out.append(f"{where}:{node.lineno}: test_os must be json.dumps of a literal list "
-                                   "of GitHub-hosted images (or a conditional between two)")
-    plain_json = False
-    for node in ast.walk(tree):
-        line = getattr(node, "lineno", "?")
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            low = node.value.lower()
-            if "test_os" in low and id(node) not in allowed:
-                out.append(f"{where}:{line}: test_os named outside a plain assignment")
-            if "github_output" in low and node is not doc:
-                out.append(f"{where}:{line}: a string names GITHUB_OUTPUT")
-        elif isinstance(node, ast.keyword) and node.arg and "test_os" in node.arg.lower():
-            out.append(f"{where}:{node.value.lineno}: test_os set as a keyword")
-        elif isinstance(node, ast.Name):
-            if "test_os" in node.id.lower():
-                out.append(f"{where}:{line}: a name containing test_os")
-            if node.id in UNSAFE_NAMES:
-                out.append(f"{where}:{line}: uses {node.id}")
-            if node.id == "json" and not isinstance(node.ctx, ast.Load):
-                out.append(f"{where}:{line}: rebinds json")
-        elif isinstance(node, ast.Attribute):
-            if node.attr in UNSAFE_ATTRS:
-                out.append(f"{where}:{line}: uses .{node.attr}")
-            if (isinstance(node.value, ast.Name) and node.value.id == "json"
-                    and not isinstance(node.ctx, ast.Load)):
-                out.append(f"{where}:{line}: assigns to json.{node.attr}")
-        elif isinstance(node, ast.Import):
-            for al in node.names:
-                if al.name == "json" and al.asname is None:
-                    plain_json = True
-                elif al.asname == "json" or (al.name == "json" and al.asname):
-                    out.append(f"{where}:{line}: import ... as json, or json imported under another name")
-        elif isinstance(node, ast.ImportFrom):
-            if node.module == "json" or any(al.asname == "json" or al.name == "json" for al in node.names):
-                out.append(f"{where}:{line}: from-imports json")
-        elif isinstance(node, ast.arg) and node.arg == "json":
-            out.append(f"{where}:{line}: an argument named json")
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "json":
-            out.append(f"{where}:{line}: defines json")
-        elif isinstance(node, (ast.Global, ast.Nonlocal)) and "json" in node.names:
-            out.append(f"{where}:{line}: declares json global")
-    if not plain_json:
-        out.append(f"{where}: needs a plain `import json`")
-    if not allowed:
-        out.append(f"{where}: test_os is never set")
-    return out
-
-
-def steps_fingerprint(steps):
-    """A stable hash of step mappings, so any change to them shows."""
-    import hashlib
-    import json
-    return hashlib.sha256(json.dumps(steps, sort_keys=True, default=str).encode()).hexdigest()
-
-
-def check_dynamic_chain(ci_text, script_source):
-    """The changes job's test_os output, everything in that job up to and
-    including step c, and ci_changes.py: the route by which a runs-on in
-    another workflow is computed."""
-    name = "ci.yml"
-    try:
-        wf = yaml.safe_load(ci_text)
-    except yaml.YAMLError:
-        return []  # check_workflow reports it
-    if not isinstance(wf, dict):
-        return []
-    jobs = wf.get("jobs") or {}
-    test = jobs.get("test") or {}
-    matrix_os = ((test.get("strategy") or {}).get("matrix") or {}).get("os")
-    if not (isinstance(matrix_os, str) and "${{" in matrix_os):
-        return []  # no dynamic matrix: nothing to pin
-    out = []
-    # Settings that reach every step: a shell, a working directory, BASH_ENV.
-    if "defaults" in wf:
-        out.append(f"{name}: no top-level defaults while the test matrix is dynamic")
-    extra_env = set((wf.get("env") or {})) - CHAIN_TOP_ENV
-    if extra_env:
-        out.append(f"{name}: top-level env {sorted(extra_env)} not allowed while the test matrix is dynamic")
-    changes = jobs.get("changes")
-    if not isinstance(changes, dict):
-        return out + [f"{name}: the test job's matrix comes from a changes job that isn't there"]
-    for key in ("env", "defaults", "container", "services"):
-        if key in changes:
-            out.append(f"{name}: job changes: no {key}")
-    if "changes" not in (test.get("needs") if isinstance(test.get("needs"), list) else [test.get("needs")]):
-        out.append(f"{name}: job test must need changes")
-    outputs = changes.get("outputs") or {}
-    found = [k for k in outputs if str(k).lower() == "test_os"]
-    if found != ["test_os"] or str(outputs["test_os"]).strip() != CHAIN_OUTPUT:
-        out.append(f"{name}: job changes: output test_os must be exactly {CHAIN_OUTPUT}, once")
-    for k, v in outputs.items():
-        if str(k).lower() != "test_os" and "test_os" in str(v).lower():
-            out.append(f"{name}: job changes: output {k} mentions test_os")
-    steps = [st for st in changes.get("steps") or [] if isinstance(st, dict)]
-    cs = [i for i, st in enumerate(steps) if str(st.get("id", "")).lower() == "c"]
-    if len(cs) != 1:
-        return out + [f"{name}: job changes needs exactly one step with id c"] + check_chain_script(script_source)
-    c = steps[cs[0]]
-    if set(c) != {"id", "env", "shell", "run"} or c.get("id") != "c" or c.get("shell") != "bash":
-        out.append(f"{name}: job changes: step c must have exactly id: c, env, shell: bash and run")
-    if str(c.get("run", "")).strip() != CHAIN_RUN:
-        out.append(f"{name}: job changes: step c must run exactly: {CHAIN_RUN}")
-    if c.get("env") != CHAIN_ENV:
-        out.append(f"{name}: job changes: step c's env must be exactly {CHAIN_ENV}")
-    # Every step before c runs in the same job and could change the script,
-    # the environment or the PATH that step c then uses.
-    before = steps[:cs[0]]
-    if steps_fingerprint(before) != CHAIN_BEFORE_SHA256:
-        out.append(f"{name}: job changes: the steps before step c changed (fingerprint "
-                   f"{steps_fingerprint(before)}). They run before ci_changes.py: review them, then update "
-                   "CHAIN_BEFORE_SHA256 in runner_guard.py (that update is itself an owner-review change)")
-    for st in steps[cs[0] + 1:]:
-        if CHAIN_WORDS.search(" ".join(walk_strings(st))):
-            out.append(f"{name}: job changes: a step after c mentions test_os, ci_changes or a GITHUB_ file")
-    return out + check_chain_script(script_source)
-
-
 # Folders a CI Python process puts first on its import path: the repository
 # root (python3 -m unittest discover), the script folder (ci_changes.py, this
 # guard) and the import smoke tests' folder (their discover -s).
@@ -505,10 +330,6 @@ def check(root):
         out.append(f"{BENCH} is missing")
     for name in names:
         out.extend(check_workflow(name, (wf_dir / name).read_text(encoding="utf-8")))
-    if "ci.yml" in names:
-        script = root / CHAIN_SCRIPT
-        source = script.read_text(encoding="utf-8") if script.is_file() else ""
-        out.extend(check_dynamic_chain((wf_dir / "ci.yml").read_text(encoding="utf-8"), source))
     # The rest of .github/ (scripts, actions, fixtures, any other file in
     # workflows/) mustn't name it either: a script that prints a matrix could
     # feed it to a runs-on.

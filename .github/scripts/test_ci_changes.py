@@ -229,6 +229,16 @@ class CompanionPins(unittest.TestCase):
             self.assertFalse(ci_changes.COMPANION_PINS.match(f), f)
 
 
+class TestShards(unittest.TestCase):
+    def test_the_shard_script_and_its_tests_run_the_rust_jobs(self):
+        for f in [".github/scripts/test_shards.py", ".github/scripts/test_test_shards.py"]:
+            self.assertTrue(ci_changes.RUST_ALSO.match(f), f)
+
+    def test_near_misses_dont(self):
+        for f in [".github/scripts/test_shards.py.orig", "docs/test_shards.py", ".github/scripts/test_test_test_shards.py"]:
+            self.assertFalse(ci_changes.RUST_ALSO.match(f), f)
+
+
 class Advisories(unittest.TestCase):
     def test_the_lockfile_deny_toml_and_the_ci_files_apply(self):
         for f in ["Cargo.lock", "fuzz/Cargo.lock", "deny.toml", ".github/workflows/ci.yml", ".github/scripts/ci_changes.py"]:
