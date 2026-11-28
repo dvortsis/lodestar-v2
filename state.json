@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T17:48:50Z",
+  "updated_at": "2026-11-28T18:01:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11148,17 +11148,23 @@
       "via": "owner, runner chat",
       "words": "UPDATE_COMPLETE",
       "meaning": "Owner item 44 done: lodestar-claude-testvm updated to the #1169 template through a reviewed change set (one Modify on the test user policy, no replacement). Test-VM volume tags are required and the test user may delete its own test volumes."
+    },
+    {
+      "at": "2026-11-28T18:01:42Z",
+      "via": "owner, runner chat",
+      "words": "Yes, increase to 6 slots",
+      "meaning": "Build slots 4 -> 6 (limits.phase_total; recorded in r24). Extra slots favour low-risk UI/docs/CI work; runner steps back to 4 if CI queueing appears."
     }
   ],
   "slots": {
-    "updated": "2026-11-28T17:23:23Z",
+    "updated": "2026-11-28T18:01:42Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-healthz-count-async",
         "role": "build",
         "agent": "session_01MMjhn8NdgJe3D7wFtABUPJ",
-        "doing": "#1181 review + analyzer fix",
+        "doing": "#1181 review clean; waiting on Rust test jobs",
         "since": "2026-11-28T14:32:02Z"
       },
       {
@@ -11174,7 +11180,7 @@
         "slice": "X-detail-actions-timeout",
         "role": "build",
         "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
-        "doing": "step 0: timeout cause",
+        "doing": "testTimeout+hookTimeout 20 s; load runs",
         "since": "2026-11-28T17:23:23Z"
       },
       {
@@ -11182,8 +11188,24 @@
         "slice": "X-hidden-count-grouped",
         "role": "build",
         "agent": "session_01MMjhnC5ux8vDCYL2oNoj1y",
-        "doing": "step 0: grouped counts and the note",
+        "doing": "#1183 open; fresh review running",
         "since": "2026-11-28T17:04:47Z"
+      },
+      {
+        "slot": 5,
+        "slice": "X-ci-test-shard",
+        "role": "build",
+        "agent": "session_01MMjhnCaX9NvW9ERGxQKgiX",
+        "doing": "step 0: measure the Rust test jobs",
+        "since": "2026-11-28T18:01:42Z"
+      },
+      {
+        "slot": 6,
+        "slice": "X-row-rail",
+        "role": "build",
+        "agent": "session_01MMjhnD4mmgLjAzYmDkubFy",
+        "doing": "step 0: plan and size grants",
+        "since": "2026-11-28T18:01:42Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
