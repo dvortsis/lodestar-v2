@@ -1,5 +1,5 @@
 import { configure, render, screen, waitFor } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { components } from '$lib/api/schema';
 
 // Waits are conditions with a 10 s deadline (CLAUDE.md); the test's own limit must exceed it.
@@ -54,6 +54,18 @@ function serve(s: Figures, list: unknown[] = []) {
 
 // Waits are conditions with a 10 s deadline (CLAUDE.md), not the 1 s default.
 configure({ asyncUtilTimeout: 10_000 });
+
+// The panel's lazy imports from mount (key commands, the live extras, the index banner): let them
+// land before the file ends, or the environment can be torn down mid-import.
+afterAll(async () => {
+	await Promise.all([
+		import('./commands'),
+		import('$lib/keys'),
+		import('$lib/features/detail/commands'),
+		import('../live/extras'),
+		import('./IndexState.svelte')
+	]);
+});
 
 beforeEach(() => {
 	get.mockReset();
