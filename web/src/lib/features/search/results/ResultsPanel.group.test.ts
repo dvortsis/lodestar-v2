@@ -60,7 +60,9 @@ beforeAll(() => stubLayout(600, 1000));
 // The panel's lazy imports, settled before the environment closes. A row's focus or hover imports
 // the mocked `$lib/features/detail/open`, and vitest still fetches the real module's own imports
 // (section.svelte, visibility), which can outlast the file. Awaiting the mock doesn't wait for
-// them; loading the real module does. It only declares module state, and no test runs after this.
+// them; loading the real module does. At load it only declares module state and, through its
+// prefetch re-export, adds one invalidation listener to a Set; no test runs after this. The other
+// mocks here (detail/commands, keys) need no such load: the panel already loads their imports.
 afterAll(async () => {
 	await Promise.all([
 		vi.importActual('$lib/features/detail/open'),

@@ -55,9 +55,9 @@ function serve(s: Figures, list: unknown[] = []) {
 // Waits are conditions with a 10 s deadline (CLAUDE.md), not the 1 s default.
 configure({ asyncUtilTimeout: 10_000 });
 
-// The panel's lazy imports (from mount, rows, focus and hover, as ResultsPanel.group and .query
-// await them, plus the live extras and the index banner): let them land before the file ends, or
-// the environment can be torn down mid-import.
+// The panel's lazy imports, as ResultsPanel.group and .query await them, plus the live extras and
+// the index banner. This file's tests render no rows, so the row-only chunks load here on purpose:
+// whatever the panel starts lands before the file ends, never mid-teardown.
 afterAll(async () => {
 	await Promise.all([
 		import('$lib/features/detail/open'),
