@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T11:03:22Z",
+  "updated_at": "2026-11-28T11:06:42Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11128,7 +11128,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T10:48:57Z",
+    "updated": "2026-11-28T11:06:42Z",
     "items": [
       {
         "slot": 1,
@@ -11157,11 +11157,11 @@
       },
       {
         "slot": 4,
-        "slice": "X-detail-attributes",
+        "slice": "X-filter-budget-drift",
         "role": "build",
-        "agent": "session_01MMjhnBrwbc5HKzZQK5hwo2",
-        "doing": "step 0: field shape and latency",
-        "since": "2026-11-28T08:06:04Z"
+        "agent": "session_01MMjhnD7WDpGhQX1vKVsT7r",
+        "doing": "step 0: diagnose in-run calibration drift",
+        "since": "2026-11-28T11:06:42Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",
