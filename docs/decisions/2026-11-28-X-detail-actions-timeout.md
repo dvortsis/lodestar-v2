@@ -1,0 +1,67 @@
+# X-detail-actions-timeout decisions (#1184)
+
+- **A test's timeout exceeds the waits inside it** (runner decision, 2026-11-28Z). `web/vite.config.ts` sets `test.testTimeout: 20_000` and `test.hookTimeout: 20_000`.
+  - Why: the repo's condition waits use a deadline of at least 10 s (CLAUDE.md, standards §2), but vitest's defaults give a test 5 s and a hook 10 s. So a slow wait failed as "Test timed out in 5000ms", well before its own deadline.
+  - That's how `DetailActions.test.ts` "puts Open full page in the menu…" failed in a full detail run: the menu's lazy chunk (`ActionsMenu.svelte`) compiles in about 2 s cold. The test waits for it twice, and other workers compiling at the same time push it past 5 s.
+  - 20 s leaves room for a test that makes two 10 s-class waits. It's the second most common per-file override (22 files), after 30 s (32 files).
+- **Per-file `vi.setConfig({ testTimeout })` values stay as they are** (61 files: 15 s ×4, 20 s ×22, 30 s ×32, 40 s ×3). A file's own setting wins over the config.
+- **`hookTimeout` is raised too, for every hook that makes a 10 s wait,** not one hook only. These hooks wait up to 10 s, the same as the 10 s default, and `hookTimeout: 20_000` covers them all. Don't revert it on the view that only one hook needs it.
+  - `web/src/lib/features/detail/DetailView.test.ts:39-44`: an `afterEach` waiting for the file tree.
+  - `web/src/lib/features/settings/form/SettingField.test.ts:107-113`: a `beforeEach` `waitFor`, under `asyncUtilTimeout: 10_000`.
+  - `web/src/lib/features/settings/form/LazyControl.test.ts:27-42`: a `beforeEach` that awaits `until` (10 s).
+  - `web/src/lib/features/settings/form/LazyControl.failure.test.ts:20-30`: the same.
+  - `web/src/lib/features/settings/form/SettingsForm.lazy.test.ts:16-27`: the same.
+  - `web/src/lib/features/settings/form/SettingsForm.offline.test.ts:31-42`: the same.
+  - `SettingsForm.test.ts:53`'s `beforeEach` uses `waitFor` at testing-library's default deadline, with no 10 s configured, so it isn't listed.
+- **The 49 files with tests that made waits of 10 s or more on the 5 s default.** These files have a `timeout` of 10 s or more, or a 10 s `asyncUtilTimeout` set through `configure`. Some of their tests (in `QueryBar.test.ts`, two of its four `describe`s) sit outside any per-file, per-`describe` or per-test timeout.
+  - Six files with such waits aren't listed, because every test in them is under a `describe(…, { timeout: 20_000 })`: `LazyControl`, `LazyControl.failure`, `SettingsForm.lazy`, `SettingsForm.offline`, `lazy` and `event-labels.lazy`. Their hooks are covered above.
+  - `filters/screens/screen.test.ts` sets 15 s on its `beforeAll` only, so its tests had the default.
+  - `web/src/lib/features/detail/target.page.test.ts`
+  - `web/src/lib/features/detail/visibility.retry.test.ts`
+  - `web/src/lib/features/detail/adult/AdultEnrichment.test.ts`
+  - `web/src/lib/features/detail/commands.failure.test.ts`
+  - `web/src/lib/features/detail/send.test.ts`
+  - `web/src/lib/features/detail/DetailActions.test.ts`
+  - `web/src/lib/features/detail/magnet.test.ts`
+  - `web/src/lib/features/detail/DetailView.test.ts`
+  - `web/src/lib/features/detail/files/FileTree.test.ts`
+  - `web/src/lib/features/detail/parsed/Parsed.test.ts`
+  - `web/src/lib/features/detail/visibility.test.ts`
+  - `web/src/lib/features/detail/DetailActions.door.test.ts`
+  - `web/src/lib/features/detail/commands.test.ts`
+  - `web/src/lib/features/detail/provenance/Provenance.test.ts`
+  - `web/src/lib/features/jobs/JobsScreen.test.ts`
+  - `web/src/lib/features/shortcuts/KeyboardScreen.test.ts`
+  - `web/src/lib/features/auth/forms.test.ts`
+  - `web/src/lib/features/auth/session.test.ts`
+  - `web/src/lib/features/appearance/AppearanceScreen.test.ts`
+  - `web/src/lib/features/search/query/QueryBar.test.ts`
+  - `web/src/lib/features/search/assist/fields.test.ts`
+  - `web/src/lib/features/search/assist/assist-bar.test.ts`
+  - `web/src/lib/features/search/results/RowActions.test.ts`
+  - `web/src/lib/features/search/live/LiveHost.test.ts`
+  - `web/src/lib/features/shell/privacy/PrivacyBanner.test.ts`
+  - `web/src/lib/features/discover/DiscoverPage.test.ts`
+  - `web/src/lib/features/discover/DiscoverPage.keys.test.ts`
+  - `web/src/lib/features/upload/UploadScreen.test.ts`
+  - `web/src/lib/features/filters/screens/names-late.test.ts`
+  - `web/src/lib/features/settings/form/SettingsForm.messages.test.ts`
+  - `web/src/lib/features/settings/form/SettingsForm.test.ts`
+  - `web/src/lib/features/settings/form/SettingsForm.messages-failed.test.ts`
+  - `web/src/lib/features/settings/logging/EventList.lazy.test.ts`
+  - `web/src/lib/features/settings/logging/event-labels.test.ts`
+  - `web/src/lib/features/settings/shell/SettingsShell.test.ts`
+  - `web/src/lib/features/settings/screens2/Lazy.test.ts`
+  - `web/src/lib/features/logs/LogsPage.test.ts`
+  - `web/src/lib/features/compare/Compare.test.ts`
+  - `web/src/lib/features/alerts/components.test.ts`
+  - `web/src/lib/features/insights/digest/DigestPreview.test.ts`
+  - `web/src/lib/features/insights/workers/workers.test.ts`
+  - `web/src/lib/shell/reach.test.ts`
+  - `web/src/routes/error.test.ts`
+  - `web/src/lib/features/companions/NeedChip.chunk.test.ts`
+  - `web/src/lib/features/filters/screens/names-failed.test.ts`
+  - `web/src/lib/features/filters/screens/names-slow.test.ts`
+  - `web/src/lib/features/filters/screens/packs/packs.test.ts`
+  - `web/src/lib/features/sources/SourceRow.chunk.test.ts`
+  - `web/src/lib/features/filters/screens/screen.test.ts`

@@ -112,7 +112,7 @@ impl OpsApi for FakeOps {
                 queue_depth: 0,
                 sampling_blocked: None,
                 searchable_torrents: None,
-                stored_torrents: 0,
+                stored_torrents: Some(0),
                 updated_at: 0,
                 uptime_s: 0,
             }

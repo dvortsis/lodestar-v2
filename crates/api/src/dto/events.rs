@@ -135,8 +135,10 @@ pub struct CrawlerEvent {
     pub searchable: Option<u64>,
     /// Torrents stored since start.
     pub stored: u64,
-    /// Torrents in the store.
-    pub torrents: u64,
+    /// Torrents in the store, as `/stats`'s `stored_torrents`: null while
+    /// the start-up count runs.
+    #[schema(required = true)]
+    pub torrents: Option<u64>,
 }
 
 /// A rebuild's phase; `done` once the new index serves.

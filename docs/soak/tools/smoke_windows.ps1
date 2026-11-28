@@ -43,8 +43,15 @@ try {
     $page = Invoke-WebRequest "http://127.0.0.1:$Port/" -Headers @{'Accept-Encoding'='identity'} -TimeoutSec 3
     $bytes = if ($page.Content -is [byte[]]) { $page.Content } else { [Text.Encoding]::UTF8.GetBytes([string]$page.Content) }
     if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)) -ne $outcome.index_sha256) { throw 'Served UI does not match the production index.' }
-    $metrics = (Invoke-WebRequest "http://127.0.0.1:$Port/metrics" -TimeoutSec 3).Content
-    if ($metrics -notmatch '(?m)^lodestar_start_time_seconds ' -or $metrics -notmatch '(?m)^lodestar_torrents ') { throw 'Required metrics absent.' }
+    # lodestar_torrents appears once the start-up count lands, seconds after the start
+    # (X-healthz-count-async): poll for it, up to 120 s.
+    $watch.Restart()
+    while ($true) {
+        $metrics = (Invoke-WebRequest "http://127.0.0.1:$Port/metrics" -TimeoutSec 3).Content
+        if ($metrics -match '(?m)^lodestar_start_time_seconds ' -and $metrics -match '(?m)^lodestar_torrents ') { break }
+        if ($watch.Elapsed.TotalSeconds -ge 120) { throw 'Required metrics absent: lodestar_torrents (the start-up torrent count) or lodestar_start_time_seconds after 120 s.' }
+        Start-Sleep -Milliseconds 500
+    }
     $udp = (& netstat -ano -p udp | Out-String)
     if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect fixture UDP ownership.' }
     if ($udp -match ('(?m)^\s*UDP\s+.*\s' + $p.Id + '\s*$')) { throw 'Offline fixture unexpectedly owns a UDP socket.' }

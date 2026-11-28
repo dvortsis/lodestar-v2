@@ -3,15 +3,22 @@
 //! says, and the DHT plugin runs no node; when it's back, the setting
 //! applies again (a pause the user chose stays on) and the node starts
 //! again on fresh sockets.
+//!
+//! The hold-and-return tests need a pin that works, so they run on Linux
+//! and Windows only. Elsewhere every pin fails by design (the crawl stays
+//! down, `iface.rs`), and that fail-closed rule is what's tested there.
 
 use std::net::SocketAddr;
+#[cfg(any(target_os = "linux", windows))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lodestar_dht::node::{Config as DhtConfig, Intensity};
 use lodestar_metainfo::InfoHash;
-use lodestar_network_policy::iface::{Down, Guard, Interface, Link};
+#[cfg(any(target_os = "linux", windows))]
+use lodestar_network_policy::iface::Down;
+use lodestar_network_policy::iface::{Guard, Interface, Link};
 use lodestar_peer_wire::{FailureKind, Fetched};
 use lodestar_pipeline::{Control, DhtSource, Pipeline, PipelineConfig};
 use lodestar_sources::{BoxFuture, Fetcher};
@@ -41,7 +48,8 @@ fn loopback() -> Link {
 }
 
 /// A guard whose probe the test switches between up (`lo`'s real check
-/// on Linux, loopback's address elsewhere) and down.
+/// on Linux, loopback's address on Windows) and down.
+#[cfg(any(target_os = "linux", windows))]
 fn switched() -> (Arc<Guard>, Arc<AtomicBool>) {
     let up = Arc::new(AtomicBool::new(false));
     let u = up.clone();
@@ -124,6 +132,7 @@ fn running(dht: &DhtSource) -> bool {
     dht.node_handle().lock().unwrap().is_some()
 }
 
+#[cfg(any(target_os = "linux", windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_down_interface_holds_the_crawl_and_its_return_rebinds_the_dht() {
     let (guard, up) = switched();
@@ -156,6 +165,7 @@ async fn a_down_interface_holds_the_crawl_and_its_return_rebinds_the_dht() {
     s.pipeline.shutdown().await.unwrap();
 }
 
+#[cfg(any(target_os = "linux", windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pause_the_user_chose_outlasts_the_hold() {
     let (guard, up) = switched();
@@ -206,6 +216,7 @@ async fn without_a_guard_there_is_no_vpn_status() {
 /// The interface goes down after the pipeline started but before the
 /// control takes over: the pool and the DHT are paused explicitly, since
 /// the control's state already reads paused and no later change would.
+#[cfg(any(target_os = "linux", windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_interface_that_went_before_the_control_started_is_held() {
     let (guard, up) = switched();
@@ -253,4 +264,46 @@ async fn an_interface_that_went_before_the_control_started_is_held() {
     );
     assert!(dht.is_paused(), "paused explicitly, not left running");
     pipeline.shutdown().await.unwrap();
+}
+
+/// Where binding to an interface is unsupported (macOS, the BSDs), every
+/// pin fails, so with an interface set the crawl stays held down and never
+/// resumes on the normal connection, even with a probe that says up. In
+/// this binary the other pinning tests don't run here, so the pin counter
+/// counts only this test's attempts.
+#[cfg(not(any(target_os = "linux", windows)))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unsupported_platform_holds_the_crawl_down() {
+    let guard = Guard::with_probe(Interface::parse("lo0").unwrap(), |_| Ok(loopback()));
+    assert!(guard.state().is_up(), "the probe says up");
+    let s = start(guard.clone(), false).await;
+    let held = |s: &Started| {
+        let st = s.control.status();
+        // The pin's own failure (`unsupported`) is reported as the hold
+        // the DHT plugin puts on: `bind_failed`.
+        st.paused && st.vpn.and_then(|v| v.down) == Some("bind_failed")
+    };
+    until("the hold", || held(&s)).await;
+    // Two more attempts (the retries, 2 s and 4 s apart), each after a
+    // check that sees the link up: each fails, and the crawl never
+    // resumes or runs a node in between.
+    let first = lodestar_network_policy::iface::pins();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while lodestar_network_policy::iface::pins() < first + 2 {
+        guard.poll();
+        assert!(
+            held(&s),
+            "held through every retry: {:?}",
+            s.control.status()
+        );
+        assert!(!running(&s.dht), "no node runs unpinned");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting: two retries"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(held(&s) && !running(&s.dht));
+    assert_eq!(guard.trips(), 1, "one trip across the retries: no flapping");
+    s.pipeline.shutdown().await.unwrap();
 }

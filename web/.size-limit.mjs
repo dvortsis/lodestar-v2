@@ -558,9 +558,9 @@ const eventNamesLimits = {
 	companions: '1160 B',
 	// runner §2.26, X-tls-root-load-event: measured 1220 B with the two root-load events, + 300 B.
 	integrations: '1520 B',
-	// runner §2.26, X-vpn-bind: measured 3302 B with the four crawl-interface events, rounded
+	// runner §2.26, X-healthz-count-async: measured 3407 B with the torrents-counted event, rounded
 	// up to 64 B.
-	pipeline: '3328 B',
+	pipeline: '3456 B',
 	fetch: '610 B'
 };
 for (const c of Object.keys(eventNamesLimits)) {
@@ -1888,7 +1888,9 @@ export default [
 	// and its narrow form "N filtered · Show", its request (POST /search/hidden, after the rows render,
 	// aborted by a newer query), its messages, and the container queries that keep it from moving
 	// anything (toolbar.css).
-	entry('Results toolbar (lazy)', toolbarLazy, '5.60 KB'),
+	// runner §2.26 (X-hidden-count-grouped): 5.60 → 5.65 KB, measured 5,647 B: the grouped count's own
+	// note rule (a class from the count's kind, and its container queries in toolbar.css).
+	entry('Results toolbar (lazy)', toolbarLazy, '5.65 KB'),
 	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
 	// chunk); the limit falls to the measured size, rounded up at 0.01 kB, so the bytes aren't respent.
 	// GS-5 (runner §2.26): +1 B of shared-chunk noise (no live-banner code changed), rounded up to 0.01 KB.

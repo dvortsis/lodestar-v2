@@ -40,7 +40,7 @@
    so they stay put whatever the count's length or language. */
 @media (width >= 128rem) {
 	.tb {
-		max-width: calc(var(--spacing) * 256);
+		max-width: calc(var(--spacing) * 288);
 	}
 }
 /* Reserved while the count is out, so nothing moves when it arrives. */
@@ -72,6 +72,18 @@
 @container tb (width < 14.5rem) or ((width >= 30rem) and (width < 42rem)) {
 	.tb-hid {
 		display: none;
+	}
+}
+/* A grouped count ("N groups · N torrents") is a long line: with the note and the controls it needs
+   up to 1,102 px (measured, en, "≈ 123.5M" with 9,999,999 hidden), so the note shows from 72rem of
+   toolbar and not at all below it ("Show hidden" stays in Filters), whatever the plain count's rule
+   above says. Sort and View keep their labels. */
+.tb-grp .tb-hid {
+	display: none;
+}
+@container tb (width >= 72rem) {
+	.tb-grp .tb-hid {
+		display: inline;
 	}
 }
 /* Below 46rem of toolbar (a narrow window, or the drawer narrowing it), Sort and View keep their

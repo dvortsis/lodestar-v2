@@ -198,6 +198,11 @@ pub struct PipelineConfig {
     /// (X-healthz-cold-start).
     #[doc(hidden)]
     pub fill_gate: Option<FillGate>,
+    /// Tests only: run on the fill thread before it counts the stored
+    /// torrents, so a test can hold the count's null window
+    /// (X-healthz-count-async).
+    #[doc(hidden)]
+    pub count_gate: Option<FillGate>,
 }
 
 /// How often a running plugin's non-direct route is probed, so a route
@@ -246,6 +251,7 @@ impl Default for PipelineConfig {
             vpn: None,
             companions: None,
             fill_gate: None,
+            count_gate: None,
         }
     }
 }
@@ -434,7 +440,10 @@ pub struct Monitor {
     remote: Arc<remote::RemoteIntake>,
     have: Arc<Have>,
     sources: Arc<Vec<SourceEntry>>,
-    stored_at_start: u64,
+    /// The torrents stored at start, once the fill thread has counted
+    /// them in the snapshot taken before the writer started; unset until
+    /// then (X-healthz-count-async).
+    stored_at_start: Arc<std::sync::OnceLock<u64>>,
     started_at: i64,
     health: Option<HealthHandle>,
     hot: Option<Arc<HotColumns>>,
@@ -537,9 +546,13 @@ impl Monitor {
     }
 
     /// Torrents stored, without a table scan: the count at start plus
-    /// what the writer has added since.
-    pub fn torrents(&self) -> u64 {
-        self.stored_at_start + self.writer.stored.load(Ordering::Relaxed)
+    /// what the writer has added since. `None` until the start-up count
+    /// lands, seconds after a start (X-healthz-count-async), and for the
+    /// rest of the run if the store couldn't be counted in the start's
+    /// snapshot: never a partial or guessed number.
+    pub fn torrents(&self) -> Option<u64> {
+        let at_start = *self.stored_at_start.get()?;
+        Some(at_start + self.writer.stored.load(Ordering::Relaxed))
     }
 
     /// Unix seconds.
@@ -702,17 +715,10 @@ impl Pipeline {
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (
-            store,
-            registered,
-            mut queue,
-            (have, fill),
-            backfill_until,
-            stored_at_start,
-            store_filter,
-        ) = tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
-            .await
-            .map_err(Error::Join)??;
+        let (store, registered, mut queue, (have, fill), backfill_until, store_filter) =
+            tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
+                .await
+                .map_err(Error::Join)??;
         // Uploads (UP-0) are stored under a built-in source, as imports
         // register theirs.
         let (store, upload_source) = tokio::task::spawn_blocking(move || {
@@ -753,12 +759,13 @@ impl Pipeline {
                 .map(|((id, ..), p)| (*id, p.manifest(), p.policy().credentials)),
             enrichers,
         );
-        lodestar_log::log_event!(
-            log_events::STARTING,
-            // The torrents counted: the filter may still be filling.
-            stored = stored_at_start,
-            queued = queue.len()
-        );
+        // The torrents are counted on the fill thread
+        // (`pipeline.torrents_counted`), so not here.
+        lodestar_log::log_event!(log_events::STARTING, queued = queue.len());
+        let stored_at_start = Arc::new(std::sync::OnceLock::new());
+        if let Some(n) = fill.counted {
+            let _ = stored_at_start.set(n);
+        }
         let have = Arc::new(have);
         for note in load_filter(&config.filter, &store_filter) {
             let (what, rule, reason) = log_events::filter_note(&note);
@@ -847,14 +854,22 @@ impl Pipeline {
         // `serve` answers `/healthz` once this returns, and the intake
         // waits for the fill before it admits a key. It stops trying again
         // once the intake is told to stop, or the pipeline is dropped.
-        if let Some(open) = fill {
-            let (have, gate) = (Arc::downgrade(&have), config.fill_gate.clone());
+        if let Some((open, pinned)) = fill.thread {
+            let have = Arc::downgrade(&have);
+            let gates = FillGates {
+                count: config.count_gate.clone(),
+                fill: config.fill_gate.clone(),
+            };
+            let counted = stored_at_start.clone();
             let stop = stop_intake.subscribe();
             tokio::task::spawn_blocking(move || {
                 fill_have(
                     &have,
+                    pinned,
+                    &counted,
                     || Store::open_reader(&open.0, open.1.clone()),
-                    gate.as_ref(),
+                    count_logged,
+                    &gates,
                     || *stop.borrow() || stop.has_changed().is_err(),
                     FILL_RETRY_FIRST,
                 )
@@ -1492,9 +1507,8 @@ fn prepare(
             control::SavedEgress,
         )>,
         Vec<QueuedKey>,
-        (Have, Option<(PathBuf, StoreConfig)>),
+        (Have, Fill),
         i64,
-        u64,
         StoreFilter,
     ),
     Error,
@@ -1583,18 +1597,50 @@ fn prepare(
             }
         }
     }
-    let stored = store.count()?;
-    // The have-filter is filled off the start (X-healthz-cold-start), from
-    // its own connection. It's sized from the exact count while that is
-    // still taken here; `Store::torrent_bound` is the scan-free bound for
-    // when it isn't (X-healthz-count-async). An in-memory store (tests)
-    // can't be reopened, so it's filled here.
+    // The have-filter is filled off the start (X-healthz-cold-start), and
+    // the torrents are counted there too (X-healthz-count-async), both in
+    // a read snapshot pinned here: after the held sweep, before the writer
+    // exists, so the count plus what the writer stores from now on is
+    // exact. The filter is sized once the count is in. A store that can't
+    // be reopened (in memory, in tests), or whose snapshot can't be
+    // pinned, is counted here, as before; only the former is filled here.
     let have = match store.reopen_args() {
-        Some(open) => (Have::filling(have::capacity_for(stored)), Some(open)),
+        Some(open) => match pin_snapshot(&open) {
+            Ok(pinned) => (
+                Have::unsized_filling(),
+                Fill {
+                    counted: None,
+                    thread: Some((open, Some(pinned))),
+                },
+            ),
+            Err(e) => {
+                lodestar_log::log_event!(
+                    log_events::HAVE_FILL_FAILED,
+                    stage = "pin",
+                    error = log_events::store_error(&e),
+                    attempts = 0u64
+                );
+                let stored = count_logged(&store)?;
+                (
+                    Have::filling(have::capacity_for(stored)),
+                    Fill {
+                        counted: Some(stored),
+                        thread: Some((open, None)),
+                    },
+                )
+            }
+        },
         None => {
+            let stored = count_logged(&store)?;
             let have = Have::new(have::capacity_for(stored));
             store.for_each_swarm_hash(|h| have.insert(&h))?;
-            (have, None)
+            (
+                have,
+                Fill {
+                    counted: Some(stored),
+                    thread: None,
+                },
+            )
         }
     };
     store.write(&WriteBatch {
@@ -1618,15 +1664,44 @@ fn prepare(
             control::saved_settings(&store, m.manifest.id, true)?.egress,
         ));
     }
-    Ok((
-        store,
-        sources,
-        queue,
-        have,
-        first_run + backfill,
-        stored,
-        filter,
-    ))
+    Ok((store, sources, queue, have, first_run + backfill, filter))
+}
+
+/// How the have-filter is filled and the torrents counted after
+/// [`prepare`].
+struct Fill {
+    /// The count, when `prepare` took it: an in-memory store (filled
+    /// there too), or one whose snapshot couldn't be pinned.
+    counted: Option<u64>,
+    /// For the fill thread: the store to reopen and, when the count is
+    /// still to take, the reader whose read transaction began before the
+    /// writer started ([`pin_snapshot`]), so counting in it is exact.
+    /// `None` when `prepare` filled the filter.
+    thread: Option<((PathBuf, StoreConfig), Option<Store>)>,
+}
+
+/// Opens a reader on the store and begins a read transaction on it, with
+/// a read so the snapshot is taken now rather than at its first query.
+/// Until the transaction ends (the reader is dropped), a WAL checkpoint
+/// can't pass it, so the fill keeps it only for the count and the scan.
+fn pin_snapshot(open: &(PathBuf, StoreConfig)) -> Result<Store, lodestar_store::Error> {
+    let reader = Store::open_reader(&open.0, open.1.clone())?;
+    let conn = reader.connection();
+    conn.execute_batch("BEGIN DEFERRED")?;
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM torrents)", [], |_| Ok(()))?;
+    Ok(reader)
+}
+
+/// Counts the stored torrents and logs `pipeline.torrents_counted`.
+fn count_logged(store: &Store) -> Result<u64, lodestar_store::Error> {
+    let began = std::time::Instant::now();
+    let stored = store.count()?;
+    lodestar_log::log_event!(
+        log_events::TORRENTS_COUNTED,
+        stored = stored,
+        ms = began.elapsed().as_millis() as u64
+    );
+    Ok(stored)
 }
 
 /// The first wait before a failed fill is tried again; it doubles.
@@ -1636,19 +1711,51 @@ const FILL_RETRY_MAX: Duration = Duration::from_secs(60);
 /// How often a fill waiting to try again checks that the pipeline is up.
 const FILL_RETRY_CHECK: Duration = Duration::from_secs(1);
 
-/// Fills a [`Have::filling`] filter from the store (blocking), then marks
-/// it filled. The scan is one statement, so one read snapshot: a hash
-/// committed after it began is missing from it, but the writer inserts
-/// every hash it commits, so none is lost. A failed read is tried again,
-/// after `first_wait` and then twice as long each time up to a minute,
-/// until `stopped` says the pipeline is stopping or the filter is gone;
-/// the filter is never marked filled until a scan has finished. Its
-/// inserts stay in between: a filter only gains bits. `gate` (tests) runs
-/// after a scan, before the filter is marked. Returns the tries made.
+/// The fill's test gates ([`PipelineConfig::count_gate`] and
+/// [`PipelineConfig::fill_gate`]).
+#[derive(Default)]
+struct FillGates {
+    count: Option<FillGate>,
+    fill: Option<FillGate>,
+}
+
+/// Counts the stored torrents and fills a [`Have::filling`] filter from
+/// the store (blocking), then marks it filled.
+///
+/// **The count** (X-healthz-count-async) is taken first, in `pinned`'s
+/// snapshot, which began before the writer started: published to
+/// `counted` as soon as it's in, since it's final then. A failed count
+/// (or one whose snapshot SQLite has ended) isn't tried again: no later
+/// snapshot can be squared with what the writer has stored since, and
+/// retrying in the held one would hold the WAL and crawling behind it. So
+/// the count is left unset for the run, the snapshot is let go, and the
+/// filter is sized from [`Store::torrent_bound`] instead. `counted`
+/// already set (the count was taken in `prepare`) skips it. `count` is
+/// [`count_logged`]; tests fail it.
+///
+/// **The fill** is one statement, so one read snapshot: `pinned`'s while
+/// it holds, else a reader from `open`. A hash committed after it began
+/// is missing from it, but the writer inserts every hash it commits, so
+/// none is lost. An unsized filter is first [`Have::size`]d with an empty
+/// filter of the count's size; the scan then fills it in place. The snapshot
+/// is let go (`pinned` dropped, ending its transaction) as soon as the
+/// scan ends, the scan fails, or the fill stops, so it never holds the WAL
+/// past the fill.
+///
+/// A failed try is tried again, after `first_wait` and then twice as long
+/// each time up to a minute, until `stopped` says the pipeline is stopping
+/// or the filter is gone; the filter is never marked filled until a scan
+/// has finished. Returns the tries made.
+// Each argument is a seam a unit test replaces (the store, the count, the
+// gates, the stop, the wait); bundling them would only hide that.
+#[allow(clippy::too_many_arguments)]
 fn fill_have(
     have: &std::sync::Weak<Have>,
+    mut pinned: Option<Store>,
+    counted: &std::sync::OnceLock<u64>,
     open: impl Fn() -> Result<Store, lodestar_store::Error>,
-    gate: Option<&FillGate>,
+    count: impl Fn(&Store) -> Result<u64, lodestar_store::Error>,
+    gates: &FillGates,
     stopped: impl Fn() -> bool,
     first_wait: Duration,
 ) -> u64 {
@@ -1656,6 +1763,7 @@ fn fill_have(
     let mut attempts = 0;
     loop {
         // Gone when the pipeline has stopped: nothing reads it any more.
+        // Returning drops `pinned`, which ends its transaction.
         let Some(filter) = have.upgrade() else {
             return attempts;
         };
@@ -1663,16 +1771,27 @@ fn fill_have(
             return attempts;
         }
         attempts += 1;
-        match open().and_then(|s| filter.fill(|insert| s.for_each_swarm_hash(insert))) {
-            Ok(()) => {
-                if let Some(gate) = gate {
+        match fill_once(
+            &filter,
+            &mut pinned,
+            counted,
+            &open,
+            &count,
+            gates,
+            &stopped,
+        ) {
+            Ok(true) => {
+                if let Some(gate) = &gates.fill {
                     gate.wait();
                 }
                 filter.mark_filled();
                 return attempts;
             }
+            // Stopped after the count: the snapshot is already let go.
+            Ok(false) => return attempts,
             Err(e) => lodestar_log::log_event!(
                 log_events::HAVE_FILL_FAILED,
+                stage = "scan",
                 error = log_events::store_error(&e),
                 attempts = attempts
             ),
@@ -1688,6 +1807,79 @@ fn fill_have(
         }
         wait = (wait * 2).min(FILL_RETRY_MAX);
     }
+}
+
+/// One try of [`fill_have`]: the count if it's still to take, then the
+/// scan. Leaves `pinned` set only while its snapshot can still count.
+fn fill_once(
+    filter: &Have,
+    pinned: &mut Option<Store>,
+    counted: &std::sync::OnceLock<u64>,
+    open: &impl Fn() -> Result<Store, lodestar_store::Error>,
+    count: &impl Fn(&Store) -> Result<u64, lodestar_store::Error>,
+    gates: &FillGates,
+    stopped: &impl Fn() -> bool,
+) -> Result<bool, lodestar_store::Error> {
+    if counted.get().is_none()
+        && let Some(snapshot) = pinned.as_ref()
+    {
+        if let Some(gate) = &gates.count {
+            gate.wait();
+        }
+        // Only inside the snapshot pinned before the writer started: a
+        // count outside it (the transaction ended under it) could hold
+        // torrents the writer has counted too.
+        let result = if snapshot.connection().is_autocommit() {
+            Err(lodestar_store::Error::Corrupt("the start's snapshot ended"))
+        } else {
+            count(snapshot)
+        };
+        match result {
+            Ok(n) => {
+                let _ = counted.set(n);
+            }
+            Err(e) => {
+                // Never tried again and never gating the fill: a count
+                // that keeps failing would hold the snapshot, and with it
+                // the WAL and crawling, for the run. The count stays
+                // unknown; the snapshot is let go and the scan goes on
+                // from a reader of its own, sized from the id bound.
+                lodestar_log::log_event!(
+                    log_events::HAVE_FILL_FAILED,
+                    stage = "count",
+                    error = log_events::store_error(&e),
+                    attempts = 0u64
+                );
+                *pinned = None;
+            }
+        }
+        // A stop during the count (seconds on a large store) doesn't go
+        // on into the scan with the WAL still pinned: the writer's
+        // stop-time checkpoint would wait out its busy timeout behind it.
+        if stopped() {
+            *pinned = None;
+            return Ok(false);
+        }
+    }
+    // The pinned snapshot if it's still held, else a reader of its own.
+    // Either way it's let go when this returns.
+    let reader = match pinned.take() {
+        Some(r) => r,
+        None => open()?,
+    };
+    // Sized as soon as the size is known, before the scan, so the pending
+    // list holds only what the writer stored during the count; the scan
+    // then fills it in place, beside the writer's own inserts.
+    if !filter.is_sized() {
+        let capacity = match counted.get() {
+            Some(n) => have::capacity_for(*n),
+            // The count was lost with its snapshot: the scan-free bound.
+            None => have::capacity_for(reader.torrent_bound()?),
+        };
+        filter.size(have::Bloom::new(capacity));
+    }
+    filter.fill(|insert| reader.for_each_swarm_hash(insert))?;
+    Ok(true)
 }
 
 struct Intake {
@@ -1944,10 +2136,16 @@ mod tests {
     fn one_torrent_store(dir: &Path) -> PathBuf {
         let db = dir.join("t.db");
         let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        add_torrent(&mut store, "one");
+        db
+    }
+
+    /// Stores a torrent named `name`, as the writer would; its hash.
+    fn add_torrent(store: &mut Store, name: &str) -> InfoHash {
         let mut d = std::collections::BTreeMap::new();
         use lodestar_bencode::OwnedValue;
         d.insert(b"length".to_vec(), OwnedValue::Int(1));
-        d.insert(b"name".to_vec(), OwnedValue::from("one"));
+        d.insert(b"name".to_vec(), OwnedValue::from(name));
         d.insert(b"piece length".to_vec(), OwnedValue::Int(1 << 14));
         d.insert(b"pieces".to_vec(), OwnedValue::Bytes(vec![1; 20]));
         let raw = lodestar_bencode::to_vec(&OwnedValue::Dict(d));
@@ -1963,7 +2161,242 @@ mod tests {
                 source: src,
             }])
             .unwrap();
-        db
+        info.v1.unwrap()
+    }
+
+    fn reopen(db: &Path) -> impl Fn() -> Result<Store, lodestar_store::Error> + '_ {
+        move || Store::open_reader(db, StoreConfig::default())
+    }
+
+    fn pinned(db: &Path) -> Store {
+        pin_snapshot(&(db.to_path_buf(), StoreConfig::default())).unwrap()
+    }
+
+    /// `(log, checkpointed)` frames of a passive checkpoint on `store`'s
+    /// connection: equal once no reader holds an older snapshot.
+    fn checkpoint(store: &Store) -> (i64, i64) {
+        store
+            .connection()
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |r| {
+                Ok((r.get(1)?, r.get(2)?))
+            })
+            .unwrap()
+    }
+
+    /// The count is taken in the snapshot pinned before the writer
+    /// started: a torrent the writer stores after it isn't counted (the
+    /// writer's own counter adds it), and is in the filter all the same,
+    /// through the writer's insert during the fill.
+    #[test]
+    fn the_count_is_the_pinned_snapshots_and_the_filter_misses_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = one_torrent_store(dir.path());
+        let snapshot = pinned(&db);
+        let have = Arc::new(Have::unsized_filling());
+        // The writer, after the pin: stores one and inserts it.
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        let later = add_torrent(&mut writer, "later");
+        have.insert(&later);
+        let counted = std::sync::OnceLock::new();
+        let attempts = fill_have(
+            &Arc::downgrade(&have),
+            Some(snapshot),
+            &counted,
+            reopen(&db),
+            count_logged,
+            &FillGates::default(),
+            || false,
+            Duration::from_millis(1),
+        );
+        assert_eq!(attempts, 1);
+        assert_eq!(counted.get(), Some(&1), "the writer's commit isn't counted");
+        assert_eq!(writer.count().unwrap(), 2);
+        assert!(have.is_filled() && have.is_sized());
+        assert_eq!(have.capacity(), have::capacity_for(1));
+        assert!(
+            have.contains(&later),
+            "the writer's insert survived the swap"
+        );
+        let mut first = None;
+        writer
+            .for_each_swarm_hash(|h| {
+                if h != later {
+                    first = Some(h);
+                }
+            })
+            .unwrap();
+        assert!(have.contains(&first.unwrap()), "the scanned hash");
+    }
+
+    /// The pinned snapshot holds the WAL back only while the fill runs:
+    /// it's let go when the fill finishes, and when it stops before.
+    #[test]
+    fn the_pinned_snapshot_is_let_go_when_the_fill_ends_or_stops() {
+        for stop in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = one_torrent_store(dir.path());
+            let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+            let snapshot = pinned(&db);
+            add_torrent(&mut writer, "after the pin");
+            let (log, done) = checkpoint(&writer);
+            assert!(
+                done < log,
+                "pinned: the checkpoint can't pass it ({done}/{log})"
+            );
+            let have = Arc::new(Have::unsized_filling());
+            let counted = std::sync::OnceLock::new();
+            let attempts = fill_have(
+                &Arc::downgrade(&have),
+                Some(snapshot),
+                &counted,
+                reopen(&db),
+                count_logged,
+                &FillGates::default(),
+                || stop,
+                Duration::from_millis(1),
+            );
+            let (log, done) = checkpoint(&writer);
+            assert_eq!(done, log, "stop {stop}: the snapshot was let go");
+            if stop {
+                assert_eq!(attempts, 0);
+                assert!(counted.get().is_none() && !have.is_filled() && !have.is_sized());
+            } else {
+                assert_eq!(counted.get(), Some(&1));
+                assert!(have.is_filled());
+            }
+        }
+    }
+
+    /// A count that fails isn't tried again and doesn't hold the fill:
+    /// it stays unset, the snapshot is let go at once (a checkpoint
+    /// passes it), and the filter is filled in the same try, sized from
+    /// the id bound. The same when SQLite has ended the snapshot's
+    /// transaction: nothing is counted outside it.
+    #[test]
+    fn a_failed_count_stays_unset_and_never_holds_the_fill() {
+        for ended in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = one_torrent_store(dir.path());
+            let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+            let snapshot = pinned(&db);
+            if ended {
+                snapshot.connection().execute_batch("ROLLBACK").unwrap();
+            }
+            add_torrent(&mut writer, "after the pin");
+            let have = Arc::new(Have::unsized_filling());
+            let counted = std::sync::OnceLock::new();
+            let counts = std::sync::atomic::AtomicU64::new(0);
+            let attempts = fill_have(
+                &Arc::downgrade(&have),
+                Some(snapshot),
+                &counted,
+                reopen(&db),
+                |s: &Store| {
+                    counts.fetch_add(1, Ordering::SeqCst);
+                    if ended {
+                        // Out of the snapshot this would count the
+                        // writer's torrent too: it must not be asked.
+                        s.count()
+                    } else {
+                        Err(lodestar_store::Error::Corrupt("test: the count fails"))
+                    }
+                },
+                &FillGates::default(),
+                || false,
+                Duration::from_millis(1),
+            );
+            assert_eq!(attempts, 1, "ended {ended}: filled in the same try");
+            assert_eq!(
+                counts.load(Ordering::SeqCst),
+                u64::from(!ended),
+                "ended {ended}: counted once, or not at all out of the snapshot"
+            );
+            assert!(
+                counted.get().is_none(),
+                "ended {ended}: the count stays unknown"
+            );
+            assert!(have.is_filled() && have.is_sized());
+            let bound = writer.torrent_bound().unwrap();
+            assert!(have.capacity() >= have::capacity_for(1));
+            assert!(have.capacity() <= have::capacity_for(bound));
+            let (log, done) = checkpoint(&writer);
+            assert_eq!(done, log, "ended {ended}: the snapshot was let go");
+        }
+    }
+
+    /// A stop that comes during the count ends the fill there: no scan
+    /// runs, and the snapshot is let go at once, so the writer's
+    /// stop-time checkpoint isn't held behind it.
+    #[test]
+    fn a_stop_during_the_count_lets_the_snapshot_go_without_a_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = one_torrent_store(dir.path());
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        let snapshot = pinned(&db);
+        add_torrent(&mut writer, "after the pin");
+        let have = Arc::new(Have::unsized_filling());
+        let counted = std::sync::OnceLock::new();
+        let stop = Arc::new(AtomicBool::new(false));
+        // The stop arrives while the count is held at its gate.
+        let gates = FillGates {
+            count: Some(FillGate::new({
+                let stop = stop.clone();
+                move || stop.store(true, Ordering::SeqCst)
+            })),
+            fill: None,
+        };
+        let opened = std::sync::atomic::AtomicU64::new(0);
+        let attempts = fill_have(
+            &Arc::downgrade(&have),
+            Some(snapshot),
+            &counted,
+            || {
+                opened.fetch_add(1, Ordering::SeqCst);
+                Store::open_reader(&db, StoreConfig::default())
+            },
+            count_logged,
+            &gates,
+            || stop.load(Ordering::SeqCst),
+            Duration::from_millis(1),
+        );
+        assert_eq!(attempts, 1);
+        assert_eq!(counted.get(), Some(&1), "the count itself finished");
+        assert_eq!(
+            opened.load(Ordering::SeqCst),
+            0,
+            "no reader opened for a scan"
+        );
+        assert!(!have.is_sized() && !have.is_filled(), "no scan ran");
+        let (log, done) = checkpoint(&writer);
+        assert_eq!(done, log, "the snapshot was let go");
+    }
+
+    /// A count lost with its snapshot stays unset; the filter is sized
+    /// from the id bound instead, and filled.
+    #[test]
+    fn a_lost_count_stays_unset_and_the_filter_is_sized_from_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = one_torrent_store(dir.path());
+        let have = Arc::new(Have::unsized_filling());
+        let counted = std::sync::OnceLock::new();
+        fill_have(
+            &Arc::downgrade(&have),
+            None,
+            &counted,
+            reopen(&db),
+            count_logged,
+            &FillGates::default(),
+            || false,
+            Duration::from_millis(1),
+        );
+        assert!(counted.get().is_none());
+        let bound = Store::open_reader(&db, StoreConfig::default())
+            .unwrap()
+            .torrent_bound()
+            .unwrap();
+        assert!(have.is_filled() && have.is_sized());
+        assert_eq!(have.capacity(), have::capacity_for(bound));
+        assert_eq!(have.len(), 1);
     }
 
     #[test]
@@ -1974,6 +2407,8 @@ mod tests {
         let tries = std::sync::atomic::AtomicU64::new(0);
         let attempts = fill_have(
             &Arc::downgrade(&have),
+            None,
+            &std::sync::OnceLock::from(1),
             || {
                 // The first open fails as a missing file would.
                 if tries.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -1983,7 +2418,8 @@ mod tests {
                     Store::open_reader(&db, StoreConfig::default())
                 }
             },
-            None,
+            count_logged,
+            &FillGates::default(),
             || false,
             Duration::from_millis(1),
         );
@@ -2005,11 +2441,14 @@ mod tests {
             move || {
                 let n = fill_have(
                     &have,
+                    None,
+                    &std::sync::OnceLock::from(0),
                     || {
                         let _ = tried_tx.send(());
                         Store::open_reader(&missing, StoreConfig::default())
                     },
-                    None,
+                    count_logged,
+                    &FillGates::default(),
                     || *rx.borrow() || rx.has_changed().is_err(),
                     // A long wait: only the stop can end it in time.
                     Duration::from_secs(3600),

@@ -218,7 +218,9 @@ try {
                 'dht_peer_rejected_total', 'dht_peer_cancelled_total', 'dht_lookup_scheduled',
                 'dht_lookup_deadlines_total', 'dht_lookups_completed_total', 'dht_outstanding',
                 'fetch_lookups', 'fetch_active', 'fetch_pending')) {
-                $values[$name] = Read-Metric $metrics $name
+                # Absent is unknown (null), not a failed sample: the server leaves torrents out
+                # until its start-up count lands (X-healthz-count-async).
+                $values[$name] = if ($name -eq 'torrents') { Read-SoakOptionalMetric $metrics $name } else { Read-Metric $metrics $name }
             }
             $metricsOk = $true; $badMetrics = 0
         } catch { $badMetrics++; Note 'metrics unavailable or missing required fields' }

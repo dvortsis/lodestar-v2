@@ -1,4 +1,4 @@
-# X-hidden-count-wide-shift decisions
+# X-hidden-count-wide-shift decisions (#1179)
 
 Slice `X-hidden-count-wide-shift`, the follow-up X-hidden-count recorded (r24). The runner decided the points below (§2.26; L3 was the runner's layout, not an owner decision) and flags them to the owner (§2.19).
 
@@ -7,7 +7,7 @@ From 128rem of window the toolbar was layout L3: `justify-content: flex-start` a
 
 ## Decision
 - **L3 keeps its content-width box, and the controls end at that box (runner, refines §10.4).** From 128rem the toolbar is a box capped at `calc(var(--spacing) * 256)` (1,024 px), and the controls sit at the box's end (`space-between`, the toolbar's own rule), not after the count. They never move, whatever the count's length or language. The box matters: the UI review's L3 finding (`docs/review/2026-11-13-ui-ux/03-not-done.md:12`) was that at 2,560 px the rows' text uses about the left 35% of the screen while controls pinned to the far right sit about 1,700 px from it. The row boxes are full-track wide (1,712 and 2,224 px at 2,048 and 2,560 px) but their visible content isn't.
-- **The cap goes from 960 to 1,024 px.** At 960 px the longest English line leaves too little room beside the controls (560.7 px). Measured at the UI font, the room left in the box after the text, the 16 px gap and the controls, with the full note and 9,999,999 hidden (exact totals stop at 200,000, `crates/search/src/count.rs`):
+- **The cap goes from 960 to 1,024 px.** At 960 px the longest English line leaves too little room beside the controls (which are 560.7 px wide). Measured at the UI font, the room left in the box after the text, the 16 px gap and the controls, with the full note and 9,999,999 hidden (exact totals stop at 200,000, `crates/search/src/count.rs`):
 
   | Case | Room left (incl. the 16 px gap) |
   | ---- | ------------------------------- |
