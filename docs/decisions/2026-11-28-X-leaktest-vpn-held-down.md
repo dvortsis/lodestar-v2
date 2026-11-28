@@ -43,13 +43,34 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
     - Docker refuses `docker exec` into a paused container, so the post-rule checks after the phase fail too.
     - The recovery's recreate should then replace the frozen container. That's shown only with the stub, not against real Docker.
   - **A signal mid-retry:** the exit trap resumes gluetun. If that fails, it prints `fail gluetun_resumed`, beside `guards_released`.
-- **Time:** each probe now needs about two attempts: a live one that's discarded, then a held one. With six probes, phase B stays inside #988's budget, and a phase with no restarts is as before. A pause lasts one attempt, about 10–20 s.
+- **Held from the first, once one probe needed it** (runner, finding 1 of the self-review). Once one probe has needed a held retry, the kernel-state probes after it run their first attempt held too. The switch prints `count hold_from_first 1`.
+  - **Why:** at #988's 2 s per container start, an attempt is about 7 starts plus the probe's timeout. If every held probe spent a wasted live attempt first, the five of them would need about 190 s, past the 180 s deadline. The last one would be skipped, and the phase would fail `vpn_interface_held_down` on a VM that holds.
+  - With the switch, the tally at 2 s per start is about 125 s:
+
+    | Part | Time |
+    |---|---|
+    | `ipv4_blocked`: its live attempt, the pin and the held one | about 50 s |
+    | `tcp_literal_blocked`, held | about 20 s |
+    | `ipv6_blocked`, held | about 22 s |
+    | `dns_direct_blocked`, held | about 17 s |
+    | the UDP probe, held | about 16 s |
+
+    That leaves about 55 s of the phase for `dns_blocked`'s live attempts.
+  - A hold doesn't change what a kernel-state probe proves. The first probe, every `dns_blocked` attempt and the gaps between holds stay live, under the capture.
+  - A phase with no restarts never holds, and is as before.
+- **Fewer container starts per attempt** (reading the up-state and the ifindex in one container, before and after the probe) would cut an attempt from about 7 starts to 4–5. It's left for later, because it would make the bracket more complex.
+- **The held `ipv4_blocked` goes to a pinned address** (runner, finding 2). `ECHO_URL` is a host name, and the probe resolves it through 127.0.0.1, which is gluetun's own forwarder. Under a hold the forwarder is frozen, so curl would fail before sending anything, and a held attempt would pass without having tested anything.
+  - So before the pause, a probe asks the live forwarder for the echo host (`held_pin`), and the held curl uses `--resolve` to go to that address. The address is read at runtime, and it's never printed or committed.
+  - The live first attempt still tests the forwarder's resolver and cache path, as before.
+- **The guard: a held attempt counts as clean only when its probe tried to send** (runner). For curl, an empty pinned address or a failure to resolve (exit 6) returns `HELD_UNSENT`, and the attempt is discarded and retried, never passed. The other held probes go to literal addresses, so they always try.
+  - If the forwarder has nothing cached for the echo host (its TTL ran out), every held attempt is discarded. The probe then fails `vpn_interface_held_down`. That fails closed.
 
 ## What phase B proves, and why the verdict is unchanged
 - **The same about the kill switch.** gluetun's firewall and its post-rules are kernel netfilter state, which stays in force while its processes are frozen. So a held retry still tests exactly what phase B is for: with the VPN interface down, only gluetun's firewall stands between the probes and `eth0`.
   - A gluetun with its firewall off still leaks on every attempt.
   - A gluetun without its post-rules still leaks the open flow, and the capture and the counter see it.
 - **Fewer meetings with a live gluetun.** Before, a probe met a live, restarting gluetun on every attempt, and a leak on any of them failed at once. Now each held probe meets it once, on its first attempt. That's acceptable because the capture and the counter run through the live stretches between holds, so gluetun's own traffic there is still judged.
+- **What a held attempt does prove:** the kernel's answer to a probe that really tried to send, with the interface down and gluetun's firewall and post-rules in place.
 - **What a held attempt doesn't prove:** anything about gluetun's own processes during that attempt, meaning its DNS forwarder and its health checks. That's why `dns_blocked_ifdown`, the one probe aimed at them, is never held (runner). The other probes test kernel state: the firewall, the post-rules and the routes.
 - **The verdict rules are as before:**
   - a probe that gets out fails at once, on any attempt, held or live;
@@ -66,6 +87,8 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
     - one pause per retry, each covering a whole attempt;
     - that every first attempt runs live;
     - the `clean_held` and `clean_live` counts.
+  - `test_a_held_ipv4_probe_that_sends_nothing_is_never_a_pass`: no pinned address, or a curl that can't resolve, is never a pass. The probe fails `vpn_interface_held_down`.
+  - The main test also checks `hold_from_first`, five holds (one per kernel-state probe), the `--resolve` to the pinned address, and that the address appears in no output line.
   - `test_dns_blocked_is_never_held`: no `dig` to the forwarder ever runs under a pause, and every attempt it makes comes after the last held one. On a slow host, where every live attempt meets a restart, it fails `vpn_interface_held_down` as before, while `dns_direct_blocked` and the UDP probe still pass on held attempts.
   - A refused pause, and one that froze gluetun anyway, both still fail `vpn_interface_held_down`.
   - A gluetun that won't resume ends the phase as a failure, and the post-rule checks fail with it.

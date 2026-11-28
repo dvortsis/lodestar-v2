@@ -661,6 +661,20 @@ case "$1" in
       [ -n "$reup" ] && [ -n "$REUP_LEAK" ] && exit 0
       [ -n "$reup" ] && [ "$reupno" = "${REUP_LEAK_AT-}" ] && exit 0
       case "$*" in
+        # A held ipv4_blocked goes to the address its pin gave (HELD_RESOLVE_FAILS:
+        # curl can't resolve all the same, exit 6, and sends nothing).
+        "curl -4 -s -m 8 --resolve "*)
+          [ "$*" = "curl -4 -s -m 8 --resolve checkip.amazonaws.com:80:192.0.2.80 http://checkip.amazonaws.com" ] || bad "$*"
+          [ -e "$STUB/paused" ] || bad "pinned while gluetun runs: $*"
+          [ -n "$HELD_RESOLVE_FAILS" ] && exit 6
+          [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
+          echo "${EXIT_IP:-198.51.100.200}" ;;
+        # The pin: gluetun's live forwarder answers the echo host from its cache
+        # (PIN_FAILS: nothing cached, no address).
+        "sh -c dig +short +time=3 +tries=1 \"\$1\""*" pin checkip.amazonaws.com")
+          [ -e "$STUB/paused" ] && bad "pin while paused: $*"
+          [ -n "$PIN_FAILS" ] && exit 1
+          echo 192.0.2.80 ;;
         "curl -4"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
                     if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
         "curl -6"*) [ -n "$V6_OPEN" ] || [ -n "$leak" ] || exit 1 ;;
@@ -1859,17 +1873,24 @@ class VMScripts(unittest.TestCase):
         self.assertFalse((self.stub / "paused").exists())  # running again
         self.assertFalse((self.stub / "recreated_paused").exists())
         # Which kind of attempt each probe passed on, in counts only, after the verdict.
+        # ipv4_blocked needed a held retry, so every later probe but the
+        # forwarder's ran held from its first attempt (the runner's call).
         clean = [l for l in lines if l.startswith("count clean_")]
         self.assertEqual(sorted(clean), sorted(
-            [f"count clean_held_{p}_ifdown 1" for p in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked")]
-            + [f"count clean_live_{p}_ifdown 1" for p in ("dns_blocked", "dns_direct_blocked", "udp")]))
+            [f"count clean_held_{p}_ifdown 1" for p in
+             ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_direct_blocked", "udp")]
+            + ["count clean_live_dns_blocked_ifdown 1"]))
         self.assertGreater(lines.index(clean[0]), lines.index("ok vpn_interface_down_during_probes"))
-        # One pause per retry, each holding a whole attempt: the interface
-        # checks, the take-down, both ifindex reads and the probe.
+        self.assertEqual(lines.count("count hold_from_first 1"), 1)
+        # One pause per held attempt, each holding a whole attempt: the
+        # interface checks, the take-down, both ifindex reads and the probe.
         spans = self.held_spans()
-        self.assertEqual(len(spans), 3)
-        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 3)
-        for span, probe in zip(spans, ("curl -4", "nc -z", "curl -6")):
+        self.assertEqual(len(spans), 5)
+        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 5)
+        # The held curl went to the pinned address, which no output line carries.
+        self.assertTrue(any("--resolve checkip.amazonaws.com:80:192.0.2.80" in ln for ln in spans[0]), spans[0])
+        self.assertNotIn("192.0.2.80", raw)
+        for span, probe in zip(spans, ("curl -4", "nc -z", "curl -6", "sh -c dig", "sh -c echo probe")):
             cmds = [ln.split(" probe ", 1)[1] for ln in span]
             self.assertTrue(cmds[0].startswith("sh -c ip -o link show up"), cmds)  # it starts with a check
             self.assertTrue(cmds[-1].startswith("sh -c cat"), cmds)  # and ends with the second ifindex read
@@ -1904,10 +1925,31 @@ class VMScripts(unittest.TestCase):
         held = "\n".join(sum(spans, []))
         self.assertIn("dig +short +time=3 +tries=1 example.edu @1.1.1.1", held)  # the direct query is held
         self.assertNotRegex(held, r"tries=1 example\.edu +\|")  # the forwarder's never
+        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 5)  # one each: from the first, held
         # dns_blocked's attempts all came after the last held one.
         log = self.log()
         self.assertGreater(log.index("tries=1 example.edu  |"), log.rindex("docker unpause gluetun"))
         self.assertFalse((self.stub / "paused").exists())
+
+    def test_a_held_ipv4_probe_that_sends_nothing_is_never_a_pass(self):
+        """The runner's guard: a held attempt counts only when its probe tried to
+        send. With no pinned address (nothing cached), or a curl that couldn't
+        resolve all the same (exit 6), every held ipv4_blocked attempt is
+        discarded, and the probe fails vpn_interface_held_down, never a pass."""
+        for flag in ("PIN_FAILS", "HELD_RESOLVE_FAILS"):
+            with self.subTest(flag):
+                self.setUp()
+                rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20,
+                                                 HELD_ATTEMPT_MIN=1, **{flag: 1})
+                self.assertEqual(rc, 1, raw)
+                self.assertIn("fail vpn_interface_held_down", lines)
+                self.assertIn("skip ipv4_blocked_ifdown", lines)
+                self.assertNotIn("ok ipv4_blocked_ifdown", lines)
+                self.assertNotIn("count clean_held_ipv4_blocked_ifdown 1", lines)
+                self.assertGreater(int(next(l for l in lines if l.startswith(
+                    "count held_attempts_ipv4_blocked_ifdown ")).split()[2]), 2)
+                self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
+                self.assertFalse((self.stub / "paused").exists())
 
     def test_phase_b_without_the_hold_still_fails_held_down(self):
         """A pause Docker refuses: the retry runs with gluetun live, as before the

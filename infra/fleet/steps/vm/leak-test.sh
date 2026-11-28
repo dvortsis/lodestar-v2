@@ -62,7 +62,8 @@ compose_project=()  # empty for the cloud lane: Compose takes the file's own nam
 [[ -n $ARM ]] && compose_project=(-p "$PROJECT")
 GUARD_TAG=lodestar-leak-guard$SUF
 EGRESS_TAG=lodestar-leak-egress$SUF
-ECHO_URL=http://checkip.amazonaws.com
+ECHO_HOST=checkip.amazonaws.com
+ECHO_URL=http://$ECHO_HOST
 V6_URL='http://[2606:4700:4700::1111]/'
 # The probes run from a throwaway container in gluetun's namespace (plan 0d), so
 # they never depend on the kill switch's own image: PROBE_IMAGE, netshoot v0.16
@@ -72,6 +73,7 @@ V6_URL='http://[2606:4700:4700::1111]/'
 . "$work/block-lib.sh"
 HOST_TAG=lodestar-leak-host$SUF  # block-lib's host guard, under this arm's own tag
 NOT_RUN=222  # a probe whose container never ran its command: never counts as blocked
+HELD_UNSENT=223  # a held probe that never tried to send: its attempt is never clean
 fails=0
 block=""
 guard_rule=()   # the recreate guard (DOCKER-USER), once the endpoint is known
@@ -398,7 +400,11 @@ judge_capture() {  # $1: phase. The capture must have run through every probe, t
 }
 down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer it); $3: refute, or held (phase B)
   local judge=${3:-refute}
-  "$judge" "ipv4_blocked_$1" probe curl -4 -s -m 8 "$ECHO_URL"
+  if [[ $judge == held ]]; then
+    held --pin "ipv4_blocked_$1" ipv4_probe
+  else
+    "$judge" "ipv4_blocked_$1" probe curl -4 -s -m 8 "$ECHO_URL"
+  fi
   "$judge" "tcp_literal_blocked_$1" probe nc -z -w 5 1.1.1.1 443  # no DNS needed
   "$judge" "ipv6_blocked_$1" probe curl -6 -s -m 8 "$V6_URL"
   if [[ $judge == held ]]; then
@@ -451,7 +457,10 @@ held_retry="" # set while a retry runs: its interface checks are capped at the t
 # So a retry pauses gluetun (docker pause: its processes frozen, its kernel
 # state, the firewall included, left as it is) from before the first interface
 # check to after the last, and resumes it before the verdict. The probes still
-# run in its namespace. Each probe's first attempt runs with gluetun live.
+# run in its namespace. Each probe's first attempt runs with gluetun live,
+# until one probe needs a held retry: from then on the later probes' first
+# attempts are held too (hold_from_first, the runner's call), since the
+# restart loop would only discard them.
 # dns_blocked is never held (held --live, the runner's call): it asks gluetun's
 # own DNS forwarder, and a paused forwarder proves nothing.
 held_hold() {  # 0: frozen, or not frozen and running as before; 1: it may be frozen and won't resume
@@ -486,9 +495,29 @@ held_seen() {  # $1: an interface check's result; counts each return of the inte
     held_was_up=""
   fi
 }
-held() {  # [--live] (never hold gluetun); $1: the probe's line, or - for one only the capture judges; the rest: the probe
-  local n rc after try=0 saved index index_rc start same live="" kind
+# ipv4_blocked's probe. Live, it asks gluetun's forwarder for the echo host,
+# as phase A does. Held, the forwarder is frozen, so it goes to the address
+# the live forwarder gave just before the pause (held_pin; never printed).
+# A held curl that had no address or couldn't resolve (exit 6) never tried
+# to send: HELD_UNSENT, never a clean attempt (the runner).
+held_addr=""
+held_pin() {
+  held_addr=$(probe sh -c 'dig +short +time=3 +tries=1 "$1" | grep -E "^[0-9]{1,3}(\.[0-9]{1,3}){3}\$" | head -n 1' pin "$ECHO_HOST" 2>/dev/null | tr -d '\r\n')
+  return 0
+}
+ipv4_probe() {
+  local rc
+  [[ -n $held_frozen ]] || { probe curl -4 -s -m 8 "$ECHO_URL"; return; }
+  [[ $held_addr =~ $IPV4 ]] || return "$HELD_UNSENT"
+  probe curl -4 -s -m 8 --resolve "$ECHO_HOST:80:$held_addr" "$ECHO_URL"; rc=$?
+  ((rc == 6)) && return "$HELD_UNSENT"
+  return "$rc"
+}
+held_always=""  # set once a probe needed a held retry: later probes' first attempts are held too
+held() {  # [--live] (never hold gluetun) or [--pin] (held_pin before a hold); $1: the probe's line, or - for one only the capture judges; the rest: the probe
+  local n rc after try=0 saved index index_rc start same live="" pin="" kind
   [[ $1 == --live ]] && { live=1; shift; }
+  [[ $1 == --pin ]] && { pin=1; shift; }
   n=$1
   shift
   while :; do
@@ -501,7 +530,14 @@ held() {  # [--live] (never hold gluetun); $1: the probe's line, or - for one on
     try=$((try + 1))
     start=$SECONDS
     saved=$not_run
-    if [[ -n $held_retry && -z $live ]]; then held_hold || { held_dead=1; break; }; fi
+    # Held: a retry, or any attempt once a probe in the phase needed one (the
+    # restart loop is running, so a live first attempt would only be discarded).
+    if [[ -z $live ]] && [[ -n $held_retry || -n $held_always ]]; then
+      if [[ -z $held_always ]]; then held_always=1; echo "count hold_from_first 1"; fi
+      held_addr=""
+      [[ -n $pin ]] && held_pin
+      held_hold || { held_dead=1; break; }
+    fi
     kind=live; [[ -n $held_frozen ]] && kind=held  # a refused pause runs live
     held_down; rc=$?
     if ((rc == 0)); then
@@ -515,6 +551,7 @@ held() {  # [--live] (never hold gluetun); $1: the probe's line, or - for one on
       # in between (its ifindex would differ).
       same=""
       ((after == 1 && index_rc == 0)) && [[ $(iface_index) == "$index" ]] && same=1
+      ((rc == HELD_UNSENT)) && same=""  # it never tried to send: nothing was tested
       # gluetun runs again before any verdict; one that won't resume ends the phase.
       held_thaw || { held_dead=1; break; }
       held_took "$start"
