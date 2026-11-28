@@ -669,11 +669,13 @@ case "$1" in
           [ -n "$HELD_RESOLVE_FAILS" ] && exit 6
           [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
           echo "${EXIT_IP:-198.51.100.200}" ;;
-        # The pin: gluetun's live forwarder answers the echo host from its cache
-        # (PIN_FAILS: nothing cached, no address).
+        # The pin: gluetun's live forwarder answers the echo host (PIN_FAILS: never;
+        # PIN_FAILS_LATE: not once the endpoint is blocked; PIN_FAILS_EARLY: not before).
         "sh -c dig +short +time=3 +tries=1 \"\$1\""*" pin checkip.amazonaws.com")
           [ -e "$STUB/paused" ] && bad "pin while paused: $*"
           [ -n "$PIN_FAILS" ] && exit 1
+          [ -n "$PIN_FAILS_LATE" ] && [ -e "$STUB/blocked" ] && exit 1  # cached only until the block
+          [ -n "$PIN_FAILS_EARLY" ] && [ ! -e "$STUB/blocked" ] && exit 1
           echo 192.0.2.80 ;;
         "curl -4"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
                     if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
@@ -1950,6 +1952,27 @@ class VMScripts(unittest.TestCase):
                     "count held_attempts_ipv4_blocked_ifdown ")).split()[2]), 2)
                 self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
                 self.assertFalse((self.stub / "paused").exists())
+
+    def test_a_held_ipv4_probe_uses_the_address_looked_up_while_the_tunnel_was_up(self):
+        """The runner's call: the echo host is looked up once while the tunnel is
+        up. With no answer from the forwarder in phase B, the held ipv4_blocked
+        still goes to that address and gets its clean attempt; with no early
+        answer, the lookup just before the pause stands in."""
+        for flag in ("PIN_FAILS_LATE", "PIN_FAILS_EARLY"):
+            with self.subTest(flag):
+                self.setUp()
+                rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20,
+                                                 HELD_ATTEMPT_MIN=1, **{flag: 1})
+                self.assertEqual(rc, 0, raw)
+                self.assertIn("ok ipv4_blocked_ifdown", lines)
+                self.assertIn("count clean_held_ipv4_blocked_ifdown 1", lines)
+                self.assertNotIn("192.0.2.80", raw)
+                log = self.log()
+                pins = [i for i, ln in enumerate(log.splitlines()) if ln.endswith(" pin checkip.amazonaws.com")]
+                down = log.splitlines().index(next(ln for ln in log.splitlines() if ln.endswith("ip link set dev wg0 down")))
+                self.assertEqual(sum(i < down for i in pins), 1)  # once while the tunnel was up
+                # A late lookup only when the early one had nothing.
+                self.assertEqual(sum(i > down for i in pins), 0 if flag == "PIN_FAILS_LATE" else 1)
 
     def test_phase_b_without_the_hold_still_fails_held_down(self):
         """A pause Docker refuses: the retry runs with gluetun live, as before the

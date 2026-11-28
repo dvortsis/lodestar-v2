@@ -500,9 +500,15 @@ held_seen() {  # $1: an interface check's result; counts each return of the inte
 # the live forwarder gave just before the pause (held_pin; never printed).
 # A held curl that had no address or couldn't resolve (exit 6) never tried
 # to send: HELD_UNSENT, never a clean attempt (the runner).
+# The address comes from a lookup made while the tunnel was up (held_early,
+# the runner's call), or failing that, from one just before the pause.
 held_addr=""
-held_pin() {
+held_early=""
+held_pin() {  # the forwarder's answer for the echo host, into held_addr; an aid, never a verdict
+  local saved=$not_run
   held_addr=$(probe sh -c 'dig +short +time=3 +tries=1 "$1" | grep -E "^[0-9]{1,3}(\.[0-9]{1,3}){3}\$" | head -n 1' pin "$ECHO_HOST" 2>/dev/null | tr -d '\r\n')
+  [[ $held_addr =~ $IPV4 ]] || held_addr=""
+  not_run=$saved  # a lookup that never ran proves nothing either way
   return 0
 }
 ipv4_probe() {
@@ -534,8 +540,8 @@ held() {  # [--live] (never hold gluetun) or [--pin] (held_pin before a hold); $
     # restart loop is running, so a live first attempt would only be discarded).
     if [[ -z $live ]] && [[ -n $held_retry || -n $held_always ]]; then
       if [[ -z $held_always ]]; then held_always=1; echo "count hold_from_first 1"; fi
-      held_addr=""
-      [[ -n $pin ]] && held_pin
+      held_addr=$held_early
+      [[ -n $pin && -z $held_addr ]] && held_pin
       held_hold || { held_dead=1; break; }
     fi
     kind=live; [[ -n $held_frozen ]] && kind=held  # a refused pause runs live
@@ -799,6 +805,9 @@ else
 fi
 refute ipv6_blocked_up probe curl -6 -s -m 10 "$V6_URL"
 check dns_local probe grep -qx 'nameserver 127.0.0.1' /etc/resolv.conf
+# Phase B's held ipv4_blocked: the echo host's address, looked up while the
+# tunnel is up, kept in a variable only (never printed or written).
+held_pin; held_early=$held_addr; held_addr=""
 # The flow starts either way: with no handshake its packets still go into wg0.
 if flow_start; then flow=1; pass flow_started; else bad flow_started; fi
 
