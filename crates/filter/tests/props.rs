@@ -1026,7 +1026,7 @@ fn a_slowdown_past_the_speed_cap_fails_rather_than_clamps() {
     for cpu in MODELS {
         let speed = |s: f64| scaling(cpu, s, 40.0).speed;
         // 45 µs once scaled by the slowdown, so a clamp would pass it;
-        // about 82 µs at the strict scale, so it fails.
+        // about 85.5 µs at the strict scale, so it fails.
         let again = timing(vec![speed(11.0) * 45.0 * (top / 11.0); 7]);
         let r = read(remeasured(&again, top * 0.999, top * 0.999, 11.0, speed));
         assert!(!still_over(&r) && r.slowed > 1.8, "{cpu}: {r:?}");
@@ -1058,7 +1058,7 @@ fn a_slowdown_past_the_speed_cap_fails_rather_than_clamps() {
 fn a_void_re_measure_under_budget_at_the_strict_scale_passes() {
     let (cpu, calib, mixed) = DRIFTED_6973P;
     let speed = |s: f64| scaling(cpu, s, mixed).speed;
-    // The calibrations 49% apart, the case 30 µs here: 42 µs at the
+    // The calibrations 49% apart, the case 30 µs here: 44.3 µs at the
     // attempt's scale, the strictest, so no slowdown is needed to pass it.
     let again = timing(vec![30.0; 7]);
     let r = remeasured(&again, 7.07, 10.56, calib, speed);
@@ -1156,7 +1156,7 @@ proptest! {
         noise in prop::collection::vec(0.0f64..100.0, 7),
         calib in 5.0f64..20.0,
         faster in 0.5f64..=1.0,
-        apart in 0.0f64..=DRIFT,
+        apart in 0.0f64..DRIFT,
         swap: bool,
         model in 0usize..3,
     ) {
@@ -1313,6 +1313,7 @@ fn the_benches_run_alone() {
     let mut benches = 0;
     // Each `#[ignore` attribute at the start of a line, however it's
     // written, and the first statement of the function it marks.
+    // Only a column-0 `#[ignore` counts: the benches are top-level fns.
     let mut at = 0;
     for line in src.split_inclusive('\n') {
         at += line.len();
@@ -1718,7 +1719,7 @@ fn sigs_at_cap(items: &[Item]) -> std::sync::Arc<lodestar_filter::spam_sigs::Spa
 /// where every held case over budget had a pass more than 15% over its own
 /// fastest measures again. A held case still over budget is measured once
 /// more at the end of the run, on its own and with a fresh calibration
-/// either side, and fails only if it's over again ([`remeasured`]): a
+/// either side, and fails only if it's over again ([`remeasure`]): a
 /// shared host can slow a run of whole cases alike, which neither their
 /// spread nor the calibrations around the attempt show
 /// (`docs/decisions/2026-11-21-X-filter-budget-remeasure.md`). After a
@@ -2246,7 +2247,7 @@ fn budget() {
         // cases alike, which neither their spread nor the calibrations
         // around the attempt show. The second measurement is scaled no
         // more leniently than the first unless the calibrations beside it
-        // show the host itself slowed, uniformly ([`remeasured`],
+        // show the host itself slowed, uniformly ([`remeasure`],
         // X-filter-budget-drift).
         println!(
             "over the {BUDGET_US} µs budget on the reference runner, with this runner at \

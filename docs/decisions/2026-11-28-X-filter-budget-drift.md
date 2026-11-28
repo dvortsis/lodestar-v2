@@ -13,6 +13,13 @@ Runner brief X-filter-budget-drift, 2026-11-28Z. The `filter budget (§20.8)` jo
 **Superseded:**
 - **From `2026-11-21-X-filter-budget-remeasure.md`:** "the second measurement is scaled by the faster of the attempt's calibration and the fastest calibration beside it". That rule still holds wherever the calibrations beside a re-measure show the host less than 10% slower than in its attempt, or disagree with each other. Where they agree and show it 10% or more slower, the slowdown rule below applies instead.
 - **From `2026-11-05-X-filter-budget-noise.md`:** "the 7763 reads raw, so it has no calibration in its verdict". This now holds only for the attempt. A 7763 re-measure on a host slowed 10% or more is divided by that slowdown, like any other model's (runner's condition 4).
+- **Also superseded, wherever the slowdown d (below) is 1.10 or more:**
+  - 2026-11-21: "so it never reads more leniently than the first";
+  - 2026-11-21: "only adds a second chance under the same scaling or a stricter one";
+  - 2026-11-21: "with its scale never loosened";
+  - 2026-11-05: "a failing run can't pass on a slower calibration draw".
+- **What that means:** a re-measure can now read more leniently than its attempt, by the measured slowdown d. #1167's case is the example: 55 µs in the attempt, 37 µs on re-measure, with d about 1.5.
+- **The residual risk:** noise that slows the calibration more than the engine, by at least 10% on all seven passes on both sides of a re-measure, loosens that re-measure in proportion. This now includes the 7763.
 
 ## Diagnosis
 - **The job ran two benches at once.** The filter `budget` matches two ignored tests, `budget` and `budget_worst_case`. The log says "running 2 tests", and their lines interleave. So libtest timed the budget's cases while the worst-case test ran its largest inputs on the same 4-vCPU runner: "invisible" took 73 ms per judgment, and "tiny files" has 130,048 files.
