@@ -346,16 +346,25 @@ fn unattributed_remote_rows_are_purged_alone() {
             with_claims: 0
         }
     );
-    let mut deleted = Vec::new();
-    loop {
-        let s = store.purge_unattributed_remote_step(2).unwrap();
-        assert!(s.deleted.len() <= 2);
-        deleted.extend(s.deleted);
-        if s.done {
-            break;
+    let sweep = |store: &mut Store| {
+        let (mut deleted, mut after, mut steps) = (Vec::new(), 0, 0);
+        loop {
+            let s = store.purge_unattributed_remote_step(after, 2).unwrap();
+            assert!(s.deleted.len() <= 2);
+            deleted.extend(s.deleted);
+            steps += 1;
+            match s.next {
+                Some(n) => {
+                    assert!(n > after, "the cursor moves on");
+                    after = n;
+                }
+                None => return (deleted, steps),
+            }
         }
-    }
+    };
+    let (deleted, steps) = sweep(&mut store);
     assert_eq!(deleted, old);
+    assert_eq!(steps, 3, "2 + 2 + 1, one pass");
     for id in &old {
         assert!(store.torrent(*id).unwrap().is_none());
     }
@@ -370,7 +379,17 @@ fn unattributed_remote_rows_are_purged_alone() {
     assert_eq!(count(&store, "SELECT count(*) FROM snapshot_deletions"), 5);
     let logged = ids(&store, "SELECT torrent_id FROM reindex_log");
     assert!(old.iter().all(|id| logged.contains(id)));
-    assert!(store.purge_unattributed_remote_step(2).unwrap().done);
+    // One pass is complete: after V17 a remote row is attributed as it's
+    // written, so a sweep after the first finds nothing new.
+    let late = prepared(&store, "late");
+    let late = write(&mut store, &late, true, &[4]);
+    let (again, _) = sweep(&mut store);
+    assert!(again.is_empty());
+    assert!(store.torrent(late).unwrap().is_some());
+    assert_eq!(
+        store.unattributed_remote_torrents().unwrap(),
+        WorkerTorrents::default()
+    );
 }
 
 proptest! {

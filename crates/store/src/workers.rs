@@ -181,31 +181,45 @@ impl Store {
     }
 
     /// One step of purging the unattributed remote torrents
-    /// ([`Store::unattributed_remote_torrents`]), as
-    /// [`Store::purge_worker_step`] purges one worker's: the same bounded,
-    /// cursor-free steps and the same deletion path (index log, rollups,
-    /// snapshot journal, cascades, `secure_delete`). Built-in-worker,
-    /// imported and attributed rows are never touched. A torrent that
-    /// WK-13's re-verification has cleared of `REMOTE_UNVERIFIED` is no
-    /// longer one of them.
+    /// ([`Store::unattributed_remote_torrents`]): those with ids above
+    /// `after`, lowest first, up to `limit` (capped at
+    /// [`MAX_WORKER_PURGE_STEP`]), by the same deletion path as
+    /// [`Store::purge_worker_step`] (index log, rollups, snapshot journal,
+    /// cascades, `secure_delete`). Built-in-worker, imported and attributed
+    /// rows are never touched, and a torrent WK-13's re-verification has
+    /// cleared of `REMOTE_UNVERIFIED` is no longer one of them. Start at
+    /// `after = 0` and pass each step's [`RemotePurgeStep::next`] on until
+    /// it's `None`.
+    ///
+    /// **A cursor, unlike [`Store::purge_worker_step`]** (runner, a
+    /// refinement of ruling 4): `torrents` has no index on `flags`, so
+    /// without one every step would scan again past every kept row. It
+    /// walks the primary key instead. **One pass is complete:** after V17
+    /// every remote row is attributed in the transaction that writes it,
+    /// so no unattributed row can appear behind the cursor; the set only
+    /// shrinks.
     ///
     /// The candidates are read before the write lock is taken (that read
-    /// scans `torrents`, which has no index on `flags`), then each is
-    /// deleted only if it still qualifies, checked in the write
-    /// transaction. So the lock is held for the deletes alone, and the
-    /// scope is exact even if a row changed in between.
-    pub fn purge_unattributed_remote_step(&mut self, limit: usize) -> Result<WorkerPurgeStep> {
+    /// scans `torrents`), then each is deleted only if it still
+    /// qualifies, checked in the write transaction. So the lock is held for
+    /// the deletes alone, and the scope is exact even if a row changed in
+    /// between; one deleted or verified meanwhile is just skipped.
+    pub fn purge_unattributed_remote_step(
+        &mut self,
+        after: i64,
+        limit: usize,
+    ) -> Result<RemotePurgeStep> {
         let limit = limit.clamp(1, MAX_WORKER_PURGE_STEP);
         let ids: Vec<i64> = self
             .conn
             .prepare_cached(concat!(
-                "SELECT t.id FROM torrents t WHERE ",
+                "SELECT t.id FROM torrents t WHERE t.id > ?3 AND ",
                 unattributed!("t.id"),
                 " ORDER BY t.id LIMIT ?2"
             ))?
-            .query_map(params![REMOTE, limit as i64 + 1], |r| r.get(0))?
+            .query_map(params![REMOTE, limit as i64 + 1, after], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
-        let done = ids.len() <= limit;
+        let more = ids.len() > limit;
         let ids = &ids[..ids.len().min(limit)];
         let tx = begin_write(&mut self.conn)?;
         let deleted = delete_ids(&tx, ids, Some(REMOTE))?;
@@ -213,8 +227,21 @@ impl Store {
         if !deleted.is_empty() {
             self.scrub_wal();
         }
-        Ok(WorkerPurgeStep { deleted, done })
+        Ok(RemotePurgeStep {
+            deleted,
+            next: if more { ids.last().copied() } else { None },
+        })
     }
+}
+
+/// What one [`Store::purge_unattributed_remote_step`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemotePurgeStep {
+    /// The torrents deleted, in id order.
+    pub deleted: Vec<i64>,
+    /// Where the next step starts (its `after`); `None` when the pass is
+    /// complete.
+    pub next: Option<i64>,
 }
 
 /// `REMOTE_UNVERIFIED`, as SQL takes it.

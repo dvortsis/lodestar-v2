@@ -4545,6 +4545,49 @@ mod tests {
             (store, id)
         }
 
+        /// WK-12: the commit records the authenticated session's worker
+        /// (`Results.worker`) for a remote result it stores, whether it's
+        /// inserted or promotes an unverified item under the item's id, in
+        /// the store's own transaction; a built-in worker's result records
+        /// nothing, so purge-by-worker reaches exactly the remote rows.
+        #[tokio::test]
+        async fn a_commit_records_the_remote_worker_and_never_the_local_one() {
+            let funnel = Arc::new(FunnelCounts::default());
+            let coordinator = Arc::new(Coordinator::new(1, 600, funnel));
+            let promoted = results_named("Some Show S01E01");
+            assert_eq!(promoted.worker, WorkerId(7));
+            let (store, item) = with_item(promoted.key.0);
+            let mut w = writer(store, coordinator.clone(), Arc::new(GateStats::new(0)));
+            let (retry, _rx) = mpsc::channel(4);
+            let inserted = results_named("Some Show S01E02");
+            let mut local = results_named("Some Show S01E03");
+            local.worker = WorkerId::LOCAL;
+            let keys = [promoted.key, inserted.key, local.key];
+            w.commit(
+                vec![
+                    leased(&coordinator, promoted),
+                    leased(&coordinator, inserted),
+                    leased(&coordinator, local),
+                ],
+                vec![],
+                vec![],
+                vec![],
+                &retry,
+            )
+            .await;
+            assert_eq!(w.stats.unverified.promoted.load(Ordering::Relaxed), 1);
+            let store = w.store.as_ref().unwrap();
+            let ids: Vec<i64> = keys
+                .iter()
+                .map(|k| store.find(k).unwrap().expect("stored"))
+                .collect();
+            assert_eq!(ids[0], item, "promoted under the item's id");
+            assert_eq!(store.torrent_worker(ids[0]).unwrap(), Some(7));
+            assert_eq!(store.torrent_worker(ids[1]).unwrap(), Some(7));
+            assert_eq!(store.torrent_worker(ids[2]).unwrap(), None);
+            assert_eq!(store.worker_torrents(7).unwrap().torrents, 2);
+        }
+
         /// A promoted item (stored under its own id) whose verified
         /// torrent a rule added since holds: the next commit of it deletes
         /// the row with the hold (FILTER-15).
