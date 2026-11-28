@@ -105,3 +105,56 @@ describe('Parsed', () => {
 		expect(label('detail-parsed-seasons')).toBe('Seasons');
 	});
 });
+
+describe('Parsed: the Release list', () => {
+	const attrs = {
+		res: '1080p',
+		vcodec: 'h265',
+		bits: '10',
+		lang: 'en, multi',
+		pack: 'yes',
+		service: 'nf',
+		year: '2008',
+		mystery: 'zzq'
+	};
+	const text = (id: string) => screen.getByTestId(id).textContent?.trim();
+
+	it('labels each key in plain words, formats values, and drops unknown keys', () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		render(Parsed, { hash: HASH, hit: searchHit(), attributes: attrs });
+		expect(text('detail-release-res')).toBe('1080p');
+		expect(text('detail-release-bits')).toBe('10-bit');
+		expect(text('detail-release-lang')).toBe('English, Multiple');
+		expect(text('detail-release-pack')).toBe('Season or collection pack');
+		expect(text('detail-release-service')).toBe('Netflix');
+		expect(text('detail-release-year')).toBe('2008');
+		const list = screen.getByTestId('detail-release');
+		expect(list.textContent).toContain('Video codec');
+		expect(list.textContent).not.toContain('mystery');
+		expect(list.textContent).not.toContain('zzq');
+	});
+
+	it('leaves a key out when the identity rows already show it', async () => {
+		get.mockResolvedValue({ hash: HASH, identity });
+		render(Parsed, { hash: HASH, hit: searchHit(), attributes: { year: '2019', res: '720p' } });
+		await waitFor(() => expect(screen.getByTestId('detail-parsed-years')).toBeTruthy());
+		expect(screen.queryByTestId('detail-release-year')).toBeNull();
+		expect(text('detail-release-res')).toBe('720p');
+	});
+
+	it('shows nothing for null or {}', () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		const { unmount } = render(Parsed, { hash: HASH, hit: searchHit(), attributes: null });
+		expect(screen.queryByTestId('detail-release')).toBeNull();
+		unmount();
+		render(Parsed, { hash: HASH, hit: searchHit(), attributes: {} });
+		expect(screen.queryByTestId('detail-release')).toBeNull();
+	});
+
+	it('shows the parsed title only when it differs from the resolved one', () => {
+		get.mockResolvedValue({ hash: HASH, identity: null });
+		const hit = searchHit();
+		render(Parsed, { hash: HASH, hit, attributes: { title: hit.title ?? 'x' } });
+		expect(screen.queryByTestId('detail-release')).toBeNull();
+	});
+});

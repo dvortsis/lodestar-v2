@@ -71,6 +71,31 @@ for (const [themeId, colorMode] of [
 	});
 }
 
+for (const [name, attributes, shown] of [
+	['a release list', { res: '1080p', vcodec: 'h265', bits: '10', mystery: 'zzq' }, true],
+	['null attributes', null, false],
+	['empty attributes', {}, false]
+] as const) {
+	test(`the detail page shows ${name} only when there is something to show`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		mockTorrent(mock, detail({ attributes }));
+		await go(`/t/${HASH}`);
+		await page.locator('[data-section="parsed"]').scrollIntoViewIfNeeded();
+		await expect(page.getByTestId('detail-parsed-years')).toBeVisible();
+		const list = page.getByTestId('detail-release');
+		if (shown) {
+			await expect(list).toContainText('Video codec');
+			await expect(page.getByTestId('detail-release-bits')).toHaveText('10-bit');
+			await expect(list).not.toContainText('zzq');
+		} else {
+			await expect(list).toHaveCount(0);
+		}
+	});
+}
+
 test('the loading state is axe-clean, and so is the page once it loads', async ({
 	page,
 	go,

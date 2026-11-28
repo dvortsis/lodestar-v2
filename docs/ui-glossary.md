@@ -21,6 +21,9 @@ fixes the words.
 | `torrent` | Torrent | One info dict, identified by its info hash (v1, or truncated v2; a hybrid is one torrent). Never "hash", "item" or "result" in labels. | 种子 (TBD) |
 | `file` | File | One entry in a torrent's file list, with a path and a size. Padding files are files, hidden by default. | 文件 (TBD) |
 | `resolved_title` | Resolved title | The name Lodestar shows: parsed from the torrent name or, when that's uninformative, resolved from its files, folder, structure or a plugin, with the method shown ("resolved via files"). | 解析标题 (TBD) |
+| `release_group` | Release group | The team or person who packaged the release, as written in its name ("GROUP" in `Show.S01.1080p-GROUP`). Not the uploader and not a Lodestar group. | 发布组 (TBD) |
+| `container_format` | File format | The kind of file the release is (mkv, mp4, epub, flac), taken from its name or its files. | 文件格式 (TBD) |
+| `release_tags` | Release tags | Words in a release name that say how it was made or changed, such as proper, repack, internal or dubbed. | 发布标记 (TBD) |
 | `raw_name` | Raw name | The torrent's own `name` field, decoded, shown in mono when it differs from the resolved title. | 原始名称 (TBD) |
 | `discovered` | Discovered | When Lodestar first saw the torrent's key, not when it was created. Torrents first seen during the warm-up window carry "First seen during backfill". | 发现时间 (TBD) |
 | `last_seen` | Last seen | The latest time the torrent's key was seen active in the DHT. | 最后出现 (TBD) |

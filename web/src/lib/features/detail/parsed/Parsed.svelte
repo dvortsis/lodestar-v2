@@ -6,16 +6,19 @@
 	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
+	import { currentLocale } from '$lib/i18n/locale.svelte';
 	import type { SearchHit } from '../cache';
 	import { loadSiblings } from '../siblings';
 	import { contentTypeLabel, resolvedVia } from './labels';
+	import { releaseRows } from './release';
 	import { joinSpans, type Identity } from './spans';
 
 	interface Props {
 		hash: string;
 		hit: SearchHit | null;
+		attributes?: Record<string, string> | null;
 	}
-	let { hash, hit }: Props = $props();
+	let { hash, hit, attributes = null }: Props = $props();
 
 	let identity = $state<Identity | null>(null);
 	let status = $state<'loading' | 'ready' | 'error' | 'withheld'>('loading');
@@ -57,6 +60,17 @@
 				).filter((r) => r[1] !== null)
 			: []
 	);
+	// The identity rows above are the title's spans across versions; the Release list leaves a key out
+	// when its row is shown, and shows it (this torrent's own value) when it isn't.
+	const SPAN_KEYS: Record<string, string> = {
+		years: 'year',
+		seasons: 'season',
+		episodes: 'episode',
+		absolute: 'absolute'
+	};
+	const release = $derived(
+		releaseRows(attributes, currentLocale(), hit?.title, new Set(rows.map((r) => SPAN_KEYS[r[2]]!)))
+	);
 	const type = $derived(hit?.content_type ? contentTypeLabel(hit.content_type) : null);
 	const adult = $derived(hit?.adult_kind ? contentTypeLabel(hit.adult_kind, 'adult') : null);
 </script>
@@ -85,6 +99,17 @@
 			<dd class="tabular-nums" data-testid="detail-parsed-{key}">{value}</dd>
 		{/each}
 	</dl>
+	{#if release.length}
+		<div class="ls-detail-stack" data-testid="detail-release">
+			<div class="font-semibold">{m.detail_release()}</div>
+			<dl class="ls-detail-facts">
+				{#each release as r (r.key)}
+					<dt>{r.label}</dt>
+					<dd data-testid="detail-release-{r.key}">{showBidi(r.value)}</dd>
+				{/each}
+			</dl>
+		</div>
+	{/if}
 	{#if status === 'error'}
 		<p class="text-muted-text" role="status">{m.detail_parsed_error()}</p>
 		<div><Button dense onclick={() => attempt++}>{m.detail_retry()}</Button></div>
