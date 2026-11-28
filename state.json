@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T00:39:05Z",
+    "updated": "2026-11-28T01:51Z",
     "items": [
       {
         "slot": 1,
@@ -11140,17 +11140,17 @@
         "slice": "X-import-hot-stamp",
         "role": "build",
         "agent": "session_01MMjhnBn3f7qkA5KY7VQ2nx",
-        "doing": "PR #1154 green; fresh review running",
+        "doing": "PR #1154 delta checked by runner; awaiting CI on 26232593",
         "since": "2026-11-27T22:12:13Z"
       },
       {
         "slot": 4,
-        "slice": "X-import-drain-memory",
+        "slice": "X-cr-round1-spec-fixes",
         "role": "build",
-        "agent": "claude",
+        "agent": "session_01MMjhnCcun2RuQsQZsLsZhP",
         "session": "session_01MMjhn8Vk45KrXtoM9AXh1o",
-        "doing": "PR #1153 fixing two-part review findings",
-        "since": "2026-11-27T17:25Z"
+        "doing": "round-1 tools: rehearsal window, S bound, repeats, gateway check, declaration checks, gluetun logs",
+        "since": "2026-11-28T01:51Z"
       }
     ],
     "compacted": "2026-11-15T05:18Z: owner asked (via the dashboard session) to reorganize; 26 archived/retired/idle rows dropped, active rows renumbered 1-4 (old 7->1, 15->2, 30->3, 32->4). Cloud-testing and the Fable slot are tracked in `extra`, not here (slices.yaml limits.extra_shared).",

@@ -13,6 +13,13 @@ These are the runner's instructions, within the limits the owner set. They aren'
 
 Anything beyond these goes to the owner.
 
+## 2026-11-28T01:51Z: the 10M import re-run is queued, not booked
+The runner decided this. No reply needed.
+
+1. **X-import-drain-memory merged** (#1153). X-import-hot-stamp (#1154) and X-healthz-cold-start are close behind. The 10M re-run should take all three, with `LODESTAR_LOG=debug`.
+2. **Don't run it on the lodestar-host VM yet.** The box runs the comparator until about 2026-11-28T18:00Z, then the rehearsal, then round 1's two days. An import there would contend with them.
+3. **The runner books its window** in this file once round 1's day 2 has ended, or sooner if a window opens. Until then, nothing changes for you.
+
 ## 2026-11-27T18:00Z: the AWS stop is now $295
 The owner decided this in the runner session ("OK to change stop to 295"). No reply needed.
 
