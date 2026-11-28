@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T08:06:04Z",
+    "updated": "2026-11-28T08:06:15Z",
     "items": [
       {
         "slot": 1,
@@ -11147,8 +11147,8 @@
         "slot": 4,
         "slice": "X-detail-attributes",
         "role": "build",
-        "agent": "pending",
-        "doing": "launching",
+        "agent": "session_01MMjhnBrwbc5HKzZQK5hwo2",
+        "doing": "step 0: field shape and latency",
         "since": "2026-11-28T08:06:04Z"
       }
     ],
