@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T01:51Z",
+    "updated": "2026-11-28T01:54Z",
     "items": [
       {
         "slot": 1,
@@ -11137,11 +11137,11 @@
       },
       {
         "slot": 3,
-        "slice": "X-import-hot-stamp",
+        "slice": "X-leaktest-vpn-held-down",
         "role": "build",
-        "agent": "session_01MMjhnBn3f7qkA5KY7VQ2nx",
-        "doing": "PR #1154 delta checked by runner; awaiting CI on 26232593",
-        "since": "2026-11-27T22:12:13Z"
+        "agent": "session_01MMjhnBiA1WMJZuXSJ8uexc",
+        "doing": "leak test phase B: remove the gluetun restore race before the round-1 rehearsal",
+        "since": "2026-11-28T01:54Z"
       },
       {
         "slot": 4,
