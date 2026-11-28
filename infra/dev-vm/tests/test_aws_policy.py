@@ -1,4 +1,5 @@
 """Pins the guard rails of the IAM user Claude signs in as (aws-claude-testvm.json)."""
+import fnmatch
 import json
 import re
 import unittest
@@ -338,7 +339,8 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(allowed.count("ec2:DeleteVolume"), 1)
         for a in ("ec2:CreateVolume", "ec2:DetachVolume", "ec2:ModifyVolume", "ec2:DeleteSnapshot",
                   "ec2:DeleteTags"):
-            self.assertNotIn(a, allowed)
+            # Match patterns too, so a wildcard Allow can't grant one of them.
+            self.assertFalse([p for p in allowed if fnmatch.fnmatchcase(a, p)], a)
 
     def test_launch_needs_default_tenancy(self):
         # I4: no dedicated hosts or instances.
