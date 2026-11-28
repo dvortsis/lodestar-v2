@@ -80,7 +80,7 @@ pub use control::Control;
 pub use coordinator::LeaseStats;
 pub use dht::{DhtSource, strategy};
 pub use have::Have;
-pub use have::{Bloom, HaveObserver, new_key};
+pub use have::{Bloom, FillGate, HaveObserver, new_key};
 pub use rollups::{Rollups, metric};
 pub use writer::{LIVE_FEEDS, WriterStats};
 
@@ -187,6 +187,11 @@ pub struct PipelineConfig {
     /// the companion manager exists. CMP-5 must wire `Some`; with `Some`
     /// the gate fails closed.
     pub companions: Option<requires::Companions>,
+    /// Tests only: run on the have-filter's fill thread after its scan and
+    /// before it's marked filled, so a test can hold the fill
+    /// (X-healthz-cold-start).
+    #[doc(hidden)]
+    pub fill_gate: Option<FillGate>,
 }
 
 /// How often a running plugin's non-direct route is probed, so a route
@@ -233,6 +238,7 @@ impl Default for PipelineConfig {
             adult_enrichers: Vec::new(),
             setup_done: None,
             companions: None,
+            fill_gate: None,
         }
     }
 }
@@ -682,10 +688,17 @@ impl Pipeline {
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (store, registered, mut queue, have, backfill_until, stored_at_start, store_filter) =
-            tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
-                .await
-                .map_err(Error::Join)??;
+        let (
+            store,
+            registered,
+            mut queue,
+            (have, fill),
+            backfill_until,
+            stored_at_start,
+            store_filter,
+        ) = tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
+            .await
+            .map_err(Error::Join)??;
         // Uploads (UP-0) are stored under a built-in source, as imports
         // register theirs.
         let (store, upload_source) = tokio::task::spawn_blocking(move || {
@@ -728,7 +741,8 @@ impl Pipeline {
         );
         lodestar_log::log_event!(
             log_events::STARTING,
-            stored = have.len(),
+            // The torrents counted: the filter may still be filling.
+            stored = stored_at_start,
             queued = queue.len()
         );
         let have = Arc::new(have);
@@ -815,6 +829,23 @@ impl Pipeline {
 
         let (stop_plugins, plugin_shutdown) = Shutdown::new();
         let (stop_intake, intake_shutdown) = Shutdown::new();
+        // The fill runs beside everything below (X-healthz-cold-start):
+        // `serve` answers `/healthz` once this returns, and the intake
+        // waits for the fill before it admits a key. It stops trying again
+        // once the intake is told to stop, or the pipeline is dropped.
+        if let Some(open) = fill {
+            let (have, gate) = (Arc::downgrade(&have), config.fill_gate.clone());
+            let stop = stop_intake.subscribe();
+            tokio::task::spawn_blocking(move || {
+                fill_have(
+                    &have,
+                    || Store::open_reader(&open.0, open.1.clone()),
+                    gate.as_ref(),
+                    || *stop.borrow() || stop.has_changed().is_err(),
+                    FILL_RETRY_FIRST,
+                )
+            });
+        }
         let (stop_pool, pool_shutdown) = Shutdown::new();
         let (emit_tx, emit_rx) = mpsc::channel(config.intake_capacity);
         let (pool_tx, pool_rx) = mpsc::channel(config.intake_capacity);
@@ -1036,6 +1067,7 @@ impl Pipeline {
                     .map(|s| (s.id, s.plugin.manifest().finds_private)),
             ),
         }));
+        remote.wait_for_fill(&have);
         let (pool, pool_task, prepare) = (stages.pool, stages.pool_task, stages.prepare);
 
         let intake_stats = Arc::new(IntakeStats::default());
@@ -1443,7 +1475,7 @@ fn prepare(
             control::SavedEgress,
         )>,
         Vec<QueuedKey>,
-        Have,
+        (Have, Option<(PathBuf, StoreConfig)>),
         i64,
         u64,
         StoreFilter,
@@ -1535,8 +1567,19 @@ fn prepare(
         }
     }
     let stored = store.count()?;
-    let have = Have::new(have::capacity_for(stored));
-    store.for_each_swarm_hash(|h| have.insert(&h))?;
+    // The have-filter is filled off the start (X-healthz-cold-start), from
+    // its own connection. It's sized from the exact count while that is
+    // still taken here; `Store::torrent_bound` is the scan-free bound for
+    // when it isn't (X-healthz-count-async). An in-memory store (tests)
+    // can't be reopened, so it's filled here.
+    let have = match store.reopen_args() {
+        Some(open) => (Have::filling(have::capacity_for(stored)), Some(open)),
+        None => {
+            let have = Have::new(have::capacity_for(stored));
+            store.for_each_swarm_hash(|h| have.insert(&h))?;
+            (have, None)
+        }
+    };
     store.write(&WriteBatch {
         events: &[Event {
             at: now,
@@ -1567,6 +1610,67 @@ fn prepare(
         stored,
         filter,
     ))
+}
+
+/// The first wait before a failed fill is tried again; it doubles.
+const FILL_RETRY_FIRST: Duration = Duration::from_secs(1);
+/// The longest wait between two tries of a fill whose store read failed.
+const FILL_RETRY_MAX: Duration = Duration::from_secs(60);
+/// How often a fill waiting to try again checks that the pipeline is up.
+const FILL_RETRY_CHECK: Duration = Duration::from_secs(1);
+
+/// Fills a [`Have::filling`] filter from the store (blocking), then marks
+/// it filled. The scan is one statement, so one read snapshot: a hash
+/// committed after it began is missing from it, but the writer inserts
+/// every hash it commits, so none is lost. A failed read is tried again,
+/// after `first_wait` and then twice as long each time up to a minute,
+/// until `stopped` says the pipeline is stopping or the filter is gone;
+/// the filter is never marked filled until a scan has finished. Its
+/// inserts stay in between: a filter only gains bits. `gate` (tests) runs
+/// after a scan, before the filter is marked. Returns the tries made.
+fn fill_have(
+    have: &std::sync::Weak<Have>,
+    open: impl Fn() -> Result<Store, lodestar_store::Error>,
+    gate: Option<&FillGate>,
+    stopped: impl Fn() -> bool,
+    first_wait: Duration,
+) -> u64 {
+    let mut wait = first_wait;
+    let mut attempts = 0;
+    loop {
+        // Gone when the pipeline has stopped: nothing reads it any more.
+        let Some(filter) = have.upgrade() else {
+            return attempts;
+        };
+        if stopped() {
+            return attempts;
+        }
+        attempts += 1;
+        match open().and_then(|s| filter.fill(|insert| s.for_each_swarm_hash(insert))) {
+            Ok(()) => {
+                if let Some(gate) = gate {
+                    gate.wait();
+                }
+                filter.mark_filled();
+                return attempts;
+            }
+            Err(e) => lodestar_log::log_event!(
+                log_events::HAVE_FILL_FAILED,
+                error = log_events::store_error(&e),
+                attempts = attempts
+            ),
+        }
+        drop(filter);
+        // In short steps, so a stopped pipeline doesn't wait it out.
+        let until = std::time::Instant::now() + wait;
+        while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+            if have.strong_count() == 0 || stopped() {
+                return attempts;
+            }
+            std::thread::sleep(left.min(FILL_RETRY_CHECK));
+        }
+        wait = (wait * 2).min(FILL_RETRY_MAX);
+    }
 }
 
 struct Intake {
@@ -1605,6 +1709,14 @@ fn claimable(d: &Discovery) -> bool {
 /// call away, so batching (≤ 512 or 250 ms) is a concern of the wire
 /// protocol, not of this boundary.
 async fn intake(mut io: Intake, mut shutdown: Shutdown) {
+    // Until the have-filter is filled, a "no" from it isn't true
+    // (X-healthz-cold-start): nothing is admitted before then. Sources
+    // wait on the bounded channels meanwhile, as they do for a busy pool.
+    tokio::select! {
+        biased;
+        _ = shutdown.requested() => return,
+        _ = io.have.filled() => {}
+    }
     loop {
         let (mut d, retried) = tokio::select! {
             biased;
@@ -1743,7 +1855,20 @@ pub(crate) fn unix_now() -> i64 {
 
 /// `settings` key holding the stamp of the hot-column snapshot that's
 /// current, or 0 while the columns are live and the snapshot is stale.
+/// Absent reads as 0.
 const HOT_STAMP: &str = "hot_stamp";
+
+/// Marks the hot-column snapshot stale, so the next [`open_hot`] rebuilds
+/// from SQLite. Anything but the running pipeline that changes the rows
+/// the columns are built from (`swarm`, `torrents`; [`Store::load_hot`])
+/// calls this before its first such write, so a crash part-way through
+/// still forces the rebuild (X-import-hot-stamp). `conn` may be a store's
+/// connection or a raw copy of one.
+pub fn invalidate_hot(conn: &lodestar_store::rusqlite::Connection) -> Result<(), Error> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", [HOT_STAMP])
+        .map_err(|e| Error::Store(e.into()))?;
+    Ok(())
+}
 
 /// Loads the hot columns (blocking): the snapshot in `dir` when it's the
 /// one the last clean shutdown recorded, else a rebuild from SQLite. The
@@ -1797,6 +1922,98 @@ fn trusted_for_hints(id: &str) -> bool {
 mod tests {
     use super::*;
     use lodestar_metainfo::InfoHash;
+
+    /// A store with one torrent, and the path to open it again.
+    fn one_torrent_store(dir: &Path) -> PathBuf {
+        let db = dir.join("t.db");
+        let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+        let mut d = std::collections::BTreeMap::new();
+        use lodestar_bencode::OwnedValue;
+        d.insert(b"length".to_vec(), OwnedValue::Int(1));
+        d.insert(b"name".to_vec(), OwnedValue::from("one"));
+        d.insert(b"piece length".to_vec(), OwnedValue::Int(1 << 14));
+        d.insert(b"pieces".to_vec(), OwnedValue::Bytes(vec![1; 20]));
+        let raw = lodestar_bencode::to_vec(&OwnedValue::Dict(d));
+        let info = lodestar_metainfo::Info::parse(&raw).unwrap();
+        let src = store.register_source("t", "1", 0).unwrap();
+        store
+            .insert(&[lodestar_store::NewTorrent {
+                info: &info,
+                raw_info: None,
+                discovered_at: 1,
+                metadata_at: 1,
+                extra_flags: 0,
+                source: src,
+            }])
+            .unwrap();
+        db
+    }
+
+    #[test]
+    fn a_failed_fill_is_tried_again_and_marked_only_once_it_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = one_torrent_store(dir.path());
+        let have = Arc::new(Have::filling(16));
+        let tries = std::sync::atomic::AtomicU64::new(0);
+        let attempts = fill_have(
+            &Arc::downgrade(&have),
+            || {
+                // The first open fails as a missing file would.
+                if tries.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Store::open_reader(dir.path().join("missing.db"), StoreConfig::default())
+                } else {
+                    assert!(!have.is_filled(), "marked before a scan finished");
+                    Store::open_reader(&db, StoreConfig::default())
+                }
+            },
+            None,
+            || false,
+            Duration::from_millis(1),
+        );
+        assert_eq!(attempts, 2);
+        assert!(have.is_filled());
+        assert_eq!(have.len(), 1);
+    }
+
+    #[test]
+    fn a_fill_that_keeps_failing_stops_with_the_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.db");
+        let have = Arc::new(Have::filling(16));
+        let (stop, rx) = watch::channel(false);
+        let (tried_tx, tried) = std::sync::mpsc::channel();
+        let (done_tx, done) = std::sync::mpsc::channel();
+        let fill = std::thread::spawn({
+            let have = Arc::downgrade(&have);
+            move || {
+                let n = fill_have(
+                    &have,
+                    || {
+                        let _ = tried_tx.send(());
+                        Store::open_reader(&missing, StoreConfig::default())
+                    },
+                    None,
+                    || *rx.borrow() || rx.has_changed().is_err(),
+                    // A long wait: only the stop can end it in time.
+                    Duration::from_secs(3600),
+                );
+                done_tx.send(n).unwrap();
+            }
+        });
+        // The first try fails, and the fill goes into its hour's wait.
+        tried
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a first try within 10 s");
+        // Still holding the filter (as a kept `Monitor` would), the
+        // pipeline stops: the waiting fill ends well within the deadline.
+        let _ = stop.send(true);
+        let attempts = done
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the fill stopped within 10 s, in its wait");
+        fill.join().unwrap();
+        assert_eq!(attempts, 1);
+        assert!(!have.is_filled());
+    }
 
     #[test]
     fn only_the_dht_plugin_is_trusted_for_hints() {

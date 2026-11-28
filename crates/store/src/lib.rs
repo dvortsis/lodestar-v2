@@ -1252,6 +1252,27 @@ impl Store {
             .collect()
     }
 
+    /// An upper bound on the number of torrents, without a scan
+    /// (X-healthz-cold-start): `max(id) - min(id) + 1`, two seeks of the
+    /// rowid b-tree (as two subqueries: SQLite only answers a `min` or
+    /// `max` with a seek when it's the query's one aggregate). Row ids are
+    /// distinct integers, so however many rows there are, they fit in
+    /// that range. Ids come from the shared `id_seq`, and deleted rows
+    /// leave gaps, so it can be well above the count. 0 for an empty table.
+    pub fn torrent_bound(&self) -> Result<u64> {
+        let (lo, hi): (Option<i64>, Option<i64>) = self.conn.query_row(
+            "SELECT (SELECT min(id) FROM torrents), (SELECT max(id) FROM torrents)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(match (lo, hi) {
+            (Some(lo), Some(hi)) => (i128::from(hi) - i128::from(lo) + 1)
+                .try_into()
+                .unwrap_or(u64::MAX),
+            _ => 0,
+        })
+    }
+
     /// Counts every row: a full scan, so not for hot paths.
     pub fn count(&self) -> Result<u64> {
         Ok(self

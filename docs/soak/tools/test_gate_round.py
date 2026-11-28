@@ -10,6 +10,7 @@ declaration and bundle checks run through real files. Round archives come from
 fixtures/round1/make_archive.py, changed per test.
 """
 
+import hashlib
 import json
 import math
 import sys
@@ -64,6 +65,7 @@ class Round1Sim(col6.Stage3Sim):
         self.cap = None  # the slots gauge; None: the preset's (or 32 with the switch off)
         self.anon = lambda e: 200 << 20
         self.drop_series = set()
+        self.early_share, self.render_early = 0.1, True  # lookups ended on enough values
         self.edits.append((lambda e, i: i == 0, lambda row, lines: row["values"].update(torrents=0)))
         self.edits.append((lambda e, i: True, lambda row, lines: row.update(private_bytes=self.anon(row["elapsed_seconds"]))))
 
@@ -74,7 +76,11 @@ class Round1Sim(col6.Stage3Sim):
         add = lambda name, value, labels="": out.append(f"lodestar_{name}{labels} {value}")
         ended = math.floor(e * 2)
         values = math.floor(ended * 0.3) if on["lookup_end"] else 0
-        for reason, n in (("values", values), ("no_values", ended - values)):
+        early = math.floor(ended * self.early_share) if on["lookup_end"] else 0  # CR-LOOKUP-END's own end
+        ends = (("values", values), ("no_values", ended - values - early))
+        if self.render_early:
+            ends += (("enough_values", early),)
+        for reason, n in ends:
             add(L["ended"], n, f'{{reason="{reason}"}}')
             add(L["residence"], f"{n * 15.0:.3f}", f'{{reason="{reason}"}}')
         add(L["queries"], math.floor(ended * 40), f'{{purpose="{collect.LEDGER_PEER_PURPOSE}"}}')
@@ -544,8 +550,11 @@ class LayoutTests(RoundBase):
         self.assertNotIn("A", v["candidates"])
 
     def test_solo_confirmation_one_arm_two_days_on_two_exits(self):
-        v = self.gate(mk.archive("S"))
-        self.assertEqual(self.cand(v)["crawler"], "pass")
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))  # the breach that calls for it (SoloBoundTests)
+        v = self.gate(add_attempt(a, "S", "r1-a2"))
+        self.assertEqual(self.cand(v)["layout"], "S")
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
 
     def test_solo_on_one_exit_twice_is_not_judged(self):
         a = mk.archive("S")
@@ -769,18 +778,20 @@ class ValidityTests(RoundBase):
             for s in d["contention"]["samples"]:
                 s["cpu"] = 0.9
         v = self.repeat_day1(mk.archive("L3"), breach)
-        self.assertNotJudged(v, "repeat_without_infrastructure_fault")
+        self.assertNotJudged(v, "repeat_of_a_non_repeatable_day")
         self.assertTrue(self.cand(v)["solo_confirmation_required"])
 
     def test_a_product_failure_under_diagnosis_is_not_repeated(self):
         v = self.repeat_day1(mk.archive("L3"), lambda d: d["archive"].update(
             events=[{"class": "product", "arms": ["B"], "diagnosis": "pending"}]))
-        self.assertNotJudged(v, "repeat_without_infrastructure_fault")
+        self.assertNotJudged(v, "repeat_of_a_non_repeatable_day")
         self.assertIsNone(v["selection"]["ships"])
 
-    def test_a_void_day_is_not_repeated(self):
+    def test_a_void_day_is_repeated(self):
+        # The runner's ruling on CR-SPEC-R1's review: §6.3's retry rule repeats a void day.
         v = self.repeat_day1(mk.archive("L3"), lambda d: d["reports"]["B"].update(verdict="void"))
-        self.assertNotJudged(v, "repeat_without_infrastructure_fault")
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
+        self.assertEqual([d["reasons"] for d in self.cand(v)["replaced_days"]], [["segment_void"]])
 
     def test_a_repeat_of_a_passing_day_is_not_judged(self):
         a = mk.archive("L3")
@@ -865,10 +876,10 @@ class ValidityTests(RoundBase):
         self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
 
 
-def add_attempt(a, layout, attempt, fresh=None):
-    """Append a fresh attempt (from make_archive) to archive `a`, with distinct run IDs and,
-    by default, days after the existing ones."""
-    later = mk.archive(layout, attempt=attempt)
+def add_attempt(a, layout, attempt, fresh=None, later=None):
+    """Append a fresh attempt (from make_archive, or `later`) to archive `a`, with distinct
+    run IDs and, by default, days after the existing ones."""
+    later = later or mk.archive(layout, attempt=attempt)
     a["declaration"]["attempts"] += later["declaration"]["attempts"]
     a["declaration"]["arms"] += later["declaration"]["arms"]
     shift = timedelta(days=3 * (len(a["declaration"]["attempts"]) - 1))
@@ -1058,6 +1069,386 @@ class HistoryTests(RoundBase):
         self.assertNotJudged(self.gate(a), "run_id_reused")
 
 
+class DropCTests(unittest.TestCase):
+    """Item H: `analyze_cr.py drop-c` on the rehearsal (plan lines 430-432)."""
+    T0 = analyze_cr.parse_utc("2026-11-28T20:00:00Z")
+
+    def host(self, minutes=120, cpu=lambda k: 0.5, steal=lambda k: 0.01, skip=(), vcpus=8):
+        header = [{"kind": "header", "started_utc": mk.iso(self.T0), "device": mk.DEVICE, "tunnels": [],
+                   "vcpus": vcpus}]
+        return header + [{"utc": mk.iso(self.T0 + timedelta(seconds=10 * k)), "cpu": cpu(k), "steal": steal(k)}
+                         for k in range(minutes * 6) if k not in skip]
+
+    def test_samples_on_other_vcpus_or_without_a_header_are_refused(self):
+        arms = {a: self.arm() for a in "BAC"}
+        for samples in (self.host(vcpus=16), self.host()[1:], {"vcpus": 4, "samples": self.host()[1:]}):
+            with self.subTest(samples=type(samples).__name__):
+                out = analyze_cr.drop_c(samples, arms)
+                self.assertEqual((out["decision"], out["reasons"]), ("not_judged", ["vcpus_differ"]))
+        self.assertEqual(analyze_cr.drop_c({"vcpus": 8, "samples": self.host()[1:]}, arms)["decision"], "keep")
+
+    def arm(self, crawl_after_min=5, minutes=120):
+        rows = []
+        for m in range(minutes + 1):
+            t = self.T0 + timedelta(minutes=m)
+            stored = max(0, m - crawl_after_min) * 3
+            rows.append({"time": mk.iso(t), "metrics_ok": True,
+                         "values": {"torrents": stored, "dht_sample_suppression_seconds": 0}})
+        return rows
+
+    def test_a_quiet_rehearsal_keeps_c(self):
+        out = analyze_cr.drop_c(self.host(), {a: self.arm() for a in "BAC"})
+        self.assertEqual((out["decision"], out["interval_minutes"]), ("keep", 60.0))
+        self.assertEqual(out["slots"], 360)
+
+    def test_cpu_or_steal_over_drops_c(self):
+        hot = analyze_cr.drop_c(self.host(cpu=lambda k: 0.72), {a: self.arm() for a in "BAC"})
+        self.assertEqual((hot["decision"], hot["reasons"]), ("drop", ["cpu"]))
+        steal = analyze_cr.drop_c(self.host(steal=lambda k: 0.04 if k % 10 == 0 else 0.0), {a: self.arm() for a in "BAC"})
+        self.assertEqual(steal["decision"], "drop")
+
+    def test_missing_slots_rank_over(self):
+        gaps = set(range(360, 720, 15))  # 24 of the last hour's 360 slots missing: 6.7 %
+        out = analyze_cr.drop_c(self.host(skip=gaps), {a: self.arm() for a in "BAC"})
+        self.assertEqual((out["decision"], out["cpu_p95"]), ("drop", None))
+
+    def test_the_interval_starts_only_once_every_arm_crawls(self):
+        out = analyze_cr.drop_c(self.host(), {"B": self.arm(), "C": self.arm(crawl_after_min=90)})
+        self.assertEqual(out["decision"], "not_judged")
+        self.assertIn("fewer_than_60_crawling_minutes", out["reasons"])
+        out = analyze_cr.drop_c(self.host(), {"B": self.arm(), "C": self.arm(crawl_after_min=200)})
+        self.assertEqual(out["reasons"], ["an_arm_never_crawled"])
+
+    def test_the_command_prints_its_numbers(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "host-samples.jsonl").write_text("".join(json.dumps(r) + "\n" for r in self.host()))
+            argv = ["drop-c", str(d / "host-samples.jsonl"), "--output", str(d / "out.json")]
+            for a in "BAC":
+                (d / a).mkdir()
+                (d / a / "samples.jsonl").write_text("".join(json.dumps(r) + "\n" for r in self.arm()))
+                argv += ["--arm", f"{a}={d / a}"]
+            self.assertEqual(analyze_cr.main(argv), 0)
+            self.assertEqual(json.loads((d / "out.json").read_text())["decision"], "keep")
+
+
+class D3ExemptionTests(SegmentBase):
+    """Item B (plan §8 item 6; owner §2.85 D3; runner, 2026-11-27): a mover run or parity check
+    spares the window only when none of the pools it touches holds the arm's /data device."""
+    POOLS = {"ssd_apps": [mk.DEVICE], "cache": ["sdc"], "array": ["md1", "md2"]}
+
+    def decl(self, pools):
+        d = mk.archive("L3")["declaration"]
+        if pools is not None:
+            d["pools"] = pools
+        return analyze_cr.check_declaration(d)
+
+    def segment_with(self, kind, touched, pools=POOLS, checked=True):
+        sim = Round1Sim()
+        entry = {"category": "array_operation", "elapsed_seconds": 4000.0, "same_boot": True,
+                 "collector_finished": False, "text": ""}
+        if kind:
+            entry.update(kind=kind, pools=touched)
+        sim.activity = [entry]
+        if checked:
+            return self.judge(sim, self.decl(pools))
+        return self.judge(sim, dict(mk.archive("L3")["declaration"], pools=pools))  # past check_declaration
+
+    def test_the_declared_device_must_sit_in_exactly_one_pool(self):
+        # Runner, 2026-11-27: the map lists the VM's kernel names; a host-side map
+        # (vdb in no pool), a device in two pools or a partition name is refused.
+        for pools in ({"ssd_apps": ["sdz"], "array": ["md1"]},
+                      {"ssd_apps": [mk.DEVICE], "cache": [mk.DEVICE], "array": ["md1"]},
+                      {"ssd_apps": [mk.DEVICE + "p1"], "array": ["md1"]}):
+            with self.subTest(pools=pools), self.assertRaises(ValueError):
+                self.decl(pools)
+        self.decl(self.POOLS)  # exactly one: accepted
+        self.decl({})  # no map: accepted, and nothing is exempt
+
+    def test_a_device_in_no_pool_is_never_exempt(self):
+        for pools in ({"ssd_apps": ["sdz"], "array": ["md1"]},
+                      {"ssd_apps": [mk.DEVICE + "p1"], "array": ["md1"]}):
+            with self.subTest(pools=pools):
+                report = self.segment_with("mover", ["ssd_apps", "array"], pools, checked=False)
+                self.assertFalse(self.check(report, "no_host_activity")[0]["ok"])
+                self.assertEqual(report["activity_exempt_d3"], [])
+
+    def test_mover_and_parity_off_the_arms_pool_spare_the_window(self):
+        for kind, touched in (("mover", ["cache", "array"]), ("parity", ["array"])):
+            report = self.segment_with(kind, touched)
+            self.assertValid(report)
+            self.assertEqual(report["activity_exempt_d3"][0]["pools"], touched)
+
+    def test_everything_else_still_counts(self):
+        for kind, touched, pools in (("mover", ["ssd_apps", "array"], self.POOLS),  # touches the arm's own pool
+                                     ("other", ["array"], self.POOLS),
+                                     ("mover", ["array", "unmapped"], self.POOLS),
+                                     ("mover", ["array"], None),
+                                     (None, None, self.POOLS)):
+            with self.subTest(kind=kind, touched=touched, pools=pools is not None):
+                report = self.segment_with(kind, touched, pools)
+                self.assertFalse(self.check(report, "no_host_activity")[0]["ok"])
+
+    def test_the_note_command_records_kind_and_pools(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "run.json").write_text(json.dumps({"clock": {"monotonic_origin": 0.0, "boot_id": "b"},
+                                                       "round1": {"round": 1}}))
+            boot = root / "boot_id"
+            boot.write_text("b\n")
+            rc = collect.note_command(["--root", d, "--category", "array_operation", "--kind", "mover",
+                                       "--pool", "cache", "--pool", "array"], clock=lambda: 10.0, boot_id_path=boot)
+            self.assertEqual(rc, 0)
+            entry = json.loads((root / "activity.jsonl").read_text())
+            self.assertEqual((entry["kind"], entry["pools"]), ("mover", ["array", "cache"]))
+            for argv in (["--kind", "mover"], []):  # a round-1 run needs both
+                with self.assertRaises(SystemExit):
+                    collect.note_command(["--root", d, "--category", "array_operation", *argv], boot_id_path=boot)
+
+
+class RoundSpecAndVcpuTests(RoundBase):
+    def test_reports_and_the_verdict_name_round_1s_spec(self):
+        v = self.gate(mk.archive("L3"))
+        self.assertEqual(v["round1_spec"], "docs/decisions/2026-11-27-CR-SPEC-round1.md")
+        self.assertEqual(v["spec"], analyze_cr.SPEC)  # old runs keep theirs
+        with tempfile.TemporaryDirectory() as d:
+            report = analyze_cr.analyze_segment(Round1Sim().write(Path(d) / "s"), None, declaration())
+        self.assertEqual(report["round1"]["round1_spec"], analyze_cr.ROUND1_SPEC)
+
+    def test_host_samples_on_other_vcpus_are_not_judged(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["contention"]["vcpus"] = 16
+        v = self.gate(a)
+        self.assertIn("vcpus_differ", self.cand(v)["days"][0]["contention"]["reasons"])
+        self.assertNotJudged(v, "contention_not_judged")
+
+    def test_the_declaration_names_8_vcpus(self):
+        decl = mk.archive("L3")["declaration"]
+        for bad in (None, 16):
+            d = dict(decl, vcpus=bad)
+            with self.assertRaises(ValueError):
+                analyze_cr.check_declaration(d)
+
+
+class L2cTests(RoundBase):
+    """Item G: B fails in L3; A (candidate) and C (diagnostic) go on in a fresh attempt."""
+
+    def test_after_l3_the_remaining_arms_pass_in_l2c(self):
+        a = mk.archive("L3")
+        add_attempt(a, "L2c", "r1-a2")
+        v = self.gate(a)
+        self.assertEqual(self.cand(v, "A")["layout"], "L2c")
+        self.assertEqual(self.cand(v, "A")["crawler"], "pass", self.cand(v, "A")["reasons"])
+
+    def test_l3_then_a_solo_confirmation_then_l2c(self):
+        # Runner review (G): a solo confirmation of B sits outside the chain, so L2c still
+        # follows L3; A and C go on in it.
+        a = mk.archive("L3")
+        add_attempt(a, "S", "r1-a2")
+        add_attempt(a, "L2c", "r1-a3")
+        analyze_cr.check_declaration(a["declaration"])
+        v = self.gate(a)
+        self.assertEqual(self.cand(v, "A")["layout"], "L2c")
+        self.assertEqual(self.cand(v, "A")["crawler"], "pass", self.cand(v, "A")["reasons"])
+
+    def test_l2c_follows_only_l3(self):
+        a = mk.archive("L2c")
+        with self.assertRaises(ValueError):
+            analyze_cr.check_declaration(a["declaration"])
+        a = mk.archive("L2")
+        add_attempt(a, "L2c", "r1-a2")
+        with self.assertRaises(ValueError):
+            analyze_cr.check_declaration(a["declaration"])
+
+
+class DigestFormTests(SegmentBase):
+    """Item K: the declaration names the image as name@sha256:<hex>; reports (whose digest the
+    collector records without the repository) are compared on the part after the last `@`."""
+
+    def test_the_declaration_needs_the_full_form(self):
+        a = mk.archive("L3")["declaration"]
+        bad = json.loads(json.dumps(a).replace(mk.DIGEST, "sha256:" + "d" * 64))
+        with self.assertRaises(ValueError):
+            analyze_cr.check_declaration(bad)
+        analyze_cr.check_declaration(a)
+
+    def test_the_collectors_bare_digest_matches_and_another_digest_part_fails(self):
+        sim = Round1Sim()
+        sim.digest = "sha256:" + "d" * 64  # as the collector records it
+        self.assertValid(self.judge(sim))
+        sim = Round1Sim()
+        sim.digest = "lodestar@sha256:" + "e" * 64  # same name, another image
+        report = self.judge(sim)
+        self.assertEqual(report["verdict"], "void")
+        self.assertFalse(self.check(report, "declared_image_digest")[0]["ok"])
+
+
+class GateDigestTests(RoundBase):
+    """Item K, at the gate: a report is judged on its digest part, never on a prefix of it or
+    on its repository name."""
+
+    def digest(self, value):
+        a = mk.archive("L3")
+        for d in a["days"]:
+            d["reports"]["B"]["identity"]["image_digest"] = value
+        return self.cand(self.gate(a))
+
+    def test_another_image_fails(self):
+        for value in ("sha256:" + "e" * 64, "sha256:" + "d" * 63 + "e", "sha256:" + "d" * 32):
+            with self.subTest(value=value):
+                c = self.digest(value)
+                self.assertIn("image_digest_differs", c["days"][0]["reasons"])
+                self.assertNotEqual(c["crawler"], "pass")
+
+    def test_the_same_digest_under_another_repository_name_passes(self):
+        for value in ("sha256:" + "d" * 64, "ghcr.io/someone/lodestar@sha256:" + "d" * 64):
+            with self.subTest(value=value):
+                self.assertEqual(self.digest(value)["crawler"], "pass")
+
+
+class ExitRecheckTests(RoundBase):
+    """Item C: a repair before the start re-checks the exits; readings are judged against the
+    exit in force at their time, so the pre-repair reading is history, not a fault."""
+
+    def repaired(self, in_window_old=False):
+        a = mk.archive("L3")
+        day = self.day(a, 1)
+        arc = day["archive"]
+        start = analyze_cr.parse_utc(day["reports"]["B"]["timeline"]["process_start_utc"])
+        old = dict(arc["exits"], X=mk.h("exit-x-before-repair"))
+        arc["exit_checks"] = [{"utc": mk.iso(start - timedelta(minutes=30)), "exits": old},
+                              {"utc": mk.iso(start - timedelta(minutes=10)), "exits": dict(arc["exits"])}]
+        arc["arms"]["B"]["egress"].insert(0, {"utc": mk.iso(start - timedelta(minutes=30)), "hash": old["X"]})
+        if in_window_old:
+            ws = analyze_cr.parse_utc(day["reports"]["B"]["timeline"]["window_start_utc"])
+            arc["arms"]["B"]["egress"].append({"utc": mk.iso(ws + timedelta(hours=3, minutes=10)), "hash": old["X"]})
+        return a
+
+    def test_a_repair_then_a_recheck_keeps_the_day_judged(self):
+        v = self.gate(self.repaired())
+        self.assertEqual(self.cand(v)["days"][0]["status"], "pass", self.cand(v)["days"][0]["reasons"])
+
+    def test_a_recheck_inside_the_window_that_moves_the_exit_is_a_fault(self):
+        # Readings match the exit in force at ws, but a later check (and so the day's final
+        # exits) names another server for X: the arm's exit changed under it.
+        a = mk.archive("L3")
+        day = self.day(a, 1)
+        arc = day["archive"]
+        ws = analyze_cr.parse_utc(day["reports"]["B"]["timeline"]["window_start_utc"])
+        start = analyze_cr.parse_utc(day["reports"]["B"]["timeline"]["process_start_utc"])
+        moved = dict(arc["exits"], X=mk.h("exit-x-after-ws"))
+        arc["exit_checks"] = [{"utc": mk.iso(start - timedelta(minutes=10)), "exits": dict(arc["exits"])},
+                              {"utc": mk.iso(ws + timedelta(hours=2)), "exits": moved}]
+        arc["exits"] = moved
+        day_out = self.cand(self.gate(a))["days"][0]
+        self.assertIn("egress_assignment_missing", day_out["reasons"])
+        self.assertNotEqual(day_out["status"], "pass")
+
+    def test_the_old_exit_inside_the_window_is_still_a_fault(self):
+        v = self.gate(self.repaired(in_window_old=True))
+        self.assertIn("egress_differs_from_declared_exit", self.cand(v)["days"][0]["reasons"])
+
+
+class EnoughValuesTests(SegmentBase):
+    """Plan §6.1: lookup_end's row reads lookups ended on enough values (CR-LOOKUP-END's own
+    end, `enough_values`), absent or zero voiding; the ledger counts it as an end on values."""
+
+    def test_the_row_reads_enough_values(self):
+        report = self.judge(Round1Sim())
+        self.assertValid(report)
+        check = self.check(report, "lookups_end_on_enough_values")[0]
+        self.assertTrue(check["ok"])
+        self.assertGreater(report["bundle"]["lookup_end"]["ended_on_enough_values"], 0)
+
+    def test_absent_or_zero_voids(self):
+        sim = Round1Sim()
+        sim.render_early = False
+        report = self.judge(sim)
+        self.assertEqual(report["verdict"], "void")
+        self.assertEqual(self.check(report, "lookups_end_on_enough_values")[0]["detail"]["note"], "absent")
+        sim = Round1Sim()
+        sim.early_share = 0.0
+        report = self.judge(sim)
+        self.assertEqual(self.check(report, "lookups_end_on_enough_values")[0]["detail"]["note"], "a measured zero")
+
+    def test_the_collector_keeps_the_series(self):
+        self.assertIn("enough_values", collect.LEDGER_END_REASONS)
+        snap = collect.sanitize_snapshot(f'lodestar_{L["ended"]}{{reason="enough_values"}} 7\n')
+        self.assertIn('reason="enough_values"} 7', snap)
+
+    def test_old_runs_without_the_series_keep_their_numbers(self):
+        a = {"snap": {L["ended"]: {(("reason", "values"),): 10.0, (("reason", "no_values"),): 5.0}}}
+        b = {"snap": {L["ended"]: {(("reason", "values"),): 30.0, (("reason", "no_values"),): 9.0}}}
+        self.assertEqual(analyze_cr.ledger(a, b)["ended_on_values"], 20.0)
+        b["snap"][L["ended"]][(("reason", "enough_values"),)] = 4.0
+        a["snap"][L["ended"]][(("reason", "enough_values"),)] = 1.0
+        self.assertEqual(analyze_cr.ledger(a, b)["ended_on_values"], 23.0)
+
+
+class ComparatorBindingTests(RoundBase):
+    """Runner, 2026-11-27 (§2.19): a comparator run by a collector without round-1 fields
+    (cr-ab-comp-2's) is bound after its window by the coordinator's `bind-comparator`, and the
+    manifest carries the binding. The report here is the analyzer's own, of a comparator run
+    written as the pre-round-1 collector writes it (no run_id)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp_cls = tempfile.TemporaryDirectory()
+        sim = cr.Sim(kind="comparator", hours=24, hour_s=3600, rehearsal=False, warm_min=60)
+        cls.old = analyze_cr.analyze_segment(sim.write(Path(cls.tmp_cls.name) / "comp"))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp_cls.cleanup()
+
+    def bound(self, **over):
+        end = self.old["timeline"]["window_end_utc"]
+        b = {"schema": 1, "kind": "cr_round1_comparator_binding", "run_id": "comp-1", "host_identity": mk.HOST,
+             "network_identity": dict(mk.NETWORK), "ended_utc": mk.iso(analyze_cr.parse_utc(end) + timedelta(seconds=40)),
+             "bound_utc": "2026-11-28T18:30:00Z", "bound_after_window": True}
+        b.update(over)
+        return b
+
+    def gate_bound(self, binding):
+        a = mk.archive("L3")
+        a["comparator"] = json.loads(json.dumps(self.old))
+        self.n += 1
+        path = mk.write(self.root / f"b{self.n}", a)
+        data = (json.dumps(binding) + "\n").encode()
+        (path.parent / "comparator-binding.json").write_bytes(data)
+        man = json.loads(path.read_text())
+        man["comparator_binding"] = {"path": "comparator-binding.json", "sha256": hashlib.sha256(data).hexdigest()}
+        path.write_text(json.dumps(man))
+        return analyze_cr.gate_round(analyze_cr.load_manifest(path))
+
+    def test_the_old_report_has_no_binding_of_its_own(self):
+        self.assertEqual(self.old["verdict"], "valid", [c for c in self.old["checks"] if not c["ok"]])
+        self.assertNotIn("binding", self.old)
+        a = mk.archive("L3")
+        a["comparator"] = json.loads(json.dumps(self.old))
+        v = self.gate(a)  # unbound: every candidate not judged
+        self.assertNotJudged(v, "comparator_not_booked")
+
+    def test_bound_after_its_window_it_passes(self):
+        v = self.gate_bound(self.bound())
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
+        self.assertTrue(v["comparator_bound_after_window"])
+
+    def test_a_host_or_network_mismatch_at_bind_time_fails(self):
+        self.assertNotJudged(self.gate_bound(self.bound(host_identity=mk.h("another-host"))), "comparator_host_identity")
+        net = dict(mk.NETWORK, uplink_hash=mk.h("another-uplink"))
+        self.assertNotJudged(self.gate_bound(self.bound(network_identity=net)), "comparator_network_identity")
+
+    def test_an_end_before_the_window_end_is_interrupted(self):
+        end = analyze_cr.parse_utc(self.old["timeline"]["window_end_utc"])
+        self.assertNotJudged(self.gate_bound(self.bound(ended_utc=mk.iso(end - timedelta(minutes=5)))),
+                             "comparator_interrupted")
+
+    def test_a_malformed_binding_is_an_error(self):
+        with self.assertRaises(ValueError):
+            self.gate_bound(self.bound(bound_after_window=False))
+
+
 class ComparatorTests(RoundBase):
     def test_missing_comparator(self):
         a = mk.archive("L3")
@@ -1141,6 +1532,22 @@ class ContentionTests(RoundBase):
         self.assertNotJudged(v, "contention_breach")
         self.assertTrue(self.cand(v)["solo_confirmation_required"])
         self.assertEqual(v["selection"]["state"], "pending_retry")
+
+    def test_a_breach_on_an_infrastructure_or_product_day_is_classed_first(self):
+        """§6.3: the first class that applies decides; class 1 and 2 get no solo confirmation."""
+        for event, cls in (({"class": "infrastructure", "arms": [], "diagnosis": None}, "infrastructure_fault"),
+                           ({"class": "product", "arms": ["B"], "diagnosis": "pending"},
+                            "product_failure_under_diagnosis")):
+            with self.subTest(cls):
+                a = mk.archive("L3")
+                self.set(a, 1, lambda s: s.update(cpu=0.85))
+                self.day(a, 1)["archive"]["events"].append(dict(event))
+                v = self.gate(a)
+                day1 = self.cand(v)["days"][0]
+                self.assertIn("contention_breach", day1["reasons"])
+                self.assertIn(cls, day1["reasons"])
+                self.assertFalse(day1["solo_confirmation_required"])
+                self.assertEqual(day1["contention_class"], "infrastructure_or_product")
 
     def test_a_network_contention_breach_on_a_b_day(self):
         a = mk.archive("L3")
@@ -1271,7 +1678,7 @@ class CohortTests(RoundBase):
     bound; the latency cohort keeps carry-in samples and charges dropped ones above 600 s."""
 
     def with_edge(self, le600, gross_mean, carry_mean):
-        a = mk.archive("S")
+        a = mk.archive("L3")  # B's day 1 (a lone S attempt is no longer allowed: SoloBoundTests)
         r = self.day(a, 1)["reports"]["B"]
         lat = analyze_cr.latency(*edge_scrapes(le600, 10000, 100))
         r["latency"] = lat
@@ -1370,7 +1777,7 @@ class ManifestTests(RoundBase):
 
     def test_every_input_hash_is_in_the_verdict(self):
         v = self.gate(mk.archive("L3"))
-        self.assertEqual(len(v["inputs"]), 1 + 1 + 2 * (3 + 2))
+        self.assertEqual(len(v["inputs"]), 1 + 1 + 2 * (3 + 2 + 3))  # + each arm's gluetun log
 
     def test_the_analyzer_hash_is_in_the_verdict_and_the_segment_report(self):
         self.assertEqual(self.gate(mk.archive("L3"))["analyzer_sha256"], analyze_cr.ANALYZER_SHA256)
@@ -1408,6 +1815,308 @@ class ManifestTests(RoundBase):
         self.assertNotIn("report_not_bound_to_its_declaration", day1["reasons"])
         self.assertNotIn("no_fresh_store_evidence", day1["reasons"])
         self.assertTrue(day1["tests"]["mean_passes"])
+
+
+# ----------------------------------------------------------------- X-cr-round1-spec-fixes
+def repeat_of(day, k, clean=True):
+    """A repeat k of `day`: the same layout and exits from fresh stores, its own run IDs;
+    by default clean (no events, fresh host samples, valid reports)."""
+    again = json.loads(json.dumps(day))
+    again["repeat"] = k
+    if clean:
+        again["archive"]["events"] = []
+        again["contention"] = mk.host_samples(again["reports"])
+    for r in again["reports"].values():
+        if clean:
+            r["verdict"] = "valid"
+        r["binding"]["placement"]["repeat"] = k
+        r["binding"]["run_id"] += f"-repeat{k}"
+    return again
+
+
+def thin_coverage(day, arm="B"):
+    """The first 30 min of the arm's window without a steal reading: coverage under 98 %."""
+    ws = analyze_cr.parse_utc(day["reports"][arm]["timeline"]["window_start_utc"])
+    for smp in day["contention"]["samples"]:
+        if ws <= analyze_cr.parse_utc(smp["utc"]) < ws + timedelta(minutes=30):
+            smp["steal"] = None
+
+
+def solo_of(arm, attempt):
+    """make_archive's S layout for `arm` instead of B: one arm on X, then Y."""
+    later = mk.archive("S", attempt=attempt)
+    decl = later["declaration"]
+    decl["arms"] = [mk.entry(attempt, e["day"], arm, e["exit"]) for e in decl["arms"]]
+    decl["attempts"][0]["candidate_digests"] = {arm: mk.DIGEST}
+    for d in later["days"]:
+        e = next(x for x in decl["arms"] if x["day"] == d["day"])
+        reports = {arm: mk.report(e, f"{attempt}-d{d['day']}-{arm}", mk.DAY_START[d["day"]])}
+        d.update(reports=reports, archive=mk.day_archive(attempt, d["day"], reports, {arm: e["exit"]}),
+                 contention=mk.host_samples(reports), gluetun_logs={arm: mk.gluetun_log(attempt, d["day"], arm)})
+    return later
+
+
+class SpecFixBase(RoundBase):
+    def gate_ends(self, a, ends):
+        """gate-round on `a` with the manifest's attempt_ends set to `ends`."""
+        self.n += 1
+        path = mk.write(self.root / f"e{self.n}", a)
+        man = json.loads(path.read_text())
+        man["attempt_ends"] = ends
+        path.write_text(json.dumps(man))
+        return analyze_cr.gate_round(analyze_cr.load_manifest(path))
+
+
+class SoloBoundTests(SpecFixBase):
+    """Item 2: an S attempt only as a solo confirmation (O4) or for the only arm left, at most
+    one per candidate per round (CR-SPEC-R1 §5)."""
+
+    def test_a_lone_solo_attempt_is_not_permitted(self):
+        v = self.gate(mk.archive("S"))
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_without_a_preceding_attempt"])
+
+    def test_the_reviewers_case_l3_void_then_s_void_then_s_never_passes(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["reports"]["B"]["verdict"] = "void"
+        add_attempt(a, "S", "r1-a2")
+        self.day(a, 1, "r1-a2")["reports"]["B"]["verdict"] = "void"
+        add_attempt(a, "S", "r1-a3")
+        v = self.gate(a)
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["more_than_one_solo_attempt"])
+        self.assertNotEqual(v["selection"]["ships"], "B")
+        self.assertEqual(v["selection"]["state"], "pending_retry")  # B isn't terminal, so A waits
+
+    def test_a_void_day_then_a_solo_attempt_is_not_permitted(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["reports"]["B"]["verdict"] = "void"
+        v = self.gate(add_attempt(a, "S", "r1-a2"))
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_not_after_a_drop"])
+
+    def test_a_passing_l3_then_a_solo_attempt_is_not_permitted(self):
+        v = self.gate(add_attempt(mk.archive("L3"), "S", "r1-a2"))
+        self.assertNotJudged(v, "solo_not_permitted")
+
+    def test_a_host_wide_breach_gives_each_candidate_its_own_solo(self):
+        # Self-review: "the attempt just before" is the candidate's own. A CPU breach hits B
+        # and A alike; B's solo fails, and A's (after B's) is still its one S.
+        a = mk.archive("L2")
+        for smp in self.day(a, 1)["contention"]["samples"]:
+            smp["cpu"] = 0.9
+        add_attempt(a, "S", "r1-a2")
+        for smp in self.day(a, 1, "r1-a2")["contention"]["samples"]:
+            smp["cpu"] = 0.9
+        v = self.gate(add_attempt(a, "S", "r1-a3", later=solo_of("A", "r1-a3")))
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
+        self.assertNotIn("solo_not_permitted", self.cand(v, "A")["reasons"])
+        self.assertEqual(self.cand(v, "A")["crawler"], "pass", self.cand(v, "A")["reasons"])
+        self.assertEqual(v["selection"]["ships"], "A")
+
+    def test_rule_a_needs_the_breach_in_the_attempt_just_before(self):
+        # Runner review of #1158: L3 (B breaches) -> L2 -> S. The breach was two attempts back.
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))
+        add_attempt(a, "L2", "r1-a2")
+        v = self.gate(add_attempt(a, "S", "r1-a3"))
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_not_after_a_drop"])
+
+    def test_a_rehearsal_drop_on_a_later_attempt_opens_no_solo(self):
+        # Runner review of #1158: the rehearsal runs only before the round's first attempt.
+        a = mk.archive("L3")
+        add_attempt(a, "L2", "r1-a2")
+        a["days"] = [d for d in a["days"] if d["attempt"] != "r1-a2"]
+        v = self.gate_ends(add_attempt(a, "S", "r1-a3"),
+                           {"r1-a2": {"reason": "rehearsal_drop:A", "days_run": []}})
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_not_after_a_drop"])
+
+    def test_a_valid_miss_still_stands_beside_a_solo_not_permitted(self):
+        a = mk.archive("L3")
+        self.day(a, 2)["reports"]["B"]["numerator"]["hourly"][3]["net_per_min"] = 60.0
+        v = self.gate(add_attempt(a, "S", "r1-a2"))
+        self.assertIn("solo_not_permitted", self.cand(v)["reasons"])
+        self.assertEqual(self.cand(v)["crawler"], "fail")
+
+    def product_drop(self, event=True):
+        """L2: A fails on day 1 (class 2), the attempt ends; B goes on alone in S."""
+        a = mk.archive("L2")
+        if event:
+            self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["A"], "diagnosis": "pending"}]
+        a["days"] = [d for d in a["days"] if d["day"] == 1]
+        return self.gate_ends(add_attempt(a, "S", "r1-a2"),
+                              {"r1-a1": {"reason": "product_failure:A", "days_run": [1]}})
+
+    def test_the_only_arm_left_after_a_product_failure_goes_solo(self):
+        v = self.product_drop()
+        self.assertEqual(self.cand(v)["layout"], "S")
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
+
+    def test_a_product_drop_the_archive_doesnt_show_is_refused(self):
+        self.assertNotJudged(self.product_drop(event=False), "solo_not_permitted")
+
+    def rehearsal_drop(self, reason, days_run=()):
+        a = mk.archive("L3")
+        a["days"] = [d for d in a["days"] if d["day"] in days_run]
+        return self.gate_ends(add_attempt(a, "S", "r1-a2"), {"r1-a1": {"reason": reason, "days_run": list(days_run)}})
+
+    def test_both_others_dropped_at_the_rehearsal(self):
+        v = self.rehearsal_drop("rehearsal_drop:A,rehearsal_drop:C")
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
+
+    def test_one_other_arm_left_is_no_solo(self):
+        self.assertNotJudged(self.rehearsal_drop("rehearsal_drop:C"), "solo_not_permitted")
+
+    def test_a_rehearsal_drop_after_a_day_ran_is_no_drop(self):
+        self.assertNotJudged(self.rehearsal_drop("rehearsal_drop:A,rehearsal_drop:C", days_run=(1,)),
+                             "solo_not_permitted")
+
+    def test_free_text_is_no_drop(self):
+        self.assertNotJudged(self.rehearsal_drop("A and C dropped"), "solo_not_permitted")
+
+
+class RepeatRuleTests(SpecFixBase):
+    """Item 3: a repeat replaces any not_judged day but contention, a product failure and a
+    failed solo confirmation, within the budget of 2."""
+
+    def test_a_coverage_miss_repeated_then_passing(self):
+        a = mk.archive("L3")
+        thin_coverage(self.day(a, 1))
+        a["days"].append(repeat_of(self.day(a, 1), 1))
+        v = self.gate(a)
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
+        self.assertEqual([d["reasons"] for d in self.cand(v)["replaced_days"]], [["contention_not_judged"]])
+
+    def test_an_uplink_counter_reset_repeated_then_passing(self):
+        a = mk.archive("L3")
+        smp = self.day(a, 1)["contention"]["samples"]
+        for s_ in smp[len(smp) // 2:]:
+            s_["uplink_drops_total"] = -1
+        a["days"].append(repeat_of(self.day(a, 1), 1))
+        self.assertEqual(self.cand(self.gate(a))["crawler"], "pass")
+
+    def test_a_repeat_of_a_product_failure_day_is_refused_its_own_or_a_peers(self):
+        for arm, diagnosis in (("B", "product"), ("A", "pending"), ("C", "product")):
+            a = mk.archive("L3")
+            self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": [arm], "diagnosis": diagnosis}]
+            a["days"].append(repeat_of(self.day(a, 1), 1))
+            self.assertNotJudged(self.gate(a), "repeat_of_a_non_repeatable_day")
+
+    def test_a_repeat_of_an_unclassed_event_day_is_refused(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "unclassified", "arms": ["B"], "cause": "x"}]
+        a["days"].append(repeat_of(self.day(a, 1), 1))
+        self.assertNotJudged(self.gate(a), "repeat_of_a_non_repeatable_day")
+
+    def test_a_repeat_of_a_failed_solo_day_is_refused_and_stays_terminal(self):
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))
+        add_attempt(a, "S", "r1-a2")
+        lose_b_probes(self.day(a, 1, "r1-a2"))  # the solo confirmation breaches
+        a["days"].append(repeat_of(self.day(a, 1, "r1-a2"), 1))
+        v = self.gate(a)
+        self.assertNotJudged(v, "repeat_of_a_non_repeatable_day")
+        self.assertTrue(self.cand(v)["solo_confirmation_failed"])
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
+
+    def test_a_third_repeat_exhausts_the_budget(self):
+        a = mk.archive("L3")
+        thin_coverage(self.day(a, 1))
+        for k in (1, 2):
+            again = repeat_of(self.day(a, 1), k, clean=False)  # the miss recurs
+            a["days"].append(again)
+        a["days"].append(repeat_of(self.day(a, 1), 3))
+        v = self.gate(a)
+        self.assertNotJudged(v, "retry_budget_exhausted")
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
+
+    def test_two_repeats_are_within_the_budget(self):
+        a = mk.archive("L3")
+        thin_coverage(self.day(a, 1))
+        a["days"].append(repeat_of(self.day(a, 1), 1, clean=False))
+        a["days"].append(repeat_of(self.day(a, 1), 2))
+        self.assertEqual(self.cand(self.gate(a))["crawler"], "pass")
+
+
+class HandshakeEvidenceTests(SpecFixBase):
+    """Self-review: a day needs every declared arm's gluetun log listed, and the archive's own."""
+
+    def test_a_missing_or_other_log_is_not_judged(self):
+        for arm in ("B", "C"):
+            for broken in ("missing", "other"):
+                a = mk.archive("L3")
+                d = self.day(a, 2)
+                if broken == "missing":
+                    del d["gluetun_logs"][arm]
+                else:
+                    d["gluetun_logs"][arm] += "a later line the archive didn't hash\n"
+                self.assertNotJudged(self.gate(a), "handshake_evidence_missing")
+
+
+class DeclarationChecksPresentTests(SpecFixBase):
+    """Item 5: every declaration check present and ok in every arm's report of the day."""
+
+    def test_a_report_without_its_declaration_checks_is_not_judged(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["reports"]["B"]["checks"] = []  # the entry wasn't found: none was emitted
+        self.assertNotJudged(self.gate(a), "declaration_checks_missing")
+
+    def test_each_named_check_is_required(self):
+        for name in analyze_cr.DECLARATION_CHECKS:
+            a = mk.archive("L3")
+            r = self.day(a, 2)["reports"]["B"]
+            r["checks"] = [c for c in r["checks"] if c["check"] != name]
+            self.assertNotJudged(self.gate(a), "declaration_checks_missing")
+
+    def test_a_peers_missing_or_failed_check_takes_the_day(self):
+        for broken in ("missing", "failed"):
+            a = mk.archive("L3")
+            r = self.day(a, 1)["reports"]["C"]
+            if broken == "missing":
+                r["checks"] = r["checks"][1:]
+            else:
+                r["checks"][-1]["ok"] = False
+            self.assertNotJudged(self.gate(a), "declaration_checks_missing")
+
+    def test_a_real_segment_report_carries_every_check(self):
+        report = analyze_cr.analyze_segment(Round1Sim().write(self.root / "seg-dc"), None, declaration())
+        got = {c["check"]: c["ok"] for c in report["checks"]}
+        self.assertEqual({n: got.get(n) for n in analyze_cr.DECLARATION_CHECKS},
+                         {n: True for n in analyze_cr.DECLARATION_CHECKS})
+
+
+class ProbeTargetTests(SpecFixBase):
+    """Item 4: a day whose archive doesn't show every arm's probe target checked as its
+    WireGuard gateway is not judged."""
+
+    def test_an_arm_without_the_gateway_check_is_not_judged(self):
+        for arm in ("B", "C"):
+            for value in (None, False):
+                a = mk.archive("L3")
+                info = self.day(a, 1)["archive"]["arms"][arm]
+                if value is None:
+                    del info["tunnel_target_is_gateway"]
+                else:
+                    info["tunnel_target_is_gateway"] = value
+                self.assertNotJudged(self.gate(a), "probe_target_unchecked")
+
+    def test_gluetun_logs_are_checked_by_hash(self):
+        a = mk.archive("L3")
+        path = mk.write(self.root / "logs", a)
+        log = self.root / "logs" / "r1-a1" / "day1" / "B" / "gluetun.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_bytes(b"2026-11-28T10:00:00Z INFO [wireguard] handshake [ipv4]\n")
+        man = json.loads(path.read_text())
+        ref = {"path": "r1-a1/day1/B/gluetun.log", "sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
+        man["days"][0]["gluetun_logs"] = {"B": ref}
+        path.write_text(json.dumps(man))
+        v = analyze_cr.gate_round(analyze_cr.load_manifest(path))
+        self.assertIn("r1-a1/day1/B/gluetun.log", v["inputs"])
+        log.write_bytes(b"edited\n")
+        with self.assertRaises(ValueError):
+            analyze_cr.load_manifest(path)
 
 
 if __name__ == "__main__":

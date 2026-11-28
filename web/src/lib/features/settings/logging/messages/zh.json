@@ -609,6 +609,8 @@
 	"settings_logging_ev_pipeline_core_rejudge_stall_cleared_h": "此前跳过的已存储的种子已重新判断。",
 	"settings_logging_ev_pipeline_enrichment_failed_n": "补充信息失败",
 	"settings_logging_ev_pipeline_enrichment_failed_h": "为种子补充详情时失败。",
+	"settings_logging_ev_pipeline_have_fill_failed_n": "已知列表填充失败",
+	"settings_logging_ev_pipeline_have_fill_failed_h": "启动时填充已知种子列表失败，会在最多一分钟的等待后重试，每次失败都会记录；成功前暂停爬取。",
 	"settings_logging_ev_pipeline_have_rebuild_failed_n": "已知列表重建失败",
 	"settings_logging_ev_pipeline_have_rebuild_failed_h": "重建已知种子列表失败。",
 	"settings_logging_ev_pipeline_queue_save_failed_n": "队列未保存",

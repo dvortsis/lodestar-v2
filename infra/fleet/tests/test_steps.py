@@ -506,6 +506,9 @@ bad() { printf '%s\n' "$*" >> "$STUB/badargs"; exit 125; }
 case "$1" in
   info) [ -n "$NO_DOCKER" ] && exit 1; echo 27.0 ;;
   compose)
+    # A recreate replaces a paused gluetun with a running one (only a gluetun
+    # that wouldn't resume is still paused here).
+    [ -e "$STUB/paused" ] && { : > "$STUB/recreated_paused"; rm -f "$STUB/paused"; }
     # gluetun is only ever recreated behind the endpoint guard (X-gluetun-leak).
     [ "$(cat "$STUB/guard" 2>/dev/null)" -gt 0 ] 2>/dev/null || bad "recreated without the guard: $*"
     [ "$(cat "$STUB/host" 2>/dev/null)" -gt 0 ] 2>/dev/null || bad "recreated without the host guard: $*"
@@ -517,6 +520,7 @@ case "$1" in
     case "$*" in
       *Health*) if [ -n "$NO_HANDSHAKE$UNHEALTHY" ] || { [ -e "$STUB/was_blocked" ] && [ -n "$NO_RECOVER" ]; }; then
                   echo unhealthy; else echo healthy; fi ;;
+      *State.Paused*gluetun) [ -e "$STUB/paused" ] && echo true || echo false ;;
       *Config.Env*) printf 'PATH=/usr/bin\nVPN_INTERFACE=%s\n' "${VPN_IFACE-wg0}" ;;
       *Running*gluetun) echo true ;;
       *Running*lodestar-leak-flow) [ -e "$STUB/flow" ] && [ -z "$FLOW_DIES" ] && echo true || echo false ;;
@@ -542,6 +546,20 @@ case "$1" in
   # leftover session, and a new gluetun answers too as it starts; only the
   # guard's ICMP rule keeps those off the wire (the host capture's fixture).
   # ICMP_FLUSHED_AT_STOP: the rule is gone by then (today's rules have none).
+  # A phase B retry holds gluetun still (X-leaktest-vpn-held-down). PAUSE_FAILS:
+  # the pause is refused (PAUSE_FREEZES: refused, and gluetun froze anyway);
+  # UNPAUSE_FAILS: gluetun won't resume. Unpausing one that isn't paused fails,
+  # as Docker's does.
+  pause) [ "$*" = "pause gluetun" ] || bad "$*"
+         [ -e "$STUB/paused" ] && bad "paused twice"
+         echo x >> "$STUB/pauses"
+         [ -n "$PAUSE_FREEZES" ] && : > "$STUB/paused"
+         [ -n "$PAUSE_FAILS$PAUSE_FREEZES" ] && exit 1
+         : > "$STUB/paused" ;;
+  unpause) [ "$*" = "unpause gluetun" ] || bad "$*"
+           [ -e "$STUB/paused" ] || exit 1
+           [ -n "$UNPAUSE_FAILS" ] && exit 1
+           rm -f "$STUB/paused" ;;
   stop) [ "$*" = "stop -t 10 gluetun" ] || bad "$*"
         [ -n "$ICMP_FLUSHED_AT_STOP" ] && echo 0 > "$STUB/icmp"
         [ -n "$STOP_FAIL" ] && exit 1
@@ -553,6 +571,7 @@ case "$1" in
          [ "$(cat "$STUB/icmp" 2>/dev/null || echo 0)" -gt 0 ] || : > "$STUB/host_leak"
          rm -f "$STUB/gluetun_stopped" "$STUB/ifdown"; : > "$STUB/gluetun_started" ;;
   exec)
+    [ -e "$STUB/paused" ] && exit 1  # Docker refuses an exec into a paused container
     case "$*" in
       "exec gluetun cat /sys/class/net/eth0/iflink") echo 7 ;;
       "exec gluetun cat /sys/class/net/eth0/address") echo "${CMAC_OUT-02:42:ac:14:00:02}" ;;
@@ -596,6 +615,11 @@ case "$1" in
       k=$(cat "$STUB/iface_not_run" 2>/dev/null || echo 0)
       if [ "$k" -lt "$IFACE_NOT_RUN" ]; then echo $((k + 1)) > "$STUB/iface_not_run"; exit 125; fi
     fi
+    # BLOCK_PAUSED: while gluetun is paused no interface check runs, so the run
+    # waits there (the test signals it there).
+    if [ -e "$STUB/paused" ] && [ -n "$BLOCK_PAUSED" ] && [ "$1 $2" = "sh -c" ] && [ "$4" = iface ]; then
+      : > "$STUB/held_probe"; exit 125
+    fi
     # IFACE_NOT_RUN_FROM=k: from phase B's k-th interface check on, none runs.
     if [ -e "$STUB/phase_b" ] && [ -n "$IFACE_NOT_RUN_FROM" ] && [ "$1 $2" = "sh -c" ] && [ "$4" = iface ]; then
       k=$(( $(cat "$STUB/iface_checks" 2>/dev/null || echo 0) + 1 )); echo "$k" > "$STUB/iface_checks"
@@ -608,7 +632,7 @@ case "$1" in
     # IFACE_REUP=n: gluetun's own VPN restart brings the interface back just
     # after each of phase B's first n leak probes (REUP_LEAK: and that probe
     # got out; REUP_LEAK_AT=k: only the k-th of them got out).
-    reup=; recreate=; reupno=
+    reup=; recreate=; reupno=; restart=
     case "$*" in "curl -"*|"nc -z"*|"sh -c dig"*|"sh -c echo"*)
       if [ -e "$STUB/ifdown" ] && [ -n "$IFACE_REUP" ]; then
         k=$(cat "$STUB/reups" 2>/dev/null || echo 0)
@@ -619,13 +643,45 @@ case "$1" in
       if [ -e "$STUB/ifdown" ] && [ -n "$IFACE_RECREATE" ]; then
         k=$(cat "$STUB/recreates" 2>/dev/null || echo 0)
         if [ "$k" -lt "$IFACE_RECREATE" ]; then echo $((k + 1)) > "$STUB/recreates"; recreate=1; fi
-      fi ;;
+      fi
+      # GLUETUN_RESTARTS: gluetun v3.41.3's own loop. With the endpoint blocked,
+      # its 6 s startup health check fails on every tunnel it brings up, and each
+      # failure restarts the VPN: the interface deleted and made again, up, with
+      # a new ifindex. A restart lands in every live attempt whose probe outlasts
+      # that with its checks (curl -m 8, nc -w 5); =all: in every live attempt
+      # (a slow host). A paused gluetun can't restart.
+      if [ -e "$STUB/ifdown" ] && [ -n "$GLUETUN_RESTARTS" ] && [ ! -e "$STUB/paused" ]; then
+        case "$GLUETUN_RESTARTS:$*" in all:*|*:"curl -"*|*:"nc -z"*) restart=1; recreate=1 ;; esac
+      fi
+      # LEAK_PAUSED: the probe gets out while gluetun is paused.
+      if [ -e "$STUB/ifdown" ] && [ -e "$STUB/paused" ] && [ -n "$LEAK_PAUSED" ]; then leak=1; fi ;;
     esac
     echo "$*" >> "$STUB/probes"
     (
       [ -n "$reup" ] && [ -n "$REUP_LEAK" ] && exit 0
       [ -n "$reup" ] && [ "$reupno" = "${REUP_LEAK_AT-}" ] && exit 0
       case "$*" in
+        # A held ipv4_blocked goes to the address its pin gave (HELD_RESOLVE_FAILS:
+        # curl can't resolve all the same, exit 6, and sends nothing).
+        "curl -4 -s -m 8 --resolve "*)
+          [ "$*" = "curl -4 -s -m 8 --resolve checkip.amazonaws.com:80:192.0.2.80 http://checkip.amazonaws.com" ] || bad "$*"
+          [ -e "$STUB/paused" ] || bad "pinned while gluetun runs: $*"
+          [ -n "$HELD_RESOLVE_FAILS" ] && exit 6
+          [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
+          echo "${EXIT_IP:-198.51.100.200}" ;;
+        # The pin: gluetun's live forwarder answers the echo host (PIN_FAILS: never;
+        # PIN_FAILS_LATE: not once the endpoint is blocked; PIN_FAILS_EARLY: not before).
+        "sh -c dig +short +time=3 +tries=1 \"\$1\""*" pin checkip.amazonaws.com")
+          [ -e "$STUB/paused" ] && bad "pin while paused: $*"
+          [ -n "$PIN_FAILS" ] && exit 1
+          [ -n "$PIN_FAILS_LATE" ] && [ -e "$STUB/blocked" ] && exit 1  # cached only until the block
+          [ -n "$PIN_FAILS_EARLY" ] && [ ! -e "$STUB/blocked" ] && exit 1
+          echo "${PIN_ADDR:-192.0.2.80}" ;;
+        # LIVE_RESOLVE_FAILS: in phase B a live curl can't resolve the name (exit 6).
+        "curl -4 -s -m 8 http://checkip.amazonaws.com")
+          [ -e "$STUB/ifdown" ] && [ -n "$LIVE_RESOLVE_FAILS" ] && [ -z "$leak" ] && exit 6
+          [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
+          if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
         "curl -4"*) [ -n "$down" ] && [ -z "$LEAK_V4" ] && [ -z "$leak" ] && exit 1
                     if [ -n "$down" ] || [ ! -e "$STUB/was_blocked" ] || [ -z "$NEW_EXIT" ]; then echo "${EXIT_IP:-198.51.100.200}"; else echo 198.51.100.201; fi ;;
         "curl -6"*) [ -n "$V6_OPEN" ] || [ -n "$leak" ] || exit 1 ;;
@@ -656,7 +712,7 @@ case "$1" in
       esac
     )
     rc=$?
-    [ -n "$reup" ] && rm -f "$STUB/ifdown"
+    [ -n "$reup$restart" ] && rm -f "$STUB/ifdown"
     [ -n "$recreate" ] && echo $(( $(cat "$STUB/ifindex" 2>/dev/null || echo 7) + 1 )) > "$STUB/ifindex"
     printf '\nprobe_rc=%s\n' "$rc" ;;
   *) bad "$*" ;;
@@ -1792,6 +1848,223 @@ class VMScripts(unittest.TestCase):
         self.assertIn("ok vpn_interface_down_during_probes", lines)
         probes = (self.stub / "probes").read_text().splitlines()
         self.assertEqual(sum(p.startswith("curl -4 -s -m 8") for p in probes[probes.index("ip link set dev wg0 down"):]), 2)
+
+    def held_spans(self):
+        """The probes run in each pause of gluetun (the stub's log, in order)."""
+        spans, cur = [], None
+        for ln in self.log().splitlines():
+            if ln == "docker pause gluetun":
+                cur = []
+            elif ln == "docker unpause gluetun":
+                if cur is not None:
+                    spans.append(cur)
+                cur = None
+            elif cur is not None and ln.startswith("docker run "):
+                cur.append(ln)
+        return spans
+
+    def test_phase_b_holds_gluetun_still_for_a_retry(self):
+        """X-leaktest-vpn-held-down: gluetun's own restart loop (a failed 6 s health
+        check restarts the VPN, which makes the interface again, up, with a new
+        ifindex) lands in every live attempt of the probes that outlast it. Each
+        probe's first attempt runs with gluetun live and is discarded; the retry
+        pauses gluetun from its first interface check to its last, gets its clean
+        attempt, and gluetun runs again before the verdict. Before the fix, those
+        probes never got one."""
+        rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok vpn_interface_down_during_probes", lines)
+        for p in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_blocked", "dns_direct_blocked"):
+            self.assertIn(f"ok {p}_ifdown", lines)
+        self.assertFalse([l for l in lines if l.startswith("count held_")], lines)
+        self.assertFalse((self.stub / "paused").exists())  # running again
+        self.assertFalse((self.stub / "recreated_paused").exists())
+        # Which kind of attempt each probe passed on, in counts only, after the verdict.
+        # ipv4_blocked needed a held retry, so every later probe but the
+        # forwarder's ran held from its first attempt (the runner's call).
+        clean = [l for l in lines if l.startswith("count clean_")]
+        self.assertEqual(sorted(clean), sorted(
+            [f"count clean_held_{p}_ifdown 1" for p in
+             ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_direct_blocked", "udp")]
+            + ["count clean_live_dns_blocked_ifdown 1"]))
+        self.assertGreater(lines.index(clean[0]), lines.index("ok vpn_interface_down_during_probes"))
+        self.assertEqual(lines.count("count hold_from_first 1"), 1)
+        # One pause per held attempt, each holding a whole attempt: the
+        # interface checks, the take-down, both ifindex reads and the probe.
+        spans = self.held_spans()
+        self.assertEqual(len(spans), 5)
+        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 5)
+        # The held curl went to the pinned address, which no output line carries.
+        self.assertTrue(any("--resolve checkip.amazonaws.com:80:192.0.2.80" in ln for ln in spans[0]), spans[0])
+        self.assertNotIn("192.0.2.80", raw)
+        for span, probe in zip(spans, ("curl -4", "nc -z", "curl -6", "sh -c dig", "sh -c echo probe")):
+            cmds = [ln.split(" probe ", 1)[1] for ln in span]
+            self.assertTrue(cmds[0].startswith("sh -c ip -o link show up"), cmds)  # it starts with a check
+            self.assertTrue(cmds[-1].startswith("sh -c cat"), cmds)  # and ends with the second ifindex read
+            self.assertEqual(sum(c.startswith(probe) for c in cmds), 1, cmds)
+        # The first attempt ran with gluetun live.
+        log = self.log()
+        live = log[log.index("ip link set dev wg0 down"):log.index("docker pause gluetun")]
+        self.assertEqual(live.count("probe curl -4 -s -m 8"), 1)
+        self.assertNotIn("docker exec", "\n".join(sum(spans, [])))  # nothing but probes while paused
+
+    def test_dns_blocked_is_never_held(self):
+        """The runner's calls: dns_blocked asks gluetun's own forwarder, so it never
+        runs under a hold, and it runs last, so its live retries can't starve the
+        others. On a slow host every live attempt meets a restart: every other
+        probe, dns_direct_blocked and the UDP probe included, passes held;
+        dns_blocked keeps running live, gets no clean attempt and fails
+        vpn_interface_held_down, as before the fix."""
+        rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS="all", HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertIn("skip dns_blocked_ifdown", lines)
+        self.assertEqual([l for l in lines if l.startswith("skip ")], ["skip dns_blocked_ifdown"])
+        self.assertGreater(int(next(l for l in lines if l.startswith("count held_attempts_dns_blocked_ifdown ")).split()[2]), 1)
+        self.assertEqual([l for l in lines if l.startswith("count held_attempts_")],
+                         [next(l for l in lines if l.startswith("count held_attempts_dns_blocked_ifdown "))])
+        self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
+        clean = sorted(l for l in lines if l.startswith("count clean_"))
+        self.assertEqual(clean, sorted(f"count clean_held_{p}_ifdown 1" for p in
+                                       ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_direct_blocked", "udp")))
+        spans = self.held_spans()
+        self.assertEqual(len(spans), 5)
+        held = "\n".join(sum(spans, []))
+        self.assertIn("dig +short +time=3 +tries=1 example.edu @1.1.1.1", held)  # the direct query is held
+        self.assertNotRegex(held, r"tries=1 example\.edu +\|")  # the forwarder's never
+        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 5)  # one each: from the first, held
+        # dns_blocked's attempts all came after the last held one.
+        log = self.log()
+        self.assertGreater(log.index("tries=1 example.edu  |"), log.rindex("docker unpause gluetun"))
+        self.assertFalse((self.stub / "paused").exists())
+
+    def test_a_held_ipv4_probe_that_sends_nothing_is_never_a_pass(self):
+        """The runner's guard: a held attempt counts only when its probe tried to
+        send. With no pinned address (nothing cached), or a curl that couldn't
+        resolve all the same (exit 6), every held ipv4_blocked attempt is
+        discarded, and the probe fails vpn_interface_held_down, never a pass."""
+        for flag in ("PIN_FAILS", "HELD_RESOLVE_FAILS"):
+            with self.subTest(flag):
+                self.setUp()
+                rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20,
+                                                 HELD_ATTEMPT_MIN=1, **{flag: 1})
+                self.assertEqual(rc, 1, raw)
+                self.assertIn("fail vpn_interface_held_down", lines)
+                self.assertIn("skip ipv4_blocked_ifdown", lines)
+                self.assertNotIn("ok ipv4_blocked_ifdown", lines)
+                self.assertNotIn("count clean_held_ipv4_blocked_ifdown 1", lines)
+                self.assertGreater(int(next(l for l in lines if l.startswith(
+                    "count held_attempts_ipv4_blocked_ifdown ")).split()[2]), 2)
+                self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
+                self.assertFalse((self.stub / "paused").exists())
+
+    def test_a_held_ipv4_probe_uses_the_address_looked_up_while_the_tunnel_was_up(self):
+        """The runner's call: the echo host is looked up once while the tunnel is
+        up. With no answer from the forwarder in phase B, the held ipv4_blocked
+        still goes to that address and gets its clean attempt; with no early
+        answer, the lookup just before the pause stands in."""
+        for flag in ("PIN_FAILS_LATE", "PIN_FAILS_EARLY"):
+            with self.subTest(flag):
+                self.setUp()
+                rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20,
+                                                 HELD_ATTEMPT_MIN=1, **{flag: 1})
+                self.assertEqual(rc, 0, raw)
+                self.assertIn("ok ipv4_blocked_ifdown", lines)
+                self.assertIn("count clean_held_ipv4_blocked_ifdown 1", lines)
+                self.assertNotIn("192.0.2.80", raw)
+                log = self.log()
+                pins = [i for i, ln in enumerate(log.splitlines()) if ln.endswith(" pin checkip.amazonaws.com")]
+                down = log.splitlines().index(next(ln for ln in log.splitlines() if ln.endswith("ip link set dev wg0 down")))
+                self.assertEqual(sum(i < down for i in pins), 1)  # once while the tunnel was up
+                # A late lookup only when the early one had nothing.
+                self.assertEqual(sum(i > down for i in pins), 0 if flag == "PIN_FAILS_LATE" else 1)
+
+    def test_a_pinned_address_that_cant_be_sent_to_is_never_a_pass(self):
+        """The runner's call: an address in 0.0.0.0/8, 127.0.0.0/8 or 169.254.0.0/16
+        is refused locally without sending, so it's never pinned: no held
+        ipv4_blocked attempt is clean, and the probe fails vpn_interface_held_down."""
+        for addr in ("127.0.0.1", "0.0.0.0", "169.254.169.254"):
+            with self.subTest(addr):
+                self.setUp()
+                rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20,
+                                                 HELD_ATTEMPT_MIN=1, PIN_ADDR=addr)
+                self.assertEqual(rc, 1, raw)
+                self.assertIn("fail vpn_interface_held_down", lines)
+                self.assertIn("skip ipv4_blocked_ifdown", lines)
+                self.assertNotIn("--resolve", self.log())  # never sent to it
+                self.assertNotIn(addr, raw)
+
+    def test_a_live_ipv4_probe_that_couldnt_resolve_is_never_a_pass(self):
+        """The runner's call: a live phase B ipv4_blocked whose curl couldn't resolve
+        the name (exit 6) sent nothing. That attempt isn't clean, even with no
+        restart: it's retried held, at the pinned address, and passes there."""
+        rc, lines, raw = self.run_script("leak-test.sh", LIVE_RESOLVE_FAILS=1, HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok ipv4_blocked_ifdown", lines)
+        self.assertIn("count clean_held_ipv4_blocked_ifdown 1", lines)
+        self.assertNotIn("count clean_live_ipv4_blocked_ifdown 1", lines)
+        self.assertIn("count hold_from_first 1", lines)
+        self.setUp()
+        rc, lines, raw = self.run_script("leak-test.sh", LIVE_RESOLVE_FAILS=1, PAUSE_FAILS=1,
+                                         HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)  # with no hold to fall back on, it never passes
+        self.assertIn("skip ipv4_blocked_ifdown", lines)
+        self.assertIn("fail vpn_interface_held_down", lines)
+
+    def test_phase_b_without_the_hold_still_fails_held_down(self):
+        """A pause Docker refuses: the retry runs with gluetun live, as before the
+        fix, its restart loop lands in every attempt, and the phase fails
+        vpn_interface_held_down, never a pass and never a leak line."""
+        for flag in ("PAUSE_FAILS", "PAUSE_FREEZES"):
+            with self.subTest(flag):
+                self.setUp()
+                rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20,
+                                                 HELD_ATTEMPT_MIN=1, **{flag: 1})
+                self.assertEqual(rc, 1, raw)
+                self.assertIn("fail vpn_interface_held_down", lines)
+                self.assertIn("skip ipv4_blocked_ifdown", lines)
+                self.assertNotIn("ok vpn_interface_down_during_probes", lines)
+                self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
+                self.assertFalse((self.stub / "paused").exists())  # a pause that froze it anyway was undone
+                self.assertNotIn("fail gluetun_resumed", lines)
+
+    def test_a_gluetun_that_wont_resume_ends_phase_b_as_a_failure(self):
+        """The retry was clean, but gluetun won't resume: no further attempt runs,
+        the phase fails vpn_interface_held_down, and the checks that need gluetun
+        running fail too. The recovery's recreate replaces it, and the exit
+        finds it running."""
+        rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, UNPAUSE_FAILS=1,
+                                         HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertNotIn("ok vpn_interface_down_during_probes", lines)
+        self.assertIn("fail post_rules_after_restart_ipv4", lines)  # no exec into a paused gluetun
+        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 1)  # never paused again
+        self.assertTrue((self.stub / "recreated_paused").exists())
+        self.assertGreaterEqual(self.log().count("docker unpause gluetun"), 2)  # the exit tried again
+        self.assertNotIn("fail gluetun_resumed", lines)  # and found it running
+
+    def test_a_leak_while_gluetun_is_held_is_a_leak(self):
+        """A retry's probe that gets out while gluetun is paused fails at once,
+        gluetun runs again, and the capture still judges it."""
+        rc, lines, raw = self.run_script("leak-test.sh", {"ifdown": [sent(47, "198.51.100.9")]},
+                                         GLUETUN_RESTARTS=1, LEAK_PAUSED=1, HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail ipv4_blocked_ifdown", lines)
+        self.assertNotIn("ok ipv4_blocked_ifdown", lines)
+        self.assertIn("fail no_egress_captured_ifdown", lines)
+        self.assertFalse((self.stub / "paused").exists())
+
+    def test_a_signal_while_gluetun_is_held_resumes_it(self):
+        """TERM in the middle of a held retry: the exit resumes gluetun."""
+        rc, out = self.signal_at("held_probe", GLUETUN_RESTARTS=1, BLOCK_PAUSED=1, HELD_PHASE_WAIT=20,
+                                 HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 143)
+        self.assertFalse((self.stub / "paused").exists())
+        self.assertIn("docker unpause gluetun", self.log())
+        self.assertFalse((self.stub / "recreated_paused").exists())  # the exit resumed it, not a recreate
+        self.assertNotIn("fail gluetun_resumed", out)
+        self.assertNotIn("ok leak_test", out)
 
     def kill_stub_leftovers(self):
         """Ends any stub process the run couldn't stop (KILL_DENIED leaves one)."""

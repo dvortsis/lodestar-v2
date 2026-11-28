@@ -6770,8 +6770,8 @@ export interface components {
         /**
          * @description `GET /legal/notice`: the Legal Notice this build shows.
          * @example {
-         *       "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 5 · 2026-11-11**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
-         *       "version": 5
+         *       "text": "# Lodestar Legal Notice and Network Risks\n\n**Version 6 · 2026-11-27**\n\nLodestar shows this notice before first use.\n\n## 1. Who publishes Lodestar\n- The **AGPL** lets you run, study, change and share it.\n- Open an issue at https://github.com/dvortsis/lodestar-v2.",
+         *       "version": 6
          *     }
          */
         LegalNotice: {

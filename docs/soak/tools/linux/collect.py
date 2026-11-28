@@ -159,8 +159,12 @@ PLAIN = frozenset((
 # CR-COL-5: CR-LEDGER's lookup ledger (build-plan §0.5 "Path to 100"; docs/metrics.md,
 # "Lookup ledger (CR-LEDGER, 2026-11-20)"), from which the analyzer reads W, q and y and
 # r5.1 A1's mechanism check. Names relayed by the runner, 2026-11-20.
-LEDGER_END_REASONS = frozenset(("values", "no_values", "deadline", "query_cap", "cancelled", "shutdown"))
+# `enough_values`: CR-LOOKUP-END's early end (docs/metrics.md, crates/dht/src/node/ledger.rs);
+# rendered only by binaries that have it, so an older run's snapshots never hold it.
+LEDGER_END_REASONS = frozenset(("values", "no_values", "deadline", "query_cap", "cancelled", "shutdown",
+                                "enough_values"))
 LEDGER_VALUE_REASONS = ("values",)  # the reasons that mean "the lookup ended on values"
+LEDGER_EARLY_VALUES = "enough_values"  # also on values; counted where rendered (0 where absent)
 # They sum to dht_queries_out_total.
 LEDGER_PURPOSES = frozenset(("peer_lookup", "hint", "scrape", "bootstrap", "refresh", "explore", "sample", "ping"))
 LEDGER_PEER_PURPOSE = "peer_lookup"
@@ -1198,6 +1202,7 @@ LABELLED[SWITCH_GAUGE] = (("switch", frozenset(SWITCH_ENV)),)
 KEEP = KEEP | {SWITCH_GAUGE}
 CHECKLIST_ITEMS = ("auto_update", "backup")
 CHECKLIST_STATES = ("excluded", "not_applicable")
+ARRAY_KINDS = ("mover", "parity", "other")  # an array_operation's kind (D3, plan §8 item 6)
 # Rule 6.11's fixed host-activity categories.
 ACTIVITY_CATEGORIES = ("import", "other_crawler", "array_operation", "host_reboot",
                        "plugin_container_action", "link_outage", "router_outage",
@@ -1843,9 +1848,18 @@ def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sy
     parser.add_argument("--root", required=True, help="The running collector's evidence directory")
     parser.add_argument("--category", required=True, choices=ACTIVITY_CATEGORIES + ("other",))
     parser.add_argument("--text", default="", help="Private detail (at most 200 characters); never published")
+    parser.add_argument("--kind", choices=ARRAY_KINDS,
+                        help="array_operation only: what ran (D3: mover and parity on the array spare an ssd_apps window)")
+    parser.add_argument("--pool", action="append", default=[],
+                        help="array_operation only: a pool it touches (`array`, or a pool's name); repeat for each "
+                             "(the mover touches a cache pool and the array)")
     args = parser.parse_args(argv)
     if len(args.text) > 200 or any(ord(c) < 32 for c in args.text):
         parser.error("--text must be one line of at most 200 characters")
+    if args.category != "array_operation" and (args.kind or args.pool):
+        parser.error("--kind and --pool are for array_operation only")
+    if not all(re.fullmatch(r"[a-z0-9_]{1,32}", p) for p in args.pool) or bool(args.kind) != bool(args.pool):
+        parser.error("--kind and --pool go together: --kind mover|parity|other and a --pool for every pool it touches")
     root = Path(args.root)
     try:
         run = json.loads((root / "run.json").read_text(encoding="utf-8"))
@@ -1853,10 +1867,15 @@ def note_command(argv, now=utc_now, clock=time.monotonic, boot_id_path="/proc/sy
     except (OSError, ValueError, KeyError, TypeError):
         sys.stderr.write("Not a CR-COL-3 run directory (run.json has no clock origin).\n")
         return 2
+    if run.get("round1") and args.category == "array_operation" and not args.kind:
+        # Round 1 (D3): what ran and on which pools decides whether it spares the window.
+        parser.error("a round-1 run's array_operation needs --kind mover|parity|other and a --pool for every pool")
     boot = (read_text(boot_id_path) or "").strip()
     entry = {"time": iso(now()), "elapsed_seconds": round(clock() - origin, 1), "category": args.category,
              "same_boot": bool(boot) and boot == run["clock"].get("boot_id"),
              "collector_finished": (root / "result.json").exists(), "text": args.text}
+    if args.kind:
+        entry.update(kind=args.kind, pools=sorted(set(args.pool)))
     append_line(root / "activity.jsonl", dumps(entry))
     print(f"Recorded {args.category} at elapsed {entry['elapsed_seconds']:.1f} s ({entry['time']}).")
     return 0
@@ -2464,14 +2483,16 @@ class Collector:
                       + ("; stop and investigate" if result["status"] == "trip" else ""))
 
     def final_egress_retries(self, boundary_elapsed, started):
-        """Up to FINAL_EGRESS_TRIES more egress reads, FINAL_EGRESS_GAP s apart, while still
-        within BOUNDARY_SECONDS of the final boundary; stops at the first that reads."""
+        """Up to FINAL_EGRESS_TRIES more egress reads, FINAL_EGRESS_GAP s apart, each starting
+        within BOUNDARY_SECONDS of the final boundary and stamped with its start (a read can
+        take a while; when it began is what the ± 90 s rule judges); stops at the first that reads."""
         out = []
         for _ in range(FINAL_EGRESS_TRIES):
             if self.clock() - started + FINAL_EGRESS_GAP > boundary_elapsed + BOUNDARY_SECONDS:
                 break
             self.sleep(FINAL_EGRESS_GAP)
-            reading = dict(self.egress.check(self.instance.process_id), utc=iso(self.now()))
+            stamp = iso(self.now())
+            reading = dict(self.egress.check(self.instance.process_id), utc=stamp)
             out.append(reading)
             if reading["read"] == "ok":
                 break

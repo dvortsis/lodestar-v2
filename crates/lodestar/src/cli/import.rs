@@ -366,6 +366,13 @@ fn open_exclusive(config: &Config) -> Outcome<Store> {
     }
 }
 
+/// Marks the hot-column snapshot stale before the store's torrents
+/// change ([`lodestar_pipeline::invalidate_hot`]).
+fn invalidate_hot(store: &Store) -> Outcome {
+    lodestar_pipeline::invalidate_hot(store.connection())
+        .map_err(failed("marking the hot-column snapshot stale"))
+}
+
 /// An opened source and what it says about its size.
 struct Opened {
     adapter: Adapter,
@@ -711,6 +718,19 @@ async fn start(
     run_job(config, &mut store, job.id, &mut opened.adapter, limit, json).await
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests only: called after each committed batch, where the progress
+    /// view is updated, so a test can stop a run part-way as a crash would.
+    /// The runtime's `block_on` polls the run on the test's own thread.
+    static AFTER_BATCH: std::cell::RefCell<Option<AfterBatch>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Tests only: what [`AFTER_BATCH`] calls.
+#[cfg(test)]
+type AfterBatch = Box<dyn Fn(&ImportCounters)>;
+
 /// The options of a job a legacy cursor file was bound to.
 const LEGACY_BOUND: &[u8] = b"legacy-cursor";
 
@@ -921,6 +941,11 @@ async fn run_job(
     limit: Option<u64>,
     json: bool,
 ) -> Outcome {
+    // The import adds torrents (and so last-seen values) the hot-column
+    // snapshot doesn't have: it's marked stale before the first write, so
+    // the next start rebuilds the columns, even after a crash part-way
+    // (X-import-hot-stamp).
+    invalidate_hot(store)?;
     // An empty store is marked as judged by this build's core, which
     // judges what the import stores, so the server doesn't judge it again.
     lodestar_pipeline::core_rejudge::seed_if_empty(store)
@@ -1010,6 +1035,12 @@ async fn run_job(
         })
     };
     let progress = |c: &ImportCounters| {
+        #[cfg(test)]
+        AFTER_BATCH.with(|h| {
+            if let Some(f) = h.borrow().as_ref() {
+                f(c);
+            }
+        });
         live.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .saved(c, unix_now());
@@ -1399,6 +1430,9 @@ fn remove(config: &Config, id: i64, yes: bool, json: bool) -> Outcome {
             return Ok(());
         }
     }
+    // Removal deletes torrents and their swarm rows: the snapshot would
+    // still hold them (X-import-hot-stamp).
+    invalidate_hot(&store)?;
     let r = remove_all(&mut store, id)?;
     let _ = store.checkpoint();
     if json {

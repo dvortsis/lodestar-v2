@@ -1549,6 +1549,53 @@ async fn remote_leases_survive_a_restart_and_parked_ones_go_to_the_built_in_work
     );
 }
 
+/// No lease is granted to a remote worker while the coordinator's
+/// have-filter is still filling at start (X-healthz-cold-start): a worker
+/// with no filter yet would claim and fetch keys already stored. Once the
+/// fill is marked, grants go through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_lease_is_granted_while_the_have_filter_fills() {
+    use lodestar_cluster::GrantAdmission;
+    use lodestar_pipeline::Have;
+    use lodestar_pipeline::remote::{NoStanding, Prior, RemoteParts};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("b.db"), StoreConfig::default()).unwrap();
+    let epoch = (now() as u32).wrapping_sub(10);
+    let authority = Arc::new(LeaseAuthority::new(
+        epoch,
+        600,
+        Arc::new(lodestar_cluster::NoEvents),
+    ));
+    let (writer, _hold) = tokio::sync::mpsc::channel(8);
+    let (pool, _p) = tokio::sync::mpsc::channel(8);
+    let intake = Arc::new(RemoteIntake::new(RemoteParts {
+        authority,
+        writer,
+        pool,
+        rollups: Arc::new(lodestar_pipeline::Rollups::default()),
+        epoch,
+        prior: Prior::default(),
+        private_sources: 0,
+        leases: Arc::new(lodestar_pipeline::stages::WorkerLeases::default()),
+        refusals: None,
+    }));
+    let sink = intake.sink(SinkParts {
+        preparer: Mutex::new(store.preparer()),
+        standing: Arc::new(NoStanding),
+        keys: test_keys(),
+        stored: Arc::new(Reader(Mutex::new(store))),
+        clocks: Arc::new(Offset(0)),
+        hints_allow_private: false,
+    });
+    // Unset, grants aren't held.
+    assert_eq!(sink.admit(W, 10), 10);
+    let have = Arc::new(Have::filling(1 << 10));
+    intake.wait_for_fill(&have);
+    assert_eq!(sink.admit(W, 10), 0, "granted while filling");
+    have.mark_filled();
+    assert_eq!(sink.admit(W, 10), 10);
+}
+
 /// Backpressure (§19.5): once the writer's queue reaches its high-water
 /// mark, no lease is granted however many are asked for; batches already
 /// harvested still queue, up to the intake's bound, then are refused for

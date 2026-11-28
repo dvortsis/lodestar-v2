@@ -29,7 +29,7 @@ Developer and operator doc. Follow it top to bottom, one step at a time. The ope
 | Step | What | Where in this sheet |
 |---|---|---|
 | 1 | One-time setup: salt, stacks, the coordinator file, identities for the runner | §3 |
-| 2 | **Rehearsal** (2 h of each arm on its day-1 exit, inside the 12 h after the comparator) | §5 |
+| 2 | **Rehearsal** (up to 3 h of each arm on its day-1 exit, inside the 12 h after the comparator; the 3 h needs X-cr-round1-spec-fixes) | §5 |
 | 3 | **Day 1**: three arms, 24 h windows, staggered starts | §6 |
 | 4 | Copy-off, `segment`, read-back; then the exit swap | §7 |
 | 5 | **Day 2**: the same, on the day-2 exits | §6 |
@@ -43,7 +43,10 @@ The layouts (the runner picks one at the rehearsal, and it holds for both days):
 | L3 | B–X, A–Y, C–Z | B–Y, A–Z, C–X |
 | L2 | B–X, A–Y | B–Y, A–X |
 | L2b | B–X, C–Y | B–Y, C–X |
+| L2c | A–X, C–Y | A–Y, C–X |
 | S | the candidate alone, one exit | the candidate alone, another exit |
+
+L2c is only for the attempt after an L3 attempt, when B is out (A goes on as the candidate, C as the diagnostic).
 
 ## 2. The rules that decide what you do
 
@@ -53,7 +56,7 @@ The layouts (the runner picks one at the rehearsal, and it holds for both days):
 | Every day | fresh data, witness and state directories, new node identities. No restart inside a window | §6.3 |
 | Disruptive steps (leak tests, restart drills, the exit swap) | only while **no** arm has a window open | §6.3 |
 | Leak tests | each arm's own, before the day's starts and after the coordinator has stopped everything | §5.2 item 3 |
-| A failed leak test | stops crawling on that arm (all arms if the cause is on the host) until it's repaired and a re-test passes. The day is repeated | §6.3 |
+| A failed leak test | stops crawling on that arm (all arms if the cause is on the host) until it's repaired and a re-test passes. Before the day's start it's a note, and the day runs after the passing re-test; after the start, the day is repeated | §6.3; the runner's ruling |
 | Shutdown | the coordinator's, at the latest final boundary + 2 min. Never stop an arm yourself | §5.2 item 11 |
 | Retry budget | at most two repeated days in the round | §6.3 |
 | Never stitch | one process, one window | rule 6.7 |
@@ -64,7 +67,17 @@ The layouts (the runner picks one at the rehearsal, and it holds for both days):
 
 Do this once, before the rehearsal. Run everything as root on the experiment VM, from a checkout of this repository at the commit the runner names, with Python 3.10 or later.
 
-1. **Pin the build.** The runner gives you the image digest, the source commit and the spec commit. Every arm and both days use the same digest.
+1. **Pin the build.** The runner gives you the image tag, the source commit and the spec commit. Pull the image by its tag **once**, check which commit it was built from, and read the digest Docker gives it:
+
+   ```bash
+   docker pull <image>:<tag>
+   docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' <image>:<tag>
+   docker inspect --format '{{index .RepoDigests 0}}' <image>:<tag>
+   ```
+
+   The first `inspect` prints the image's revision label. It must equal the source commit the runner gave you, the coordinator file's `commit`. If it doesn't, **stop**: don't send the digest, and tell the runner what it printed. The tag moves every day, so this check is what ties the digest to the commit.
+
+   Otherwise, send the runner the second line (`<image>@sha256:<64 hex>`): it goes into the declaration as `image_digest`, and into the coordinator file as `image`. From then on everything runs by that digest, never the tag. Every arm and both days use it.
 2. **Make the salt** (once for the round; never copy it into the round's folder):
 
    ```bash
@@ -102,7 +115,7 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
    ```
 
    - `declaration` and `comparator_report` are read from `<round>`; the other paths are full paths.
-   - **`tunnel_target`** is the address each arm's 10 s tunnel probe pings inside its tunnel. The runner declares it before the rehearsal; the rehearsal checks it answers (§5, step 4).
+   - **`tunnel_target`** is each arm's **WireGuard gateway**: the address its 10 s tunnel probe pings inside its tunnel. The runner declares it before the rehearsal. `bring-up` reads the gateway from inside the arm's tunnel and refuses a `tunnel_target` that differs; it records only that they matched, never the address (X-cr-round1-spec-fixes). Write the address nowhere but the coordinator file. The rehearsal checks it answers (§5, step 4).
    - Each **password file** holds the admin password you'll set when you claim that arm's fresh instance each day (§6, step 7). `chmod 600`, outside `<round>` and `<stacks>`.
    - The `next_run` times are the next scheduled runs of the items you excluded (stage-1 sheet, 3.4c).
 4a. **Check that every arm has its own VPN server** (the coordinator compares them and prints only ok or fail):
@@ -118,7 +131,17 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
    $C identity /root/round1-coordinator.json
    ```
 
-   Send the runner the four lines. It writes `host_identity`, `network_identity.uplink_hash`, `backing_device` into the declaration, and you put `uplink_interface` in the coordinator file. Then the runner gives you `declaration.json` and the comparator's report (`comparator.json`) for `<round>`.
+   Send the runner the four lines, and the box's vCPU count (`nproc`, which must be 8). It writes `host_identity`, `network_identity.uplink_hash`, `backing_device` and `vcpus` into the declaration, and you put `uplink_interface` in the coordinator file. The declaration is append-only: these are filled once, before the rehearsal, and never change.
+
+   Also send the **pool map**: for each Unraid pool (`cache`, `array` and any others), the kernel names, **as this VM sees them** (`lsblk -dno NAME`), of the VM's disks whose storage sits on that pool. Use whole-disk names such as `vdb`, never the Unraid host's own device names (`nvme0n1`, `md1`) or a partition (`vdb1`). Write each pool's name in lowercase letters, digits and `_` only, at most 32 characters (`[a-z0-9_]{1,32}`), the form `collect.py note --pool` accepts: a name in any other form can never match a note, so that pool could never spare a window. The `backing_device` line above must appear in exactly one pool. The runner's records PR writes the map into the declaration as `pools`; without it, no mover run or parity check can spare a window (§8 item 6, D3).
+5a. **Bind the comparator** once it has stopped (its collector wrote `result.json`), before the rehearsal. Its collector predates round 1, so its report carries no binding; the coordinator binds it now, with the round's salt. First its report, then the binding:
+
+   ```bash
+   python3 docs/soak/tools/analyze_cr.py segment <the comparator's evidence folder> --output <round>/comparator.json
+   $C bind-comparator /root/round1-coordinator.json --comparator-run <the comparator's evidence folder>
+   ```
+
+   It writes `<round>/comparator-binding.json` and prints the comparator's run id (`comparator-<folder name>`). Send the runner that line: the declaration's `comparator.run_id` names it. It refuses a comparator that hasn't finished, that ended before its window's end, or whose folder isn't the one `comparator.json` was made from (it segments the folder again and compares the window and binary), and it never rewrites a binding. Then the runner gives you `declaration.json` for `<round>`.
 6. **Disk.** The coordinator checks free space each day (every arm's expected growth plus the round's archives, plus 20 %). If it refuses, ask the runner; never delete an archive to make room.
 
 ## 4. Each arm's leak test
@@ -142,6 +165,8 @@ It prints `ok leak_test` or `fail leak_test` with the arm and phase, and keeps t
 ## 5. The rehearsal (inside the 12 h after the comparator; never a measurement)
 
 The rehearsal checks the setup and the timing. Its stores are deleted afterwards, and it never enters the manifest.
+
+**Don't start it until the runner says X-cr-round1-spec-fixes has merged** and names a checkout that has it. That slice brings the rehearsal's 30 min warm-up and 3 h window, the gateway check (§3, step 4) and the gluetun logs in the archive.
 
 1. Day folder `<round>/rehearsal`. Make each arm's `data` and `witness` folders empty.
 2. Leak tests for every arm on its **day-1** exit, recorded with `--rehearsal`:
@@ -174,7 +199,14 @@ The rehearsal checks the setup and the timing. Its stores are deleted afterwards
    tmux new -d -s round1-rehearsal "$C watch $D"
    ```
 
-6. **It ends** when every arm has had 60 active minutes in the rehearsal's last hour (the runner reads it), or at 4 h. The collectors close after 2 h windows and the coordinator stops everything at the last one + 2 min. At 4 h, if it's still running, stop the watch's `tmux` session, then stop every arm with the coordinator, and tell the runner:
+6. **When it ends.** Each collector runs a 30 min warm-up, then a 3 h window (X-cr-round1-spec-fixes), and the coordinator stops everything at the last window's end + 2 min. An arm's active minutes run from its `crawling_from_utc` (step 8c's output) to the rehearsal's end; the runner reads them and states them in the rehearsal report.
+   - **Once every arm has had 60 active minutes,** run step 8c's `drop-c` and send the runner its output.
+   - **On `keep` or `drop`,** that output decides the layout. Stop the rehearsal straight away (below).
+   - **On `not_judged` with `vcpus_differ`,** stop it straight away (step 8c).
+   - **On any other `not_judged`,** leave it running and run `drop-c` again every 15 min, sending each output, until one prints `keep` or `drop` (then stop it) or the windows end.
+   - **At 4 h from the first start,** if it's still running, stop it and tell the runner.
+
+   To stop it, stop the watch's `tmux` session, then every arm with the coordinator:
 
    ```bash
    tmux kill-session -t round1-rehearsal; $C stop $D
@@ -193,10 +225,35 @@ The rehearsal checks the setup and the timing. Its stores are deleted afterwards
    python3 docs/soak/tools/linux/host_samples.py drops --samples <round>/rehearsal/host-samples.jsonl
    ```
 
-   It prints one line per hour with each series' rise (`uplink_rx_dropped`, `uplink_tx_dropped`, and the card's own `rx_missed_errors` and `rx_fifo_errors` where it has them). Send the runner the lines. If any is above 0, tell the runner before day 1: some network cards count harmless frames as drops, and the series may need changing. **The runner selects the layout** (the drop-C rule) from the rehearsal and tells you.
+   It prints one line per hour with each series' rise (`uplink_rx_dropped`, `uplink_tx_dropped`, and the card's own `rx_missed_errors` and `rx_fifo_errors` where it has them). Send the runner the lines. If any is above 0, tell the runner before day 1: some network cards count harmless frames as drops, and the series may need changing. Only the owner can approve that change.
+8b. **Each arm's settings, as the declaration says.** Judge each rehearsal arm against the declaration (it reads the switch gauge the arm reported):
+
+   ```bash
+   for arm in B A C; do
+     python3 docs/soak/tools/analyze_cr.py segment <round>/rehearsal/$arm --declaration <round>/declaration.json \
+       --output <round>/rehearsal/$arm.report.json
+   done
+   ```
+
+   `declaration_entry_found` and every check named `declared_*`, `effective_switches_recorded`, `safe_restart_on`, `preset_stayed_declared` and `switches_stayed_declared` must be present and read ok (a rehearsal is never a measurement, whatever its verdict). A missing one is `declaration_checks_missing` (X-cr-round1-spec-fixes). If one is missing or not ok, stop and tell the runner.
+8c. **The drop-C rule.** Run it during the rehearsal, when step 6 says, and send the runner each output:
+
+   ```bash
+   python3 docs/soak/tools/analyze_cr.py drop-c <round>/rehearsal/host-samples.jsonl \
+     --arm B=<round>/rehearsal/B --arm A=<round>/rehearsal/A --arm C=<round>/rehearsal/C
+   ```
+
+   It prints `keep` or `drop` with its numbers (the last 60 min once every arm crawled; host CPU p95 over 70 % or steal p95 over 3 % drops C), and each arm's `crawling_from_utc`. **The runner selects the layout** from the first `keep` or `drop` and tells you.
+
+   It can also print `not_judged` with a reason. Send that to the runner too; the runner decides as follows:
+   - **`vcpus_differ`:** the rehearsal fails. Stop it (step 6). The box or the declaration is fixed, and the rehearsal is repeated.
+   - **Any other reason** (no host samples, an arm that never crawled, fewer than 60 crawling minutes): the rehearsal keeps running, and `drop-c` is run again every 15 min.
+   - **Still `not_judged` at the end** (the 3 h window's end or the 4 h cap, whichever comes first): C is dropped (layout L2, or S with B alone if A is dropped too), since C is only diagnostic and keeping it unjudged risks B's measurement. The runner records the reason in the round's archive.
 9. Delete each arm's rehearsal `data` and `witness` folders. Keep `<round>/rehearsal` itself.
 
 ## 6. A day, step by step
+
+**Don't start day 1 until the runner says** the code for the S bound, the repeat rule and `declaration_checks_missing` has merged (X-cr-round1-spec-fixes, or its split-out PR).
 
 Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<n>-repeat<k>` (k = 1, then 2), and its **first** command (the first `leak`) carries `--repeat <k>`; later commands read it from the folder. Pause the backup and parity schedules as the stage-1 sheet's 4.1 says, and write the restore time down.
 
@@ -249,7 +306,7 @@ Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<
    3. Save no other settings.
    4. Write the claim time (UTC) in the run record.
 9. **During the day:** touch nothing. Write a host-activity note for any event, in each running arm's evidence folder (`python3 docs/soak/tools/linux/collect.py note --root <day dir>/<arm> --category <category>`). Don't read rates.
-10. **After the watch ends:** leak tests after, every arm, `--phase after`. Then rewrite the archive with them in it:
+10. **After the watch ends:** leak tests after, every arm, `--phase after`. Then rewrite the archive with them in it. It also saves each arm's gluetun log for the day as `<arm>/gluetun.log`, with addresses and keys removed (X-cr-round1-spec-fixes):
 
     ```bash
     $C archive $D
@@ -261,15 +318,15 @@ Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<
 
 | What happened | What you do |
 |---|---|
-| A leak test failed | §4: the coordinator stopped the arm. Tell the runner. The day is repeated from fresh stores after a repair and a passing re-test |
+| A leak test failed | §4: the coordinator stopped the arm. Tell the runner. Before the day's start: it's a note; repair, pass a `--phase retest`, and the day runs. After the start (an `after` test): the day is repeated from fresh stores |
 | An arm's collector stopped early (its `result.json` names a reason other than `baseline_window_complete`) | Leave the others running: the watch carries on and records the event. Tell the runner, who diagnoses it with a fresh reviewer |
 | The watch died, or your session dropped | Start the watch again at once with the same command. Inside a window, the collectors' own scrapes cover the gap. In the overhang, a gap of over 3 min ends the arms' recorded activity, so later candidates may not be judged: tell the runner the times. If every window has closed and the overhang has passed, it stops everything at once |
 | The host rebooted or lost power | The day is invalid. Round 1's stacks never restart by themselves, so no arm crawls untested after a reboot. Leave them down. Write a note when you can, restore, and tell the runner. The repeated day starts as any day does: leak tests, `bring-up`, then `up` |
-| A parity operation, sync, rebuild or mover run on the array | Write the note (`array_operation`). Data on `ssd_apps` isn't invalidated by mover or parity (§8 item 6); anything else, tell the runner |
+| A parity operation, sync, rebuild or mover run | Write the note in each running arm's evidence folder, saying what ran and on which pool: `collect.py note --root <day dir>/<arm> --category array_operation --kind <mover, parity or other> --pool <name>`, with one `--pool` for **every** pool it touches (the mover moves files between a cache pool and the array: name both). A mover run or parity check spares a window only when none of the pools it touched holds that arm's `/data` (§8 item 6, D3); a sync or rebuild is `--kind other` and always counts. Tell the runner either way |
 
 ## 7. After each day, before the exit swap
 
-1. **Each arm's segment report,** against the declaration. List the layout's arms for today (L3: `B A C`; L2: `B A`; L2b: `B C`; S: the candidate):
+1. **Each arm's segment report,** against the declaration. List the layout's arms for today (L3: `B A C`; L2: `B A`; L2b: `B C`; L2c: `A C`; S: the candidate):
 
    ```bash
    for arm in <the layout's arms>; do
@@ -293,6 +350,8 @@ Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<
 
 ## 8. After day 2: the verdict
 
+**Wait for the runner first.** The runner classifies the round's events from the archived gluetun logs and commits that classification to the round's archive. Only then run `manifest` and `gate-round`. `manifest` lists each gluetun log with its SHA-256 (X-cr-round1-spec-fixes). Don't read any report's rates before then.
+
 ```bash
 python3 infra/fleet/steps/vm/round1-coordinator.py manifest /root/round1-coordinator.json
 python3 docs/soak/tools/analyze_cr.py gate-round <round>/manifest.json --output <round>/verdict.json
@@ -300,6 +359,7 @@ python3 docs/soak/tools/analyze_cr.py gate-round <round>/manifest.json --output 
 
 - `manifest` refuses a report on another image, a repeated run ID or a gap in repeats: tell the runner, don't edit a file.
 - If an attempt ended short (the runner says so), record it first: `$C end-attempt /root/round1-coordinator.json --attempt <attempt> --reason <reason>`.
+  - The runner gives the `<reason>`: one or more comma-separated tokens, each naming an arm where it applies. For example, `rehearsal_drop:C` when the rehearsal drops C from `r1-L3`, or `product_failure:A`. The other forms are `solo_confirmation:<arm>`, `valid_miss:<arm>` and `other:<slug>`. Each arm must be one of the attempt's arms, with no spaces after the commas. `end-attempt` refuses anything else; tell the runner if it does.
 - Send the runner `verdict.json` and the manifest's SHA-256 line. **The verdict and what follows are the runner's.**
 - **Keep every raw folder** (both days, the rehearsal's samples) until the runner has reproduced `gate-round` from the copy.
 

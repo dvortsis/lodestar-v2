@@ -14,6 +14,7 @@ and never contacts the crawler.
   gate-round MANIFEST [--output F]           round 1: every arm's verdict and the selection
                                              (revised path to 100 §5.2 item 5; `segment
                                              --declaration D` judges a round-1 arm first)
+  drop-c SAMPLES --arm A=DIR ...             round 1's rehearsal: §6.3's drop-C rule, keep or drop
   checkpoint1 --utp E --adm E ...            rule 6.9: the Checkpoint 1 projection
 
 `effect`, `gate` and `checkpoint1` read the JSON reports `segment` and `effect` write.
@@ -41,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import analyze_cr0  # noqa: E402  (the memory gate's fit, one copy)
 
 SPEC = "docs/decisions/2026-11-02-CR-SPEC.md"
+ROUND1_SPEC = "docs/decisions/2026-11-27-CR-SPEC-round1.md"  # round 1's own spec (item L); SPEC stays for old runs
 KINDS = collect.SPEC_KINDS
 HOUR = 3600
 WARMUP = 3600                  # rule 1.1
@@ -410,7 +412,8 @@ def analyze_segment(root, winners=None, declaration=None):
     entry = None
     if declaration is not None:
         entry = declared_entry(declaration, run)
-        report["round1"] = {"declared": entry, "placement": run.get("round1"), "analyzer_sha256": ANALYZER_SHA256}
+        report["round1"] = {"declared": entry, "placement": run.get("round1"), "analyzer_sha256": ANALYZER_SHA256,
+                            "round1_spec": ROUND1_SPEC}
         checks.add("5.5", "declaration_entry_found", entry is not None, "invalid",
                    None if entry else {"placement": run.get("round1")})
     if not ok:
@@ -512,6 +515,24 @@ def analyze_segment(root, winners=None, declaration=None):
     activity = load_activity(root)
     counted = [a for a in activity if a.get("category") in collect.ACTIVITY_CATEGORIES and a.get("same_boot") is True
                and not a.get("collector_finished") and p_e <= a["elapsed_seconds"] <= end_e]
+    # Round 1, D3 (plan §8 item 6; owner §2.85; runner, 2026-11-27): a mover run or parity
+    # check spares the window only when none of the pools it touches holds the arm's /data
+    # device (the declaration maps pools to the VM's kernel device names; an unmapped pool
+    # can't be cleared, and a device in no pool is never exempt).
+    # Every other entry still counts.
+    if declaration is not None:
+        pools, device = declaration.get("pools") or {}, declaration.get("backing_device")
+
+        def spares(a):
+            touched = a.get("pools")
+            return (a.get("category") == "array_operation" and a.get("kind") in D3_KINDS
+                    and isinstance(touched, list) and touched
+                    and any(device in v for v in pools.values())
+                    and all(p in pools and device not in pools[p] for p in touched))
+        exempt = [a for a in counted if spares(a)]
+        counted = [a for a in counted if a not in exempt]
+        report["activity_exempt_d3"] = [{"kind": a["kind"], "pools": a["pools"], "elapsed_seconds": a["elapsed_seconds"]}
+                                        for a in exempt]
     notes = [a for a in activity if a not in counted]
     checks.add("6.11", "no_host_activity", not counted,
                detail={"entries": [{"category": a["category"], "elapsed_seconds": a["elapsed_seconds"]} for a in counted]}
@@ -674,7 +695,7 @@ def declared_checks(checks, run, config, entry, preset):
     checks.add("5.5", "declared_switches", not wrong, "void", {"differ": wrong} if wrong else None)
     checks.add("2.3", "safe_restart_on", effective["safe_restart"] is True, "void")
     digest = run.get("image_digest")
-    checks.add("5.5", "declared_image_digest", digest == entry["image_digest"], "void")
+    checks.add("5.5", "declared_image_digest", digest_part(digest) == digest_part(entry["image_digest"]), "void")
 
 
 def fresh_store(ok):
@@ -741,8 +762,14 @@ def bundle_evidence(checks, window, switches, preset, hourly):
             checks.add("6.1", f"{switch}_evidence", (value or 0) > 0, "void",
                        None if (value or 0) > 0 else {"series": name, "value": value,
                                                       "note": "absent" if value is None else "a measured zero"})
-    # lookup_end: lookups ended on values above 0, and the lookup-cost pair's checks.
+    # lookup_end (plan §6.1): lookups ended on enough values above 0 (CR-LOOKUP-END's own end;
+    # its series absent voids), and the lookup-cost pair's checks.
     rows["lookup_end"] = lookup_cost_pair(checks, window, switches, preset, judged=bool(switches.get("lookup_end")))
+    if switches.get("lookup_end"):
+        early = optional_delta(window[0], window[-1], LEDGER["ended"], reason=collect.LEDGER_EARLY_VALUES)
+        rows["lookup_end"]["ended_on_enough_values"] = early
+        checks.add("6.1", "lookups_end_on_enough_values", (early or 0) > 0, "void",
+                   None if (early or 0) > 0 else {"value": early, "note": "absent" if early is None else "a measured zero"})
     # preset_slots: the slots equal the declared preset's count at every window scrape.
     caps = [get(r["snap"], LEDGER["cap"]) for r in window]
     want = PRESET_SLOTS[preset]
@@ -922,7 +949,10 @@ def ledger(a, b):
         "peer_lookups_answered": optional_delta(a, b, "dht_peer_lookups_answered_total"),
     }
     reasons = [optional_delta(a, b, LEDGER["ended"], reason=r) for r in collect.LEDGER_VALUE_REASONS]
-    parts["ended_on_values"] = None if any(r is None for r in reasons) else sum(reasons)
+    # CR-LOOKUP-END's early end is an end on values too. Older binaries don't render it, so
+    # it counts as 0 there and their numbers are unchanged (X-cr-round1-collect-fixes).
+    early = optional_delta(a, b, LEDGER["ended"], reason=collect.LEDGER_EARLY_VALUES)
+    parts["ended_on_values"] = None if any(r is None for r in reasons) else sum(reasons) + (early or 0)
     ended, answered = parts["lookups_ended"], parts["peer_lookups_answered"]
 
     def per(value, count):
@@ -930,7 +960,9 @@ def ledger(a, b):
     return {"W_seconds": per(parts["residence_seconds"], ended), "q": per(parts["peer_lookup_queries"], ended),
             "y": per(parts["stored"], ended),
             "seconds_per_answered": per(parts["peer_lookup_seconds"], answered), **parts,
-            "absent": sorted(k for k, v in parts.items() if v is None)}
+            "absent": sorted(k for k, v in parts.items() if v is None),
+            # Only where rendered, so an older run's report is unchanged.
+            **({"ended_on_enough_values": early} if early is not None else {})}
 
 
 def lookup_cost_pair(checks, window, switches, preset, judged=None):
@@ -1757,18 +1789,40 @@ LAYOUTS = {
     "L3": {1: {"B": "X", "A": "Y", "C": "Z"}, 2: {"B": "Y", "A": "Z", "C": "X"}},
     "L2": {1: {"B": "X", "A": "Y"}, 2: {"B": "Y", "A": "X"}},
     "L2b": {1: {"B": "X", "C": "Y"}, 2: {"B": "Y", "C": "X"}},
+    # §6.3: a candidate B that fails in L3 leaves A (candidate) and C (diagnostic), which go
+    # on in a fresh attempt with the remaining arms (item G); only after an L3 attempt.
+    "L2c": {1: {"A": "X", "C": "Y"}, 2: {"A": "Y", "C": "X"}},
     "S": None,
 }
 EXIT_LABELS = ("X", "Y", "Z")
 SELECTION_ORDER = ["B", "A"]  # O2: B Balanced first, A Aggressive the authorized fallback
 DIAGNOSES = (None, "pending", "product", "infrastructure")  # an event's diagnosis (§6.3)
 RETRY_BUDGET = 2  # §6.3: repeated days per round, not counting a solo confirmation's own
+# An attempt's recorded end (the manifest's attempt_ends `reason`, comma-separated tokens)
+# names the arms that dropped out of it: `rehearsal_drop:<arm>` before its first day, or
+# `product_failure:<arm>` after a class 2 failure there (CR-SPEC-R1 §5, X-cr-round1-spec-fixes).
+DROP_TOKEN = re.compile(r"^(rehearsal_drop|product_failure):([A-Z])$")
+# The declaration checks `segment --declaration` writes, each of which must be present and ok
+# in every arm's report of a day (CR-SPEC-R1 §6; run sheet 8b).
+DECLARATION_CHECKS = ("declaration_entry_found", "effective_switches_recorded", "declared_preset", "declared_switches",
+                      "declared_image_digest", "safe_restart_on", "preset_stayed_declared", "switches_stayed_declared")
+# A not_judged day a repeat may not replace (the runner's ruling on CR-SPEC-R1's review):
+# contention goes to a solo confirmation, a product failure (or an event not yet classed) to
+# its diagnosis and a fresh attempt; a failed solo confirmation is terminal.
+NOT_REPEATABLE = {"product_failure", "product_failure_under_diagnosis", "peer_product_failure", "unknown_event"}
 # §6.3's contention thresholds, as proposed; the CR-SPEC decisions file freezes them and a
 # declaration's `contention` block may only restate them (gate-round refuses other values).
 CONTENTION = {"interval_seconds": 10, "coverage_min": 0.98, "cpu_p95_max": 0.80, "steal_p95_max": 0.05,
               "disk_write_p99_ms_max": 50.0, "tunnel_loss_max": 0.01, "tunnel_rtt_p95_over_rehearsal_max": 2.0,
               "uplink_drops_max": 0}
 HASH = re.compile(r"^[0-9a-f]{16,128}$")  # a salted hash, never an address
+# The declaration's image: `name@sha256:<hex>` (runner, 2026-11-27). The collector records
+# Docker's repo digest without the repository, so reports are compared on the part after `@`.
+IMAGE_DIGEST = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+
+
+def digest_part(value):
+    return str(value).rsplit("@", 1)[-1] if value else None
 # The analyzer's own SHA-256, in every round-1 output, so a reproduction pins its version.
 ANALYZER_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 RUN_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
@@ -1787,6 +1841,8 @@ def check_declaration(decl):
     require(isinstance(decl.get("round"), int) and decl["round"] >= 1, "declaration: round")
     for key in ("spec_commit", "image_digest", "host_identity"):
         require(isinstance(decl.get(key), str) and decl[key], f"declaration: {key}")
+    require(IMAGE_DIGEST.fullmatch(decl["image_digest"]) is not None,
+            "declaration: image_digest is name@sha256:<64 hex> (pulled by tag, recorded by its repo digest)")
     require(HASH.fullmatch(decl["host_identity"]) is not None, "declaration: host_identity must be a salted hash")
     require(isinstance(decl.get("backing_device"), str) and re.fullmatch(r"[a-z0-9_-]{1,32}", decl["backing_device"])
             is not None, "declaration: backing_device (the /data device's kernel name, §6.3)")
@@ -1802,6 +1858,16 @@ def check_declaration(decl):
             "declaration: selection_order must be B then A (O2, Balanced first)")
     thresholds = decl.get("contention", CONTENTION)
     require(thresholds == CONTENTION, "declaration: contention thresholds differ from the frozen ones")
+    pools = decl.get("pools", {})
+    require(isinstance(pools, dict) and all(isinstance(k, str) and isinstance(v, list)
+                                            and all(isinstance(x, str) for x in v) for k, v in pools.items()),
+            "declaration: pools maps a pool name to its devices' kernel names (D3)")
+    # Runner, 2026-11-27: the map lists the VM's kernel device names (the names identity
+    # records), so the declared /data device must sit in exactly one pool, by exact name.
+    require(not pools or sum(decl.get("backing_device") in v for v in pools.values()) == 1,
+            "declaration: backing_device must be listed in exactly one pool (D3)")
+    # Item J: the thresholds are shares of the declared vCPUs (8); host samples must match.
+    require(decl.get("vcpus") == DECLARED_VCPUS, f"declaration: vcpus must be {DECLARED_VCPUS} (the box's, §6.3)")
     attempts = decl.get("attempts")
     require(isinstance(attempts, list) and attempts, "declaration: attempts")
     ids = set()
@@ -1827,7 +1893,8 @@ def check_declaration(decl):
         require(isinstance(sw, dict) and set(sw) == set(ROUND_SWITCHES) and all(isinstance(v, bool) for v in sw.values()),
                 f"declaration: entry {key} names exactly the 12 switches, each true or false")
         require(e.get("exit") in EXIT_LABELS, f"declaration: entry {key}'s exit label")
-        require(isinstance(e.get("image_digest"), str) and e["image_digest"], f"declaration: entry {key}'s image digest")
+        require(isinstance(e.get("image_digest"), str) and IMAGE_DIGEST.fullmatch(e["image_digest"]) is not None,
+                f"declaration: entry {key}'s image digest (name@sha256:<64 hex>)")
     # §6.1's arms: B and A all-on but route_backoff (O3), B Balanced and A Aggressive; C the
     # explicit all-off Balanced control, diagnostic. A is a candidate only if O2 authorized it.
     all_on = {s: s != "route_backoff" for s in ROUND_SWITCHES}
@@ -1851,15 +1918,19 @@ def check_declaration(decl):
     # Runner, 2026-11-27: layouts only shrink (L3 → L2 or L2b → S), so each later attempt that
     # isn't a solo confirmation drops an arm, and the round can't loop through fresh attempts.
     # A solo confirmation (S) is one arm from the attempt before it, outside that chain.
+    # L2c follows the chain's L3 attempt (B dropped); a solo confirmation between them is
+    # outside the chain, so L3 → S → L2c holds.
     arms_of = {a["id"]: {e["arm"] for e in arms if e["attempt"] == a["id"]} for a in attempts}
-    chain = None
+    chain, chain_layout = None, None
     for a in attempts:
         own = arms_of[a["id"]]
         if chain is not None and a["layout"] == "S" and len(own) == 1 and own <= chain:
             continue
+        require(a["layout"] != "L2c" or chain_layout == "L3",
+                f"declaration: attempt {a['id']}'s layout L2c follows only an L3 attempt (B dropped)")
         require(chain is None or own < chain,
                 f"declaration: attempt {a['id']} must drop an arm from the attempt before it (layouts only shrink)")
-        chain = own
+        chain, chain_layout = own, a["layout"]
     return decl
 
 
@@ -1874,7 +1945,7 @@ def load_manifest(path):
     base = path.resolve().parent
     hashes = {}
 
-    def load(ref):
+    def raw(ref):
         require(isinstance(ref, dict) and isinstance(ref.get("path"), str) and isinstance(ref.get("sha256"), str),
                 "manifest: each input is {path, sha256}")
         rel = Path(ref["path"])
@@ -1884,10 +1955,31 @@ def load_manifest(path):
         digest = hashlib.sha256(data).hexdigest()
         require(digest == ref["sha256"], f"manifest: {ref['path']}'s SHA-256 differs from the manifest's")
         hashes[ref["path"]] = digest
-        return json.loads(data.decode("utf-8"))
+        return data
+
+    def load(ref):
+        return json.loads(raw(ref).decode("utf-8"))
 
     out = {"declaration": check_declaration(load(man.get("declaration"))),
            "comparator": load(man["comparator"]) if man.get("comparator") is not None else None, "days": []}
+    # Runner, 2026-11-27 (§2.19, flagged to the owner): a comparator run by a collector that
+    # predates round 1 has no binding; the coordinator binds it after its window
+    # (`bind-comparator`), and the manifest carries that binding. A report's own binding wins.
+    out["comparator_binding"] = None
+    if man.get("comparator_binding") is not None:
+        bind = load(man["comparator_binding"])
+        require(isinstance(bind, dict) and bind.get("kind") == "cr_round1_comparator_binding"
+                and bind.get("bound_after_window") is True and RUN_ID.fullmatch(str(bind.get("run_id"))) is not None
+                and HASH.fullmatch(str(bind.get("host_identity"))) is not None
+                and isinstance(bind.get("network_identity"), dict) and isinstance(bind.get("ended_utc"), str),
+                "manifest: comparator_binding {kind cr_round1_comparator_binding, run_id, host_identity, "
+                "network_identity, ended_utc, bound_after_window: true}")
+        out["comparator_binding"] = bind
+        if out["comparator"] is not None and not (out["comparator"].get("binding") or {}).get("run_id"):
+            out["comparator"] = dict(out["comparator"], binding={
+                "run_id": bind["run_id"], "host_identity": bind["host_identity"],
+                "network_identity": bind["network_identity"], "ended_utc": bind["ended_utc"],
+                "placement": None, "bound_after_window": True})
     declared = {a["id"] for a in out["declaration"]["attempts"]}
     ends = man.get("attempt_ends") or {}
     require(isinstance(ends, dict) and all(k in declared and isinstance(v, dict) and isinstance(v.get("reason"), str)
@@ -1905,7 +1997,11 @@ def load_manifest(path):
             "attempt": d["attempt"], "day": d["day"], "repeat": d.get("repeat", 0),
             "reports": {arm: load(ref) for arm, ref in sorted((d.get("reports") or {}).items())},
             "archive": load(d["archive"]) if d.get("archive") is not None else None,
-            "contention": load(d["contention"]) if d.get("contention") is not None else None})
+            "contention": load(d["contention"]) if d.get("contention") is not None else None,
+            # Each arm's redacted gluetun log, the handshake evidence (X-cr-round1-spec-fixes
+            # item 6): checked by hash here, read by the runner, never by the gate.
+            "gluetun_logs": {arm: hashlib.sha256(raw(ref)).hexdigest()
+                             for arm, ref in sorted((d.get("gluetun_logs") or {}).items())}})
     listed = {(d["attempt"], d["day"]) for d in out["days"]}
     # Runner (2026-11-27): days_run lists the days the attempt ran, each listed; [] means it
     # never started, so no day of it may be listed. The verdict echoes each entry, and the
@@ -1936,7 +2032,11 @@ def nearest_rank(values, p):
     return math.inf if v is None else v
 
 
-def contention(samples, arm, ws, we, device):
+DECLARED_VCPUS = 8
+D3_KINDS = ("mover", "parity")  # array operations D3 exempts on an ssd_apps window
+
+
+def contention(samples, arm, ws, we, device, vcpus=DECLARED_VCPUS):
     """§6.3's contention verdict for one candidate window [ws, we): `ok`, `breach` or
     `not_judged` (a series under 98 % coverage). Every 10 s interval is read; a missing one
     counts over the threshold. Uplink drops are a cumulative counter, read as each hour's delta."""
@@ -1945,6 +2045,8 @@ def contention(samples, arm, ws, we, device):
         return {"verdict": "not_judged", "reasons": ["contention_samples_missing"]}
     if samples.get("backing_device") != device:  # §6.3: /data latency on the declared device
         return {"verdict": "not_judged", "reasons": ["backing_device_differs"]}
+    if samples.get("vcpus") != vcpus:  # item J: the CPU shares are of the declared vCPUs
+        return {"verdict": "not_judged", "reasons": ["vcpus_differ"]}
     step = c["interval_seconds"]
     # Every interval that starts inside the window, the last one possibly partial (a window is
     # boundary scrape to boundary scrape, rarely a multiple of 10 s).
@@ -2099,16 +2201,30 @@ def arm_window(report):
     return utc(t.get("window_start_utc")), utc(t.get("window_end_utc"))
 
 
+def exit_in_force(archive, exit_label, at):
+    """The exit's hash as checked last at or before `at` (the archive's `exit_checks`, a timed
+    history: a repair before the start can re-check a server); the archive's `exits` without one."""
+    checks = [c for c in (archive.get("exit_checks") or []) if isinstance(c, dict) and utc(c.get("utc")) is not None]
+    before = [c for c in checks if utc(c["utc"]) <= at] if at is not None else []
+    if before:
+        return (before[-1].get("exits") or {}).get(exit_label)
+    if checks:
+        return (checks[0].get("exits") or {}).get(exit_label)
+    return ((archive or {}).get("exits") or {}).get(exit_label)
+
+
 def egress_problems(archive, arm, exit_label, report):
-    """§5.2 item 4: the arm's salted egress hash equals its exit's at every boundary of its window."""
-    exits = (archive or {}).get("exits") or {}
-    want = exits.get(exit_label)
-    if not isinstance(want, str) or not HASH.fullmatch(want):
-        return ["egress_assignment_missing"]
-    readings = ((archive.get("arms") or {}).get(arm) or {}).get("egress") or []
+    """§5.2 item 4: the arm's salted egress hash equals its exit's at every boundary of its window.
+    Each reading is judged against the exit in force at its time; inside the window, that's the
+    exit checked last before the window's start (X-cr-round1-collect-fixes, item C)."""
     ws, we = arm_window(report)
     if ws is None or we is None:
         return ["egress_window_unknown"]
+    exits = (archive or {}).get("exits") or {}
+    want = exit_in_force(archive or {}, exit_label, ws)
+    if not isinstance(want, str) or not HASH.fullmatch(want) or exits.get(exit_label) != want:
+        return ["egress_assignment_missing"]
+    readings = ((archive.get("arms") or {}).get(arm) or {}).get("egress") or []
     hours = report.get("window_hours") or 24
     hour = (we - ws) / hours
     out = []
@@ -2120,8 +2236,11 @@ def egress_problems(archive, arm, exit_label, report):
             out.append("egress_unchecked_at_a_boundary")
         elif any(g != want for g in got):
             out.append("egress_differs_from_declared_exit")
-    if any(r.get("hash") != want for r in readings):
-        out.append("egress_differs_from_declared_exit")
+    for r in readings:
+        t = utc(r.get("utc"))
+        expected = want if t is None or t >= ws else exit_in_force(archive, exit_label, t)
+        if r.get("hash") != expected:
+            out.append("egress_differs_from_declared_exit")
     return sorted(set(out))
 
 
@@ -2160,7 +2279,8 @@ def judge_day(cand, attempt, decl, day, comparator_ok):
     if not RUN_ID.fullmatch(str(b.get("run_id"))):
         reasons.append("run_id_missing")
     digest = attempt["candidate_digests"].get(cand)
-    if ident.get("image_digest") != decl["image_digest"] or (digest is not None and digest != decl["image_digest"]):
+    if digest_part(ident.get("image_digest")) != digest_part(decl["image_digest"]) \
+            or (digest is not None and digest != decl["image_digest"]):
         reasons.append("image_digest_differs")
     if (rep.get("round1") or {}).get("fresh_store") is not True:
         reasons.append("no_fresh_store_evidence")
@@ -2186,7 +2306,16 @@ def judge_day(cand, attempt, decl, day, comparator_ok):
         leak = info.get("leak_test") or {}
         if leak.get("before") != "pass" or leak.get("after") != "pass":
             reasons.append("leak_test_not_passed")
+        if info.get("tunnel_target_is_gateway") is not True:  # §7: the probe pinged the WireGuard gateway
+            reasons.append("probe_target_unchecked")
+        # §8: the handshake evidence, each arm's gluetun log, listed and the archive's own.
+        log = (day.get("gluetun_logs") or {}).get(arm)
+        if log is None or log != info.get("gluetun_log_sha256"):
+            reasons.append("handshake_evidence_missing")
         if arm in reports:
+            got = {c.get("check"): c.get("ok") for c in reports[arm].get("checks") or [] if isinstance(c, dict)}
+            if any(got.get(name) is not True for name in DECLARATION_CHECKS):
+                reasons.append("declaration_checks_missing")
             reasons += egress_problems(archive, arm, e["exit"], reports[arm])
             pb = reports[arm].get("binding") or {}
             pp = pb.get("placement") or {}
@@ -2219,15 +2348,21 @@ def judge_day(cand, attempt, decl, day, comparator_ok):
         reasons.append("comparator_not_valid")
     # Contention for this window (O4): a breach isn't a valid miss.
     if ws is not None and we is not None:
-        out["contention"] = contention(day["contention"], cand, ws, we, decl["backing_device"])
+        out["contention"] = contention(day["contention"], cand, ws, we, decl["backing_device"], decl["vcpus"])
     else:
         out["contention"] = {"verdict": "not_judged", "reasons": ["window_unknown"]}
     if out["contention"]["verdict"] == "not_judged":
         reasons.append("contention_not_judged")
     elif out["contention"]["verdict"] == "breach":
         reasons.append("contention_breach")
-        out["solo_confirmation_required"] = attempt["layout"] != "S"
-        out["solo_confirmation_failed"] = attempt["layout"] == "S"
+        # §6.3: the first class that applies decides. A day with an evidenced infrastructure
+        # fault (class 1) or a product failure (class 2) is that, not demonstrated contention,
+        # so it calls for no solo confirmation (and a breach in layout S isn't its failure).
+        classed = {"infrastructure_fault", "peer_infrastructure_fault", "product_failure",
+                   "product_failure_under_diagnosis", "peer_product_failure", "unknown_event"} & set(reasons)
+        out["contention_class"] = "infrastructure_or_product" if classed else "demonstrated_contention"
+        out["solo_confirmation_required"] = not classed and attempt["layout"] != "S"
+        out["solo_confirmation_failed"] = not classed and attempt["layout"] == "S"
     out["tests"] = crawler_tests(rep)
     out["memory"] = memory_verdict(rep)
     out["window"] = {"start_utc": (rep.get("timeline") or {}).get("window_start_utc"),
@@ -2250,6 +2385,46 @@ def candidate_days(inputs, decl, attempt, cand):
 # the comparator or spacing that every window of the round depends on isn't there.
 UNJUDGEABLE = ("not_authorized", "spacing", "retry_budget_exhausted", "earlier_attempt_incomplete",
                "repeats_not_contiguous", "run_id_reused")
+
+
+def solo_problems(cand, decl, inputs, attempts, judged_days):
+    """§6.3's S attempts, bounded (CR-SPEC-R1 §5, X-cr-round1-spec-fixes item 2): an S
+    attempt of the candidate is allowed only (a) after the attempt just before it gave the
+    candidate a day with `solo_confirmation_required`, or (b) when the candidate is the only
+    arm left: every other arm of that attempt dropped out, as its recorded end says, at the
+    rehearsal (before its first day, and only the round's first attempt) or by a product failure the day archives show. At most
+    one S attempt per candidate per round. Returns the problems, [] when it's allowed."""
+    solos = [a for a in attempts if a["layout"] == "S"]
+    if not solos:
+        return []
+    if len(solos) > 1:
+        return ["more_than_one_solo_attempt"]
+    # "The attempt just before" is the candidate's own previous attempt: with two candidates,
+    # a host-wide breach calls for both solo confirmations, one after the other.
+    i = attempts.index(solos[0])
+    if i == 0:
+        return ["solo_without_a_preceding_attempt"]
+    before = attempts[i - 1]
+    if any(j["attempt"] == before["id"] and j.get("solo_confirmation_required") for j in judged_days):
+        return []  # (a)
+    others = {e["arm"] for e in decl["arms"] if e["attempt"] == before["id"]} - {cand}
+    end = (inputs.get("attempt_ends") or {}).get(before["id"])
+    if cand not in {e["arm"] for e in decl["arms"] if e["attempt"] == before["id"]} or not others or end is None:
+        return ["solo_not_after_a_drop"]
+    dropped = set()
+    for token in str(end["reason"]).split(","):
+        m = DROP_TOKEN.fullmatch(token.strip())
+        if not m:
+            continue
+        if m[1] == "rehearsal_drop" and not end["days_run"] and before["id"] == decl["attempts"][0]["id"]:
+            dropped.add(m[2])
+        elif m[1] == "product_failure" and any(
+                ev.get("class") == "product" and ev.get("diagnosis") != "infrastructure"
+                and m[2] in (ev.get("arms") or [])
+                for d in inputs["days"] if d["attempt"] == before["id"]
+                for ev in (d["archive"] or {}).get("events") or []):
+            dropped.add(m[2])
+    return [] if others <= dropped else ["solo_not_after_a_drop"]  # (b)
 
 
 def judge_candidate(cand, inputs):
@@ -2310,11 +2485,14 @@ def judge_candidate(cand, inputs):
         days[k] = vs[-1]
     if any(j["status"] == "pass" for j in replaced):
         reasons.append("repeat_of_a_judged_day")
-    # Only an evidenced infrastructure fault repeats a day (§6.3, event class 1): contention
-    # calls for a solo confirmation, a product failure for a diagnosis, never a repeat.
-    if any(j["status"] == "not_judged" and not {"infrastructure_fault", "peer_infrastructure_fault"} & set(j["reasons"])
-           for j in replaced):
-        reasons.append("repeat_without_infrastructure_fault")
+    # §6.3's retry rule repeats any not_judged day (a coverage miss, an uplink counter reset, a
+    # void segment, an infrastructure fault), within the budget, except one whose answer is
+    # elsewhere: contention (a solo confirmation), a product failure, its own or a peer's, or
+    # an event not yet classed (a diagnosis and a fresh attempt), and a failed solo
+    # confirmation (terminal). A judged miss stays a miss (below).
+    if any(j["status"] == "not_judged" and (j.get("solo_confirmation_required") or j.get("solo_confirmation_failed")
+                                            or NOT_REPEATABLE & set(j["reasons"])) for j in replaced):
+        reasons.append("repeat_of_a_non_repeatable_day")
     out["replaced_days"] = [{"day": j["day"], "repeat": j["repeat"], "status": j["status"], "reasons": j["reasons"]}
                             for j in replaced]
     declared_days = sorted({e["day"] for e in entries if e["attempt"] == attempt["id"]})
@@ -2366,6 +2544,10 @@ def judge_candidate(cand, inputs):
         reasons.append("retry_budget_exhausted")
     out["days"] = judged
     every = earlier + replaced + judged
+    solo = solo_problems(cand, decl, inputs, attempts, every)
+    if solo:
+        out["solo_problems"] = solo
+        reasons.append("solo_not_permitted")
     # History across attempts (§6.3). A breach outside S needs a solo confirmation after it;
     # a failed solo confirmation has no further retry; a product failure on this digest,
     # diagnosed or pending, withholds qualification (a fix makes a new candidate).
@@ -2442,13 +2624,96 @@ def gate_round(inputs):
     decl = inputs["declaration"]
     arms = sorted({e["arm"] for e in decl["arms"]})
     judged = {arm: judge_candidate(arm, inputs) for arm in arms}
-    out = {"schema": 1, "kind": "cr_round1_verdict", "spec": SPEC, "plan": "docs/plan/2026-11-27-revised-path-to-100.md",
+    out = {"schema": 1, "kind": "cr_round1_verdict", "spec": SPEC, "round1_spec": ROUND1_SPEC,
+           "plan": "docs/plan/2026-11-27-revised-path-to-100.md",
            "round": decl["round"], "manifest_sha256": inputs["manifest_sha256"], "analyzer_sha256": ANALYZER_SHA256,
            "inputs": dict(sorted(inputs["inputs"].items())), "contention_thresholds": CONTENTION,
            "attempt_ends": dict(sorted(inputs.get("attempt_ends", {}).items())),
+           "comparator_bound_after_window": bool(((inputs.get("comparator") or {}).get("binding") or {})
+                                                 .get("bound_after_window")),
            "candidates": {a: j for a, j in judged.items() if j["role"] == "candidate"},
            "diagnostics": {a: j for a, j in judged.items() if j["role"] != "candidate"}}
     out["selection"] = select(judged, SELECTION_ORDER)
+    return out
+
+
+# §6.3's drop-C rule (plan lines 430-432), frozen in CR-SPEC-R1: tighter than contention's.
+DROP_C = {"cpu_p95_max": 0.70, "steal_p95_max": 0.03, "minutes": 60, "crawling_lookback_minutes": 10}
+
+
+def crawling_from(rows):
+    """The first scrape from which the arm is crawling: sampling (suppression 0) and its store
+    grew in the 10 min before. None if it never is."""
+    look = timedelta(minutes=DROP_C["crawling_lookback_minutes"])
+    seen = []
+    for r in rows:
+        t, vals = utc(r.get("time")), r.get("values") or {}
+        if t is None or not r.get("metrics_ok") or not number(vals.get("torrents")):
+            continue
+        seen.append((t, vals["torrents"]))
+        before = [v for u, v in seen if u <= t - look]
+        if vals.get("dht_sample_suppression_seconds") == 0 and before and vals["torrents"] > before[-1]:
+            return t
+    return None
+
+
+def drop_c(samples, arms):
+    """§6.3's drop-C rule on the rehearsal: the last 60 min, starting only once every arm is
+    crawling. C is dropped if host CPU p95 is over 70 % of the declared 8 vCPU or steal p95 over
+    3 % (nearest rank over every 10 s slot; a missing slot ranks over). `samples` is the
+    rehearsal's host samples (host_samples.py's lines or its assembled JSON); `arms` maps an
+    arm to its rehearsal collector's samples.jsonl rows."""
+    rows = samples.get("samples") if isinstance(samples, dict) else samples
+    if isinstance(samples, dict):
+        vcpus = {samples.get("vcpus")}
+    else:  # the sampler's header lines: one per start, each naming the vCPUs it saw
+        vcpus = {r.get("vcpus") for r in rows or [] if isinstance(r, dict) and r.get("kind") == "header"}
+    rows = sorted((r for r in rows or [] if utc(r.get("utc")) is not None), key=lambda r: r["utc"])
+    out = {"thresholds": DROP_C, "arms": {}}
+    if vcpus != {DECLARED_VCPUS}:  # the shares are of the declared 8 vCPU, or they mean nothing
+        return dict(out, decision="not_judged", reasons=["vcpus_differ"])
+    if not rows:
+        return dict(out, decision="not_judged", reasons=["no_host_samples"])
+    end = utc(rows[-1]["utc"]) + timedelta(seconds=CONTENTION["interval_seconds"])
+    starts = {}
+    for arm, arm_rows in sorted(arms.items()):
+        starts[arm] = crawling_from(arm_rows)
+        out["arms"][arm] = {"crawling_from_utc": iso(starts[arm]) if starts[arm] else None}
+    if not arms or any(v is None for v in starts.values()):
+        return dict(out, decision="not_judged", reasons=["an_arm_never_crawled"])
+    start = max(end - timedelta(minutes=DROP_C["minutes"]), max(starts.values()))
+    minutes = (end - start).total_seconds() / 60
+    out.update(interval_start_utc=iso(start), interval_end_utc=iso(end), interval_minutes=round(minutes, 2))
+    if minutes < DROP_C["minutes"]:
+        return dict(out, decision="not_judged", reasons=["fewer_than_60_crawling_minutes"])
+    step = CONTENTION["interval_seconds"]
+    n = math.ceil((end - start).total_seconds() / step)
+    slots = [None] * n
+    for r in rows:
+        t = utc(r["utc"])
+        if start <= t < end:
+            k = int((t - start).total_seconds() // step)
+            slots[k] = slots[k] or r
+    cpu = [s.get("cpu") if s and number(s.get("cpu")) else None for s in slots]
+    steal = [s.get("steal") if s and number(s.get("steal")) else None for s in slots]
+    p_cpu, p_steal = nearest_rank(cpu, 0.95), nearest_rank(steal, 0.95)
+    over = {"cpu": p_cpu > DROP_C["cpu_p95_max"], "steal": p_steal > DROP_C["steal_p95_max"]}
+    # A missing slot ranks over every value, so a p95 that lands on one is over (shown as null).
+    out.update(slots=n, missing_slots=sum(s is None for s in slots),
+               cpu_p95=None if math.isinf(p_cpu) else p_cpu, steal_p95=None if math.isinf(p_steal) else p_steal,
+               decision="drop" if any(over.values()) else "keep", reasons=[k for k, v in over.items() if v])
+    return out
+
+
+def read_jsonl(path):
+    out = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            out.append(row)
     return out
 
 
@@ -2579,6 +2844,11 @@ def main(argv=None):
     p = sub.add_parser("gate-round")
     p.add_argument("manifest", type=Path, help="Round 1's manifest: every input with its SHA-256")
     p.add_argument("--output", type=Path)
+    p = sub.add_parser("drop-c")
+    p.add_argument("samples", type=Path, help="The rehearsal's host samples (host-samples.jsonl or its assembled JSON)")
+    p.add_argument("--arm", action="append", default=[], metavar="ARM=RUN_DIR",
+                   help="Each rehearsal arm's collector run directory (repeat for every arm)")
+    p.add_argument("--output", type=Path)
     p = sub.add_parser("checkpoint1")
     p.add_argument("--utp", required=True)
     p.add_argument("--adm", required=True)
@@ -2602,6 +2872,14 @@ def main(argv=None):
                   args.output)
         elif args.command == "route-baseline":
             write(route_baseline([load_report(p) for p in args.reports]), None)
+        elif args.command == "drop-c":
+            text = args.samples.read_text(encoding="utf-8")
+            samples = json.loads(text) if args.samples.suffix == ".json" else read_jsonl(args.samples)
+            arms = {}
+            for item in args.arm:
+                arm, _, run_dir = item.partition("=")
+                arms[arm] = read_jsonl(Path(run_dir) / "samples.jsonl")
+            write(drop_c(samples, arms), args.output)
         elif args.command == "gate-round":
             write(gate_round(load_manifest(args.manifest)), args.output)
         elif args.command == "gate":
