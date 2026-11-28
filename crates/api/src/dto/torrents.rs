@@ -22,12 +22,14 @@ pub struct TorrentDetail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub adult_enrichment: Option<AdultEnrichment>,
-    /// The release attributes parsed from the name, as `/compare` shows
-    /// them (`title`, `alt`, `year`, `season`, `episode`, `res`, `source`,
-    /// `vcodec`, `acodec`, `group`, …): only the keys the torrent has,
-    /// list values comma-joined. Null when the torrent hasn't been
-    /// classified yet, or its record can't be read by this build; `{}`
-    /// when it was classified and the name gave none.
+    /// The effective release's attributes, as `/compare` shows them
+    /// (`title`, `alt`, `year`, `season`, `episode`, `res`, `source`,
+    /// `vcodec`, `acodec`, `group`, …): parsed from the name, or from the
+    /// file or folder the title was resolved from (see a search hit's
+    /// `resolved_via`). Only the keys the torrent has, list values
+    /// comma-joined. Null when the torrent hasn't been classified yet, or
+    /// its record can't be read by this build; `{}` when it was classified
+    /// and nothing was parsed.
     #[schema(required = true, example = json!({"group": "GROUP", "res": "1080p", "source": "bluray", "title": "The Movie", "vcodec": "h264", "year": "2008"}))]
     pub attributes: Option<BTreeMap<String, String>>,
     /// Null = never scraped.

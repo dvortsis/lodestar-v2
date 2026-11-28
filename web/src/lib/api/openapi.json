@@ -26269,7 +26269,7 @@
               "object",
               "null"
             ],
-            "description": "The release attributes parsed from the name, as `/compare` shows\nthem (`title`, `alt`, `year`, `season`, `episode`, `res`, `source`,\n`vcodec`, `acodec`, `group`, …): only the keys the torrent has,\nlist values comma-joined. Null when the torrent hasn't been\nclassified yet, or its record can't be read by this build; `{}`\nwhen it was classified and the name gave none.",
+            "description": "The effective release's attributes, as `/compare` shows them\n(`title`, `alt`, `year`, `season`, `episode`, `res`, `source`,\n`vcodec`, `acodec`, `group`, …): parsed from the name, or from the\nfile or folder the title was resolved from (see a search hit's\n`resolved_via`). Only the keys the torrent has, list values\ncomma-joined. Null when the torrent hasn't been classified yet, or\nits record can't be read by this build; `{}` when it was classified\nand nothing was parsed.",
             "additionalProperties": {
               "type": "string"
             },

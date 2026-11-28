@@ -718,7 +718,10 @@ pub(crate) fn release_attributes(r: &lodestar_classify::Record) -> BTreeMap<Stri
 }
 
 /// The detail view: the summary, the swarm section and the first files.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per section of the body, each built by its own reader"
+)]
 fn detail_of(
     row: &TorrentRow,
     tree: &FileTree,
@@ -821,13 +824,12 @@ pub(crate) async fn detail(
         // Only for the admin with "Show adult content" on (§20.9), only
         // for a torrent that could be adult, and never for one a filter or
         // the core holds back.
+        // Read once: the adult gate and the release attributes both use it.
+        let enrichment = store.enrichment(row.id).map_err(internal)?;
         let (section, wanted) = if adult_asked(adult_shown, viewer) {
             // As ENR-1's gate reads it: stored as Adult, or found by an
             // always-adult source unless you said Not adult.
-            let stored_adult = store
-                .enrichment(row.id)
-                .map_err(internal)?
-                .is_some_and(|e| crate::search::is_adult(&e));
+            let stored_adult = enrichment.as_ref().is_some_and(crate::search::is_adult);
             let adult = stored_adult
                 || (always_adult & row.sources != 0
                     && !store
@@ -862,9 +864,7 @@ pub(crate) async fn detail(
         .map_err(internal)?;
         // The release fields as classify stored them: no parse runs here.
         // Null without a record, or with one this build can't read.
-        let attributes = store
-            .enrichment(row.id)
-            .map_err(internal)?
+        let attributes = enrichment
             .and_then(|e| lodestar_classify::Record::decode(&e.data).ok())
             .map(|r| release_attributes(&r));
         drop(store);

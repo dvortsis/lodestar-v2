@@ -47,6 +47,12 @@ struct Fixture {
 /// is enriched as the pipeline would; `adult` as an Is adult correction
 /// would. `shown`: "Show adult content" on.
 async fn fixture(torrents: &[(&str, bool, bool)], shown: bool) -> Fixture {
+    fixture_with(torrents, shown, false).await
+}
+
+/// As [`fixture`]; `corrupt` stores every classified torrent's record as
+/// bytes this build can't read (a rollback, a newer build's snapshot).
+async fn fixture_with(torrents: &[(&str, bool, bool)], shown: bool, corrupt: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let mut store = Store::open(&db, StoreConfig::default()).unwrap();
@@ -83,7 +89,20 @@ async fn fixture(torrents: &[(&str, bool, bool)], shown: bool) -> Fixture {
             adult: adult.then_some(true),
             not_junk: false,
         };
-        let (e, _) = lodestar_filter::reclassify::enrich_corrected(&row.name, &files, correction);
+        // The parse runs here, at classify time: bounded however hostile
+        // the name. Generous for the slowest CI runner in a debug build.
+        let started = Instant::now();
+        let (mut e, _) =
+            lodestar_filter::reclassify::enrich_corrected(&row.name, &files, correction);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "classifying {} bytes took {:?}",
+            row.name.len(),
+            started.elapsed()
+        );
+        if corrupt {
+            e.data = b"e999\nnot\ta record".to_vec();
+        }
         enriched.push((*id, e));
     }
     store.set_enrichments(&enriched).unwrap();
@@ -207,6 +226,19 @@ async fn an_unclassified_torrent_has_null_attributes() {
 }
 
 #[tokio::test]
+async fn a_record_this_build_cant_read_has_null_attributes() {
+    let f = fixture_with(
+        &[("The.Movie.2008.1080p.BluRay.x264-GROUP", true, false)],
+        false,
+        true,
+    )
+    .await;
+    let (status, body) = detail(&f, 0).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(attributes(&body), &Value::Null);
+}
+
+#[tokio::test]
 async fn an_adult_torrent_stays_hidden_and_shows_attributes_when_shown() {
     let name = "Some.Scene.2021.1080p.WEB-GROUP";
     let hidden = fixture(&[(name, true, true)], false).await;
@@ -279,9 +311,9 @@ fn fill(unit: &str, bytes: usize) -> String {
 
 /// Hostile and odd names, as long as metainfo lets a name be (bidi and
 /// zero-width controls, combining marks, non-BMP letters, a flood of
-/// markers, control characters) are classified and served: the route
-/// answers, the map stays bounded by the parser's input cap, and nothing
-/// reads past it.
+/// markers, control characters) are classified within the fixture's
+/// deadline and served: the route answers in time, the map stays bounded
+/// by the parser's input cap, and nothing reads past it.
 #[tokio::test]
 async fn hostile_names_are_served_within_bounds() {
     let cap = Limits::default().max_name_bytes;
