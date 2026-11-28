@@ -246,7 +246,7 @@ test.describe('status pill', () => {
 		const events = await liveEvents(page);
 		await go('/search');
 		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'crawling');
-		events.drop();
+		await events.drop();
 		await expect(page.getByTestId('reconnecting-banner')).toContainText('Lost contact');
 		await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'reconnecting');
 		await expect(page.getByRole('heading', { name: 'Search' })).toBeVisible();
@@ -581,7 +581,7 @@ for (const [name, themeId, colorMode] of [
 			const events = await liveEvents(page);
 			await go('/search');
 			await expect(page.getByTestId('status-pill')).toHaveAttribute('data-state', 'crawling');
-			events.drop();
+			await events.drop();
 			await expect(page.getByTestId('reconnecting-banner')).toBeVisible();
 			await expectNoA11yViolations(page);
 		});
