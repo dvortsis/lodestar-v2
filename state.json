@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T05:45:17Z",
+    "updated": "2026-11-28T06:04:41Z",
     "items": [
       {
         "slot": 1,
@@ -11137,11 +11137,11 @@
       },
       {
         "slot": 3,
-        "slice": "CMP-G",
+        "slice": "X-watch-search-wait",
         "role": "build",
-        "agent": "session_01MMjhn9KRy17VkjD1ziKQHs",
-        "doing": "PR #1161: one re-run of a watch.rs flake running",
-        "since": "2026-11-28T03:23Z"
+        "agent": "pending",
+        "doing": "launching",
+        "since": "2026-11-28T06:04:41Z"
       },
       {
         "slot": 4,
