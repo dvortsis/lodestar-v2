@@ -50,9 +50,8 @@ vi.mock('./screens', () => ({
 	aboutOf: async (s: Screen) => (await s.about?.())?.[s.id] ?? {}
 }));
 vi.mock('../form/schema', () => ({ loadSettingsIndex: () => registry.index() }));
-vi.mock('./SectionForm.svelte', async () => ({
-	default: (await import('./testing/Stub.svelte')).default
-}));
+// A synchronous factory, so no lazy import of the real SectionForm can start while it's pending.
+vi.mock('./SectionForm.svelte', () => ({ default: Stub }));
 
 const until = (check: () => void) => waitFor(check, { timeout: 10_000 });
 vi.setConfig({ testTimeout: 15_000 });

@@ -5,6 +5,7 @@ import { ApiError } from '$lib/api/client';
 import RestartBanner from './RestartBanner.svelte';
 import { restart } from './restart.svelte';
 import type { System } from './logic';
+import Restarting from './testing/Restarting.svelte';
 
 const page = vi.hoisted(() => ({ url: new URL('http://x/settings') }));
 vi.mock('$app/state', () => ({ page }));
@@ -13,9 +14,8 @@ vi.mock('$lib/api/client', async (original) => ({
 	...(await original<typeof import('$lib/api/client')>()),
 	api
 }));
-vi.mock('./RestartingPage.svelte', async () => ({
-	default: (await import('./testing/Restarting.svelte')).default
-}));
+// A synchronous factory, so no lazy import of the real RestartingPage can start while it's pending.
+vi.mock('./RestartingPage.svelte', () => ({ default: Restarting }));
 
 // The dialog, Review and the Restarting page are lazy chunks: wait for conditions, never a delay.
 vi.setConfig({ testTimeout: 30_000 });
