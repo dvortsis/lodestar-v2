@@ -76,6 +76,7 @@ describe('Open in torrent client and the actions menu', () => {
 		expect(screen.queryByTestId('detail-open-magnet')).toBeNull();
 	});
 
+	// The menu's chunk compiles on first open (about 2 s cold); vite.config.ts gives a test 20 s.
 	it('puts Open full page in the menu for the drawer only, and Block in both', async () => {
 		const { unmount } = render(DetailActions, { detail: torrentDetail(), mode: 'drawer' });
 		await fireEvent.click(screen.getByTestId('detail-actions-menu'));
