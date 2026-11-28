@@ -135,18 +135,18 @@ test.describe('the rail at x-large', () => {
 			.evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')));
 		expect(order).toEqual([
 			'facet-type',
-			'facet-discovered',
-			'facet-size',
-			'facet-ext',
 			'facet-res',
+			'facet-size',
 			'facet-seeders',
-			'facet-trackers'
+			'facet-lang',
+			'facet-discovered'
 		]);
 		await expect(page.getByTestId('facet-type-movie-count')).toContainText('812');
 		await expect(page.getByTestId('facet-type-movie').locator('..')).toContainText('Movie');
 		expect(facetCalls(mock).at(-1)!.lease).toBe('lease-1');
-		// Before M4 the swarm groups say so, never zeros.
-		await expect(page.getByTestId('facet-seeders-unavailable')).toContainText('Not available yet');
+		// Before M4 the swarm groups offer their presets with no counts, never zeros (UI review I6).
+		await expect(page.getByTestId('facet-seeders-5')).toBeVisible();
+		await expect(page.getByTestId('facet-seeders-5-count')).toHaveCount(0);
 		await expect(page.getByTestId('facet-discovered-backfill')).toBeVisible();
 	});
 
@@ -241,6 +241,7 @@ test.describe('the rail at x-large', () => {
 	test('Show more lists up to 100 extensions, with a search box', async ({ page, go, mock }) => {
 		serve(mock);
 		await go('/search?q=lantern');
+		await page.getByTestId('facet-more').getByText('More filters').click(); // Extension is under it (U10)
 		await expect(page.getByTestId('facet-ext-other')).toBeVisible();
 		await page.getByTestId('facet-ext-more').click();
 		await expect.poll(() => facetCalls(mock).at(-1)?.limits.ext).toBe(100);

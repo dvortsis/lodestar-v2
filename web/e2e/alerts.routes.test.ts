@@ -292,7 +292,7 @@ test.describe('one alert', () => {
 		await expect(page.getByTestId('alert-row-5-title')).toHaveText('Lantern Keeper S01E05');
 		await expect(page.getByTestId('alert-row-5-raw')).toContainText('Lantern.Keeper.S01E05');
 		await expect(page.getByTestId('alert-row-5-size')).toHaveText('2.00 GiB');
-		await expect(page.getByTestId('alert-row-5-trackers')).toContainText('4 / 20');
+		await expect(page.getByTestId('alert-row-5-trackers')).toHaveCount(0); // the drawer's (UI review U11)
 		await expect(page.getByTestId('alert-open-search')).toHaveAttribute(
 			'href',
 			/^\/search\?q=lantern\+keeper\+1080p/

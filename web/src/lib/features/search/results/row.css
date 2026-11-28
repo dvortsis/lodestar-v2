@@ -99,6 +99,27 @@
 	font-size: var(--text-caption);
 	line-height: var(--text-caption--line-height);
 }
+/* A badge you can click is a real button: the tag's look, no button chrome, out of the tab order (the list is the tab stop). */
+/* Availability: in words, or the arrow and number once the row is narrow (below). */
+.rr-swarm-num {
+	display: none;
+	align-items: center;
+	gap: var(--spacing);
+}
+.rr-badge-btn {
+	font: inherit;
+	font-size: var(--text-caption);
+	line-height: var(--text-caption--line-height);
+	background: transparent;
+	cursor: pointer;
+}
+.rr-badge-btn:hover {
+	background: var(--color-hover);
+}
+.rr-badge-btn:focus-visible {
+	outline: var(--focus-ring-width) solid var(--color-primary);
+	outline-offset: var(--focus-ring-offset);
+}
 .rr-bar {
 	flex: none;
 	width: var(--compbar-min-width);
@@ -146,11 +167,6 @@
 	}
 }
 
-.rr-leechers {
-	display: inline-flex;
-	align-items: center;
-	gap: var(--spacing);
-}
 /* Discover's Newest list is about recency: the discovered time leads its facts (review I3). Tied
    to the section's heading id in DiscoverPage.svelte; e2e/search-results-adaptive checks it. */
 [aria-labelledby='discover-newest-h'] .rr-discovered {
@@ -172,9 +188,15 @@
 	}
 }
 @container result-row (max-width: 480px) {
+	.rr-swarm-words {
+		display: none;
+	}
+	.rr-swarm-num {
+		display: inline-flex;
+	}
 	.rr-raw,
-	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-discovered):not(.rr-extra),
-	.rr-leechers,
+	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-discovered):not(.rr-extra):not(.rr-badges),
+	.rr-optional,
 	.rr-action-label {
 		display: none;
 	}

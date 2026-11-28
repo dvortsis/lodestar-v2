@@ -43,12 +43,11 @@
 	"search_facets_last_30d": "30 d",
 	"search_facets_last_1y": "1 y",
 	"search_facets_custom": "Custom",
-	"search_facets_custom_hint": "Drag across the histogram, or focus it and use the arrow keys.",
+	"search_facets_custom_hint": "Type two dates, drag across the histogram, or focus it and use the arrow keys.",
 	"search_facets_presets": "{facet} presets",
 	"search_facets_at_least": "≥ {count}",
 	"search_facets_backfill_marker": "Backfill: found by the first crawl, so these dates are when Lodestar found them, not when they were published.",
 	"search_facets_unavailable": "Not available yet",
-	"search_facets_unavailable_swarm": "Seeder and tracker counts arrive with swarm indexing.",
 	"search_facets_unavailable_index": "This index is being rebuilt; the counts return when it's done.",
 	"search_facets_error": "Couldn't load the filters",
 	"search_facets_retry": "Retry",
@@ -58,5 +57,9 @@
 	"search_facets_error_body": "The results are fine; only the counts didn't load.",
 	"search_facets_year": "Release year",
 	"search_facets_count_one": "1 torrent",
-	"search_facets_fixed": "Set by your query: edit it in the search box."
+	"search_facets_fixed": "Set by your query: edit it in the search box.",
+	"search_facets_date_from": "From",
+	"search_facets_date_to": "To",
+	"search_facets_dates_order": "From is after To. Change one of the dates.",
+	"search_facets_dates_bad": "Enter a date as year-month-day, such as 2026-11-28."
 }

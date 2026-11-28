@@ -41,8 +41,8 @@ test('a pasted link shows the rows with their facts', async ({ page, go, mock })
 	await expect(page.getByTestId(`${id}-raw`)).toHaveText('Lantern.Keeper.1.1080p');
 	await expect(page.getByTestId(`${id}-badge-type`)).toHaveText('TV');
 	await expect(page.getByTestId(`${id}-badge-private`)).toBeVisible();
-	await expect(page.getByTestId(`${id}-seeders`)).toHaveText('120');
-	await expect(page.getByTestId(`${id}-trackers`)).toContainText('4 / 20');
+	await expect(page.getByTestId(`${id}-seeders`)).toHaveText('120 seeders');
+	await expect(page.getByTestId(`${id}-trackers`)).toHaveCount(0); // the drawer's (UI review U11)
 	await expect(page.getByTestId('results-announce')).toHaveText('3 torrents');
 });
 

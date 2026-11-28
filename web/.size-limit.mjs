@@ -1548,7 +1548,8 @@ export default [
 	// X-web-followups-1124 (a raise for the runner's §2.26 call): 35.03 → 35.10 KB, measured 35,099 B (+69 B): VirtualList
 	// keeps a focused row active through a new resetKey (the list's side of #1115's table fix).
 	// X-import-verified-no (runner §2.26): 35.10 → 35.39 KB, measured 35,390 B (+290 B): the Imported badge and its help.
-	routeEntry('Alert route (own JS + CSS)', alertView, '35.39 KB'),
+	// X-row-rail (runner §2.26, 2026-11-28): 35.39 KB → 35,520 B, measured 35,488 B (+0.37 kB: the row chunk), rounded up to 64 B.
+	routeEntry('Alert route (own JS + CSS)', alertView, '35520 B'),
 	routeEntry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
@@ -1850,7 +1851,8 @@ export default [
 	// X-import-verified-no (runner §2.26): 43.76 → 44.09 KB, measured 44,089 B (+329 B): the Imported badge and its help.
 	// UX-start (runner §2.26): 44.09 -> 44.224 KB, measured 44,195 B (one trim round, compacting pillState's branches, saved nothing): shell/status.ts, which this chunk carries, gained the "warming up" branch and the found/stored fields.
 	// X-zero-rescue (runner §2.26): 44,224 → 44,416 B, measured 44,377 B (+153 B), rounded up to 64 B: the panel's lazy mount of the rescue chunk and the hint it hides. The rescue itself is its own entry below.
-	entry('Search results (lazy)', resultsFirst, '44416 B'),
+	// X-row-rail (runner §2.26, 2026-11-28): 44,416 → 44,608 B, measured 44,579 B (+0.45 kB, ceiling 45.0 kB): the row's badges.ts, +N chip, badge buttons and seeders words.
+	entry('Search results (lazy)', resultsFirst, '44608 B'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	// runner §2.26 (X-hidden-count): 2.71 → 2.72 KB, measured 2,717 B: "Search {count} searchable
 	// torrents" (en, zh).
@@ -1875,7 +1877,8 @@ export default [
 	// X-group-chip-label (runner §2.26): 18,843 → 18,856 B, facets.svelte.ts keeping each response's
 	// group labels for the query chips.
 	// runner §2.26, X-facet-exclude-fill: 18,856 → 18,958 B, the filled exclude icon (measured, limit rounded up to 64 B).
-	entry('Facet rail (lazy)', facetsLazy, '19.01 KB'),
+	// X-row-rail (runner §2.26, 2026-11-28): 19.01 KB → 20,160 B, measured 20,107 B (+1.07 kB, ceiling 20.2 kB): the reorder, presets without counts, typed From and To dates and the badge-filter listener.
+	entry('Facet rail (lazy)', facetsLazy, '20160 B'),
 	// runner, 2026-10-31, S-search-5: +0.2 KB for the View and Select controls and their messages;
 	// still under the 45 KB per-view cap (§10.1).
 	// runner, 2026-10-31, X-build-stable-name (§2.26): SHA in version literal varies gzip ±few B; was 4,593–4,603 B on main
@@ -1904,8 +1907,10 @@ export default [
 	// X-web-build-determinism (runner §2.26): 7,998 B with stable names (7,992 B with content hashes).
 	// GS-5 (runner §2.26): 8.01 → 8.15 KB, a grouped card's "+N other versions" fact.
 	// X-import-verified-no (runner §2.26): 8.15 → 8.17 KB, measured 8,162 B (+12 B): the Imported badge and its help.
-	entry('Search cards (lazy)', cardsLazy, '8.17 KB'),
-	entry('Search table mode (on demand)', tableLazy, '6.5 KB'),
+	// X-row-rail (runner §2.26, 2026-11-28): 8.17 KB → 8,960 B, measured 8,929 B (+0.42 kB): the row chunk, counted here because the card imports its helpers; one shared chunk, not copied (checked).
+	entry('Search cards (lazy)', cardsLazy, '8960 B'),
+	// X-row-rail (runner §2.26, 2026-11-28): 6.5 KB → 6,784 B, measured 6,737 B (+0.41 kB): the row chunk, as the cards.
+	entry('Search table mode (on demand)', tableLazy, '6784 B'),
 	// GS-5: measured 3.01 KB (the rows, their logic, styles and messages), rounded up to 0.01 KB.
 	// X-gs-followups (runner §2.26): 3.02 → 3.05 KB, measured 3,044 B (+37 B): Show all's group
 	// total and its no-number wording.
@@ -1969,7 +1974,8 @@ export default [
 	// X-gs-followups (runner §2.26): 15.69 → 15.71 KB, measured 15,705 B (+18 B, no /t code: the
 	// shared message barrel and chunk names moved; Settings and Welcome moved by +9 and −2 B too).
 	// X-detail-attributes-ui (runner §2.26): 15.71 KB → 15,744 B, measured 15,718 B (+13 B, the message barrel); rounded up to 64 B.
-	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15744 B'),
+	// X-row-rail (runner §2.26, 2026-11-28): 15,744 → 15,808 B, measured 15,747 B (+3 B), rounded up to 64 B.
+	routeEntry('/t/[hash] route (own JS + CSS)', torrentView, '15808 B'),
 	entry(
 		'Detail sections (on demand)',
 		[

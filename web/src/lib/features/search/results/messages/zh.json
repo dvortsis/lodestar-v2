@@ -49,5 +49,9 @@
 	"search_results_blocked_one": "已屏蔽，移除了 1 个结果。",
 	"search_results_blocked_other": "已屏蔽，移除了 {count} 个结果。",
 	"search_results_load_more": "加载更多种子",
-	"search_results_end": "已到结果末尾"
+	"search_results_end": "已到结果末尾",
+	"search_results_seeders_one": "1 个做种",
+	"search_results_seeders_other": "{count} 个做种",
+	"search_results_badge_filter": "按{label}筛选",
+	"search_results_badges_more": "另有 {count} 项。打开详情"
 }

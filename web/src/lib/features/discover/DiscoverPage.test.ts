@@ -338,7 +338,9 @@ describe('rows', () => {
 	it('shows 0 as 0, not as never scraped', async () => {
 		handler = () => response({ newest: newest({ hits: [hit(1, { seeders: 0, leechers: 0 })] }) });
 		mount();
-		expect((await screen.findByTestId(`discover-row-${hash(1)}-seeders`)).textContent).toBe('0');
+		expect((await screen.findByTestId(`discover-row-${hash(1)}-seeders`)).textContent).toBe(
+			'0 seeders'
+		);
 	});
 
 	it('uses the raw name when title is null, and shows the raw name and method when they differ', async () => {
@@ -387,18 +389,18 @@ describe('rows', () => {
 			});
 		mount();
 		expect((await screen.findByTestId(`discover-row-${hash(1)}-seeders`)).textContent).toBe(
-			'≈\u00A012'
+			'≈\u00A012 seeders'
 		);
 		expect(screen.getByTestId(`discover-row-${hash(1)}-suspect`).textContent).toBe(
 			'Suspect seeders'
 		);
 	});
 
-	it('marks a backfill discovery', async () => {
+	it("keeps the backfill marker off the row (§10.4: it is the drawer's)", async () => {
 		handler = () => response({ newest: newest({ hits: [hit(1, { flags: ['backfill'] })] }) });
 		mount();
 		const row = await screen.findByTestId(`discover-row-${hash(1)}`);
-		expect(within(row).getByText('First seen during backfill')).toBeTruthy();
+		expect(within(row).queryByText('First seen during backfill')).toBeNull();
 	});
 
 	it('uses the single-line Compact row without the composition bar', async () => {

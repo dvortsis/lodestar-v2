@@ -49,5 +49,9 @@
 	"search_results_blocked_one": "Blocked. 1 result removed.",
 	"search_results_blocked_other": "Blocked. {count} results removed.",
 	"search_results_load_more": "Load more torrents",
-	"search_results_end": "End of the results"
+	"search_results_end": "End of the results",
+	"search_results_seeders_one": "1 seeder",
+	"search_results_seeders_other": "{count} seeders",
+	"search_results_badge_filter": "Filter by {label}",
+	"search_results_badges_more": "{count} more facts. Open the details"
 }
