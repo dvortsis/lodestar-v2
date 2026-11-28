@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T17:31:15Z",
+  "updated_at": "2026-11-28T17:48:50Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11142,6 +11142,12 @@
       "via": "owner, runner chat",
       "words": "2. The test-VM laptop: Yes, same internet connection. 3. Your own items: use your recommendations",
       "meaning": "The test VM shares the experiment host uplink: no X-test-vm load screen during any measured window (comparator, rehearsal, CR-R1 days, drills) or night hours 06:00Z-15:00Z. Items 20, 38, 44 stay owner actions (owner-only surfaces); runner gave its recommended timing."
+    },
+    {
+      "at": "2026-11-28T17:48:50Z",
+      "via": "owner, runner chat",
+      "words": "UPDATE_COMPLETE",
+      "meaning": "Owner item 44 done: lodestar-claude-testvm updated to the #1169 template through a reviewed change set (one Modify on the test user policy, no replacement). Test-VM volume tags are required and the test user may delete its own test volumes."
     }
   ],
   "slots": {
