@@ -11116,23 +11116,23 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T08:18:32Z",
+    "updated": "2026-11-28T08:19:24Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-vpn-bind",
         "role": "build",
         "agent": "session_01MMjhnBk6q6p8uDAteN1GqD",
-        "doing": "building (step 0 approved)",
+        "doing": "#1167 review round 1 fixes (one push)",
         "since": "2026-11-28T05:01:56Z"
       },
       {
         "slot": 2,
         "slice": "X-hidden-count",
         "role": "build",
-        "agent": "pending",
+        "agent": "session_01MMjhnAdLGBQaRDghkS2MDK",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "launching",
+        "doing": "step 0: locate the counts",
         "since": "2026-11-28T08:18:32Z"
       },
       {
