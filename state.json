@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T11:02:28Z",
+  "updated_at": "2026-11-28T11:03:22Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11118,8 +11118,13 @@
       "at": "2026-11-28T11:01:19Z",
       "words": "New rule: no load tests at night while unsupervised. Stop any load or soak test running now, and don't schedule or start one overnight unless I'm around to supervise.",
       "via": "owner, relayed from another of the owner's chats with the owner's Allow",
-      "effect": "No load or soak test starts or runs overnight unless the owner is present to supervise. The VM arm A screen was stopped by the owner directly at 11:02:01Z (0 containers). Pending owner answers: which UTC hours count as night; how the rehearsal and round 1 day 1/day 2 (24 h windows) fit.",
-      "record": "r24 records PR, owner-decisions next section"
+      "effect": "Soak tests may run overnight unsupervised (cr-ab-comp-2, the rehearsal, round 1 day 1/day 2 unaffected). No CPU load test (e.g. the VM Aggressive screen) runs at night. Pending owner answer: which UTC hours count as night. Runner reading: cloud-container benchmarks in slice sessions are not load tests on the owner's CPU.",
+      "record": "r24 records PR, owner-decisions next section",
+      "correction": {
+        "at": "2026-11-28T11:03:10Z",
+        "words": "Correction to the rule: soak tests are fine, unsupervised overnight included. Just no load tests on the CPU at night.",
+        "via": "same relay, owner's Allow"
+      }
     }
   ],
   "slots": {
