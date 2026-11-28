@@ -67,8 +67,9 @@ phases:
 - id: ph-v10
   name: Hardening to 1.0
   badge: Later
-  plain: Version 0.8 (plug-ins on workers), then the big relevance, performance, security and chaos checks that
-    must pass before 1.0.
+  plain: The big relevance, performance, security and chaos checks that must pass before 1.0. Most of version 0.8
+    (plug-ins and companions on workers, the Nostr and Lemmy plug-ins) moves to 1.1 by your D1 (§2.93); its parsers
+    are merged and ship switched off.
   tag: v0.8 / M8 / 1.0
 - id: ph-polish
   name: Backlog, fixes and polish
@@ -204,11 +205,11 @@ workstreams:
   ws-m7-w6:
     phase: ph-m7
     name: 'Wave 6: tails waiting on you'
-    plain: Searchable usenet and unverified items (one migration), the Stremio addon and IRC plug-ins, each after your answer.
+    plain: Searchable usenet and unverified items (one migration), the Stremio addon and IRC plug-ins. All move to 1.1 by your D1 (§2.93).
   ws-m7-gates:
     phase: ph-m7
     name: v0.7 gates
-    plain: The 10M scale run on your import host, then the v0.7 gate.
+    plain: The 10M scale run moves to 1.1, and the v0.7 gate's safety checks run in the 1.0 audits gate instead (your D1, §2.93).
   ws-v10:
     phase: ph-v10
     name: Plans and epics
@@ -216,15 +217,15 @@ workstreams:
   ws-v08-workers:
     phase: ph-v10
     name: 'v0.8: plug-ins and companions on workers'
-    plain: Source plug-ins and companions running on remote workers, with placement, fleet-wide politeness, consent and credentials per worker.
+    plain: Source plug-ins and companions running on remote workers, with placement, fleet-wide politeness, consent and credentials per worker. Moved to 1.1 by your D1 (§2.93).
   ws-v08-feeds:
     phase: ph-v10
     name: 'v0.8: Nostr and Lemmy'
-    plain: Nostr and Lemmy as sources, and how third-party adult tags are treated. The parsers may land early, switched off.
+    plain: Nostr and Lemmy as sources, and how third-party adult tags are treated. The parsers are merged and ship switched off; the plug-ins and the adult-tag rule move to 1.1 by your D1 (§2.93).
   ws-v08-gate:
     phase: ph-v10
     name: 'v0.8: guide and gate'
-    plain: The user-guide chapters and the v0.8 gate.
+    plain: The user-guide chapters and the v0.8 gate, moved to 1.1 by your D1 (§2.93).
   ws-m8-tooling:
     phase: ph-v10
     name: Benchmarks, relevance and CI
@@ -296,6 +297,7 @@ placement:
   - X-vpn-bind
   - X-vpn-bind-ui
   - X-vpn-bind-worker
+  - X-vpn-bind-win
   - D-vpn-guide
 - ws: ws-filters
   match:
@@ -319,6 +321,9 @@ placement:
   - X-detail-attributes
   - X-detail-attributes-ui
   - X-hidden-count
+  - X-hidden-count-wide-shift
+  - X-hidden-count-grouped
+  - X-hidden-count-drawer-wrap
   - X-detail-depth-compare
   - X-cards-raw-name
   - X-rowactions-arrowdown
@@ -392,6 +397,10 @@ placement:
   - X-live-banner-flake
   - X-upload-screen-flake
   - X-events-send-await
+  - X-drawer-detach-flake
+  - X-smoke-torrent-flake
+  - X-all-themes-settle
+  - X-detail-actions-timeout
   - X-size-own-modules
   - X-size-own-modules-2
   - X-help
@@ -579,6 +588,9 @@ placement:
   - X-flake-dht-bootstrap
   - X-dht-reply-ratio-resolved
   - X-ci-no-fail-fast
+  - X-ci-test-shard
+  - X-vpn-hold-macos
+  - X-flake-trio
   - X-flake-dataset-macos
   - X-flake-detect-macos
   - X-flake-address-port
@@ -946,6 +958,7 @@ placement:
   - M8-POL
   - M8-PURGE
   - M8-DR
+  - M8-DR-a
 - ws: ws-m8-docs
   match:
   - M8-DOC-*
@@ -973,6 +986,7 @@ placement:
   - X-filter-budget-manyfile-perf
   - X-filter-split-reuse
   - X-filter-budget-remeasure
+  - X-filter-budget-drift
   - X-filter-dicp-doc
   - X-filter12-fix
   - X-fixed-sleep-nits
@@ -1030,6 +1044,34 @@ held:
 - CR-AB-1  # deferred to 1.1 by owner O1 (§2.86)
 - CR-5  # deferred to 1.1 by owner O1 (§2.86)
 - X-cr-round1-1p1  # a 1.1 item from CR-SPEC-R1 §14 (runner records r20)
+- OUT-1  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- OUT-3  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- UN-3  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- UN-4  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- IRC-2  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- IRC-3  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- SRC-3b  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- ENR-13b  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- G-v07-scale  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-0  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-1  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-2  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-3  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-4  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-5  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-6  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-7a  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-7b  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- PL-8  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- CW-0  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- CW-1  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- CW-2  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- CW-3  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- NOS-3  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- LEM-1  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- ADH-0  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- DOC-v08  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
+- G-v08  # moved to 1.1 by your D1 (owner-decisions §2.93; runner records r24)
 expanded:
 - X-ui-checks
 - E-v06-sources
@@ -1046,6 +1088,9 @@ state_override:
   R-rc3-cut: done
   SRC-10b: closed
   ENR-debrid: closed  # dropped, no provider qualifies (decisions/2026-11-23-ENR-debrid.md, #1103; runner records r17)
+  G-v07: closed  # no separate v0.7 gate: its safety checks fold into G-v1-audits on the 1.0 RC (D1, owner-decisions §2.93; runner records r24)
+  X-tokio-1541-v052: closed  # no public v0.5.2 (owner-decisions §2.93), so release/v0.5.2 is never tagged (runner records r24)
+  CR-AB-COMP: done  # cr-ab-comp-2, owner-run on lodestar-host, 2026-11-27T17:00:06Z to 2026-11-28T18:00:52Z; the analyzer marked its report valid (runner records r24)
 conditions:
   owner-cr-spec:
     met: true
@@ -1081,9 +1126,9 @@ conditions:
     label: Release branch cut
     auto: branch:release/v0.5.1
   migration-slot:
-    met: false
+    met: true
     who: runner
-    label: A free database-migration number (runner assigns V14)
+    label: A free database-migration number. V17 is assigned to WK-12; the later numbers are queued in the runner's state (runner records r24)
   owner-rpq2:
     met: true
     who: you
@@ -1138,7 +1183,7 @@ conditions:
     met: true
     who: you
     label: 'Standing permission, no per-run booking (§2.68). A crawler run never overlaps another run, a comparator day, an import pilot or a soak. It may pause only Appdata Backup and a scheduled parity check, with a restore step that always runs'
-    note: '`lodestar-host`, the VM on your new Unraid server, is the host of record (§2.85, D2), at 8 vCPU and 32 GiB (D10). Every test crawl runs inside WireGuard with its leak test passing (§2.85). cr-ab-comp-1 (the bitmagnet comparator on the old host) ended 2026-11-08T14:01Z: 317.8 stored/min over 24 h. cr-ab-comp-2 is running on the new host; its window ends about 2026-11-28T18:00Z, and round 1 (CR-R1) starts at least 12 h after it (§2.86)'
+    note: '`lodestar-host`, the VM on your new Unraid server, is the host of record (§2.85, D2), at 8 vCPU and 32 GiB (D10). Every test crawl runs inside WireGuard with its leak test passing (§2.85). cr-ab-comp-1 (the bitmagnet comparator on the old host) ended 2026-11-08T14:01Z: 317.8 stored/min over 24 h. cr-ab-comp-2 ran on the new host from 2026-11-27T17:00:06Z to 2026-11-28T18:00:52Z: 316.65 stored/min, all 19 checks passed, report valid. Round 1 (CR-R1) day 1 starts no earlier than 2026-11-29T06:00:52Z, 12 h after it (§2.86)'
   owner-checkpoint-1:
     met: true
     who: you
@@ -1239,7 +1284,7 @@ conditions:
   owner-m6-manual:
     met: false
     who: you
-    label: You do the M6 manual Unraid and MSI installs and approve the rc's signing (M6 Q14)
+    label: 'You install the 1.0 release candidate by hand, on your Unraid server and from the Windows MSI, and approve its signing (M6 Q14; on the 1.0 RC by your D1, §2.93)'
   owner-pk-nightly-host:
     met: true
     who: you
@@ -1377,13 +1422,14 @@ roadmap:
     - D-v051-main
     override: done
   - id: v052
-    label: Cut v0.5.2
-    plain: A new release branch from main, now that v0.5.1 is out. The consent gate is in (sources that need consent stay off in v0.5.2); the feature manifest is frozen first, and the release notes are trimmed at the cut. INFRA-01 (the image publish on a version tag) is checked before the tag.
+    label: v0.5.2 cut, not released
+    plain: 'Superseded (your answer of 2026-11-28, §2.93): there is no public v0.5.2, and the next public release is 1.0. The release/v0.5.2 branch was cut and stays untagged.'
     col: 3
     row: 2
     members:
     - P-v052-cut
     - X-consent-gate-052
+    override: closed
   - id: unhold
     label: Soak verdict starts the planned tracks
     plain: Workers, companions, packaging, the early v0.8 parsers and the 1.0 tooling were sliced on 2026-11-06. The memory test passed on 2026-11-06, so their first slices are starting, at most four at a time.
@@ -1413,7 +1459,7 @@ roadmap:
     - CR-1c
   - id: crab
     label: Comparator on the new host
-    plain: 'cr-ab-comp-2, the pinned bitmagnet comparator, runs on lodestar-host from 2026-11-27T17:00Z; its window ends about 2026-11-28T18:00Z. It calibrates the host and its VPN network for round 1.'
+    plain: 'Done: cr-ab-comp-2, the pinned bitmagnet comparator, ran on lodestar-host from 2026-11-27T17:00:06Z to 2026-11-28T18:00:52Z and stored 456,140 torrents, 316.65 a minute. All 19 checks passed and its report is valid. It calibrates the host and its VPN network for round 1.'
     col: 1
     row: 0
     members:
@@ -1446,13 +1492,13 @@ roadmap:
     - X-leaktest-vpn-held-down
   - id: crreh
     label: Rehearsal on the box
-    plain: 'After the comparator''s window ends (about 2026-11-28T18:00Z): each arm''s leak test, the switch gauge check and the drop-C rule, over a 3 h window with a 30 min warm-up and a 4 h cap (CR-SPEC-R1 §6). It decides whether the all-off control runs.'
+    plain: 'After the comparator''s window ended (2026-11-28T18:00:52Z): each arm''s leak test, the switch gauge check and the drop-C rule, over a 3 h window with a 30 min warm-up and a 4 h cap (CR-SPEC-R1 §6). It decides whether the all-off control runs.'
     col: 5
     row: 0
     members: []
   - id: crr1
     label: Round 1 (two days)
-    plain: 'After a rehearsal, day 1 starts at least 12 h after the comparator''s window ends (about 2026-11-29T06:00Z), then day 2 on swapped VPN exits; the verdict is due about 2026-12-01. All-on Balanced first, Aggressive as the fallback you authorized, an all-off control (plan §6).'
+    plain: 'After a rehearsal, day 1 starts at least 12 h after the comparator''s window ended, so no earlier than 2026-11-29T06:00:52Z, then day 2 on swapped VPN exits; the verdict is due about 2026-12-01. All-on Balanced first, Aggressive as the fallback you authorized, an all-off control (plan §6).'
     col: 6
     row: 0
     members:
@@ -1637,7 +1683,7 @@ roadmap:
     - CMP-G
   - id: m6
     label: Packaging (M6)
-    plain: Windows updates and Restart now, the release manifest, the settings CLI, the install smoke and the user guide, then the M6 exit gate.
+    plain: Windows updates and Restart now, the release manifest, the settings CLI, the install smoke and the user guide; the M6 exit gate runs on the 1.0 release candidate.
     col: 3
     row: 3
     members:
@@ -1666,7 +1712,7 @@ roadmap:
     members: []
   - id: m7
     label: v0.7 / M7
-    plain: Grouping, regex, Torznab, outputs, upload, enrichment plug-ins, usenet and IRC, then the v0.7 gate.
+    plain: 'Grouping, regex, Torznab, outputs, upload, enrichment plug-ins, usenet and IRC. RX-2 (regex in the query bar) is the last 1.0 piece. The unstarted tails move to 1.1 and the v0.7 gate''s safety checks run in the 1.0 audits gate (your D1, §2.93).'
     col: 5
     row: 7
     members:
@@ -1682,9 +1728,7 @@ roadmap:
     - RX-2
     - TZ-0
     - OUT-0
-    - OUT-1
     - OUT-2
-    - OUT-3
     - UP-0
     - UP-1
     - UP-2
@@ -1693,7 +1737,6 @@ roadmap:
     - ENR-11
     - ENR-12
     - ENR-13
-    - ENR-13b
     - ENR-14
     - ENR-tmdb
     - ENR-tvdb
@@ -1710,45 +1753,20 @@ roadmap:
     - UN-0
     - UN-1
     - UN-2
-    - UN-3
-    - UN-4
     - IRC-0
     - IRC-1
-    - IRC-2
-    - IRC-3
-    - SRC-3b
-    - G-v07-scale
     - G-v07
   - id: v08
-    label: v0.8
-    plain: Plug-ins and companions on workers; Nostr and Lemmy.
+    label: v0.8 parsers (the rest in 1.1)
+    plain: 'The Nostr and Lemmy parsers are merged and ship switched off. Plug-ins and companions on workers, the Nostr and Lemmy plug-ins and the v0.8 gate move to 1.1 (your D1, §2.93).'
     col: 6
     row: 5
     members:
-    - PL-0
-    - PL-1
-    - PL-2
-    - PL-3
-    - PL-4
-    - PL-5
-    - PL-6
-    - PL-7a
-    - PL-7b
-    - PL-8
-    - CW-0
-    - CW-3
-    - CW-1
-    - CW-2
     - NOS-0
     - NOS-1
     - NOS-2a
     - NOS-2b
-    - NOS-3
     - LEM-0
-    - LEM-1
-    - ADH-0
-    - DOC-v08
-    - G-v08
   - id: m8
     label: Hardening to 1.0
     plain: Relevance, 10M performance, chaos tests, eight security reviews, audits, design review and the 1.0 docs.
@@ -1805,9 +1823,43 @@ roadmap:
     - G-v1-ui
     - G-v1-vs-bitmagnet
     - G-v1
+  - id: v11
+    label: Moved to 1.1 (your D1)
+    plain: 'By your D1 (2026-11-28, §2.93): the unstarted v0.7 tails (the Stremio addon and its screen, usenet sending, the IRC plug-ins, searchable unverified items, the detail view''s identification offer, the 10M v0.7 run) and every unmerged v0.8 slice. None of them is built before 1.0.'
+    col: 9
+    row: 5
+    members:
+    - OUT-1
+    - OUT-3
+    - UN-3
+    - UN-4
+    - IRC-2
+    - IRC-3
+    - SRC-3b
+    - ENR-13b
+    - G-v07-scale
+    - PL-0
+    - PL-1
+    - PL-2
+    - PL-3
+    - PL-4
+    - PL-5
+    - PL-6
+    - PL-7a
+    - PL-7b
+    - PL-8
+    - CW-0
+    - CW-1
+    - CW-2
+    - CW-3
+    - NOS-3
+    - LEM-1
+    - ADH-0
+    - DOC-v08
+    - G-v08
   - id: tracku
     label: 'Track U: UI review fixes'
-    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in. Then every other finding, grouped by cause: the §10 text for the moderate user, one page frame, control sizes, labels, the search toolbar and row, zero-result rescue, detail, safety switches, Settings search, the Insights story and charts, the setup-token check, first run, alerts, help, and the review''s scripts kept as checks.'
+    plain: 'The 2026-11-13 UI review: the wizard labels and Sign out first (your call), the guards and the Sources restructure, then the drawer beside the results from 1366 px, the /insights scroll check, the offline retry and keeping a Settings draft across sign-in. Then every other finding, grouped by cause: the §10 text for the moderate user, one page frame, control sizes, labels, the search toolbar and row, zero-result rescue, detail, safety switches, Settings search, the Insights story and charts, the setup-token check, first run, alerts, help, and the review''s scripts kept as checks. By your D1 (§2.93) Track U is fill work: what isn''t merged when release/v1.0 is cut moves to 1.1.'
     col: 5
     row: 4
     members:
@@ -1950,12 +2002,14 @@ roadmap:
     - v08
   - - m7
     - v08
-  - - v08
+  - - v06
     - m8
+  - - v1
+    - v11
   - - unhold
     - m6
   - - m6
-    - m8
+    - v1
   - - v052
     - m7
   - - m8
@@ -1964,8 +2018,6 @@ roadmap:
     - m8
   - - trackq
     - v1
-  - - tracku
-    - m8
 owner_queue:
 - n: 3
   type: action
@@ -2047,16 +2099,21 @@ owner_queue:
   action: 'Runner calls since r20 you may want to veto (§2.19; the "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r21.md and -r22.md): the leak test''s held retries and its never-sent-is-never-clean rule, the round-1 gateway check and three stricter round-1 rules, remote workers waiting for the have-filter fill, the 10M re-run after round 1''s day 2, the VPN setting being restart-required, remote workers outside the VPN setting until X-vpn-bind-worker, and CMP-G''s privileged test runs and advisory smoke check'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
-- n: 44
-  type: action
-  action: 'Apply the reviewed test-VM policy: in AWS CloudFormation (us-east-1), update the stack lodestar-claude-testvm with infra/dev-vm/aws-claude-testvm.json from main, keeping every parameter and ticking the IAM acknowledgement (X-testvm-iam-volumes, #1169; §2.88 items 31 and 33)'
-  unblocks: Test volumes carry the test-VM tags, and the test user can delete its own leftover volumes
-  when: Any time
 - n: 45
   type: review
   action: 'Runner calls since r22 you may want to veto (§2.19; "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r23.md): skipping host-named trackers while a VPN interface is set, the VPN state on the open /metrics page, EADDRNOTAVAIL counted as VPN down on Windows only, the test-VM volume launch also requiring Environment and LaunchedBy, the zero-result chips offered unasked as §10.4 says, and the VPN setting covering crawl traffic only (the torrent cache, source plugins and companions keep their own egress, with a warning in Settings)'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
+- n: 46
+  type: review
+  action: 'Runner calls since r23 you may want to veto (§2.19; "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r24.md): the D1 rewiring as the runner drew it (G-v07 folded into the 1.0 audits gate, the M6 gate moved onto the 1.0 RC, the 1.0 cut waiting on Track Q''s fixes, Track U as fill work, and the Windows VPN binding not gating the cut); the toolbar caps and the grouped note''s 72rem threshold; the result row''s size grants; 20 s test timeouts; WK-12''s wider worker number and purge cursor; the 10M benchmark runner''s triggers, registration and token handling, with runner-guard recommended as a required check; and the runner''s security review of any change to the CI files'
+  unblocks: Nothing; these go ahead unless you object
+  when: Any time
+- n: 47
+  type: action
+  action: 'Install the 1.0 release candidate by hand: on your Unraid server from the app template, and on Windows from the MSI, then say whether its signing looks right (M6 Q14). By the runner''s D1 rewiring (§2.93, item 46) this happens on the 1.0 release candidate, not on an earlier release. The runner gives you the steps when the candidate is tagged'
+  unblocks: The M6 exit gate (G-m6), and with it the 1.0 tag
+  when: After you tag v1.0.0-rc.1
 
 gates:
 - id: G-v05
@@ -2117,22 +2174,22 @@ gates:
   where: docs/plan/2026-11-06-v06-workers.md
 - id: G-m6
   name: Milestone 6 exit
-  plain: Clean install, crawling and search on Docker/Unraid, Linux and Windows, with Windows updates and the guide.
+  plain: Clean install, crawling and search on Docker/Unraid, Linux and Windows, with Windows updates and the guide, on the 1.0 release candidate.
   slice: G-m6
   measure: ''
   target: architecture 14 M6 exit criteria
   where: docs/plan/2026-11-06-m6-gap-audit.md
 - id: G-v07
-  name: v0.7 gate
-  plain: Outputs and enrichment never carry private, held or hidden adult items; uploads go through the safety floor.
-  slice: G-v07
+  name: v0.7 safety checks (in the 1.0 audits gate)
+  plain: 'Outputs and enrichment never carry private, held or hidden adult items; uploads go through the safety floor. By your D1 (§2.93) these checks run on the 1.0 release candidate inside the audits gate, so this row passes with it.'
+  slice: G-v1-audits
   measure: ''
   target: architecture 14 M7 exit criteria and 18.9
   where: docs/plan/2026-11-05-v07-m7.md
 - id: G-v08
   name: v0.8 gate
-  plain: Plug-ins and companions on workers stay polite, private and consented; Nostr and Lemmy are safe.
-  slice: G-v08
+  plain: 'Plug-ins and companions on workers stay polite, private and consented; Nostr and Lemmy are safe. Moved to 1.1 with the rest of v0.8 by your D1 (§2.93).'
+  status: held
   measure: ''
   target: architecture 19.8 and 18.9
   where: docs/plan/2026-11-06-v08.md
@@ -2201,7 +2258,7 @@ gates:
   where: docs/plan/2026-11-06-m8-hardening.md
 - id: G-v1-audits
   name: '1.0: politeness, purge and filter gates'
-  plain: The politeness audit of every plug-in that ships and the purge audit complete, a bounded-load check of the crawler's DHT politeness (your D4, §2.85; the crawler's full politeness audit is a 1.1 gate), the sources, rule-pack and enrichment gates re-run, and the filter speed budget (G-filter-budget) checked on the reference CPU.
+  plain: The politeness audit of every plug-in that ships and the purge audit complete, a bounded-load check of the crawler's DHT politeness (your D4, §2.85; the crawler's full politeness audit is a 1.1 gate), the sources, rule-pack and enrichment gates re-run, the filter speed budget (G-filter-budget) checked on the reference CPU, and the v0.7 safety checks (your D1, §2.93).
   slice: G-v1-audits
   measure: ''
   target: 18.9, 20.8; 50 us on the 2.20 reference CPU
@@ -2246,7 +2303,11 @@ crawler:
 - label: bitmagnet, 24 h on the old host (cr-ab-comp-1)
   value: 317.8
   kind: measured
-  note: 'The comparator, 2026-11-07 to 11-08. cr-ab-comp-2 re-measures it on lodestar-host before round 1 (§2.86)'
+  note: 'The comparator, 2026-11-07 to 11-08. cr-ab-comp-2 re-measured it on lodestar-host before round 1 (§2.86)'
+- label: bitmagnet, 24 h on lodestar-host (cr-ab-comp-2)
+  value: 316.65
+  kind: measured
+  note: '2026-11-27T17:00:06Z to 2026-11-28T18:00:52Z, 1,440.51 measured minutes; 456,140 stored; best hour 387.60, worst 281.46; all 19 checks passed, report valid'
 - label: Gate for the v0.6 tag
   value: 100
   kind: gate
@@ -2286,15 +2347,17 @@ notes:
   - label: Cloud testing is optional now
     text: 'With lodestar-host as the host of record (§2.85, D2), runs of record are on your box and cloud runs are optional screens or replicates, never evidence of a gain (§2.82). The AWS stop is $295, as the AWS Budget "Lodestar Path to 100" measures it (§2.87). The optional Aggressive cloud screen waits while the test lanes'' SSM access is denied.'
   - label: v0.5.1 is published
-    text: You published v0.5.1 on 2026-11-07 from 12cd25ca, after it passed the 24-hour memory test (0.91 MiB an hour, upper bound 1.35, bar 2.0), the VPN (gluetun) leg and the Windows MSI check. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
+    text: You published v0.5.1 on 2026-11-07 from 12cd25ca, after it passed the 24-hour memory test (0.91 MiB an hour, upper bound 1.35, bar 2.0), the VPN (gluetun) leg and the Windows MSI check. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in 1.0, since there is no public v0.5.2 (your answer of 2026-11-28, §2.93).
   - label: The crawler is the longest road
-    text: 'It finds about 12 torrents a minute and the v0.6 tag needs 100. Performance comes first and politeness second, tuned after 1.0 (§2.85). By your O1 to O4 (2026-11-27, §2.86; docs/plan/2026-11-27-revised-path-to-100.md), round 1 replaces the serial stages and Checkpoint 1: after the bitmagnet comparator cr-ab-comp-2 (window ends about 2026-11-28T18:00Z), the round-1 tool fixes (X-cr-round1-spec-fixes, X-leaktest-vpn-held-down) and a rehearsal, three arms run on lodestar-host for two days from about 2026-11-29T06:00Z, each on its own VPN exit: all switches on at Balanced (the first choice), at Aggressive (the fallback you authorized), and an all-off control. The verdict is due about 2026-12-01. A qualified candidate''s settings become the defaults (CR-COMB) and its two days are the acceptance. If none qualifies, the round-1 report comes to you and round 2 runs only with your yes. The paired on/off runs (CR-AB-ADM, CR-AB-4, CR-AB-LC, CR-AB-1), Checkpoint 1 and CR-5 move to 1.1. Cloud results stay provisional (§2.82).'
+    text: 'It finds about 12 torrents a minute and the v0.6 tag needs 100. Performance comes first and politeness second, tuned after 1.0 (§2.85). By your O1 to O4 (2026-11-27, §2.86; docs/plan/2026-11-27-revised-path-to-100.md), round 1 replaces the serial stages and Checkpoint 1: after the bitmagnet comparator cr-ab-comp-2 (done: 2026-11-27T17:00:06Z to 2026-11-28T18:00:52Z, 456,140 stored, 316.65 a minute, best hour 387.60 and worst 281.46, rising every hour; all 19 checks passed, report valid), the round-1 tool fixes (X-cr-round1-spec-fixes, X-leaktest-vpn-held-down) and a rehearsal, three arms run on lodestar-host for two days, day 1 starting no earlier than 2026-11-29T06:00:52Z (the comparator''s end plus 12 h), each on its own VPN exit: all switches on at Balanced (the first choice), at Aggressive (the fallback you authorized), and an all-off control. The verdict is due about 2026-12-01. A qualified candidate''s settings become the defaults (CR-COMB) and its two days are the acceptance. If none qualifies, the round-1 report comes to you and round 2 runs only with your yes. The paired on/off runs (CR-AB-ADM, CR-AB-4, CR-AB-LC, CR-AB-1), Checkpoint 1 and CR-5 move to 1.1. Cloud results stay provisional (§2.82).'
   - label: Sources are being laid down
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
       the Sukebei feed are recorded, so the main plug-in can start once its foundations land.
-  - label: Four build sessions and two test sessions
-    text: 'By your yes to D6 (2026-11-26, §2.85), four build sessions and two test sessions run at once, filled only when ready work fits the plan (it replaces §2.81''s "as many testing sessions as needed"). The runner approves best-practice UX and performance decisions itself, flagged to you (§2.19, §2.26). The runner keeps the current list in its state file, shown on the slots view.'
+  - label: Estimates
+    text: 'As of 2026-11-28T19:55Z, from the runner''s 6-hourly review (runner-state tools/estimate.py). They use how long planned slices actually took from launch to merge over the last 14 days (half took 5.3 h or less; the slow case is 10.4 h), six build slots, and the live crawls and soaks at their fixed lengths. The crawler at 100 a minute (the v0.6 gate): likely 2026-12-05. 1.0 feature-complete (release/v1.0 cut): likely 2026-12-05. 1.0 ready to tag: likely 2026-12-08. What sets these dates is the crawler chain: round 1 (the rehearsal, then two days), the change of defaults and its two-day acceptance, the v0.6 gate, then the 1.0 cut and the side-by-side bitmagnet run on the release candidate. They assume each of your steps is on time: tagging the release candidate, the manual installs on it, the benchmark runner and the soak hosts. The biggest risk: if no round-1 candidate qualifies, round 2 needs your yes and adds about 4 days or more. They were worked out before this page''s D1 changes, and the next review refreshes them.'
+  - label: Six build sessions and two test sessions
+    text: 'By your yes of 2026-11-28 (§2.91), six build sessions run at once, up from D6''s four (§2.85), with the two test sessions beside them, filled only when ready work fits the plan. The two extra slots take low-risk work first, and the runner steps back if CI queues grow. A review runs every 6 h to keep throughput up without lowering the bar, and updates this page''s plan and estimates (§2.92). The runner approves best-practice UX and performance decisions itself, flagged to you (§2.19, §2.26). The runner keeps the current list in its state file, shown on the slots view.'
   you:
   - label: New decisions from the reviews
     text: Owner queue item 20 (the draft security advisories); the runner gives you its detail directly. FILTER-01 and FILTER-03 are chosen (§2.70); the others are the runner's now (§2.69).

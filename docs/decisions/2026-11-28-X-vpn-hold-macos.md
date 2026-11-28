@@ -1,9 +1,9 @@
-# X-vpn-hold-macos decisions (PR pending)
+# X-vpn-hold-macos decisions (#1185)
 
 Fixes `test (macos-latest)`, red on `main` since #1167 (runner, 2026-11-28). The job runs on `main` pushes only.
 
 - **Cause:** three tests in `crates/pipeline/tests/vpn_hold.rs` assume a pin that works. On macOS, as on any platform other than Linux and Windows, every pin fails by design (`network-policy/src/iface.rs`: "unsupported; every pin fails, so the crawl stays down"). The crawl therefore never resumed, and the status read `bind_failed` rather than `missing`.
 - **Fix (runner):** those three tests run on `any(target_os = "linux", windows)` only, with the helpers only they use.
 - **The other platforms get a test of the fail-closed rule instead:** `an_unsupported_platform_holds_the_crawl_down`. With an interface set and a probe that says up, the crawl is held as `bind_failed` (the pin fails as `unsupported`; the DHT plugin reports its hold) through the first attempt and two retries, with exactly one trip, so it never resumes or runs a node in between. This isn't a skipped test: it asserts what those platforms must do. It waits on the pin counter, with a 30 s deadline and no fixed sleep. In that binary it's the only test that pins on those platforms, so the counter counts only its own attempts.
-- **Not run on macOS here** (cloud sessions are Linux). Checked on Linux by running the new test with its `cfg` removed: `lo0` doesn't exist on Linux, so its pin fails as macOS's does. It passed in 6.3 s, which is the two real retries. The `cfg` code shows macOS compiles exactly that test plus `without_a_guard_there_is_no_vpn_status`. `Down` and `AtomicBool`/`Ordering` are imported only where the gated tests use them, so there are no unused-import warnings.
+- **Not run on macOS here** (cloud sessions are Linux). Checked on Linux by running the new test with its `cfg` removed: `lo0` doesn't exist on Linux, so its pin fails at `bind_device` (ENODEV) and takes the same refused path that macOS's `unsupported` pin takes. It passed in 6.3 s, which is the two real retries. The `cfg` code shows macOS compiles exactly that test plus `without_a_guard_there_is_no_vpn_status`. `Down` and `AtomicBool`/`Ordering` are imported only where the gated tests use them, so there are no unused-import warnings.
 - No production code changes.

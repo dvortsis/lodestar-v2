@@ -558,8 +558,8 @@ const eventNamesLimits = {
 	companions: '1160 B',
 	// runner §2.26, X-tls-root-load-event: measured 1220 B with the two root-load events, + 300 B.
 	integrations: '1520 B',
-	// runner §2.26, X-healthz-count-async: measured 3407 B with the torrents-counted event, rounded
-	// up to 64 B.
+	// runner §2.26, X-healthz-count-async: measured 3432 B with the torrents-counted event and the
+	// have_fill_failed stage wording, rounded up to 64 B.
 	pipeline: '3456 B',
 	fetch: '610 B'
 };

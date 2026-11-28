@@ -445,7 +445,7 @@ lodestar_log::catalogue! {
     ///   counted on its own connection instead (`attempts` 0);
     /// - `count`: the count failed; `stored_torrents` stays unknown until
     ///   the next start, and it isn't tried again (`attempts` 0);
-    /// - `scan`: the fill's scan failed; it's tried again after a wait
+    /// - `scan`: the fill's read of the store failed; it's tried again after a wait
     ///   that grows to a minute, and nothing is crawled until it succeeds.
     HAVE_FILL_FAILED {
         id: "pipeline.have_fill_failed",
