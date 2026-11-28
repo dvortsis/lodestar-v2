@@ -1253,6 +1253,25 @@ impl Store {
     }
 
     /// Counts every row: a full scan, so not for hot paths.
+    /// An upper bound on the number of torrents, without a scan
+    /// (X-healthz-cold-start): `max(id) - min(id) + 1`, two seeks of the
+    /// rowid b-tree. Row ids are distinct integers, so however many rows
+    /// there are, they fit in that range; deleted rows only make it
+    /// larger. 0 for an empty table.
+    pub fn torrent_bound(&self) -> Result<u64> {
+        let (lo, hi): (Option<i64>, Option<i64>) =
+            self.conn
+                .query_row("SELECT min(id), max(id) FROM torrents", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?;
+        Ok(match (lo, hi) {
+            (Some(lo), Some(hi)) => (i128::from(hi) - i128::from(lo) + 1)
+                .try_into()
+                .unwrap_or(u64::MAX),
+            _ => 0,
+        })
+    }
+
     pub fn count(&self) -> Result<u64> {
         Ok(self
             .conn

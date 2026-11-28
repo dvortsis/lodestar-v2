@@ -80,7 +80,7 @@ pub use control::Control;
 pub use coordinator::LeaseStats;
 pub use dht::{DhtSource, strategy};
 pub use have::Have;
-pub use have::{Bloom, HaveObserver, new_key};
+pub use have::{Bloom, FillGate, HaveObserver, new_key};
 pub use rollups::{Rollups, metric};
 pub use writer::{LIVE_FEEDS, WriterStats};
 
@@ -187,6 +187,10 @@ pub struct PipelineConfig {
     /// the companion manager exists. CMP-5 must wire `Some`; with `Some`
     /// the gate fails closed.
     pub companions: Option<requires::Companions>,
+    /// Tests only: run on the have-filter's fill thread before it scans
+    /// the store, so a test can hold the fill (X-healthz-cold-start).
+    #[doc(hidden)]
+    pub fill_gate: Option<FillGate>,
 }
 
 /// How often a running plugin's non-direct route is probed, so a route
@@ -233,6 +237,7 @@ impl Default for PipelineConfig {
             adult_enrichers: Vec::new(),
             setup_done: None,
             companions: None,
+            fill_gate: None,
         }
     }
 }
@@ -682,7 +687,7 @@ impl Pipeline {
             })
             .collect();
         let backfill = config.backfill.as_secs() as i64;
-        let (store, registered, mut queue, have, backfill_until, stored_at_start, store_filter) =
+        let (store, registered, mut queue, (have, fill), backfill_until, stored_at_start, store_filter) =
             tokio::task::spawn_blocking(move || prepare(store, &manifests, backfill))
                 .await
                 .map_err(Error::Join)??;
@@ -728,10 +733,23 @@ impl Pipeline {
         );
         lodestar_log::log_event!(
             log_events::STARTING,
-            stored = have.len(),
+            // The torrents counted: the filter may still be filling.
+            stored = stored_at_start,
             queued = queue.len()
         );
         let have = Arc::new(have);
+        // The fill runs beside everything below (X-healthz-cold-start):
+        // `serve` answers `/healthz` once this returns, and the intake
+        // waits for the fill before it admits a key.
+        if let Some(open) = fill {
+            let (have, gate) = (Arc::downgrade(&have), config.fill_gate.clone());
+            tokio::task::spawn_blocking(move || {
+                if let Some(gate) = gate {
+                    gate.wait();
+                }
+                fill_have(&have, || Store::open_reader(&open.0, open.1.clone()));
+            });
+        }
         for note in load_filter(&config.filter, &store_filter) {
             let (what, rule, reason) = log_events::filter_note(&note);
             lodestar_log::log_event!(
@@ -1443,7 +1461,7 @@ fn prepare(
             control::SavedEgress,
         )>,
         Vec<QueuedKey>,
-        Have,
+        (Have, Option<(PathBuf, StoreConfig)>),
         i64,
         u64,
         StoreFilter,
@@ -1535,8 +1553,22 @@ fn prepare(
         }
     }
     let stored = store.count()?;
-    let have = Have::new(have::capacity_for(stored));
-    store.for_each_swarm_hash(|h| have.insert(&h))?;
+    // The have-filter is filled off the start (X-healthz-cold-start), from
+    // its own connection, and sized from a bound that needs no scan: ids
+    // are distinct, so the torrents fit in `torrent_bound`, and each has
+    // at most two swarm hashes, which `capacity_for`'s doubling covers. An
+    // in-memory store (tests) can't be reopened, so it's filled here.
+    let have = match store.reopen_args() {
+        Some(open) => (
+            Have::filling(have::capacity_for(store.torrent_bound()?)),
+            Some(open),
+        ),
+        None => {
+            let have = Have::new(have::capacity_for(stored));
+            store.for_each_swarm_hash(|h| have.insert(&h))?;
+            (have, None)
+        }
+    };
     store.write(&WriteBatch {
         events: &[Event {
             at: now,
@@ -1567,6 +1599,40 @@ fn prepare(
         stored,
         filter,
     ))
+}
+
+/// The longest wait between two tries of a fill whose store read failed.
+const FILL_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// Fills a [`Have::filling`] filter from the store (blocking), then marks
+/// it filled. The scan is one statement, so one read snapshot: a hash
+/// committed after it began is missing from it, but the writer inserts
+/// every hash it commits, so none is lost. A failed read is tried again,
+/// after 1 s and then twice as long each time up to a minute, while the
+/// pipeline is up; the filter is never marked filled until a scan has
+/// finished. Its inserts stay in between: a filter only gains bits.
+fn fill_have(
+    have: &std::sync::Weak<Have>,
+    open: impl Fn() -> Result<Store, lodestar_store::Error>,
+) {
+    let mut wait = Duration::from_secs(1);
+    loop {
+        // Gone when the pipeline has stopped: nothing reads it any more.
+        let Some(have) = have.upgrade() else { return };
+        match open().and_then(|s| s.for_each_swarm_hash(|h| have.fill_insert(&h))) {
+            Ok(()) => {
+                have.mark_filled();
+                return;
+            }
+            Err(e) => lodestar_log::log_event!(
+                log_events::HAVE_REBUILD_FAILED,
+                error = log_events::store_error(&e)
+            ),
+        }
+        drop(have);
+        std::thread::sleep(wait);
+        wait = (wait * 2).min(FILL_RETRY_MAX);
+    }
 }
 
 struct Intake {
@@ -1605,6 +1671,14 @@ fn claimable(d: &Discovery) -> bool {
 /// call away, so batching (≤ 512 or 250 ms) is a concern of the wire
 /// protocol, not of this boundary.
 async fn intake(mut io: Intake, mut shutdown: Shutdown) {
+    // Until the have-filter is filled, a "no" from it isn't true
+    // (X-healthz-cold-start): nothing is admitted before then. Sources
+    // wait on the bounded channels meanwhile, as they do for a busy pool.
+    tokio::select! {
+        biased;
+        _ = shutdown.requested() => return,
+        _ = io.have.filled() => {}
+    }
     loop {
         let (mut d, retried) = tokio::select! {
             biased;

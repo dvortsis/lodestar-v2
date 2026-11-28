@@ -9,11 +9,26 @@
 //! Reads and inserts are lock-free (atomic words); an observer, when one
 //! is set (WK-3, only once workers are allowed), takes its own lock. When the filter fills
 //! past its capacity it's rebuilt at twice the size from the store.
+//!
+//! **Filling at start (X-healthz-cold-start).** A large store takes
+//! seconds to scan, so a start no longer waits for it: the filter is made
+//! [`filling`](Have::filling), a blocking thread inserts every stored hash
+//! ([`fill_insert`](Have::fill_insert)) and then calls
+//! [`mark_filled`](Have::mark_filled). Until then a "no" can't be
+//! trusted, so:
+//! - the intake waits for [`filled`](Have::filled) before it admits
+//!   anything;
+//! - [`contains`](Have::contains) answers "yes" to every hash, so any other
+//!   reader treats a key as stored, which only undercounts, as a false
+//!   positive already does;
+//! - [`is_full`](Have::is_full) answers "no", so the writer never swaps in
+//!   a rebuilt filter under a running fill (the fill writes into the one it
+//!   started with).
 
 use std::fmt;
 use std::hash::Hasher;
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use lodestar_cluster::have::{HaveHeader, HaveKey, chunks_for};
@@ -31,12 +46,39 @@ pub trait HaveObserver: Send + Sync + 'static {
     fn inserted(&self, hash: &InfoHash);
 }
 
+/// Run on the fill's thread before it scans the store: a test holds the
+/// fill with it ([`PipelineConfig::fill_gate`](crate::PipelineConfig)).
+#[derive(Clone)]
+pub struct FillGate(Arc<dyn Fn() + Send + Sync>);
+
+impl FillGate {
+    pub fn new(f: impl Fn() + Send + Sync + 'static) -> FillGate {
+        FillGate(Arc::new(f))
+    }
+
+    pub fn wait(&self) {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for FillGate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("FillGate")
+    }
+}
+
 /// The shared filter; [`Have::replace`] swaps in a rebuilt one.
 pub struct Have {
     bloom: RwLock<Arc<Bloom>>,
     /// Set once, when workers are allowed; unset, an insert costs one
     /// atomic load more than before.
     observer: OnceLock<Arc<dyn HaveObserver>>,
+    /// Whether every stored hash is in. The flag is the hot read; the
+    /// channel is for waiting on it. Set once, after the fill's last
+    /// insert: the flag's `Release` (and the channel's lock) publish the
+    /// fill's inserts to whoever reads it `true`.
+    filled: AtomicBool,
+    filled_tx: tokio::sync::watch::Sender<bool>,
 }
 
 impl fmt::Debug for Have {
@@ -44,24 +86,79 @@ impl fmt::Debug for Have {
         f.debug_struct("Have")
             .field("bloom", &self.current())
             .field("observed", &self.observer.get().is_some())
+            .field("filled", &self.is_filled())
             .finish()
     }
 }
 
 impl Have {
+    /// A complete filter: empty, or filled before anyone reads it.
     pub fn new(capacity: u64) -> Have {
+        Have::with_state(capacity, true)
+    }
+
+    /// A filter a fill is still to complete ([`mark_filled`]). Until then
+    /// it reads as holding every hash and never as full.
+    ///
+    /// [`mark_filled`]: Have::mark_filled
+    pub fn filling(capacity: u64) -> Have {
+        Have::with_state(capacity, false)
+    }
+
+    fn with_state(capacity: u64, filled: bool) -> Have {
         Have {
             bloom: RwLock::new(Arc::new(Bloom::new(capacity))),
             observer: OnceLock::new(),
+            filled: AtomicBool::new(filled),
+            filled_tx: tokio::sync::watch::Sender::new(filled),
         }
+    }
+
+    /// Whether the fill has finished: a "no" from the bloom is then true.
+    pub fn is_filled(&self) -> bool {
+        self.filled.load(Ordering::Acquire)
+    }
+
+    /// Returns once the fill has finished (at once for a complete filter).
+    pub async fn filled(&self) {
+        if self.is_filled() {
+            return;
+        }
+        // The sender lives as long as `self`, so this only ends when the
+        // value turns true.
+        let mut rx = self.filled_tx.subscribe();
+        let _ = rx.wait_for(|f| *f).await;
+    }
+
+    /// How many are waiting in [`filled`](Self::filled) now: the intake,
+    /// while it waits for the fill.
+    pub fn waiting(&self) -> usize {
+        self.filled_tx.receiver_count()
+    }
+
+    /// Inserts a hash the fill read from the store: into the filter only,
+    /// not to the observer. The workers' filter is built from the store
+    /// itself (WK-3), as it was when the fill ran before an observer could
+    /// be set.
+    pub fn fill_insert(&self, hash: &InfoHash) {
+        self.current().insert(hash);
+    }
+
+    /// Ends the fill: every hash stored when it began is in, and every one
+    /// stored since was inserted by the writer.
+    pub fn mark_filled(&self) {
+        self.filled.store(true, Ordering::Release);
+        self.filled_tx.send_replace(true);
     }
 
     fn current(&self) -> Arc<Bloom> {
         self.bloom.read().expect("have lock").clone()
     }
 
+    /// Whether `hash` may be stored. "Yes" to everything until the fill
+    /// has finished, so a "no" is never given that the store contradicts.
     pub fn contains(&self, hash: &InfoHash) -> bool {
-        self.current().contains(hash)
+        !self.is_filled() || self.current().contains(hash)
     }
 
     pub fn insert(&self, hash: &InfoHash) {
@@ -78,8 +175,10 @@ impl Have {
     }
 
     /// Past capacity, the false-positive rate climbs; time to rebuild.
+    /// Never while filling: the fill writes into the current filter, so a
+    /// rebuild waits until it's done.
     pub fn is_full(&self) -> bool {
-        self.current().is_full()
+        self.is_filled() && self.current().is_full()
     }
 
     pub fn len(&self) -> u64 {
@@ -98,7 +197,11 @@ impl Have {
         self.current().memory_bytes()
     }
 
+    /// Swaps in a rebuilt filter. Not while filling: the fill's inserts
+    /// would go into the old one ([`is_full`](Self::is_full) never asks
+    /// for a rebuild then).
     pub fn replace(&self, bloom: Bloom) {
+        debug_assert!(self.is_filled(), "a have-filter replaced while filling");
         *self.bloom.write().expect("have lock") = Arc::new(bloom);
     }
 }
@@ -370,6 +473,62 @@ mod tests {
         have.insert(&hash(1));
         have.insert(&hash(2));
         assert_eq!(*seen.0.lock().unwrap(), vec![hash(1), hash(2)]);
+    }
+
+    #[test]
+    fn while_filling_it_holds_everything_and_is_never_full() {
+        let have = Have::filling(10);
+        assert!(!have.is_filled());
+        // The bloom is empty, but no "no" may be given yet.
+        assert!(have.contains(&hash(1)));
+        for i in 0..1_000 {
+            have.fill_insert(&hash(i));
+        }
+        assert!(have.current().is_full());
+        assert!(!have.is_full(), "a rebuild was asked for while filling");
+        have.mark_filled();
+        assert!(have.is_filled());
+        assert!(have.is_full());
+        assert!((0..1_000).all(|i| have.contains(&hash(i))));
+        assert!(!Have::new(10).contains(&hash(1)));
+    }
+
+    #[test]
+    fn fill_inserts_skip_the_observer() {
+        #[derive(Default)]
+        struct Count(AtomicU64);
+        impl HaveObserver for Count {
+            fn inserted(&self, _: &InfoHash) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let have = Have::filling(100);
+        let seen = Arc::new(Count::default());
+        assert!(have.observe(seen.clone()));
+        have.fill_insert(&hash(1));
+        have.insert(&hash(2));
+        assert_eq!(seen.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn filled_returns_only_once_marked() {
+        let have = Arc::new(Have::filling(100));
+        let waiter = tokio::spawn({
+            let have = have.clone();
+            async move { have.filled().await }
+        });
+        // Not finished while unmarked: give it every chance to run.
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!waiter.is_finished());
+        have.mark_filled();
+        tokio::time::timeout(std::time::Duration::from_secs(10), waiter)
+            .await
+            .expect("filled within 10 s")
+            .unwrap();
+        // A complete filter is filled at once.
+        Have::new(10).filled().await;
     }
 
     proptest::proptest! {
