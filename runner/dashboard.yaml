@@ -292,6 +292,9 @@ placement:
   - X-client-handoff
   - UX-start
   - D-start
+  - X-start-wait-strings
+  - X-vpn-bind
+  - D-vpn-guide
 - ws: ws-filters
   match:
   - M-filters-dialogs
@@ -669,6 +672,9 @@ placement:
   - X-cr-round1-collect
   - X-cr-round1-gate
   - CR-SPEC-R1
+  - X-cr-round1-collect-fixes
+  - X-cr-round1-spec-fixes
+  - X-cr-round1-1p1
 - ws: ws-cr-live
   match:
   - CR-R1
@@ -979,6 +985,9 @@ placement:
   - X-import-rate-1m
   - X-import-verified-no
   - X-import-drain-memory
+  - X-import-hot-stamp
+  - X-healthz-cold-start
+  - X-healthz-count-async
   - X-remote-verified
   - X-saved-verified-rewrite
   - X-store-load-busy-map
@@ -1011,6 +1020,7 @@ held:
 - CR-AB-LC  # deferred to 1.1 by owner O1 (§2.86)
 - CR-AB-1  # deferred to 1.1 by owner O1 (§2.86)
 - CR-5  # deferred to 1.1 by owner O1 (§2.86)
+- X-cr-round1-1p1  # a 1.1 item from CR-SPEC-R1 §14 (runner records r20)
 expanded:
 - X-ui-checks
 - E-v06-sources
@@ -1032,10 +1042,10 @@ conditions:
     met: true
     who: you
     label: You confirm the frozen crawler measurement specification (CR-SPEC)
-  owner-notice-v5:
+  owner-notice-v7:
     met: true
     who: you
-    label: You approve the Legal Notice version 5 wording that lists Prowlarr or Jackett as a built Account source
+    label: You approve the Legal Notice wording that lists Prowlarr or Jackett as a built Account source (approved for version 5; it ships under version 7)
   owner-migrations-on-main:
     met: true
     who: you
@@ -1409,6 +1419,7 @@ roadmap:
     - X-dht-switch-identity
     - X-cr-round1-collect
     - X-cr-round1-gate
+    - X-cr-round1-collect-fixes
   - id: crspec
     label: Round-1 measurement rules
     plain: 'CR-SPEC-R1, which you confirmed (O3, §2.86): every arm''s declared settings, the evidence each switch must show, the layouts, retries and the pinned image. Merged before the rehearsal.'
@@ -1416,31 +1427,45 @@ roadmap:
     row: 0
     members:
     - CR-SPEC-R1
+  - id: crfix
+    label: Tool fixes before the rehearsal
+    plain: 'Two slices land before the rehearsal: the round-1 tools enforce what CR-SPEC-R1''s review found (X-cr-round1-spec-fixes: the rehearsal window, bounded solo attempts, plan repeats, the probe target, the gluetun logs), and the leak test''s phase B stops running out of clean attempts (X-leaktest-vpn-held-down), since round 1 runs it on every arm before and after every day.'
+    col: 4
+    row: 0
+    members:
+    - X-cr-round1-spec-fixes
+    - X-leaktest-vpn-held-down
+  - id: crreh
+    label: Rehearsal on the box
+    plain: 'After the comparator''s window ends (about 2026-11-28T18:00Z): each arm''s leak test, the switch gauge check and the drop-C rule, over a 3 h window with a 30 min warm-up and a 4 h cap (CR-SPEC-R1 §6). It decides whether the all-off control runs.'
+    col: 5
+    row: 0
+    members: []
   - id: crr1
     label: Round 1 (two days)
     plain: 'After a rehearsal, day 1 starts at least 12 h after the comparator''s window ends (about 2026-11-29T06:00Z), then day 2 on swapped VPN exits; the verdict is due about 2026-12-01. All-on Balanced first, Aggressive as the fallback you authorized, an all-off control (plan §6).'
-    col: 4
+    col: 6
     row: 0
     members:
     - CR-R1
   - id: crtune
     label: New defaults (CR-COMB)
     plain: 'The qualified candidate''s settings become the defaults, with no other change, checked on a fresh start (plan §6.5). Round 1''s two days are the acceptance.'
-    col: 5
+    col: 7
     row: 0
     members:
     - CR-COMB
   - id: g06c
     label: Crawler gate (100/min)
     plain: 24 h mean at least 100 a minute, no hour under 70, p95 discovery-to-searchable within 10 min.
-    col: 6
+    col: 8
     row: 0
     members:
     - G-v06-crawler
   - id: cr11
     label: Per-switch attribution (1.1)
     plain: 'The paired on/off runs, Checkpoint 1 and profile-driven tuning, deferred by your O1 (§2.86): they measure each switch''s share after 1.0.'
-    col: 7
+    col: 9
     row: 0
     members:
     - CR-AB-ADM
@@ -1534,8 +1559,8 @@ roadmap:
     - G-import-10M
     - SB-6
   - id: i50
-    label: Import 50M gate
-    plain: Numbers come to you before the full library.
+    label: Import 50M gate (1.0.x)
+    plain: 'Numbers come to you before the full library. Moved to 1.0.x by your D5 (§2.85), unless the host has spare time in weeks 2 to 4.'
     col: 3
     row: 8
     members:
@@ -1769,6 +1794,7 @@ roadmap:
     - G-v1-security
     - G-v1-design
     - G-v1-ui
+    - G-v1-vs-bitmagnet
     - G-v1
   - id: tracku
     label: 'Track U: UI review fixes'
@@ -1868,6 +1894,10 @@ roadmap:
   - - crharness
     - crspec
   - - crspec
+    - crfix
+  - - crfix
+    - crreh
+  - - crreh
     - crr1
   - - crr1
     - crtune
@@ -1912,8 +1942,6 @@ roadmap:
   - - m7
     - v08
   - - v08
-    - m8
-  - - i50
     - m8
   - - unhold
     - m6
@@ -2045,6 +2073,11 @@ owner_queue:
   action: 'Runner calls you may want to veto (§2.19; docs/decisions/2026-11-27-runner-records-r19.md): CR-0w (#1134) merged before round 1, its stage-1 timing hold being moot; round 1''s harness is built as three slices on disjoint files (X-dht-switch-identity, X-cr-round1-collect, X-cr-round1-gate) to meet the 12 h gap after the comparator; CR-AB-ADM, CR-AB-4 and CR-AB-LC no longer need cloud provisional runs, and the optional Aggressive cloud screen stays blocked while the test lanes'' SSM access is denied'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
+- n: 42
+  type: review
+  action: 'Runner calls since r19 you may want to veto (§2.19; docs/decisions/2026-11-28-runner-records-r20.md, "Flags for the owner"): the round-1 harness and measurement refinements, the title-suggestion file rebuilt at every start, /healthz answering while the have-filter fills, the start-up count left for a follow-up with a contract change, the wizard opening the event stream, and the 1.0 scope changes from D1, D4, D5 and D13 as the runner applied them'
+  unblocks: Nothing; these go ahead unless you object
+  when: Any time
 
 gates:
 - id: G-v05
@@ -2084,7 +2117,7 @@ gates:
   where: docs/decisions/2026-11-07-SRC-G.md
 - id: G-import
   name: Import scale (1M, 10M, 50M)
-  plain: Lodestar holds big libraries within its speed and size budgets.
+  plain: Lodestar holds big libraries within its speed and size budgets. The 50M step moves to 1.0.x (your D5, §2.85).
   slice: G-import-50M
   measure: 'Only a synthetic figure: 100k at about 13,900/s'
   target: Import >= 2,000/s offline; about 2.3 KB per torrent all-in; cold file search p95 <= 150 ms at 10M
@@ -2133,7 +2166,7 @@ gates:
   where: architecture 20.8
 - id: G-v1
   name: 1.0 gates
-  plain: Every 1.0 gate below green on the release candidate, the 50M numbers approved, then you tag v1.0.0.
+  plain: Every 1.0 gate below green on the release candidate, then you tag v1.0.0. The 50M import moves to 1.0.x (your D5, §2.85).
   slice: G-v1
   measure: ''
   target: architecture 17
@@ -2175,7 +2208,7 @@ gates:
   where: docs/plan/2026-11-06-m8-hardening.md
 - id: G-v1-soak-linux
   name: '1.0: Linux Docker soak'
-  plain: 24 hours on your Unraid host under the v0.5.1 rules.
+  plain: 24 hours on lodestar-host, the VM on your Unraid server (your D2, §2.85), under the v0.5.1 rules.
   slice: G-v1-soak-linux
   measure: ''
   target: Memory slope upper 95% bound <= 2.0 MiB/h over hours 12-24
@@ -2189,7 +2222,7 @@ gates:
   where: docs/plan/2026-11-06-m8-hardening.md
 - id: G-v1-audits
   name: '1.0: politeness, purge and filter gates'
-  plain: The politeness and purge audits complete, the sources, rule-pack and enrichment gates re-run, and the filter speed budget (G-filter-budget) checked on the reference CPU.
+  plain: The purge audit complete, a bounded-load politeness check for the crawler (your D4, §2.85; the full politeness audit is a 1.1 gate), the sources, rule-pack and enrichment gates re-run, and the filter speed budget (G-filter-budget) checked on the reference CPU.
   slice: G-v1-audits
   measure: ''
   target: 18.9, 20.8; 50 us on the 2.20 reference CPU
@@ -2215,6 +2248,13 @@ gates:
   measure: ''
   target: architecture 10.1, 10.17, 17
   where: docs/plan/2026-11-06-m8-hardening.md
+- id: G-v1-vs-bitmagnet
+  name: '1.0: better than bitmagnet'
+  plain: 'Search, storage, memory and latency beat bitmagnet, measured side by side on lodestar-host in the same hours (your D13 B, §2.85). Crawl-rate parity is the 1.1 target.'
+  slice: G-v1-vs-bitmagnet
+  measure: ''
+  target: Every non-crawl row of the scorecard better than bitmagnet's
+  where: docs/plan/2026-11-26-fastest-1.0-proposal.md 4.8
 crawler:
 - label: CR-0, 24 h on Linux
   value: 12.3
@@ -2254,7 +2294,7 @@ soak:
   start: '2026-11-06T13:12:25Z'
   end: '2026-11-06T13:12:25Z'
 notes:
-  updated: '2026-11-27'
+  updated: '2026-11-28'
   now:
   - label: No start wait (§2.77)
     text: 'CR-0w (#1134, merged 2026-11-27) removes the sampling wait after any start and the gate a restart carried, and turns safe restart on by default. X-split-resume-gate (#1118) had already shortened the sampler split''s hold after a restart. Round 1 observes a clean restart of each candidate after day 2 (plan §6.6). The Legal Notice''s safe-restart line is corrected, with a new notice version, by your 2026-11-27 answer (§2.87; X-legal-safe-restart).'
@@ -2269,7 +2309,7 @@ notes:
   - label: v0.5.1 is published
     text: You published v0.5.1 on 2026-11-07 from 12cd25ca, after it passed the 24-hour memory test (0.91 MiB an hour, upper bound 1.35, bar 2.0), the VPN (gluetun) leg and the Windows MSI check. It carries the memory fixes (mimalloc serves the C code too, huge pages off, memory gauges), the log redaction security fix and the Legal Notice at setup, as you decided (§2.40). Soak r4 on release candidate 3 failed at 29.35 MiB an hour (bar 2.0). Rule packs on by default come in v0.5.2.
   - label: The crawler is the longest road
-    text: 'It finds about 12 torrents a minute and the v0.6 tag needs 100. Performance comes first and politeness second, tuned after 1.0 (§2.85). By your O1 to O4 (2026-11-27, §2.86; docs/plan/2026-11-27-revised-path-to-100.md), round 1 replaces the serial stages and Checkpoint 1: after the bitmagnet comparator cr-ab-comp-2 (window ends about 2026-11-28T18:00Z) and a rehearsal, three arms run on lodestar-host for two days from about 2026-11-29T06:00Z, each on its own VPN exit: all switches on at Balanced (the first choice), at Aggressive (the fallback you authorized), and an all-off control. The verdict is due about 2026-12-01. A qualified candidate''s settings become the defaults (CR-COMB) and its two days are the acceptance. If none qualifies, the round-1 report comes to you and round 2 runs only with your yes. The paired on/off runs (CR-AB-ADM, CR-AB-4, CR-AB-LC, CR-AB-1), Checkpoint 1 and CR-5 move to 1.1. Cloud results stay provisional (§2.82).'
+    text: 'It finds about 12 torrents a minute and the v0.6 tag needs 100. Performance comes first and politeness second, tuned after 1.0 (§2.85). By your O1 to O4 (2026-11-27, §2.86; docs/plan/2026-11-27-revised-path-to-100.md), round 1 replaces the serial stages and Checkpoint 1: after the bitmagnet comparator cr-ab-comp-2 (window ends about 2026-11-28T18:00Z), the round-1 tool fixes (X-cr-round1-spec-fixes, X-leaktest-vpn-held-down) and a rehearsal, three arms run on lodestar-host for two days from about 2026-11-29T06:00Z, each on its own VPN exit: all switches on at Balanced (the first choice), at Aggressive (the fallback you authorized), and an all-off control. The verdict is due about 2026-12-01. A qualified candidate''s settings become the defaults (CR-COMB) and its two days are the acceptance. If none qualifies, the round-1 report comes to you and round 2 runs only with your yes. The paired on/off runs (CR-AB-ADM, CR-AB-4, CR-AB-LC, CR-AB-1), Checkpoint 1 and CR-5 move to 1.1. Cloud results stay provisional (§2.82).'
   - label: Sources are being laid down
     text: The plug-in contract, the feed readers for Torznab and RSS, and the Jobs view are merged. Consent, network
       controls and the Internet Archive reader are next. Your answers on terms of service, private sources, caches and
