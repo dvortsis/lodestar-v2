@@ -1,4 +1,4 @@
-# X-filter-budget-drift decisions (#PR)
+# X-filter-budget-drift decisions (#1175)
 
 Runner brief X-filter-budget-drift, 2026-11-28Z. The `filter budget (§20.8)` job failed on #1167's head, which touches nothing in `crates/filter`, and the job is inside the required `ci-ok`. This is a measurement change the runner decides under `docs/owner-decisions.md` §2.26, a refinement under §2.19 that the runner flags to the owner. The runner approved the design, with conditions, on 2026-11-28Z.
 
