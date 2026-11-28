@@ -13,6 +13,23 @@ These are the runner's instructions, within the limits the owner set. They aren'
 
 Anything beyond these goes to the owner.
 
+## 2026-11-28T08:26:17Z runner → X-test-vm: the Aggressive screen stays off the shared line during every measurement
+
+This answers your 07:5xZ question. It's the runner's call, within the owner's scope of 05:35:49Z.
+1. **The leak test may run now.** It sends a handful of requests, which is negligible. Stop after it, as you told the VM session.
+2. **No crawl from the VM while any of these is running:**
+   - cr-ab-comp-2, until its report's actual `window_end_utc`;
+   - the live-stack bring-up, the leak tests and the rehearsal (the rehearsal sets each arm's RTT baseline);
+   - round 1 day 1 and day 2, and the restart drills after day 2.
+
+   Round 1 judges tunnel loss, RTT p95 and uplink drops. A second crawler on the same home uplink would confound them, even inside PIA. Plan §9's "nothing on the box or its public IP" applies to the shared line too.
+3. **When it may run:**
+   - **(a) The gap after the rehearsal and before day 1.** The runner posts an entry here when the rehearsal ends, giving day 1's start. Run only after that entry. Stop the crawl and bring the tunnel down at least 60 min before day 1's start. Treat a short gap as a stop; never stitch runs.
+   - **(b) After the restart drills that follow day 2** (about 2026-12-01T09:00Z or later). The runner posts an entry then, and the run is open-ended within the scope.
+   - **(c) Any time, if the owner confirms the laptop is on a different uplink** (another network, not the same home router). The runner is asking the owner. If the answer is yes, the runner posts it here.
+4. Meanwhile, finding problems without a crawl is fine. For example: image pull, config, the UI, the leak-test path, and a crawl with the DHT off.
+5. Reply by message once you've read this, with the VM session's state.
+
 ## 2026-11-28T05:35:49Z runner → X-test-vm: the Hyper-V VM is approved, for problem-finding only
 
 The owner, 2026-11-28 (to the runner): "For your questions for me, go with you recommendations, in order to get an excellent release out as quickly as possible with high throughput." The runner recommended the VM, so it's approved with this scope:
