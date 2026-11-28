@@ -1,4 +1,5 @@
 """Pins the guard rails of the IAM user Claude signs in as (aws-claude-testvm.json)."""
+import fnmatch
 import json
 import re
 import unittest
@@ -55,7 +56,12 @@ EXPECTED = {
     "RunOnlyEncryptedBoundedVolumes": {
         "Effect": "Allow", "Action": "ec2:RunInstances", "Resource": VOLUMES,
         "Condition": {"Bool": {"ec2:Encrypted": "true"}, "NumericLessThanEquals": {"ec2:VolumeSize": "100"},
-                      "StringEquals": {"aws:RequestTag/Project": "Lodestar"}}},
+                      "StringEquals": {"aws:RequestTag/Project": "Lodestar", "aws:RequestTag/Environment": "Test",
+                                       "aws:RequestTag/Purpose": "X-test-vm",
+                                       "aws:RequestTag/LaunchedBy": "${aws:userid}"},
+                      "ForAllValues:StringEquals": {"aws:TagKeys": ["Project", "Environment", "ManagedBy",
+                                                                    "Purpose", "ExpiresAt", "LaunchedBy",
+                                                                    "Name"]}}},
     "RunOnlyInTheLodestarNetwork": {
         "Effect": "Allow", "Action": "ec2:RunInstances",
         "Resource": [SUBNET, sub("arn:aws:ec2:us-east-1:${AWS::AccountId}:security-group/${SecurityGroupId}")]},
@@ -82,6 +88,11 @@ EXPECTED = {
             "ec2:ResourceTag/Project": "Lodestar", "ec2:ResourceTag/Environment": "Test",
             "ec2:InstanceType": "c6a.xlarge", "ec2:ResourceTag/Purpose": "X-test-vm",
             "ec2:ResourceTag/LaunchedBy": "${aws:userid}"}}},
+    "DeleteOnlyOwnLodestarTestVolumes": {
+        "Effect": "Allow", "Action": "ec2:DeleteVolume", "Resource": VOLUMES,
+        "Condition": {"StringEquals": {
+            "ec2:ResourceTag/Project": "Lodestar", "ec2:ResourceTag/Environment": "Test",
+            "ec2:ResourceTag/Purpose": "X-test-vm", "ec2:ResourceTag/LaunchedBy": "${aws:userid}"}}},
     "RunCommandsOnlyOnOwnLodestarTestInstances": {
         "Effect": "Allow", "Action": "ssm:SendCommand", "Resource": INSTANCES,
         "Condition": {"StringEquals": {
@@ -282,7 +293,7 @@ class PolicyTests(unittest.TestCase):
                            "Resource": {"Ref": "PiaLoginSecret"}}])
 
     def test_mutations_need_the_launching_principal(self):
-        # I1: stop, start, reboot, delete and Run Command reach only instances
+        # I1: stop, start, reboot, delete, volume delete and Run Command reach only resources
         # this principal launched; the tag is forced at launch and can't change.
         _, _, sts = statements()
         inst = next(s for s in sts if s["Sid"] == "RunOnlyTheGuardedInstance")
@@ -294,7 +305,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(cmd["Condition"]["StringEquals"]["ssm:resourceTag/LaunchedBy"], "${aws:userid}")
         mutating = {"ec2:TerminateInstances", "ec2:StopInstances", "ec2:StartInstances", "ec2:RebootInstances",
                     "ec2:ModifyInstanceAttribute", "ec2:CreateTags", "ec2:DeleteTags", "ssm:SendCommand",
-                    "ssm:StartSession"}
+                    "ssm:StartSession", "ec2:DeleteVolume", "ec2:DetachVolume", "ec2:ModifyVolume"}
         for st in sts:
             if st["Effect"] != "Allow" or not mutating & set(actions(st)):
                 continue
@@ -307,6 +318,29 @@ class PolicyTests(unittest.TestCase):
                     cond = st["Condition"]["StringEquals"]
                     self.assertIn("${aws:userid}", cond.values())
         self.assertFalse(any("ec2:DeleteTags" in actions(s) for s in sts if s["Effect"] == "Allow"))
+
+    def test_volumes_are_deleted_only_when_this_principal_launched_them(self):
+        # Owner §2.88 items 31 and 33. A launch's volume must carry the same
+        # Purpose and LaunchedBy the delete checks, so the user can delete only
+        # what it launched; tags come only from RunInstances, never later.
+        _, _, sts = statements()
+        vol = next(s for s in sts if s["Sid"] == "RunOnlyEncryptedBoundedVolumes")
+        dele = next(s for s in sts if s["Sid"] == "DeleteOnlyOwnLodestarTestVolumes")
+        self.assertEqual(dele["Resource"], VOLUMES)
+        for k, v in {"Project": "Lodestar", "Environment": "Test", "Purpose": "X-test-vm",
+                     "LaunchedBy": "${aws:userid}"}.items():
+            with self.subTest(tag=k):
+                self.assertEqual(vol["Condition"]["StringEquals"][f"aws:RequestTag/{k}"], v)
+                self.assertEqual(dele["Condition"]["StringEquals"][f"ec2:ResourceTag/{k}"], v)
+        self.assertEqual(vol["Condition"]["ForAllValues:StringEquals"]["aws:TagKeys"],
+                         next(s for s in sts if s["Sid"] == "RunOnlyTheGuardedInstance")
+                         ["Condition"]["ForAllValues:StringEquals"]["aws:TagKeys"])
+        allowed = [a for s in sts if s["Effect"] == "Allow" for a in actions(s)]
+        self.assertEqual(allowed.count("ec2:DeleteVolume"), 1)
+        for a in ("ec2:CreateVolume", "ec2:DetachVolume", "ec2:ModifyVolume", "ec2:DeleteSnapshot",
+                  "ec2:DeleteTags"):
+            # Match patterns too, so a wildcard Allow can't grant one of them.
+            self.assertFalse([p for p in allowed if fnmatch.fnmatchcase(a, p)], a)
 
     def test_launch_needs_default_tenancy(self):
         # I4: no dedicated hosts or instances.
