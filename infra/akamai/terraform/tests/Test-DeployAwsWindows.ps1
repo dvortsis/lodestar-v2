@@ -202,6 +202,7 @@ try {
     $nic = "<--network-interfaces> <DeviceIndex=0,SubnetId=$SUBNET,Groups=$SG,AssociatePublicIpAddress=true,DeleteOnTermination=true>"
     Check 'one interface: same subnet and group, public IPv4' ($run.Count -eq 1 -and $run[0].Contains($nic)) ($run -join ' | ')
     Check 'no --subnet-id or --security-group-ids beside it' ($run.Count -eq 1 -and -not $run[0].Contains('<--subnet-id>') -and -not $run[0].Contains('<--security-group-ids>')) ($run -join ' | ')
+    Check 'the root volume is deleted on termination' ($run.Count -eq 1 -and $run[0].Contains('<DeviceName=/dev/sda1,Ebs={VolumeSize=') -and $run[0].Contains('Encrypted=true,DeleteOnTermination=true}>')) ($run -join ' | ')
     Check 'the other launch arguments are unchanged' ($run.Count -eq 1 -and $run[0].Contains('<--metadata-options> <HttpTokens=required>') -and
         $run[0].Contains('<--instance-type> <c6a.xlarge>') -and $run[0].Contains('Encrypted=true') -and
         $run[0].Contains('<--iam-instance-profile> <Arn=arn:aws:iam::111122223333:instance-profile/LodestarTestProfile>')) ($run -join ' | ')
