@@ -1,7 +1,9 @@
+import type { Page } from '@playwright/test';
 import { HASH, mockTorrent } from '../detail.fixtures';
 import type { OpenApiMock } from '../mock/openapi-mock';
 import { discoverResponse, showAdultSettings } from '../../src/lib/features/discover/testing';
 import { mockSettings } from './settings-fixture';
+import { expect } from './test';
 import { crawlerFixture, overviewFixture } from '../../src/lib/features/insights/overview/fixtures';
 
 // Every route the app has today, with sample params for the dynamic ones. A new route slice adds
@@ -22,6 +24,12 @@ export interface RouteCase {
 	densityAware?: true;
 	/** Mocks for the requests the route makes on load. Any unmocked call fails the test. */
 	mock?: (mock: OpenApiMock) => void;
+	/**
+	 * Waits until the page's own content is there, for a route whose heading (or lack of one)
+	 * shows before it. The smoke test then also waits for every loading placeholder to go, so
+	 * axe and the snapshot see the settled page, not a still skeleton.
+	 */
+	ready?: (page: Page) => Promise<void>;
 }
 
 export const ROUTES: RouteCase[] = [
@@ -158,6 +166,7 @@ export const ROUTES: RouteCase[] = [
 	{
 		name: 'settings',
 		path: '/settings/general',
+		heading: 'General',
 		key: true,
 		// The settings index and the General section, so the snapshots render a field.
 		mock: mockSettings
@@ -166,6 +175,12 @@ export const ROUTES: RouteCase[] = [
 		name: 'torrent',
 		path: `/t/${HASH}`,
 		key: true,
-		mock: (m) => mockTorrent(m)
+		mock: (m) => mockTorrent(m),
+		// The page has no heading of its own, and loads every section at once: wait for the
+		// torrent, then for the last section to render (its placeholder is a bare skeleton).
+		ready: async (page) => {
+			await expect(page.getByTestId('detail-view')).toBeVisible();
+			await expect(page.locator('[data-section="technical"]')).toBeVisible({ timeout: 10_000 });
+		}
 	}
 ];
