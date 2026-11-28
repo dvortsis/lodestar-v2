@@ -1888,7 +1888,9 @@ export default [
 	// and its narrow form "N filtered · Show", its request (POST /search/hidden, after the rows render,
 	// aborted by a newer query), its messages, and the container queries that keep it from moving
 	// anything (toolbar.css).
-	entry('Results toolbar (lazy)', toolbarLazy, '5.60 KB'),
+	// runner §2.26 (X-hidden-count-grouped): 5.60 → 5.65 KB, measured 5,647 B: the grouped count's own
+	// note rule (a class from the count's kind, and its container queries in toolbar.css).
+	entry('Results toolbar (lazy)', toolbarLazy, '5.65 KB'),
 	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
 	// chunk); the limit falls to the measured size, rounded up at 0.01 kB, so the bytes aren't respent.
 	// GS-5 (runner §2.26): +1 B of shared-chunk noise (no live-banner code changed), rounded up to 0.01 KB.

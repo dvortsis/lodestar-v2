@@ -64,6 +64,15 @@
 	const shut = (e: MouseEvent) =>
 		(e.currentTarget as HTMLElement).closest<HTMLElement>('[popover]')?.hidePopover();
 
+	// The count names groups and torrents (a long line): the hidden note only fits it from 72rem of
+	// toolbar (toolbar.css), so it is told apart by a class.
+	const isGroups = $derived(
+		results.status === 'ready' &&
+			results.hits.length > 0 &&
+			results.total > 0 &&
+			results.grouped.collapsed &&
+			results.grouped.groups !== undefined
+	);
 	// The count of the rows shown: none while the first answer is out, or after it failed.
 	const count = $derived.by(() => {
 		if (results.status !== 'ready') return '';
@@ -173,7 +182,7 @@
 
 {#if results.status !== 'empty'}
 	<div class="tb" data-testid="results-toolbar">
-		<p class="tb-count" data-testid="results-count">
+		<p class="tb-count" class:tb-grp={isGroups} data-testid="results-count">
 			{count}{#if hidden > 0 && results.status === 'ready' && !results.refining}<span class="tb-hid"
 					>&nbsp;· <span id="{id}-hidden" class="tb-full" data-testid="results-hidden"
 						>{m.search_toolbar_hidden({ count: formatCount(hidden, locale) })}</span
