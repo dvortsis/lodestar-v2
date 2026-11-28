@@ -1,4 +1,4 @@
-# runner-records-r24 decisions (#1187)
+# runner-records-r24 decisions (#1188)
 
 This file records the owner's answers of 2026-11-28 (owner-decisions §2.89 to §2.93), the D1 rewiring of `runner/slices.yaml` and `runner/dashboard.yaml`, and the runner's calls since r23 (#1170). The rulings are the runner's, under §2.26 and its reading of §2.85 to §2.93, except where they apply an owner answer. A ruling that only grants owns or records a slice isn't flagged. The owner can veto any flagged call.
 
