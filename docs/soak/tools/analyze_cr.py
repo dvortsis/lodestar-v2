@@ -1798,6 +1798,18 @@ EXIT_LABELS = ("X", "Y", "Z")
 SELECTION_ORDER = ["B", "A"]  # O2: B Balanced first, A Aggressive the authorized fallback
 DIAGNOSES = (None, "pending", "product", "infrastructure")  # an event's diagnosis (§6.3)
 RETRY_BUDGET = 2  # §6.3: repeated days per round, not counting a solo confirmation's own
+# An attempt's recorded end (the manifest's attempt_ends `reason`, comma-separated tokens)
+# names the arms that dropped out of it: `rehearsal_drop:<arm>` before its first day, or
+# `product_failure:<arm>` after a class 2 failure there (CR-SPEC-R1 §5, X-cr-round1-spec-fixes).
+DROP_TOKEN = re.compile(r"^(rehearsal_drop|product_failure):([A-Z])$")
+# The declaration checks `segment --declaration` writes, each of which must be present and ok
+# in every arm's report of a day (CR-SPEC-R1 §6; run sheet 8b).
+DECLARATION_CHECKS = ("declaration_entry_found", "effective_switches_recorded", "declared_preset", "declared_switches",
+                      "declared_image_digest", "safe_restart_on", "preset_stayed_declared", "switches_stayed_declared")
+# A not_judged day a repeat may not replace (the runner's ruling on CR-SPEC-R1's review):
+# contention goes to a solo confirmation, a product failure (or an event not yet classed) to
+# its diagnosis and a fresh attempt; a failed solo confirmation is terminal.
+NOT_REPEATABLE = {"product_failure", "product_failure_under_diagnosis", "peer_product_failure", "unknown_event"}
 # §6.3's contention thresholds, as proposed; the CR-SPEC decisions file freezes them and a
 # declaration's `contention` block may only restate them (gate-round refuses other values).
 CONTENTION = {"interval_seconds": 10, "coverage_min": 0.98, "cpu_p95_max": 0.80, "steal_p95_max": 0.05,
@@ -1933,7 +1945,7 @@ def load_manifest(path):
     base = path.resolve().parent
     hashes = {}
 
-    def load(ref):
+    def raw(ref):
         require(isinstance(ref, dict) and isinstance(ref.get("path"), str) and isinstance(ref.get("sha256"), str),
                 "manifest: each input is {path, sha256}")
         rel = Path(ref["path"])
@@ -1943,7 +1955,10 @@ def load_manifest(path):
         digest = hashlib.sha256(data).hexdigest()
         require(digest == ref["sha256"], f"manifest: {ref['path']}'s SHA-256 differs from the manifest's")
         hashes[ref["path"]] = digest
-        return json.loads(data.decode("utf-8"))
+        return data
+
+    def load(ref):
+        return json.loads(raw(ref).decode("utf-8"))
 
     out = {"declaration": check_declaration(load(man.get("declaration"))),
            "comparator": load(man["comparator"]) if man.get("comparator") is not None else None, "days": []}
@@ -1982,7 +1997,11 @@ def load_manifest(path):
             "attempt": d["attempt"], "day": d["day"], "repeat": d.get("repeat", 0),
             "reports": {arm: load(ref) for arm, ref in sorted((d.get("reports") or {}).items())},
             "archive": load(d["archive"]) if d.get("archive") is not None else None,
-            "contention": load(d["contention"]) if d.get("contention") is not None else None})
+            "contention": load(d["contention"]) if d.get("contention") is not None else None,
+            # Each arm's redacted gluetun log, the handshake evidence (X-cr-round1-spec-fixes
+            # item 6): checked by hash here, read by the runner, never by the gate.
+            "gluetun_logs": {arm: hashlib.sha256(raw(ref)).hexdigest()
+                             for arm, ref in sorted((d.get("gluetun_logs") or {}).items())}})
     listed = {(d["attempt"], d["day"]) for d in out["days"]}
     # Runner (2026-11-27): days_run lists the days the attempt ran, each listed; [] means it
     # never started, so no day of it may be listed. The verdict echoes each entry, and the
@@ -2287,7 +2306,12 @@ def judge_day(cand, attempt, decl, day, comparator_ok):
         leak = info.get("leak_test") or {}
         if leak.get("before") != "pass" or leak.get("after") != "pass":
             reasons.append("leak_test_not_passed")
+        if info.get("tunnel_target_is_gateway") is not True:  # §7: the probe pinged the WireGuard gateway
+            reasons.append("probe_target_unchecked")
         if arm in reports:
+            got = {c.get("check"): c.get("ok") for c in reports[arm].get("checks") or [] if isinstance(c, dict)}
+            if any(got.get(name) is not True for name in DECLARATION_CHECKS):
+                reasons.append("declaration_checks_missing")
             reasons += egress_problems(archive, arm, e["exit"], reports[arm])
             pb = reports[arm].get("binding") or {}
             pp = pb.get("placement") or {}
@@ -2359,6 +2383,45 @@ UNJUDGEABLE = ("not_authorized", "spacing", "retry_budget_exhausted", "earlier_a
                "repeats_not_contiguous", "run_id_reused")
 
 
+def solo_problems(cand, decl, inputs, attempts, judged_days):
+    """§6.3's S attempts, bounded (CR-SPEC-R1 §5, X-cr-round1-spec-fixes item 2): an S
+    attempt of the candidate is allowed only (a) after the attempt just before it gave the
+    candidate a day with `solo_confirmation_required`, or (b) when the candidate is the only
+    arm left: every other arm of that attempt dropped out, as its recorded end says, at the
+    rehearsal (before its first day) or by a product failure the day archives show. At most
+    one S attempt per candidate per round. Returns the problems, [] when it's allowed."""
+    solos = [a for a in attempts if a["layout"] == "S"]
+    if not solos:
+        return []
+    if len(solos) > 1:
+        return ["more_than_one_solo_attempt"]
+    order = [a["id"] for a in decl["attempts"]]
+    i = order.index(solos[0]["id"])
+    if i == 0:
+        return ["solo_without_a_preceding_attempt"]
+    before = decl["attempts"][i - 1]
+    if any(j["attempt"] == before["id"] and j.get("solo_confirmation_required") for j in judged_days):
+        return []  # (a)
+    others = {e["arm"] for e in decl["arms"] if e["attempt"] == before["id"]} - {cand}
+    end = (inputs.get("attempt_ends") or {}).get(before["id"])
+    if cand not in {e["arm"] for e in decl["arms"] if e["attempt"] == before["id"]} or not others or end is None:
+        return ["solo_not_after_a_drop"]
+    dropped = set()
+    for token in str(end["reason"]).split(","):
+        m = DROP_TOKEN.fullmatch(token.strip())
+        if not m:
+            continue
+        if m[1] == "rehearsal_drop" and not end["days_run"]:
+            dropped.add(m[2])
+        elif m[1] == "product_failure" and any(
+                ev.get("class") == "product" and ev.get("diagnosis") != "infrastructure"
+                and m[2] in (ev.get("arms") or [])
+                for d in inputs["days"] if d["attempt"] == before["id"]
+                for ev in (d["archive"] or {}).get("events") or []):
+            dropped.add(m[2])
+    return [] if others <= dropped else ["solo_not_after_a_drop"]  # (b)
+
+
 def judge_candidate(cand, inputs):
     """§5.2 item 5: one candidate's crawler verdict, its per-day memory verdicts and
     shipping eligibility. Its two days pair only within its latest attempt; a valid miss in
@@ -2417,11 +2480,14 @@ def judge_candidate(cand, inputs):
         days[k] = vs[-1]
     if any(j["status"] == "pass" for j in replaced):
         reasons.append("repeat_of_a_judged_day")
-    # Only an evidenced infrastructure fault repeats a day (§6.3, event class 1): contention
-    # calls for a solo confirmation, a product failure for a diagnosis, never a repeat.
-    if any(j["status"] == "not_judged" and not {"infrastructure_fault", "peer_infrastructure_fault"} & set(j["reasons"])
-           for j in replaced):
-        reasons.append("repeat_without_infrastructure_fault")
+    # §6.3's retry rule repeats any not_judged day (a coverage miss, an uplink counter reset, a
+    # void segment, an infrastructure fault), within the budget, except one whose answer is
+    # elsewhere: contention (a solo confirmation), a product failure, its own or a peer's, or
+    # an event not yet classed (a diagnosis and a fresh attempt), and a failed solo
+    # confirmation (terminal). A judged miss stays a miss (below).
+    if any(j["status"] == "not_judged" and (j.get("solo_confirmation_required") or j.get("solo_confirmation_failed")
+                                            or NOT_REPEATABLE & set(j["reasons"])) for j in replaced):
+        reasons.append("repeat_of_a_non_repeatable_day")
     out["replaced_days"] = [{"day": j["day"], "repeat": j["repeat"], "status": j["status"], "reasons": j["reasons"]}
                             for j in replaced]
     declared_days = sorted({e["day"] for e in entries if e["attempt"] == attempt["id"]})
@@ -2473,6 +2539,10 @@ def judge_candidate(cand, inputs):
         reasons.append("retry_budget_exhausted")
     out["days"] = judged
     every = earlier + replaced + judged
+    solo = solo_problems(cand, decl, inputs, attempts, every)
+    if solo:
+        out["solo_problems"] = solo
+        reasons.append("solo_not_permitted")
     # History across attempts (§6.3). A breach outside S needs a solo confirmation after it;
     # a failed solo confirmation has no further retry; a product failure on this digest,
     # diagnosed or pending, withholds qualification (a fix makes a new candidate).

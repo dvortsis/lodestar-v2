@@ -52,6 +52,8 @@ COMP_WS = COMP_START + timedelta(hours=1)
 COMP_END = COMP_WS + timedelta(hours=24)
 DAY_START = {1: COMP_END + timedelta(hours=12), 2: COMP_END + timedelta(hours=38)}
 STAGGER = {"B": 0, "A": 3, "C": 6}  # minutes: staggered starts and finishes (§6.3)
+DECLARATION_CHECKS = ("declaration_entry_found", "effective_switches_recorded", "declared_preset", "declared_switches",
+                      "declared_image_digest", "safe_restart_on", "preset_stayed_declared", "switches_stayed_declared")
 
 
 def iso(t):
@@ -76,6 +78,8 @@ def report(e, run_id, start, rate=120.0, hourly=None, p95=60, memory_ok=True):
                     "placement": {k: e[k] for k in ("round", "attempt", "day", "arm")},
                     "ended_utc": iso(we + timedelta(seconds=40))},
         "round1": {"declared": dict(e), "fresh_store": True},
+        # The declaration checks gate-round requires present and ok (X-cr-round1-spec-fixes).
+        "checks": [{"rule": "5.5", "check": name, "ok": True, "effect": "void"} for name in DECLARATION_CHECKS],
         "timeline": {"process_start_utc": iso(start), "window_start_utc": iso(ws), "window_end_utc": iso(we),
                      "last_scrape_utc": iso(we + timedelta(seconds=30))},
         "numerator": {"window": {"mean_net_per_min": sum(hourly) / len(hourly)},
@@ -107,7 +111,7 @@ def day_archive(attempt, day, reports, placed):
         readings += [{"utc": iso(ws + timedelta(hours=k, seconds=30)), "hash": EXITS[placed[arm]]} for k in range(25)]
         arms[arm] = {"exit": placed[arm], "egress": readings, "active_from_utc": iso(start + timedelta(seconds=60)),
                      "active_through_utc": iso(latest + timedelta(minutes=2)),
-                     "leak_test": {"before": "pass", "after": "pass"}}
+                     "leak_test": {"before": "pass", "after": "pass"}, "tunnel_target_is_gateway": True}
     return {"schema": 1, "round": 1, "attempt": attempt, "day": day,
             "exits": {label: EXITS[label] for label in sorted(set(placed.values()))}, "arms": arms, "events": []}
 

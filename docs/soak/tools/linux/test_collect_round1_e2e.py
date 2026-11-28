@@ -248,6 +248,7 @@ class EndToEnd(unittest.TestCase):
         """Runner, 2026-11-27: every file the round's archive keeps, the collectors' evidence
         included, is free of raw addresses, the salt and the machine ID."""
         secrets = [PUBLIC_IP, r1.SALT.decode(), r1.MACHINE_ID, PASSWORD] + list(tc.EXIT_IP.values()) + self.secrets
+        secrets += ["10.0.0.1", "192.0.2.91", tc.WG_PRIVATE]  # the gateway, and what gluetun's log names
         for path in self.round.rglob("*"):
             if path.is_file() and path.name != "collector.py":
                 text = path.read_text(errors="replace")
@@ -273,6 +274,18 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(final["egress_retries"][-1]["read"], "ok")
         day1 = [d for d in self.verdict["candidates"]["B"]["days"] if d["day"] == 1][0]
         self.assertEqual(day1["status"], "pass", day1["reasons"])
+
+    def test_the_manifest_lists_each_arms_redacted_gluetun_log(self):
+        """X-cr-round1-spec-fixes item 6: the handshake evidence, by hash, for every arm and day."""
+        man = json.loads((self.round / "manifest.json").read_text())
+        for d in man["days"]:
+            self.assertEqual(sorted(d["gluetun_logs"]), sorted(LAYOUT[d["day"]]))
+            archive = json.loads((self.round / d["archive"]["path"]).read_text())
+            for arm, ref in d["gluetun_logs"].items():
+                self.assertEqual(ref["sha256"], tc.co.sha256(self.round / ref["path"]))
+                self.assertEqual(archive["arms"][arm]["gluetun_log_sha256"], ref["sha256"])
+                self.assertTrue(archive["arms"][arm]["tunnel_target_is_gateway"])
+                self.assertIn("[ipv4]", (self.round / ref["path"]).read_text())
 
     def test_the_verdict_reproduces(self):
         again = analyze_cr.gate_round(analyze_cr.load_manifest(self.round / "manifest.json"))
