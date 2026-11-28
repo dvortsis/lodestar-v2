@@ -45,6 +45,7 @@ describe('the first-hour pipeline (starting scene)', () => {
 
 	it('the counters are a labelled list, not colour alone', () => {
 		render(States, { kind: 'starting', live: live() });
-		expect(screen.getByLabelText('Counts since this start').tagName).toBe('DL');
+		const group = screen.getByRole('group', { name: 'Counts since this start' });
+		expect(group.querySelector('dl')).toBeTruthy();
 	});
 });
