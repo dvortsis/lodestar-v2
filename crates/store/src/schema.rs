@@ -27,7 +27,32 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (14, V14),
     (15, V15),
     (16, V16),
+    (17, V17),
 ];
+
+/// WK-12 (`docs/decisions/2026-11-28-WK-12.md`, architecture §19.4, plan
+/// Q10): which remote worker prepared a torrent, so purge-by-worker and
+/// quarantine can find its rows. Additive only, and holds no names.
+///
+/// - A row only for a torrent whose info-derived columns a **remote**
+///   worker's record wrote (a new row, or the partial import it
+///   upgraded), in the commit's own transaction. No row means the
+///   built-in worker, an import or a row from before V17, so a
+///   single-machine install writes nothing; the CHECK refuses 0.
+/// - `worker` is the authenticated session's id (`WorkerId`, a `u32`
+///   the coordinator never reuses), never a value a worker sends.
+/// - Rows go with their torrent (`ON DELETE CASCADE`): every deletion
+///   path, the snapshot purge's included, needs nothing new.
+/// - The index serves the purge's steps and the per-worker counts; its
+///   entries end in the rowid, so a worker's rows read in id order.
+/// - No backfill: nothing before V17 recorded the worker.
+const V17: &str = "
+CREATE TABLE torrent_worker (
+    torrent_id INTEGER PRIMARY KEY REFERENCES torrents (id) ON DELETE CASCADE,
+    worker     INTEGER NOT NULL CHECK (worker BETWEEN 1 AND 4294967295)
+) STRICT;
+CREATE INDEX torrent_worker_worker ON torrent_worker (worker);
+";
 
 /// X-unverified-cap-index (`docs/decisions/2026-11-23-X-unverified-cap-index.md`):
 /// the usenet cap's eviction and count without scanning the tier. Additive
@@ -1725,13 +1750,12 @@ mod tests {
 
     /// Older builds opening this build's store refuse it as newer and
     /// change nothing: no migration, no snapshot, the file as it was. The
-    /// v0.5.1 code path (migrations through V12) and V13, V14 and V15
-    /// builds all refuse a V16 store, and so do their read-only
-    /// connections.
+    /// v0.5.1 code path (migrations through V12) and V13–V16 builds all
+    /// refuse a V17 store, and so do their read-only connections.
     #[test]
     fn older_builds_refuse_a_newer_store_untouched() {
         let latest = latest_schema_version();
-        assert_eq!(latest, 16);
+        assert_eq!(latest, 17);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lodestar.db");
         drop(crate::Store::open(&path, crate::StoreConfig::default()).unwrap());
@@ -1745,7 +1769,7 @@ mod tests {
         };
         let (files, bytes) = (listing(), std::fs::read(&path).unwrap());
 
-        for older in [12, 13, 14, 15] {
+        for older in [12, 13, 14, 15, 16] {
             let mut conn = Connection::open(&path).unwrap();
             configure(&conn, 0).unwrap();
             let err =
@@ -1829,7 +1853,7 @@ mod tests {
         };
 
         // Up.
-        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..16]).unwrap();
         assert_eq!(version(&conn), 16);
         let snapshot = dir.path().join("lodestar.pre-v16.db");
         assert!(snapshot.exists(), "pre-V16 snapshot");
@@ -1846,7 +1870,7 @@ mod tests {
         assert_eq!(rows(&conn), 5);
         assert_eq!(counts(&conn), vec![(0, 1), (4, 4)]);
         // Once only: a second open finds it current and takes no snapshot.
-        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..16]).unwrap();
         assert_eq!(version(&conn), 16);
         assert!(!dir.path().join("lodestar.pre-v16.1.db").exists());
         drop(conn);
@@ -1876,7 +1900,7 @@ mod tests {
         insert(&conn, 7, 4, &[0x77; 32]);
 
         // Up again: the backfill counts what the V15 build left.
-        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..16]).unwrap();
         assert_eq!(version(&conn), 16);
         assert!(dir.path().join("lodestar.pre-v16.1.db").exists());
         assert_eq!(counts(&conn), vec![(0, 2), (4, 3)]);
@@ -1934,6 +1958,141 @@ mod tests {
             "2M unverified items, {} MB: V16 with snapshot {with_snapshot:?}, migration alone {alone:?}",
             bytes / 1_000_000
         );
+    }
+
+    /// `n` torrents with a file list each, ids 1..=n, as a crawl stores
+    /// them (V14+ stores).
+    fn fill_torrents(conn: &Connection, n: i64) {
+        conn.execute_batch(&format!(
+            "BEGIN;
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {n})
+             INSERT INTO torrents (id, info_hash, name, size, piece_len, piece_count,
+                 file_count, info_size, flags, discovered_at, metadata_at, last_seen_at, sources)
+             SELECT i, randomblob(20), 'Some.Release.Name.2024.1080p.WEB-DL.x264-GROUP.' || i,
+                 i, 16384, 1, 1, 100, 0, 0, 0, 0, 1 FROM n;
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {n})
+             INSERT INTO torrent_files (torrent_id, codec, data) SELECT i, 0, randomblob(150) FROM n;
+             UPDATE id_seq SET next = {n} + 1;
+             COMMIT;"
+        ))
+        .unwrap();
+    }
+
+    fn schema_of(conn: &Connection) -> Vec<(String, String)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT name, sql FROM sqlite_schema WHERE sql IS NOT NULL
+                 AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    /// V17 on a V16 store with data, then down and up again (WK-12):
+    /// - up: it runs once, keeps every row, takes the pre-V17 snapshot,
+    ///   and leaves `torrent_worker` empty (no backfill); a fresh store
+    ///   ends with the same schema;
+    /// - down: the update rollback restores the snapshot, a V16 store,
+    ///   which a V16 build opens and writes;
+    /// - up again: V17 runs on what that left, with a second snapshot.
+    #[test]
+    fn v17_upgrades_a_v16_store_and_comes_back_after_a_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lodestar.db");
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..16]).unwrap();
+        fill_torrents(&conn, 50);
+        let count = |conn: &Connection, table: &str| -> i64 {
+            conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+
+        // Up.
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 17);
+        let snapshot = dir.path().join("lodestar.pre-v17.db");
+        assert!(snapshot.exists(), "pre-V17 snapshot");
+        assert_eq!(count(&conn, "torrents"), 50);
+        assert_eq!(count(&conn, "torrent_files"), 50);
+        assert_eq!(count(&conn, "torrent_worker"), 0, "no backfill");
+        let mut fresh = Connection::open_in_memory().unwrap();
+        migrate_with(&mut fresh, None, MIGRATIONS).unwrap();
+        assert_eq!(schema_of(&fresh), schema_of(&conn));
+        conn.execute(
+            "INSERT INTO torrent_worker (torrent_id, worker) VALUES (1, 7), (2, 9)",
+            [],
+        )
+        .unwrap();
+        // Rows go with their torrent.
+        conn.execute("DELETE FROM torrents WHERE id = 2", [])
+            .unwrap();
+        assert_eq!(count(&conn, "torrent_worker"), 1);
+        // Once only.
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert!(!dir.path().join("lodestar.pre-v17.1.db").exists());
+        drop(conn);
+
+        // Down: the snapshot replaces the store, and a V16 build runs on it.
+        for side in ["lodestar.db-wal", "lodestar.db-shm"] {
+            let _ = std::fs::remove_file(dir.path().join(side));
+        }
+        std::fs::copy(&snapshot, &path).unwrap();
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn, 0).unwrap();
+        migrate_with(&mut conn, Some(&path), &MIGRATIONS[..16]).unwrap();
+        assert_eq!(version(&conn), 16);
+        assert_eq!(count(&conn, "torrents"), 50, "the snapshot's rows");
+        let objects: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name LIKE 'torrent_worker%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(objects, 0, "no V17 object in a V16 store");
+        conn.execute("DELETE FROM torrents WHERE id = 3", [])
+            .unwrap();
+
+        // Up again.
+        migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+        assert_eq!(version(&conn), 17);
+        assert!(dir.path().join("lodestar.pre-v17.1.db").exists());
+        assert_eq!(count(&conn, "torrents"), 49);
+        assert_eq!(count(&conn, "torrent_worker"), 0);
+    }
+
+    /// V17's cost (WK-12) on V16 stores of 1M and 2M torrents with file
+    /// lists, with and without the pre-migration snapshot. Run with
+    /// `cargo test --release -p lodestar-store --lib v17_migration_time --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement; writes ~300 and ~600 MB stores"]
+    fn v17_migration_time_on_1m_and_2m_stores() {
+        for n in [1_000_000, 2_000_000] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("lodestar.db");
+            let mut conn = Connection::open(&path).unwrap();
+            configure(&conn, 0).unwrap();
+            migrate_with(&mut conn, Some(&path), &MIGRATIONS[..16]).unwrap();
+            fill_torrents(&conn, n);
+            let bytes = std::fs::metadata(&path).unwrap().len();
+            let t = std::time::Instant::now();
+            migrate_with(&mut conn, Some(&path), MIGRATIONS).unwrap();
+            let with_snapshot = t.elapsed();
+            let mut bare = Connection::open(dir.path().join("lodestar.pre-v17.db")).unwrap();
+            configure(&bare, 0).unwrap();
+            let t = std::time::Instant::now();
+            migrate_with(&mut bare, None, MIGRATIONS).unwrap();
+            let alone = t.elapsed();
+            eprintln!(
+                "{n} torrents, {} MB: V17 with snapshot {with_snapshot:?}, migration alone {alone:?}",
+                bytes / 1_000_000
+            );
+        }
     }
 
     /// V15 on a V14 store with claims from an identify source and two

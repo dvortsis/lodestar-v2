@@ -2873,6 +2873,10 @@ fn transaction(
         events,
         filtered: &filtered,
         class_gen,
+        prepared_by: &rest
+            .iter()
+            .map(|&i| committing[i].results.worker.0)
+            .collect::<Vec<_>>(),
         ..WriteBatch::default()
     }) {
         Ok(w) => w,
@@ -3056,7 +3060,7 @@ fn promote(
             torrent: fixed.as_ref().unwrap_or(pt.torrent),
             ..*pt
         };
-        match store.promote(item.id, &t, unverified::SEARCHABLE, now)? {
+        match store.promote_from(item.id, &t, unverified::SEARCHABLE, now, r.worker.0)? {
             Promoted::Kept(id) => {
                 stats.promoted.fetch_add(1, Ordering::Relaxed);
                 if mismatch {

@@ -421,6 +421,7 @@ fn counters_add_up_inside_writes() {
             events: &events,
             filtered: &[],
             swarm: &[],
+            prepared_by: &[],
             class_gen: None,
         })
         .unwrap();

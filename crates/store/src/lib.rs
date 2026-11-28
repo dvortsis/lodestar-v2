@@ -39,6 +39,7 @@ mod swarm;
 pub mod unverified;
 mod user_data;
 mod user_items;
+pub mod workers;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -486,6 +487,14 @@ pub struct WriteBatch<'a> {
     pub filtered: &'a [Filtered<'a>],
     /// Scrape results, applied after the touches.
     pub swarm: &'a [SwarmUpdate],
+    /// The worker that prepared each of `prepared`, in order (WK-12,
+    /// §19.4): the authenticated session's id, 0 for the built-in worker.
+    /// Empty when every one is the built-in worker's; otherwise as long as
+    /// `prepared`, or the write is refused with nothing written. A remote
+    /// worker's new row, or the partial import its record upgrades, is
+    /// recorded in `torrent_worker` in this transaction
+    /// ([`workers`](crate::workers)).
+    pub prepared_by: &'a [u32],
     /// The classification-rules generation the batch's enrichment was
     /// made under (§20.9). If it has changed since, the torrents are
     /// written but marked for enriching again ([`Written::stale_class`]).
@@ -760,6 +769,9 @@ impl Store {
             .iter()
             .map(|t| prepare(codec, config.archive_raw, t.info, t.raw_info))
             .collect::<Result<_>>()?;
+        if !batch.prepared_by.is_empty() && batch.prepared_by.len() != batch.prepared.len() {
+            return Err(Error::Invalid("prepared_by must match prepared"));
+        }
         let tx = begin_write(conn)?;
         // Disabled and purged sources' bits are never written (SRC-14b):
         // read once, in the write's transaction, so a purge (which
@@ -776,11 +788,15 @@ impl Store {
                 source: t.source,
                 verified: t.raw_info.is_some(),
             };
-            out.push(commit_one(&tx, codec, &pt)?);
+            out.push(commit_one(&tx, codec, &pt)?.0);
         }
         let mut prepared = Vec::with_capacity(batch.prepared.len());
-        for pt in batch.prepared {
-            prepared.push(commit_live(&tx, codec, pt, stopped, &finders)?);
+        for (i, pt) in batch.prepared.iter().enumerate() {
+            let (inserted, theirs) = commit_live(&tx, codec, pt, stopped, &finders)?;
+            if theirs && let Some(&worker) = batch.prepared_by.get(i) {
+                workers::record(&tx, inserted.stored(), worker)?;
+            }
+            prepared.push(inserted);
         }
         let mut touched = Vec::with_capacity(batch.touches.len());
         for t in batch.touches {
@@ -1527,17 +1543,18 @@ fn delete_held(tx: &Connection, filtered: &[Filtered<'_>]) -> Result<Vec<i64>> {
 
 /// [`commit_one`] under a live source: `t`'s own when it's running, else
 /// the lowest live one that also found it in this batch. With none left,
-/// nothing is written ([`Inserted::Refused`]).
+/// nothing is written ([`Inserted::Refused`]). As [`commit_one`], with
+/// whether the row's info-derived columns are `t`'s.
 fn commit_live(
     tx: &Connection,
     codec: &BlobCodec,
     t: &PreparedTorrent<'_>,
     stopped: u64,
     finders: &HashMap<InfoHash, u64>,
-) -> Result<Inserted> {
+) -> Result<(Inserted, bool)> {
     // Held since it was judged: nothing is stored under a held hash.
     if is_held(tx, t.torrent.swarm_hashes())? {
-        return Ok(Inserted::Held);
+        return Ok((Inserted::Held, false));
     }
     if stopped & t.source.bit() as u64 == 0 {
         return commit_one(tx, codec, t);
@@ -1548,7 +1565,7 @@ fn commit_live(
         .filter_map(|h| finders.get(&h))
         .fold(0u64, |a, b| a | b);
     if live == 0 {
-        return Ok(Inserted::Refused);
+        return Ok((Inserted::Refused, false));
     }
     let source = SourceId::new(live.trailing_zeros() as u8).expect("bit under 64");
     // Stored private: whether it's public came from every finder's
@@ -1568,7 +1585,13 @@ fn commit_live(
 }
 
 /// Inserts one prepared torrent, or adds its source to the stored one.
-fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Result<Inserted> {
+/// Also says whether the row's info-derived columns are now `t`'s: a new
+/// row, or a partial import it upgraded (WK-12's provenance follows them).
+fn commit_one(
+    tx: &Connection,
+    codec: &BlobCodec,
+    t: &PreparedTorrent<'_>,
+) -> Result<(Inserted, bool)> {
     let p = t.torrent;
     // A blob compressed elsewhere must name a dictionary we can read back.
     if p.files.dict_id.is_some_and(|id| !codec.has_dict(id)) {
@@ -1582,10 +1605,9 @@ fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Re
         }
         // An import with an incomplete file list gets the real one when
         // the info dict is fetched.
-        if t.extra_flags & flags::FILES_PARTIAL == 0 && t.verified {
-            upgrade_partial(tx, id, t)?;
-        }
-        return Ok(Inserted::Existing(id));
+        let upgraded =
+            t.extra_flags & flags::FILES_PARTIAL == 0 && t.verified && upgrade_partial(tx, id, t)?;
+        return Ok((Inserted::Existing(id), upgraded));
     }
     let id = insert_new(
         tx,
@@ -1595,7 +1617,7 @@ fn commit_one(tx: &Connection, codec: &BlobCodec, t: &PreparedTorrent<'_>) -> Re
         t.metadata_at,
         t.source,
     )?;
-    Ok(Inserted::New(id))
+    Ok((Inserted::New(id), true))
 }
 
 /// Inserts a new torrent's rows (`torrents`, files, extra, raw and
@@ -1696,13 +1718,14 @@ fn write_enrichment(conn: &Connection, id: i64, e: &Enriched) -> Result<()> {
 
 /// Replaces a `FILES_PARTIAL` torrent's file list and info-derived columns
 /// with those of a verified info dict. Does nothing to complete torrents.
-fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Result<()> {
+/// Returns whether it replaced them.
+fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Result<bool> {
     let p = t.torrent;
     let flags_now: i64 = conn
         .prepare_cached("SELECT flags FROM torrents WHERE id = ?1")?
         .query_row([id], |r| r.get(0))?;
     if flags_now & flags::FILES_PARTIAL == 0 {
-        return Ok(());
+        return Ok(false);
     }
     // An import's private restriction is sticky (IMP-1): the fetched info
     // dict can't clear it.
@@ -1774,7 +1797,7 @@ fn upgrade_partial(conn: &Connection, id: i64, t: &PreparedTorrent<'_>) -> Resul
     import::verified_upgrade(conn, id, private || p.flags & flags::PRIVATE != 0)?;
     conn.prepare_cached("INSERT INTO reindex_log (torrent_id) VALUES (?1)")?
         .execute([id])?;
-    Ok(())
+    Ok(true)
 }
 
 /// Clears [`flags::PRIVATE_SOURCE`], writing only when it's set.

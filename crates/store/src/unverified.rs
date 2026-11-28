@@ -1025,6 +1025,22 @@ impl Store {
         codes: SearchableCodes,
         at: i64,
     ) -> Result<Promoted> {
+        self.promote_from(id, t, codes, at, 0)
+    }
+
+    /// [`Store::promote`] of a record `worker` prepared (WK-12: the
+    /// authenticated session's id, 0 for the built-in worker). A remote
+    /// worker's kept torrent, or the partial import its record upgrades,
+    /// is recorded in `torrent_worker` in the promotion's transaction
+    /// ([`crate::workers`]).
+    pub fn promote_from(
+        &mut self,
+        id: i64,
+        t: &PreparedTorrent<'_>,
+        codes: SearchableCodes,
+        at: i64,
+        worker: u32,
+    ) -> Result<Promoted> {
         let p = t.torrent;
         // A usenet item is refused first, with its own error, whatever
         // `t` is; checked again in the transaction below.
@@ -1096,8 +1112,10 @@ impl Store {
             }
             // As `commit_one`: an import's partial file list gets the
             // fetched one.
-            if t.extra_flags & flags::FILES_PARTIAL == 0 {
-                crate::upgrade_partial(&tx, existing, t)?;
+            if t.extra_flags & flags::FILES_PARTIAL == 0
+                && crate::upgrade_partial(&tx, existing, t)?
+            {
+                crate::workers::record(&tx, Some(existing), worker)?;
             }
             if let Some(blob) = row_claims {
                 tx.prepare_cached(
@@ -1147,6 +1165,7 @@ impl Store {
                 .execute([id])?;
             crate::saved::queue_promoted(&tx, tx.last_insert_rowid())?;
             crate::insights::count_promoted(&tx, id, at, codes)?;
+            crate::workers::record(&tx, Some(id), worker)?;
             Promoted::Kept(id)
         };
         // Found by an always-adult source and not stored adult yet: marked
