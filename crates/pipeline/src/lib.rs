@@ -181,6 +181,12 @@ pub struct PipelineConfig {
     /// instance is set up. While it reads `false`, no plugin starts, the
     /// scrape scheduler waits and the pool starts paused. `None`: no hold.
     pub setup_done: Option<watch::Receiver<bool>>,
+    /// X-vpn-bind: the guard of the network interface the crawl is limited
+    /// to. While it's down, [`Control`] keeps the crawler paused (as the
+    /// setup hold does) and the DHT plugin runs no node. The guard itself
+    /// is the binary's, which also hands it to the DHT, fetch and scrape
+    /// sockets. `None`: crawl by any route, as before.
+    pub vpn: Option<Arc<lodestar_network_policy::iface::Guard>>,
     /// The companion manager's snapshots ([`requires`], CMP-10): a plugin
     /// that needs a companion runs only while it's there and healthy.
     /// `None`: no plugin is held for a companion, so the gate is off until
@@ -237,6 +243,7 @@ impl Default for PipelineConfig {
             torrent_cache: None,
             adult_enrichers: Vec::new(),
             setup_done: None,
+            vpn: None,
             companions: None,
             fill_gate: None,
         }
@@ -435,6 +442,8 @@ pub struct Monitor {
     gate: Arc<gate::GateStats>,
     /// [`PipelineConfig::setup_done`], for [`Control`] to lift the hold.
     setup_done: Option<watch::Receiver<bool>>,
+    /// [`PipelineConfig::vpn`], for [`Control`]'s VPN hold.
+    vpn: Option<Arc<lodestar_network_policy::iface::Guard>>,
     /// [`PipelineConfig::companions`], for [`Monitor::companion_state`].
     companions: Option<requires::Companions>,
     /// [`PipelineConfig::reenrich`], for [`Control`]: a purge that removed
@@ -541,6 +550,11 @@ impl Monitor {
     /// The setup hold this pipeline started with ([`setup_hold`]).
     pub fn setup_done(&self) -> Option<&watch::Receiver<bool>> {
         self.setup_done.as_ref()
+    }
+
+    /// The crawl's interface guard (X-vpn-bind), when it has one.
+    pub fn vpn(&self) -> Option<&Arc<lodestar_network_policy::iface::Guard>> {
+        self.vpn.as_ref()
     }
 
     /// The scrape scheduler, when scraping is on.
@@ -1024,6 +1038,8 @@ impl Pipeline {
         // Held until setup, the pool starts paused; `Control` lifts it.
         let mut pool_config = config.pool.clone();
         pool_config.paused |= setup_hold::held(config.setup_done.as_ref());
+        // X-vpn-bind: so is a pool whose interface is down at start.
+        pool_config.paused |= config.vpn.as_ref().is_some_and(|g| !g.state().is_up());
         if pool_config.hint_first {
             pool_config.hint_sources = hint_sources;
         }
@@ -1276,6 +1292,7 @@ impl Pipeline {
                 rollups: rollups_handle,
                 gate,
                 setup_done: config.setup_done.clone(),
+                vpn: config.vpn.clone(),
                 companions: config.companions.clone(),
                 reenrich: config.reenrich.clone(),
             },

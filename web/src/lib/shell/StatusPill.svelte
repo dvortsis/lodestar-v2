@@ -1,7 +1,8 @@
 <script lang="ts">
 	// Crawler and index state, icon + text, linking to Insights (§10.3). Narrow widths keep the icon
 	// and hide the words visually; they stay in the accessible name. Numbers come from the server
-	// through the formatters; unknown is "—".
+	// through the formatters. The count is the searchable one, the figure Search and Insights show
+	// (X-hidden-count), and is left out while unknown.
 	import type { Component } from 'svelte';
 	import IconBroadcast from '~icons/ph/broadcast-bold';
 	import IconPause from '~icons/ph/pause-circle-bold';
@@ -94,10 +95,8 @@
 						found: formatCompact(state.found ?? null, locale),
 						stored: formatCompact(state.stored ?? null, locale)
 					})
-				: showsCount
-					? (state.torrents === 1 ? m.shell_status_torrents_one : m.shell_status_torrents)({
-							count: formatCompact(state.torrents, locale)
-						})
+				: showsCount && state.searchable !== null
+					? m.shell_status_searchable({ count: formatCompact(state.searchable, locale) })
 					: ''
 	);
 </script>

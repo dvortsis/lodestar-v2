@@ -16,19 +16,26 @@ const goto = vi.hoisted(() => vi.fn());
 const nav = vi.hoisted(() => ({ visit: (() => {}) as (to: string) => void }));
 const replaceState = vi.hoisted(() => vi.fn((to: string) => nav.visit(to)));
 vi.mock('$app/navigation', () => ({ goto, replaceState, pushState: vi.fn() }));
-const search = vi.hoisted(() => ({ q: 'lantern', sort: 'relevance', setSort: vi.fn() }));
+const search = vi.hoisted(() => ({
+	q: 'lantern',
+	sort: 'relevance',
+	hidden: false,
+	setSort: vi.fn(),
+	setHidden: vi.fn()
+}));
 vi.mock('$lib/state/search.svelte', async (original) => ({
 	...(await original<typeof import('$lib/state/search.svelte')>()),
 	search
 }));
-const results = vi.hoisted(() => ({
-	status: 'ready',
-	hits: [] as unknown[],
-	total: 0,
-	totalApprox: false,
-	grouped: {} as Record<string, unknown>
+vi.mock('../results/results.svelte', async () => ({
+	results: (await import('./testing.svelte')).fakeResults
 }));
-vi.mock('../results/results.svelte', () => ({ results }));
+const post = vi.hoisted(() => vi.fn());
+vi.mock('$lib/api/client', async (original) => ({
+	...(await original<typeof import('$lib/api/client')>()),
+	api: { post }
+}));
+const { fakeResults: results } = await import('./testing.svelte');
 
 const { default: ResultsToolbar } = await import('./ResultsToolbar.svelte');
 const { visit } = await import('../query/testing.svelte');
@@ -40,11 +47,16 @@ beforeEach(() => {
 	replaceState.mockClear();
 	search.setSort.mockReset();
 	search.sort = 'relevance';
+	search.hidden = false;
+	search.setHidden.mockReset();
+	post.mockReset();
 	Object.assign(results, {
 		status: 'ready',
 		hits: [hit(1)],
 		total: 1284,
 		totalApprox: false,
+		query: null,
+		refining: false,
 		grouped: {}
 	});
 });
@@ -52,6 +64,123 @@ beforeEach(() => {
 const count = () => screen.getByTestId('results-count').textContent?.trim();
 
 describe('ResultsToolbar', () => {
+	const lantern = { ast: { op: 'term', value: 'lantern' }, hidden: false };
+	const asked = () => post.mock.calls.filter(([path]) => path === '/search/hidden');
+
+	it('asks for the hidden count once the rows show, and Show adds them (P7)', async () => {
+		post.mockResolvedValue({ hidden_total: 1200 });
+		results.query = lantern;
+		render(ResultsToolbar);
+		await waitFor(() => expect(screen.getByTestId('results-hidden-show')).toBeTruthy(), WAIT);
+		expect(asked()).toHaveLength(1);
+		expect(asked()[0]![1].body).toMatchObject({ ast: lantern.ast, hidden: false });
+		// Both forms are in the line; CSS shows one by the toolbar's width (the short one is aria-hidden).
+		const short = screen.getByTestId('results-count').querySelector('.tb-short')!;
+		expect(short.textContent).toBe('1,200 filtered');
+		expect(short.getAttribute('aria-hidden')).toBe('true');
+		expect(count()?.replace(short.textContent!, '').replace(/\s+/g, ' ')).toBe(
+			'1,284 results · 1,200 hidden by filters · Show'
+		);
+		const show = screen.getByRole('button', { name: 'Show' });
+		const described = document.getElementById(show.getAttribute('aria-describedby')!);
+		expect(described?.textContent).toBe('1,200 hidden by filters');
+		const region = document.body.appendChild(
+			Object.assign(document.createElement('div'), { id: 'results' })
+		);
+		await fireEvent.click(show);
+		expect(search.setHidden).toHaveBeenCalledWith(true);
+		expect(document.activeElement).toBe(region);
+		region.remove();
+	});
+
+	it('drops a late answer for rows no longer shown, and aborts its request', async () => {
+		let answer!: (v: unknown) => void;
+		const signals: AbortSignal[] = [];
+		post.mockImplementationOnce(
+			(_: string, o: { signal: AbortSignal }) => (
+				signals.push(o.signal),
+				new Promise((r) => (answer = r))
+			)
+		);
+		post.mockResolvedValueOnce({ hidden_total: 3 });
+		results.query = lantern;
+		render(ResultsToolbar);
+		await waitFor(() => expect(asked()).toHaveLength(1), WAIT);
+		// A new query's rows: the old request is aborted, its late answer ignored.
+		results.query = { ast: { op: 'term', value: 'other' }, hidden: false };
+		await waitFor(() => expect(asked()).toHaveLength(2), WAIT);
+		expect(signals[0]!.aborted).toBe(true);
+		answer({ hidden_total: 999 });
+		await waitFor(
+			() => expect(screen.getByTestId('results-hidden').textContent).toBe('3 hidden by filters'),
+			WAIT
+		);
+		await tick();
+		expect(screen.getByTestId('results-hidden').textContent).toBe('3 hidden by filters');
+	});
+
+	it('hides the count while a new query loads or fails, so Show never applies to it', async () => {
+		post.mockResolvedValue({ hidden_total: 3 });
+		results.query = lantern;
+		render(ResultsToolbar);
+		await waitFor(() => expect(screen.getByTestId('results-hidden-show')).toBeTruthy(), WAIT);
+		// The next query has no rows to keep: the store says loading, the rows' query stays.
+		results.status = 'loading';
+		await tick();
+		expect(screen.queryByTestId('results-hidden-show')).toBeNull();
+		results.status = 'error';
+		await tick();
+		expect(screen.queryByTestId('results-hidden-show')).toBeNull();
+		results.status = 'ready';
+	});
+
+	it('asks again when the rows reload for the same query', async () => {
+		post.mockResolvedValue({ hidden_total: 3 });
+		results.query = lantern;
+		render(ResultsToolbar);
+		await waitFor(() => expect(asked()).toHaveLength(1), WAIT);
+		results.query = { ...lantern };
+		await waitFor(() => expect(asked()).toHaveLength(2), WAIT);
+	});
+
+	it('hides the count while new rows are on their way, so Show waits for them', async () => {
+		post.mockResolvedValue({ hidden_total: 3 });
+		results.query = lantern;
+		render(ResultsToolbar);
+		await waitFor(() => expect(screen.getByTestId('results-hidden-show')).toBeTruthy(), WAIT);
+		results.refining = true;
+		await tick();
+		expect(screen.queryByTestId('results-hidden-show')).toBeNull();
+		results.refining = false;
+		await tick();
+		expect(screen.getByTestId('results-hidden-show')).toBeTruthy();
+	});
+
+	it('offers nothing for none, an unknown count, a failure, or hidden already shown', async () => {
+		for (const [shown, answer] of [
+			[lantern, () => Promise.resolve({ hidden_total: 0 })],
+			[lantern, () => Promise.resolve({ hidden_total: null })],
+			[lantern, () => Promise.reject(new Error('down'))],
+			[{ ...lantern, hidden: true }, () => Promise.resolve({ hidden_total: 5 })]
+		] as const) {
+			post.mockReset();
+			post.mockImplementation(answer);
+			results.query = shown;
+			const { unmount } = render(ResultsToolbar);
+			if (!shown.hidden) {
+				await waitFor(() => expect(asked()).toHaveLength(1), WAIT);
+				// Settled, so nothing can still arrive after the check.
+				await (post.mock.results[0]!.value as Promise<unknown>).catch(() => {});
+			}
+			await tick();
+			expect(screen.queryByTestId('results-hidden')).toBeNull();
+			expect(screen.queryByTestId('results-hidden-show')).toBeNull();
+			unmount();
+		}
+		// Already shown: nothing is asked.
+		expect(asked()).toHaveLength(0);
+	});
+
 	it('counts the results: exact, one, none, and ≈ compact only when the server says so', () => {
 		const { unmount } = render(ResultsToolbar);
 		expect(count()).toBe('1,284 results');

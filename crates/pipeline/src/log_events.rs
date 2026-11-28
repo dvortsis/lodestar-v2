@@ -110,6 +110,48 @@ lodestar_log::catalogue! {
         message: "DHT node started",
         fields: { sockets: Size },
     }
+    /// X-vpn-bind: the network interface the crawl is limited to is
+    /// missing or down, or a socket couldn't be pinned to it. Harvesting
+    /// and fetching pause and the DHT node stops; nothing goes out by the
+    /// normal route. `reason` is the API's code (`missing`, `down`,
+    /// `no_address`, `bind_failed`, `unsupported`).
+    VPN_DOWN {
+        id: "pipeline.vpn_down",
+        component: Pipeline,
+        level: Error,
+        message: "Crawling paused: the network interface it's limited to is unavailable",
+        fields: { reason: Label },
+    }
+    /// X-vpn-bind: the interface is usable again; the DHT node binds fresh
+    /// sockets and crawling resumes (unless it's paused for another reason).
+    VPN_UP {
+        id: "pipeline.vpn_up",
+        component: Pipeline,
+        level: Info,
+        message: "Crawling resumed: the network interface is back",
+        fields: {},
+    }
+    /// X-vpn-bind: with the crawl limited to a network interface, trackers
+    /// named by host aren't scraped (looking the name up would ask outside
+    /// the interface). Logged once per start, with the count.
+    VPN_TRACKERS_SKIPPED {
+        id: "pipeline.vpn_trackers_skipped",
+        component: Pipeline,
+        level: Info,
+        message: "Trackers named by host skipped: no lookups outside the crawl's interface",
+        fields: { count: Size },
+    }
+    /// X-vpn-bind: the DHT's sockets couldn't be pinned to the interface
+    /// (on Linux before 5.7, pinning needs `CAP_NET_RAW`, which the
+    /// privilege drop removes). The crawl stays paused and tries again
+    /// at the next check.
+    VPN_PIN_FAILED {
+        id: "pipeline.vpn_pin_failed",
+        component: Dht,
+        level: Error,
+        message: "DHT sockets couldn't be limited to the network interface",
+        fields: { error: Error },
+    }
     /// A CS-1 entry's origin code is unknown; it's kept as imported.
     CS_ORIGIN_UNKNOWN {
         id: "pipeline.cs_origin_unknown",

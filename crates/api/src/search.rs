@@ -2,12 +2,12 @@
 //! with display rows read from SQLite.
 
 use std::sync::{Arc, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::routing::get;
+use axum::routing::{get, post};
 use hmac::{Hmac, KeyInit, Mac};
 use lodestar_classify::{Category, Composition, Record};
 use lodestar_release_parser::Resolution;
@@ -29,8 +29,8 @@ use crate::dto::events::RebuildPhase;
 use crate::dto::search::{
     ClauseRemoval, CollapseMode, CollapseUnavailable, CompositionShare, ExplainHit, ExplainPhase2,
     ExplainPriors, ExplainWeights, IndexRebuild, NaturalChip, NaturalProposal, ParseQuery,
-    ParseResponse, SearchExplain, SearchHit, SearchIndexState, SearchNotice, SearchRecovery,
-    SearchRequest, SearchResponse, UnpopulatedField,
+    ParseResponse, SearchExplain, SearchHiddenCount, SearchHit, SearchIndexState, SearchNotice,
+    SearchRecovery, SearchRequest, SearchResponse, UnpopulatedField,
 };
 use crate::dto::suggest::CharRange;
 use crate::error::{ApiError, ApiResult, internal};
@@ -41,7 +41,7 @@ use crate::{ApiState, INTEREST_TOP, auth, swarm, torrents};
 
 /// This module's half of `/openapi.json`.
 #[derive(OpenApi)]
-#[openapi(paths(parse_query, search_route, search_post, index_state))]
+#[openapi(paths(parse_query, search_route, search_post, hidden_count, index_state))]
 pub(crate) struct ApiDoc;
 
 /// The widest real UTC offsets, in minutes.
@@ -221,7 +221,8 @@ pub fn routes() -> Router<ApiState> {
                     .post(search_post)
                     .route_layer(axum::middleware::from_fn(ast_needs_post)),
             )
-            .route("/search/state", get(index_state)),
+            .route("/search/state", get(index_state))
+            .route("/search/hidden", post(hidden_count)),
     )
 }
 
@@ -838,6 +839,152 @@ fn search_disabled() -> ApiError {
         "search_disabled",
         "Search is turned off.",
     )
+}
+
+/// How long the hidden count may run. Past it the count is left out
+/// (`null`): "N hidden · Show" is a hint beside the results, and a query
+/// that is slow to count again (swarm clauses) mustn't cost the server
+/// more per search than this.
+pub const HIDDEN_COUNT_BUDGET: Duration = RECOVERY_BUDGET;
+
+/// What "N hidden · Show" says beside the results: the matches of the
+/// query a filter rule hid, which `hidden=true` would add. The UI asks
+/// once the first page is on screen, so the first page never waits for
+/// it. Takes the search's own body (`q` or `ast`, `hidden`, `tz`; the
+/// rest is ignored).
+#[utoipa::path(
+    operation_id = "searchHiddenCount",
+    post,
+    path = "/search/hidden",
+    tag = "search",
+    request_body = SearchRequest,
+    responses(
+        (status = 200, body = SearchHiddenCount),
+        (status = 400, body = crate::dto::error::ErrorEnvelope, description = "`bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast` or `bad_tz`. Each names the parameter at fault in `field`; `query_syntax` also gives `start` and `end`."),
+    )
+)]
+pub(crate) async fn hidden_count(
+    State(s): State<ApiState>,
+    headers: HeaderMap,
+    Json(p): Json<SearchRequest>,
+) -> ApiResult<axum::Json<SearchHiddenCount>> {
+    same_origin_json(&headers)?;
+    let Some(search) = s.index.clone() else {
+        return Err(search_disabled());
+    };
+    let ast = request_ast(p.ast, p.q)?;
+    let tz = tz_param(p.tz)?;
+    let visibility = Visibility {
+        hidden: p.hidden.unwrap_or(false),
+        adult: s.adult.shown(),
+    };
+    let cancel = CancelToken::new();
+    let _guard = cancel.cancel_on_drop();
+    tokio::task::spawn_blocking(move || {
+        let hidden_total = count_hidden(
+            search.index(),
+            &ast,
+            visibility,
+            (unix_now(), tz * 60),
+            HIDDEN_COUNT_BUDGET,
+            &cancel,
+        )
+        .map_err(search_error)?;
+        Ok(axum::Json(SearchHiddenCount { hidden_total }))
+    })
+    .await
+    .map_err(internal)?
+}
+
+/// The matches of `ast` a filter rule hid, as `hidden=true` would add
+/// them: under `v`'s Adult visibility and the verified default, so never
+/// Adult while it's hidden, nor unverified items "Show" wouldn't bring
+/// back. Quarantined and dropped torrents are never in the index.
+///
+/// Each count reads the index serving at the time; a commit between two
+/// of them can move the answer by what it added, as a search a moment
+/// later would.
+///
+/// 0 without running the query when the index holds no hidden torrent
+/// at all; `None` when there's nothing to offer (`v.hidden`, or the query
+/// names `hidden` itself), past `budget` (the route's is
+/// [`HIDDEN_COUNT_BUDGET`]), or when the count would be an estimate. `at`
+/// is the request's time and offset (seconds east of UTC). A client that
+/// went away is `Cancelled`.
+fn count_hidden(
+    index: Arc<lodestar_search::SearchIndex>,
+    ast: &Node,
+    v: Visibility,
+    (now, utc_offset): (i64, i32),
+    budget: Duration,
+    cancel: &CancelToken,
+) -> Result<Option<usize>, SearchError> {
+    if v.hidden || ast.mentions_flag("hidden") {
+        return Ok(None);
+    }
+    let flag = Node::Flag {
+        name: "hidden".into(),
+        value: true,
+    };
+    let deadline = cancel.with_budget(budget);
+    // A lease for `node`, as a search takes one (its stem fallback
+    // included); `None` past the budget.
+    let lease = |node: &Node| -> Result<Option<Lease>, SearchError> {
+        match Lease::new_at(
+            index.clone(),
+            node,
+            now,
+            utc_offset,
+            Sort::Relevance,
+            &deadline,
+        ) {
+            Ok(lease) => Ok(Some(lease)),
+            Err(SearchError::OutOfTime) => Ok(None),
+            Err(e) => Err(e),
+        }
+    };
+    // A count stands only when it's exact and every `/…/` clause verified
+    // the whole snapshot (as recovery's counts, `recovery.rs`).
+    let exact = |l: &Lease| {
+        Some(l.total())
+            .filter(|t| !t.approx && !l.regex_stopped())
+            .map(|t| t.value)
+    };
+    // Nothing "Show" could reveal anywhere: no need to run the query. The
+    // probe is what `hidden=true` adds to a browse, under the request's
+    // Adult visibility and verified default, so a fast answer tells
+    // nothing about torrents the viewer may not see (filter-hidden Adult
+    // while Adult is hidden).
+    let probe = base_query(&flag, Visibility { hidden: true, ..v }).query();
+    let Some(any) = lease(&probe)? else {
+        return Ok(None);
+    };
+    if exact(&any) == Some(0) {
+        return Ok(Some(0));
+    }
+    // What "Show" adds, by definition: the `hidden=true` search's total
+    // less the search's own. Each lease takes its own stem fallback (§8),
+    // as each search would, so a few matches that only stems find are
+    // counted only where the search shown would find them.
+    let shown = base_query(ast, v);
+    let with_hidden = base_query(ast, Visibility { hidden: true, ..v });
+    let Some(visible) = lease(&shown.query())? else {
+        return Ok(None);
+    };
+    let Some(all) = lease(&with_hidden.query())? else {
+        return Ok(None);
+    };
+    if let (Some(a), Some(b)) = (exact(&all), exact(&visible)) {
+        return Ok(a.checked_sub(b));
+    }
+    // Past the exact range (100,000) neither search falls back to stems,
+    // so the hidden ones alone are counted, unless that count would.
+    let only_hidden = Node::And {
+        of: vec![with_hidden.node.clone(), flag],
+    };
+    Ok(lease(&with_hidden.restrict(only_hidden))?
+        .filter(|l| !l.stemmed())
+        .and_then(|l| exact(&l)))
 }
 
 /// Zero-result recovery for `ast` on `lease`'s snapshot: each removable
@@ -1866,6 +2013,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_hidden_count_is_left_out_past_its_budget_and_with_nothing_to_offer() {
+        let index = Arc::new(lodestar_search::SearchIndex::in_memory().unwrap());
+        let q = lodestar_search::parse("movie").unwrap();
+        let v = Visibility {
+            hidden: false,
+            adult: false,
+        };
+        let cancel = CancelToken::new();
+        let run = |ast: &Node, v, budget| {
+            count_hidden(index.clone(), ast, v, (0, 0), budget, &cancel).unwrap()
+        };
+        assert_eq!(run(&q, v, HIDDEN_COUNT_BUDGET), Some(0));
+        // Out of time: no count, never a wrong one.
+        assert_eq!(run(&q, v, Duration::ZERO), None);
+        // Already shown, or asked about itself: nothing to offer.
+        let shown = Visibility { hidden: true, ..v };
+        assert_eq!(run(&q, shown, HIDDEN_COUNT_BUDGET), None);
+        let own = lodestar_search::parse("movie hidden:yes").unwrap();
+        assert_eq!(run(&own, v, HIDDEN_COUNT_BUDGET), None);
     }
 
     #[test]

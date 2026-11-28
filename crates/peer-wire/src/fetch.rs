@@ -79,6 +79,10 @@ pub struct FetchOptions {
     /// admission bounds assume it. A test of a deliberately lossy link
     /// can give itself room (X-flake-utp-lossy-win).
     pub first_window_deadline: Duration,
+    /// X-vpn-bind: dial TCP only through this guard's network interface,
+    /// and not at all while it's down. uTP needs nothing here: it rides
+    /// the DHT's sockets, which the DHT pins. `None` dials as before.
+    pub guard: Option<Arc<lodestar_network_policy::iface::Guard>>,
 }
 
 /// A live address check, shared with whoever keeps the lists current.
@@ -214,6 +218,7 @@ impl Default for FetchOptions {
             route_backoff: false,
             reserve: None,
             first_window_deadline: FIRST_WINDOW_DEADLINE,
+            guard: None,
         }
     }
 }
@@ -386,6 +391,53 @@ fn utp_table_full(r: &Result<Fetched, Error>) -> bool {
     matches!(r, Err(Error::Connect(e)) if e.kind() == io::ErrorKind::QuotaExceeded)
 }
 
+/// A TCP connection to `addr`: through [`FetchOptions::guard`]'s
+/// interface when there is one, refused without a packet while it's
+/// down, and as before when there isn't.
+async fn dial(addr: SocketAddr, opts: &FetchOptions) -> io::Result<TcpStream> {
+    let Some(guard) = &opts.guard else {
+        return TcpStream::connect(addr).await;
+    };
+    if !guard.state().is_up() {
+        return Err(io::Error::new(
+            io::ErrorKind::NetworkDown,
+            "the crawl's network interface is down",
+        ));
+    }
+    let dialed = pinned_dial(addr, guard).await;
+    if let Err(e) = &dialed {
+        guard.trip(e);
+    }
+    dialed
+}
+
+/// A TCP socket pinned to `iface` before it binds or connects.
+pub(crate) async fn pinned_dial(
+    addr: SocketAddr,
+    guard: &lodestar_network_policy::iface::Guard,
+) -> io::Result<TcpStream> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    // A v4-mapped peer is an IPv4 one: an IPv4 socket reaches it
+    // wherever the interface has only an IPv4 address.
+    let addr = lodestar_network_policy::normalize(addr);
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    let any: SocketAddr = match addr {
+        SocketAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
+        SocketAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
+    };
+    let local = guard.pin(&socket, any)?;
+    // Windows: the interface's own address, so the strong host model
+    // keeps the connection on it. Linux: the device pin is enough.
+    if !local.ip().is_unspecified() {
+        socket.bind(&local.into())?;
+    }
+    socket.set_nonblocking(true)?;
+    tokio::net::TcpSocket::from_std_stream(socket.into())
+        .connect(addr)
+        .await
+}
+
 async fn attempt(
     transport: Transport,
     addr: SocketAddr,
@@ -404,7 +456,7 @@ async fn attempt(
     };
     match transport {
         Transport::Tcp => {
-            let tcp = timeout(opts.connect_timeout, TcpStream::connect(addr))
+            let tcp = timeout(opts.connect_timeout, dial(addr, opts))
                 .await
                 .map_err(|_| timed_out())?
                 .map_err(|e| {

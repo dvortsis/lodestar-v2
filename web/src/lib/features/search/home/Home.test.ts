@@ -24,7 +24,9 @@ const props = { focusBar: () => {}, count: 2_400_000, saved: [] };
 describe('Search home', () => {
 	it('says what it is and what to type, with the count', () => {
 		render(Home, props);
-		expect(screen.getByTestId('results-empty-title').textContent).toBe('Search 2,400,000 torrents');
+		expect(screen.getByTestId('results-empty-title').textContent).toBe(
+			'Search 2,400,000 searchable torrents'
+		);
 		expect(screen.getByTestId('results-empty').querySelectorAll('.rp-examples a')).toHaveLength(3);
 	});
 

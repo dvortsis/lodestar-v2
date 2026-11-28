@@ -1,5 +1,5 @@
 {
-	"search_home_title": "搜索 {count} 个种子",
+	"search_home_title": "搜索 {count} 个可搜索的种子",
 	"search_home_title_unknown": "搜索种子",
 	"search_home_lead": "Lodestar 会自动在网络上发现种子，并让你搜索它们。在上方输入几个词，或试试这些：",
 	"search_home_recent": "你最近的搜索",

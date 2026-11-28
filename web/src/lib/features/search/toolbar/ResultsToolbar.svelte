@@ -19,6 +19,9 @@
 	import { groupsCount } from '../collapse/count';
 	import { PARAM, groupHref, groupedIn, grouping } from '../collapse/grouping.svelte';
 	import { viewOf, type View } from './view';
+	import { FOCUS_RING } from '$lib/ui/classes';
+	import { api } from '$lib/api/client';
+	import type { components } from '$lib/api/schema';
 
 	const id = $props.id();
 	const locale = $derived(currentLocale());
@@ -74,6 +77,45 @@
 			? m.search_toolbar_count_one()
 			: m.search_toolbar_count_other({ count: formatCount(n, locale) });
 	});
+
+	// "N hidden · Show" (§10.4, P7): matches a filter rule hid, as the server counts them for the
+	// rows shown (POST /search/hidden). Asked once the rows have painted, so the first page never
+	// waits for it; a newer query, sort or visibility aborts it, and a late answer is dropped. "Show"
+	// adds exactly those (`hidden=true`); none to offer, or a failure, shows nothing. Its 44 px target
+	// under a coarse pointer is padding taken back by a negative margin, so the line keeps its height.
+	type Body = components['schemas']['SearchRequest'];
+	let hidden = $state(0);
+	$effect(() => {
+		const q = results.query;
+		hidden = 0;
+		if (!q || q.hidden) return;
+		const ctl = new AbortController();
+		const frame = requestAnimationFrame(() =>
+			api
+				.post('/search/hidden', {
+					// The rest of a search's body is left unset (the server ignores it here).
+					body: { ast: q.ast, hidden: false } as Body,
+					signal: ctl.signal
+				})
+				.then((r) => {
+					if (!ctl.signal.aborted) hidden = r.hidden_total ?? 0;
+				})
+				.catch(() => {})
+		);
+		return () => {
+			cancelAnimationFrame(frame);
+			ctl.abort();
+		};
+	});
+	function showHidden() {
+		ensureSearchPath();
+		void search.setHidden(true);
+		// The button goes with its count: focus the results it opened (as Skip to results does), not
+		// the page.
+		const region = document.getElementById('results');
+		region?.setAttribute('tabindex', '-1');
+		region?.focus();
+	}
 
 	// With the drawer open the URL is a shallow `/t/{hash}?…`: each write puts it back on /search
 	// first (query/path.ts), which closes the drawer, rather than navigating to the detail page.
@@ -131,7 +173,22 @@
 
 {#if results.status !== 'empty'}
 	<div class="tb" data-testid="results-toolbar">
-		<p class="tb-count" data-testid="results-count">{count}</p>
+		<p class="tb-count" data-testid="results-count">
+			{count}{#if hidden > 0 && results.status === 'ready' && !results.refining}<span class="tb-hid"
+					>&nbsp;· <span id="{id}-hidden" class="tb-full" data-testid="results-hidden"
+						>{m.search_toolbar_hidden({ count: formatCount(hidden, locale) })}</span
+					><span class="tb-short" aria-hidden="true"
+						>{m.search_toolbar_hidden_short({ count: formatCount(hidden, locale) })}</span
+					>&nbsp;·
+					<button
+						type="button"
+						class="text-primary underline pointer-coarse:-m-3 pointer-coarse:min-h-0 pointer-coarse:p-3 {FOCUS_RING}"
+						data-testid="results-hidden-show"
+						aria-describedby="{id}-hidden"
+						onclick={showHidden}>{m.search_toolbar_hidden_show()}</button
+					></span
+				>{/if}
+		</p>
 		<div class="tb-controls">
 			<GroupToggle
 				on={grouped}

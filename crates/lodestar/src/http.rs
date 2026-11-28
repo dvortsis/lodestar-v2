@@ -263,16 +263,14 @@ async fn status(State(s): State<AppState>) -> Response {
         "started_at": m.started_at(),
         "torrents": m.torrents(),
         // Why it's paused: "setup" while it waits for setup (LEGAL-2),
+        // "vpn_down" while the crawl's interface is down (X-vpn-bind),
         // "user" for the crawler setting, null while it runs.
         "crawler": s.crawl.as_ref().map(|c| {
             let st = c.status();
+            let vpn_down = st.vpn.is_some_and(|v| v.down.is_some());
             json!({
                 "paused": st.paused,
-                "reason": match (st.paused, st.waiting_for_setup) {
-                    (false, _) => Value::Null,
-                    (true, true) => "setup".into(),
-                    (true, false) => "user".into(),
-                },
+                "reason": pause_reason(st.paused, st.waiting_for_setup, vpn_down),
             })
         }),
         "sources": m.sources().iter().map(|src| json!({
@@ -375,9 +373,29 @@ fn unix_now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
+/// Why the crawler is paused, for the status page: `setup` while it
+/// waits for setup (LEGAL-2), `vpn_down` while the crawl's interface is
+/// down (X-vpn-bind), `user` for the crawler setting; null while it runs.
+fn pause_reason(paused: bool, waiting_for_setup: bool, vpn_down: bool) -> Option<&'static str> {
+    match (paused, waiting_for_setup, vpn_down) {
+        (false, _, _) => None,
+        (true, true, _) => Some("setup"),
+        (true, false, true) => Some("vpn_down"),
+        (true, false, false) => Some("user"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{STATUS_PAGE, rebuild};
+    use super::{STATUS_PAGE, pause_reason, rebuild};
+
+    #[test]
+    fn the_status_page_says_why_the_crawler_is_paused() {
+        assert_eq!(pause_reason(false, true, true), None, "running");
+        assert_eq!(pause_reason(true, true, true), Some("setup"));
+        assert_eq!(pause_reason(true, false, true), Some("vpn_down"));
+        assert_eq!(pause_reason(true, false, false), Some("user"));
+    }
     use lodestar_search::{IndexVersion, RebuildPhase, RebuildProgress};
     use serde_json::json;
 

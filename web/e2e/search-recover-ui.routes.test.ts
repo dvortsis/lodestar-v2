@@ -85,7 +85,7 @@ test('the growing banner shows the count and the hourly rate', async ({ page, go
 	server(mock, () => body(hits(2)));
 	mock.on('searchIndexState', indexState(84_210, { growing: true, growth_per_hour: 2104.5 }));
 	await go('/search?q=lantern');
-	await expect(page.getByTestId('results-cold-start')).toHaveText(/84,210 torrents, \+2\.1K\/h/);
+	await expect(page.getByTestId('results-cold-start')).toHaveText(/84,210 searchable, \+2\.1K\/h/);
 	await expectNoA11yViolations(page);
 });
 
@@ -97,7 +97,7 @@ test('the growing banner leaves the rate out when none was measured', async ({
 	server(mock, () => body(hits(2)));
 	mock.on('searchIndexState', indexState(84_210, { growing: true, growth_per_hour: null }));
 	await go('/search?q=lantern');
-	await expect(page.getByTestId('results-cold-start')).toContainText('84,210 torrents');
+	await expect(page.getByTestId('results-cold-start')).toContainText('84,210 searchable');
 	await expect(page.getByTestId('results-cold-start')).not.toContainText('/h');
 });
 

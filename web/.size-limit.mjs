@@ -546,7 +546,8 @@ const eventNamesLimits = {
 	// runner §2.26, X-gluetun-restart-recover: measured 6460 B with the two network-watch events, + 10%.
 	system: '7110 B',
 	auth: '1630 B',
-	dht: '1120 B',
+	// runner §2.26, X-vpn-bind: measured 1174 B with the bootstrap-name event, rounded up to 64 B.
+	dht: '1216 B',
 	filters: '1740 B',
 	search: '2250 B',
 	// runner §2.26, UP-1: measured 704 B, the watch labels.
@@ -557,8 +558,9 @@ const eventNamesLimits = {
 	companions: '1160 B',
 	// runner §2.26, X-tls-root-load-event: measured 1220 B with the two root-load events, + 300 B.
 	integrations: '1520 B',
-	// runner §2.26, X-rejudge-stall: measured 2704 B with the two stall events, + 300 B.
-	pipeline: '3010 B',
+	// runner §2.26, X-vpn-bind: measured 3302 B with the four crawl-interface events, rounded
+	// up to 64 B.
+	pipeline: '3328 B',
 	fetch: '610 B'
 };
 for (const c of Object.keys(eventNamesLimits)) {
@@ -1475,7 +1477,9 @@ export default [
 	// (large:px-6, large:py-6, print:p-0, max-w-7xl) and the h1's one class string.
 	// X-grid-two-col-large (runner §2.26): 19.79 → 19.80 KB, measured 19,792 B: the large: grid utilities
 	// (grid-cols-2, col-span-2, gap-x-4) of three label | value lists; +9 B over main.
-	entry('CSS', search.css, '19.80 KB'),
+	// runner §2.26 (X-hidden-count): 19.80 → 19.82 KB, measured 19,816 B: the 44 px touch target on
+	// "N hidden by filters · Show" (pointer-coarse padding, negative margin, min-height reset).
+	entry('CSS', search.css, '19.82 KB'),
 	...(appEntry
 		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
 		: []),
@@ -1848,7 +1852,9 @@ export default [
 	// X-zero-rescue (runner §2.26): 44,224 → 44,416 B, measured 44,377 B (+153 B), rounded up to 64 B: the panel's lazy mount of the rescue chunk and the hint it hides. The rescue itself is its own entry below.
 	entry('Search results (lazy)', resultsFirst, '44416 B'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
-	entry('Search home (lazy)', homeLazy, '2.71 KB'),
+	// runner §2.26 (X-hidden-count): 2.71 → 2.72 KB, measured 2,717 B: "Search {count} searchable
+	// torrents" (en, zh).
+	entry('Search home (lazy)', homeLazy, '2.72 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
@@ -1878,7 +1884,11 @@ export default [
 	// GS-5 (runner §2.26): 4.6 → 5.01 KB, the Group versions switch (twice: among the controls, and in
 	// More whenever the toolbar is too narrow for it, a container query), its note and the URL write
 	// with Back.
-	entry('Results toolbar (lazy)', toolbarLazy, '5.02 KB'),
+	// runner §2.26 (X-hidden-count): 5.02 → 5.60 KB, measured 5,590 B: "N hidden by filters · Show"
+	// and its narrow form "N filtered · Show", its request (POST /search/hidden, after the rows render,
+	// aborted by a newer query), its messages, and the container queries that keep it from moving
+	// anything (toolbar.css).
+	entry('Results toolbar (lazy)', toolbarLazy, '5.60 KB'),
 	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
 	// chunk); the limit falls to the measured size, rounded up at 0.01 kB, so the bytes aren't respent.
 	// GS-5 (runner §2.26): +1 B of shared-chunk noise (no live-banner code changed), rounded up to 0.01 KB.

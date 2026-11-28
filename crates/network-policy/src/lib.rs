@@ -4,6 +4,8 @@
 //! are excluded even when a special-purpose subrange is globally reachable.
 //! This policy is for outbound discovery, not inbound protocol replies.
 
+pub mod iface;
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Canonicalize mapped IPv4 before deduplication and subscribed-IP checks.

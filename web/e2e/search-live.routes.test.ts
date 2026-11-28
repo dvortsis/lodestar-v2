@@ -67,8 +67,8 @@ test('new matches show a banner; the list holds until Show reloads it and regist
 	// point (events are handled in order): once the pill shows it, the `a1` event has been handled,
 	// and the banner must still be absent. Then the new id counts.
 	await events.send('search_live', { id: 'a1', matched: 7, through: 120 });
-	await events.send('crawler', crawlerEvent({ torrents: 1 }));
-	await expect(page.getByTestId('status-pill-count')).toHaveText('· 1 torrent');
+	await events.send('crawler', crawlerEvent({ searchable: 1 }));
+	await expect(page.getByTestId('status-pill-count')).toHaveText('· 1 searchable');
 	await expect(banner).toHaveCount(0);
 	await events.send('search_live', { id: 'a2', matched: 1, through: 121 });
 	await expect(banner).toHaveText('1 new result');

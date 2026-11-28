@@ -72,6 +72,60 @@ pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwe
         .map_err(|e| Error::Http(e.to_string()))
 }
 
+/// [`client`], sending only through `iface` (X-vpn-bind), and looking
+/// no name up ([`NoLookups`]: a tracker named by host fails, one named by
+/// address works). Linux only: pinned to the device (`SO_BINDTODEVICE`).
+/// reqwest gives no hook to pin its sockets on Windows (binding an address
+/// alone leaves the weak-host send path open), so there, as elsewhere, the
+/// client isn't built and HTTP trackers stay off ([`through_reaches`])
+/// rather than going out by the normal route.
+pub fn client_through(
+    iface: &lodestar_network_policy::iface::Interface,
+    deny: Option<&crate::Deny>,
+) -> Result<reqwest::Client> {
+    through(iface, deny)?
+        .build()
+        .map_err(|e| Error::Http(e.to_string()))
+}
+
+#[cfg(target_os = "linux")]
+fn through(
+    iface: &lodestar_network_policy::iface::Interface,
+    deny: Option<&crate::Deny>,
+) -> Result<reqwest::ClientBuilder> {
+    // Certificates are checked as every routed client checks them
+    // (`lodestar_integrations::tls`), not by the OS verifier.
+    let route = lodestar_integrations::Route::Interface(iface.name().to_owned());
+    let tls = lodestar_integrations::tls::http_client_config(&route)
+        .map_err(|e| Error::Http(e.to_string()))?;
+    Ok(builder(None, deny, None)?
+        .interface(iface.name())
+        .dns_resolver(NoLookups)
+        // A redirect could name an address of a family the interface has
+        // no address of, which would leave with another interface's
+        // source; trackers rarely redirect, so none is followed.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            attempt.error("a redirect is refused with an interface set")
+        }))
+        .tls_backend_preconfigured(tls))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn through(
+    iface: &lodestar_network_policy::iface::Interface,
+    _: Option<&crate::Deny>,
+) -> Result<reqwest::ClientBuilder> {
+    Err(Error::Http(format!(
+        "HTTP trackers can't be limited to {iface} here"
+    )))
+}
+
+/// Whether a [`client_through`] client may ask `url`'s tracker: on Linux,
+/// one named by address (no lookups); elsewhere none.
+pub fn through_reaches(url: &Url) -> bool {
+    cfg!(target_os = "linux") && literal_ip(url).is_some()
+}
+
 /// [`client`]'s builder, with `roots` in place of the routed roots when
 /// bound (tests pass their own CA).
 fn builder(
@@ -142,6 +196,20 @@ fn literal_ip(url: &Url) -> Option<IpAddr> {
     }
 }
 
+/// X-vpn-bind: no name is looked up (the system resolver would ask
+/// outside the crawl's interface). IP-literal URLs never reach a resolver,
+/// so only names come here, and each is refused. Linux only: elsewhere the
+/// pinned client is refused before it is built.
+#[cfg(target_os = "linux")]
+struct NoLookups;
+
+#[cfg(target_os = "linux")]
+impl reqwest::dns::Resolve for NoLookups {
+    fn resolve(&self, _: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async { Err(Error::Resolve.into()) })
+    }
+}
+
 /// The system resolver, minus blocklisted addresses.
 struct DenyResolver(crate::Deny);
 
@@ -149,6 +217,7 @@ impl reqwest::dns::Resolve for DenyResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let (deny, host) = (self.0.clone(), name.as_str().to_owned());
         Box::pin(async move {
+            crate::looked_up();
             let all: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
             let allowed: Vec<SocketAddr> = all
                 .iter()
@@ -261,6 +330,11 @@ impl HttpTracker {
 
     pub fn max_hashes(&self) -> usize {
         self.cfg.max_hashes.clamp(1, MAX_HASHES)
+    }
+
+    /// The tracker's address when its URL names one rather than a host.
+    pub fn literal_ip(&self) -> Option<IpAddr> {
+        literal_ip(&self.scrape_url)
     }
 
     pub async fn scrape(&self, hashes: &[InfoHash]) -> Result<Reply> {
@@ -417,6 +491,23 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_pinned_client_asks_only_trackers_it_can_keep_on_the_interface() {
+        let reaches = |u: &str| through_reaches(&Url::parse(u).unwrap());
+        assert_eq!(
+            reaches("http://203.0.113.9/scrape"),
+            cfg!(target_os = "linux")
+        );
+        assert!(
+            !reaches("http://tracker.example/scrape"),
+            "a name: no lookup"
+        );
+        assert_eq!(
+            reaches("http://[2001:db8::66]/scrape"),
+            cfg!(target_os = "linux")
+        );
+    }
 
     const A: InfoHash = InfoHash([0xaa; 20]);
     const B: InfoHash = InfoHash([0xbb; 20]);

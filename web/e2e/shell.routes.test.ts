@@ -188,12 +188,12 @@ test.describe('status pill', () => {
 		const pill = page.getByTestId('status-pill');
 		await expect(pill).toHaveAttribute('data-state', 'crawling');
 		await expect(page.getByTestId('status-pill-text')).toHaveText('Working');
-		await expect(page.getByTestId('status-pill-count')).toHaveText('· 1.2M torrents');
+		await expect(page.getByTestId('status-pill-count')).toHaveText('· 1.2M searchable');
 		await expect(pill).toHaveAttribute('href', '/insights');
 
-		events.send('crawler', crawlerEvent({ fetch_active: 0, fetch_pending: 0, torrents: 0 }));
+		events.send('crawler', crawlerEvent({ fetch_active: 0, fetch_pending: 0, searchable: 0 }));
 		await expect(pill).toHaveAttribute('data-state', 'idle');
-		await expect(page.getByTestId('status-pill-count')).toHaveText('· 0 torrents');
+		await expect(page.getByTestId('status-pill-count')).toHaveText('· 0 searchable');
 
 		events.send('rebuild', {
 			done: 1500,

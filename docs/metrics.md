@@ -426,7 +426,8 @@ samples of those counters every 10 s. All **main** (B14).
 | `stats.uptime_s` | integer (s) | no | Seconds since the pipeline started (`lodestar_start_time_seconds`) | `formatSpan` | Snapshot |
 | `stats.paused`, `crawler.paused` | boolean | no | The crawler is paused | — | Snapshot |
 | `stats.updated_at` | integer | no | When the numbers were read | `formatDateTime` | — |
-| `crawler.state` | string | no | `running` / `paused` (icon + text, glossary) | — | Snapshot |
+| `crawler.state` | string | no | `running` / `paused` / `vpn_down` (icon + text, glossary). `vpn_down` wins over `paused`: the crawl's interface is down, so nothing is crawled whatever the setting says (X-vpn-bind) | — | Snapshot |
+| `crawler.interface` | `{interface: string, state: "up"\|"down", reason: string\|null}` | yes: null = any route (no interface set) | The network interface the crawl is limited to, as this start applied it, and whether it's usable. `reason` (null while up): `missing`, `down`, `no_address`, `bind_failed`, `unsupported` (X-vpn-bind). Its gauge is `lodestar_crawl_interface_up` | Text + icon (glossary) | Snapshot |
 | `crawler.since` | integer | no | Last pause or resume; the start when running since then | `formatRelative` | — |
 | `crawler.intensity` | string | no | `low` / `balanced` / `aggressive` (`/settings/crawler`'s `intensity`) | — | Snapshot |
 | `crawler.intensity_env` | string | yes: null = editable | The variable that sets it | — | — |
@@ -1074,3 +1075,12 @@ See [the decision](decisions/2026-11-11-WK-11.md). A remote worker's on-disk spo
 | `worker_spool_unavailable` | gauge | 1 when the spool couldn't be opened at start: the worker runs without one, keeping unaccepted batches in memory. |
 | `worker_spool_lease_drift_total` | counter | After a replay drains, the difference between the leases the worker holds and the coordinator's count for it (`HeartbeatAck.leases`), summed each time they differ. |
 | `worker_spool_lease_reconcile_total{result}` | counter | The coordinator's answers to this worker's reconcile lists, sent when `worker_spool_lease_drift_total` grows: `returned` (leases it gave back for re-grant), `unknown` (listed leases it had no record of) and `refused` (lists refused whole). A coordinator older than protocol 1.1 is sent no list ([WK-11b](decisions/2026-11-12-WK-11b.md)). Kept in the spool's counters, like `worker_spool_lease_drift_total`, until the worker has a metrics export. |
+
+## Crawl interface (X-vpn-bind, 2026-11-28)
+
+Only when `dht.interface` names an interface; absent otherwise. `docs/decisions/2026-11-28-X-vpn-bind.md`.
+
+| Series | Type | Meaning |
+|---|---|---|
+| `crawl_interface_up` | gauge | 1 while the interface the crawl is limited to is usable, 0 while it's missing or down ("VPN down": the crawl is paused and no socket uses another route) |
+| `crawl_interface_trips_total` | counter | Times it went from usable to down, by a check or by a pinned socket's send failing as if it were gone |

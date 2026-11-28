@@ -73,6 +73,8 @@ export function createResults() {
 	let moreError = $state.raw<ApiError | null>(null);
 	/** The query the rows answer, as a key; a reload of the same query keeps them. */
 	let shownKey = $state<string | null>(null);
+	/** The query the rows answer (null with none): the toolbar's hidden count follows it. */
+	let shownQuery = $state.raw<ResultsQuery | null>(null);
 	/** The query of the request in flight, and of the last one answered or failed, as keys. */
 	let inflightKey: string | null = null;
 	let settledKey: string | null = null;
@@ -126,6 +128,7 @@ export function createResults() {
 			error = null;
 			refining = false;
 			shownKey = null;
+			shownQuery = null;
 			inflightKey = null;
 			settledKey = null;
 			lease = null;
@@ -163,6 +166,9 @@ export function createResults() {
 			cursor = r.next_cursor;
 			lease = r.next_cursor;
 			shownKey = key;
+			// A fresh object every answer, a forced reload of the same query included (a Block hid a
+			// row): the toolbar asks for the hidden count again.
+			shownQuery = { ...q };
 			settledKey = key;
 			status = 'ready';
 		} catch (e) {
@@ -213,6 +219,9 @@ export function createResults() {
 		},
 		get totalApprox() {
 			return totalApprox;
+		},
+		get query() {
+			return shownQuery;
 		},
 		get notices() {
 			return notices;
@@ -292,6 +301,7 @@ export function createResults() {
 			lease = null;
 			moreError = null;
 			shownKey = null;
+			shownQuery = null;
 			expired = false;
 			refining = false;
 			loadingMore = false;

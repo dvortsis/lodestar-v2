@@ -39,8 +39,11 @@ export type ProgressOverlay =
 
 export interface PillState {
 	kind: PillKind;
-	/** Torrents in the store (crawling, idle, paused); null when unknown. */
-	torrents: number | null;
+	/**
+	 * Searchable torrents (the serving index's documents, as Search's banner and Insights count
+	 * them), for the states that show a count; null when unknown or search is off.
+	 */
+	searchable: number | null;
 	/** Rebuild progress; null outside a rebuild. */
 	done: number | null;
 	total: number | null;
@@ -62,18 +65,18 @@ export function pillState(input: {
 	restartNeeded?: boolean;
 }): PillState {
 	const { stream, crawler, rebuild, progress, restartNeeded } = input;
-	const none = { torrents: null, done: null, total: null };
+	const none = { searchable: null, done: null, total: null };
 	const has = crawler !== null || rebuild !== null;
 	if (stream === 'busy') return { kind: 'busy', ...none };
 	if (stream === 'offline' || (stream === 'connecting' && has))
 		return { kind: 'reconnecting', ...none };
 	if (stream === 'connecting') return { kind: 'connecting', ...none };
 	if (rebuild && REBUILDING.has(rebuild.phase))
-		return { kind: 'rebuilding', torrents: null, done: rebuild.done, total: rebuild.total };
+		return { kind: 'rebuilding', searchable: null, done: rebuild.done, total: rebuild.total };
 	if (rebuild?.phase === 'failed') return { kind: 'failed', ...none };
 	if (!crawler) return { kind: 'unknown', ...none };
 	if (crawler.paused && !restartNeeded)
-		return { kind: 'paused', torrents: crawler.torrents, done: null, total: null };
+		return { kind: 'paused', searchable: crawler.searchable ?? null, done: null, total: null };
 	// Starting: a start inside its grace with no routing nodes yet (null is "off" or "not reported"),
 	// or sampling held back by the server. Warming up: a start with nothing stored yet. Past the
 	// grace, a DHT that never joined with nothing stored is a stall, not a calm "Idle".
@@ -81,7 +84,12 @@ export function pillState(input: {
 	const fresh = crawler.stored === 0;
 	const joining = crawler.dht_nodes === 0;
 	if (k === 'settled' && joining && fresh)
-		return { ...none, kind: 'stalled', reason: 'no_progress', torrents: crawler.torrents };
+		return {
+			...none,
+			kind: 'stalled',
+			reason: 'no_progress',
+			searchable: crawler.searchable ?? null
+		};
 	const start =
 		k === 'starting' || (k === 'warming' && joining)
 			? 'starting'
@@ -92,19 +100,19 @@ export function pillState(input: {
 		return {
 			...none,
 			kind: start,
-			torrents: crawler.torrents,
+			searchable: crawler.searchable ?? null,
 			...(start === 'warming' && { found: crawler.harvested, stored: crawler.stored })
 		};
 	const working = crawler.fetch_active > 0 || crawler.fetch_pending > 0;
 	// An idle crawler has no writer to be stuck on. A starved pipeline is idle too, though, so the
 	// stored-rate verdict (`no_progress`) and the other reasons stand.
 	if (progress?.kind === 'stalled' && (working || progress.reason !== 'writer_stalled'))
-		return { ...none, torrents: crawler.torrents, ...progress };
+		return { ...none, searchable: crawler.searchable ?? null, ...progress };
 	// Only over the calm states: a stall, a rebuild or a lost connection matter more.
-	if (restartNeeded) return { ...none, kind: 'restart', torrents: crawler.torrents };
+	if (restartNeeded) return { ...none, kind: 'restart', searchable: crawler.searchable ?? null };
 	return {
 		kind: working ? 'crawling' : 'idle',
-		torrents: crawler.torrents,
+		searchable: crawler.searchable ?? null,
 		done: null,
 		total: null
 	};

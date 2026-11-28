@@ -49,6 +49,42 @@
 	font-variant-numeric: tabular-nums;
 	color: var(--color-muted-text);
 }
+/* "N hidden by filters · Show" where the toolbar has room; "N filtered · Show" where the longer
+   words would wrap the count or the controls when it arrives (measured: up to 56rem of toolbar).
+   The full words stay the button's description. Below 14.5rem even the short form wraps the count
+   line, so no note shows there ("Show hidden" stays in Filters). Nothing moves when it arrives. */
+.tb-short {
+	display: none;
+}
+@container tb (width < 56rem) {
+	.tb-full {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+	.tb-short {
+		display: inline;
+	}
+}
+@container tb (width < 14.5rem) or ((width >= 30rem) and (width < 42rem)) {
+	.tb-hid {
+		display: none;
+	}
+}
+/* Below 46rem of toolbar (a narrow window, or the drawer narrowing it), Sort and View keep their
+   labels as accessible names only, as below 40rem of window: room for the hidden count where the
+   controls share its row. */
+@container tb (width < 46rem) {
+	.tb-lbl > span {
+		position: absolute;
+		overflow: hidden;
+		width: 1px;
+		height: 1px;
+		clip-path: inset(50%);
+	}
+}
 .tb-controls {
 	display: flex;
 	flex-wrap: wrap;
@@ -90,16 +126,6 @@
 @media (width >= 40rem) {
 	.tb-phone {
 		display: none;
-	}
-}
-/* A toolbar narrowed by the drawer: Sort and View keep their names for screen readers only. */
-@container tb (width < 38rem) {
-	.tb-lbl > span {
-		position: absolute;
-		overflow: hidden;
-		width: 1px;
-		height: 1px;
-		clip-path: inset(50%);
 	}
 }
 .tb-lbl {

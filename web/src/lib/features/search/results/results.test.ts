@@ -40,6 +40,24 @@ const sent = (n: number) => post.mock.calls[n]![1].body;
 beforeEach(() => post.mockReset());
 
 describe('the results store', () => {
+	it('names the query the rows answer, for the hidden count, and none without rows', async () => {
+		post.mockResolvedValueOnce(page([1]));
+		const r = createResults();
+		expect(r.query).toBeNull();
+		const q = query();
+		await r.load(q);
+		expect(r.query).toEqual(q);
+		// A forced reload of the same query (a Block hid a row) names it afresh, so the hidden count
+		// is asked again.
+		const first = r.query;
+		post.mockResolvedValueOnce(page([1]));
+		await r.retry();
+		expect(r.query).toEqual(q);
+		expect(r.query).not.toBe(first);
+		await r.load({ ...q, ast: null });
+		expect(r.query).toBeNull();
+	});
+
 	it('browses match-all only when requested, with pagination and a distinct request identity', async () => {
 		post.mockResolvedValueOnce(page([1, 2], { next_cursor: 'browse-next' }));
 		const r = createResults();

@@ -1,5 +1,5 @@
 {
-	"search_home_title": "Search {count} torrents",
+	"search_home_title": "Search {count} searchable torrents",
 	"search_home_title_unknown": "Search torrents",
 	"search_home_lead": "Lodestar finds torrents on the network by itself and lets you search them. Type a few words in the box above, or try one of these:",
 	"search_home_recent": "Your recent searches",
