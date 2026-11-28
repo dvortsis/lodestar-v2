@@ -9,7 +9,7 @@ This replaces the earlier X-rehearsal-window brief; item 1 is that work.
 **Deadlines.**
 - Items 1, 4 and 6 are needed before the rehearsal, which starts after about 2026-11-28T18:00Z.
 - Items 2, 3 and 5 are needed before day 1, at or after about 2026-11-29T06:00Z.
-- Aim for one PR, ready by 2026-11-28T14:00Z. If that's tight, tell the runner by 11:00Z; it may split items 2, 3 and 5 out.
+- Aim for one PR, ready by 2026-11-28T14:00Z. If that's tight, tell the runner by 11:00Z; it may split items 2, 3 and 5 out. Day 1 waits for whichever PR carries them (CR-SPEC-R1 §6).
 
 **The changes**
 1. **The rehearsal window** (`infra/fleet/steps/vm/round1-coordinator.py`, around 616–617).
@@ -31,9 +31,10 @@ This replaces the earlier X-rehearsal-window brief; item 1 is that work.
    - **Runner ruling:** a repeat may replace any `not_judged` day, except these:
      - (i) one with `solo_confirmation_required` (→ S);
      - (ii) one whose not_judged comes from a product failure, its own or a peer's (→ a fresh attempt, plan class 2).
+     - (iii) a day with `solo_confirmation_failed` (terminal, `out_of_retries`). Keep replaced days in `every` so a failed solo stays terminal.
    - Name the second reason `repeat_of_a_non_repeatable_day`, replacing `repeat_without_infrastructure_fault`.
    - The budget (`RETRY_BUDGET` 2) and `repeat_of_a_judged_day` are unchanged.
-   - Add tests: a coverage miss repeated and then passing within the budget; a repeat of a product-failure day refused; a third repeat exhausting the budget.
+   - Add tests: a coverage miss repeated and then passing within the budget; a repeat of a product-failure day refused; a repeat of a failed-solo day refused; a third repeat exhausting the budget.
 4. **The probe target is the WireGuard gateway** (coordinator config check around 222–228, and `bring-up`).
    - The plan says the probe is "ICMP to its WireGuard gateway". Today `tunnel_target` is any IPv4 address, so an address inside the namespace would never show loss.
    - At bring-up, read the arm's WireGuard gateway from inside its namespace, the same way bring-up already reads egress. Use the tunnel interface's route or peer address, whichever gluetun exposes.
