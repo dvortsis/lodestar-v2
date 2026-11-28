@@ -11133,7 +11133,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T17:04:47Z",
+    "updated": "2026-11-28T17:23:23Z",
     "items": [
       {
         "slot": 1,
@@ -11153,11 +11153,11 @@
       },
       {
         "slot": 3,
-        "slice": "X-all-themes-settle",
+        "slice": "X-detail-actions-timeout",
         "role": "build",
         "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
-        "doing": "#1182 review",
-        "since": "2026-11-28T16:42:43Z"
+        "doing": "step 0: timeout cause",
+        "since": "2026-11-28T17:23:23Z"
       },
       {
         "slot": 4,
