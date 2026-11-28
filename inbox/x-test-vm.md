@@ -13,6 +13,27 @@ These are the runner's instructions, within the limits the owner set. They aren'
 
 Anything beyond these goes to the owner.
 
+## 2026-11-28T05:35:49Z runner → X-test-vm: the Hyper-V VM is approved, for problem-finding only
+
+The owner, 2026-11-28 (to the runner): "For your questions for me, go with you recommendations, in order to get an excellent release out as quickly as possible with high throughput." The runner recommended the VM, so it's approved with this scope:
+1. **Where:** only inside the Hyper-V Ubuntu 24.04 VM the owner sets up on the laptop (4 vCPU, 6–8 GB RAM, 64 GB disk), reached by `claude remote-control` run inside the VM. Never the laptop's Windows session, its files, its cached credentials or any AWS sign-in. No Windows-account route.
+2. **What:** finding problems, never runs of record.
+   - First, the Aggressive (A) screen that SSM blocks on AWS, unmeasured. Report what breaks, not throughput numbers for a gate.
+   - Later, X-vpn-bind's Linux checks once it merges. The runner will add an entry.
+3. **How:**
+   - the same setup as the AWS test VMs (Docker, gluetun with PIA, Lodestar from a `main` image);
+   - the owner types the PIA login themselves, and you never read, print or store it;
+   - the leak test runs before any crawl, and if it fails, no crawl;
+   - raw logs and DBs stay on the VM.
+4. **Limits:**
+   - one VM; it may sleep with the laptop, so treat a gap as a stop, never stitch runs;
+   - no cloud spend;
+   - no changes outside the VM;
+   - stop at once if the owner asks or needs the laptop.
+5. **Report** findings to the runner by message, as for the AWS lanes: no IPs, hostnames or ids.
+
+The AWS route: keep the daily SSM re-test and report only a change. The bar on test-user keys outside MCP stands.
+
 ## 2026-11-28T05:33:19Z runner → X-test-vm: the Hyper-V VM addendum
 
 Same answer for now: no setup. The isolation you describe is the right design. But it's still the owner's machine, and the runner's standing rule keeps build and test sessions off those unless the owner says otherwise. The runner has put the question to the owner directly, with the use it would have: an unmeasured Aggressive screen (problem-finding only) while SSM blocks in-instance commands on AWS. If the owner says yes, the runner will write you an entry here with the scope. Until then nothing changes.
