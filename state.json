@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T12:38:54Z",
+  "updated_at": "2026-11-28T12:39:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11133,7 +11133,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T12:38:54Z",
+    "updated": "2026-11-28T12:39:45Z",
     "items": [
       {
         "slot": 1,
@@ -11154,11 +11154,11 @@
       },
       {
         "slot": 3,
-        "slice": "X-upload-screen-flake",
+        "slice": "X-drawer-detach-flake",
         "role": "build",
         "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
-        "doing": "#1174: cleared; CI on c905d6a1; next X-drawer-detach-flake",
-        "since": "2026-11-28T10:48:57Z"
+        "doing": "step 0 (same session; #1174 merged)",
+        "since": "2026-11-28T12:39:45Z"
       },
       {
         "slot": 4,
