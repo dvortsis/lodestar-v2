@@ -26229,6 +26229,7 @@
         "type": "object",
         "description": "`GET /torrents/{hash}`: the torrent summary (`docs/metrics.md` §7.1),\nits swarm section (§7.2) and the first 500 files.\n\nA null swarm field is \"never scraped\" (or no estimate), never 0.",
         "required": [
+          "attributes",
           "completed",
           "dht_peers",
           "dht_seeds",
@@ -26262,6 +26263,27 @@
           "adult_enrichment": {
             "$ref": "#/components/schemas/AdultEnrichment",
             "description": "What an adult-enrichment service (ThePornDB, StashDB) matched\n(§20.9). **Absent**, never null or empty, unless \"Show adult\ncontent\" is on and the signed-in admin asks: a caller can't tell\nfrom this field whether a match exists. Also absent for a hidden\nor held torrent and for a match that came through a private\nsource."
+          },
+          "attributes": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The effective release's attributes, as `/compare` shows them\n(`title`, `alt`, `year`, `season`, `episode`, `res`, `source`,\n`vcodec`, `acodec`, `group`, …): parsed from the name, or from the\nfile or folder the title was resolved from (see a search hit's\n`resolved_via`). Only the keys the torrent has, list values\ncomma-joined. Null when the torrent hasn't been classified yet, or\nits record can't be read by this build; `{}` when it was classified\nand nothing was parsed.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "example": {
+              "group": "GROUP",
+              "res": "1080p",
+              "source": "bluray",
+              "title": "The Movie",
+              "vcodec": "h264",
+              "year": "2008"
+            }
           },
           "completed": {
             "type": [

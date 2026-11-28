@@ -757,12 +757,10 @@ pub(crate) async fn compare(
         let values: Vec<BTreeMap<String, Option<String>>> = records
             .iter()
             .map(|r| {
+                let mut own = r.as_ref().map(torrents::release_attributes);
                 keys.iter()
                     .map(|k| {
-                        let v = r.as_ref().and_then(|r| {
-                            let all: Vec<&str> = r.release_all(k).collect();
-                            (!all.is_empty()).then(|| all.join(", "))
-                        });
+                        let v = own.as_mut().and_then(|m| m.remove(*k));
                         ((*k).to_string(), v)
                     })
                     .collect()

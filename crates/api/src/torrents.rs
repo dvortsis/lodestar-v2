@@ -1,7 +1,7 @@
 //! `/torrents/{hash}`: one torrent's details and its file list. Display
 //! data comes from SQLite, not the index (§8).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, Weak};
@@ -700,7 +700,30 @@ fn load(s: &ApiState, hash: &str, adult_shown: bool) -> ApiResult<(TorrentRow, F
     Ok((row, tree))
 }
 
+/// A torrent's parsed release attributes (the release fields its stored
+/// enrichment record holds: `title`, `year`, `res`, `vcodec`, `group`,
+/// …), as `/compare` and `/torrents/{hash}` both show them: each key
+/// once, its values comma-joined in the record's order (`alt` repeats
+/// in the record, one entry per alternative title). The one definition,
+/// so a torrent reads the same in both.
+pub(crate) fn release_attributes(r: &lodestar_classify::Record) -> BTreeMap<String, String> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    for (k, v) in &r.release {
+        out.entry(k.clone())
+            .and_modify(|all| {
+                all.push_str(", ");
+                all.push_str(v);
+            })
+            .or_insert_with(|| v.clone());
+    }
+    out
+}
+
 /// The detail view: the summary, the swarm section and the first files.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per section of the body, each built by its own reader"
+)]
 fn detail_of(
     row: &TorrentRow,
     tree: &FileTree,
@@ -709,9 +732,11 @@ fn detail_of(
     provenance: Provenance,
     adult_enrichment: Option<AdultEnrichment>,
     identified_as: Option<IdentifiedAs>,
+    attributes: Option<BTreeMap<String, String>>,
 ) -> TorrentDetail {
     TorrentDetail {
         adult_enrichment,
+        attributes,
         identified_as,
         completed: swarm.completed,
         dht_peers: more.dht_peers,
@@ -801,13 +826,13 @@ pub(crate) async fn detail(
         // Only for the admin with "Show adult content" on (§20.9), only
         // for a torrent that could be adult, and never for one a filter or
         // the core holds back.
+        // Shared by the adult gate and the release attributes (`load` and
+        // `identified_section` read it on their own).
+        let enrichment = store.enrichment(row.id).map_err(internal)?;
         let (section, wanted) = if adult_asked(adult_shown, viewer) {
             // As ENR-1's gate reads it: stored as Adult, or found by an
             // always-adult source unless you said Not adult.
-            let stored_adult = store
-                .enrichment(row.id)
-                .map_err(internal)?
-                .is_some_and(|e| crate::search::is_adult(&e));
+            let stored_adult = enrichment.as_ref().is_some_and(crate::search::is_adult);
             let adult = stored_adult
                 || (always_adult & row.sources != 0
                     && !store
@@ -840,9 +865,24 @@ pub(crate) async fn detail(
             finders_adult,
         )
         .map_err(internal)?;
+        // The release fields as classify stored them: no parse runs here.
+        // Null without a record, or with one this build can't read.
+        let record = enrichment.and_then(|e| lodestar_classify::Record::decode(&e.data).ok());
+        let attributes = match record {
+            // The hold is a store read: only for a plugin-resolved title.
+            Some(r) if r.resolved == Some(lodestar_classify::ResolvedVia::Plugin) => {
+                let closed = plugin_text_closed(&row, finders_adult)
+                    || swarm_held(&store, &row).map_err(internal)?;
+                Some(detail_attributes(&r, closed))
+            }
+            Some(r) => Some(release_attributes(&r)),
+            None => None,
+        };
         drop(store);
         let id = row.id;
-        let detail = detail_of(&row, &tree, summary, more, provenance, section, identified);
+        let detail = detail_of(
+            &row, &tree, summary, more, provenance, section, identified, attributes,
+        );
         Ok::<_, ApiError>((detail, wanted.then_some(id)))
     })
     .await
@@ -939,12 +979,7 @@ fn identified_section(
 ) -> lodestar_store::Result<Option<IdentifiedAs>> {
     // Unknown always-adult sources: nothing can be confirmed, so nothing
     // shows.
-    let Some(always_adult) = always_adult else {
-        return Ok(None);
-    };
-    if row.flags & (store_flags::HIDDEN | store_flags::PRIVACY) != 0
-        || always_adult & row.sources != 0
-    {
+    if plugin_text_closed(row, always_adult) {
         return Ok(None);
     }
     // Every stored answer, surest first, ties by source id: the order
@@ -977,8 +1012,7 @@ fn identified_section(
     if enrichment.as_ref().is_some_and(crate::search::is_adult) {
         return Ok(None);
     }
-    let hashes = store.torrent_swarm_hashes(row.id)?.unwrap_or_default();
-    if store.held_among(&hashes)?.into_iter().any(|h| h) {
+    if swarm_held(store, row)? {
         return Ok(None);
     }
     let resolved = enrichment
@@ -1092,8 +1126,43 @@ fn held_back(store: &Store, row: &TorrentRow) -> lodestar_store::Result<bool> {
     if row.flags & (store_flags::HIDDEN | store_flags::PRIVATE_SOURCE) != 0 {
         return Ok(true);
     }
+    swarm_held(store, row)
+}
+
+/// Whether a filter holds any of the torrent's swarm hashes.
+fn swarm_held(store: &Store, row: &TorrentRow) -> lodestar_store::Result<bool> {
     let hashes = store.torrent_swarm_hashes(row.id)?.unwrap_or_default();
     Ok(store.held_among(&hashes)?.into_iter().any(|h| h))
+}
+
+/// Whether text that came from an enrichment plugin is withheld for this
+/// torrent, before any per-source terms: it's hidden or private
+/// (`HIDDEN`, any [`store_flags::PRIVACY`] bit), or found by an
+/// always-adult source, or the always-adult sources aren't known (fail
+/// closed). `identified_as` and a plugin-resolved title in `attributes`
+/// both follow it; a filter hold ([`swarm_held`]) withholds them too.
+fn plugin_text_closed(row: &TorrentRow, always_adult: Option<u64>) -> bool {
+    let Some(always_adult) = always_adult else {
+        return true;
+    };
+    row.flags & (store_flags::HIDDEN | store_flags::PRIVACY) != 0 || always_adult & row.sources != 0
+}
+
+/// The fields a plugin-resolved record took from the plugin's answer.
+const PLUGIN_FIELDS: [&str; 3] = ["title", "alt", "year"];
+
+/// `release_attributes`, with the fields a plugin's answer gave left out
+/// when `closed` (see [`plugin_text_closed`]) and the record's title was
+/// resolved via a plugin. Every other field came from the name or the
+/// file tree, which the detail body shows anyway.
+fn detail_attributes(r: &lodestar_classify::Record, closed: bool) -> BTreeMap<String, String> {
+    let mut out = release_attributes(r);
+    if closed && r.resolved == Some(lodestar_classify::ResolvedVia::Plugin) {
+        for k in PLUGIN_FIELDS {
+            out.remove(k);
+        }
+    }
+    out
 }
 
 /// Whether this request may see adult enrichment at all: "Show adult
@@ -1424,6 +1493,127 @@ pub(crate) mod tests {
     use lodestar_store::claims::ClaimedFile;
 
     use super::*;
+
+    fn release_record(release: &[(&str, &str)]) -> lodestar_classify::Record {
+        let mut r = lodestar_classify::Record::decode(b"e1\ntype\tother").expect("a bare record");
+        r.release = release
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        r
+    }
+
+    #[test]
+    fn a_record_without_release_fields_has_an_empty_map() {
+        assert!(release_attributes(&release_record(&[])).is_empty());
+        // `{}`, not null: classified, and the name gave nothing.
+        let json = serde_json::to_value(Some(release_attributes(&release_record(&[])))).unwrap();
+        assert_eq!(json, serde_json::json!({}));
+    }
+
+    #[test]
+    fn each_key_is_listed_once_its_values_joined_in_record_order() {
+        let r = release_record(&[
+            ("title", "Movie"),
+            ("alt", "Film"),
+            ("alt", "Pelicula"),
+            ("res", "1080p"),
+            ("acodec", "aac, flac"),
+        ]);
+        let got = release_attributes(&r);
+        let want: BTreeMap<String, String> = [
+            ("acodec", "aac, flac"),
+            ("alt", "Film, Pelicula"),
+            ("res", "1080p"),
+            ("title", "Movie"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn plugin_text_is_closed_for_hidden_private_always_adult_or_unknown_finders() {
+        let open = row(0b10, None, 0);
+        assert!(!plugin_text_closed(&open, Some(0b100)));
+        // The always-adult sources aren't known: fail closed.
+        assert!(plugin_text_closed(&open, None));
+        // Found by an always-adult source.
+        assert!(plugin_text_closed(&open, Some(0b10)));
+        for flag in [
+            store_flags::HIDDEN,
+            store_flags::PRIVATE,
+            store_flags::PRIVATE_SOURCE,
+            store_flags::REMOTE_UNVERIFIED,
+        ] {
+            assert!(
+                plugin_text_closed(&row(0b10, None, flag), Some(0)),
+                "{flag:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_closed_torrent_drops_a_plugin_resolved_title_and_nothing_else() {
+        let mut r = release_record(&[
+            ("title", "Plugin Title"),
+            ("alt", "Other"),
+            ("year", "1994"),
+            ("res", "1080p"),
+            ("container", "mkv"),
+        ]);
+        r.resolved = Some(lodestar_classify::ResolvedVia::Plugin);
+        let keys = |m: BTreeMap<String, String>| m.into_keys().collect::<Vec<_>>();
+        assert_eq!(keys(detail_attributes(&r, true)), ["container", "res"]);
+        assert_eq!(
+            keys(detail_attributes(&r, false)),
+            ["alt", "container", "res", "title", "year"]
+        );
+        // A title resolved any other way came from the name or the files,
+        // which the body shows anyway: kept even when closed.
+        for via in [
+            None,
+            Some(lodestar_classify::ResolvedVia::File),
+            Some(lodestar_classify::ResolvedVia::Folder),
+            Some(lodestar_classify::ResolvedVia::Structure),
+        ] {
+            r.resolved = via;
+            assert_eq!(
+                detail_attributes(&r, true),
+                release_attributes(&r),
+                "{via:?}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        /// Any name, through the real parser and the stored record's
+        /// round trip: every stored key appears once with every one of its
+        /// values, and the map is bounded by the parser's input cap.
+        #[test]
+        fn attributes_follow_the_stored_record(name in "\\PC{0,600}") {
+            let release = lodestar_release_parser::parse(&name);
+            let mut r = release_record(&[]);
+            for (k, v) in release.fields() {
+                if k == "alt" {
+                    r.release.extend(release.alt_titles.iter().map(|a| ("alt".to_owned(), a.clone())));
+                } else {
+                    r.release.push((k.to_owned(), v));
+                }
+            }
+            let r = lodestar_classify::Record::decode(&r.encode()).expect("round trip");
+            let got = release_attributes(&r);
+            for (k, _) in &r.release {
+                let all: Vec<&str> = r.release_all(k).collect();
+                proptest::prop_assert_eq!(&got[k], &all.join(", "));
+            }
+            proptest::prop_assert_eq!(got.len(), r.release.iter().map(|(k, _)| k).collect::<std::collections::BTreeSet<_>>().len());
+            for v in got.values() {
+                proptest::prop_assert!(v.len() <= 2 * lodestar_release_parser::MAX_INPUT_BYTES);
+            }
+        }
+    }
 
     fn row(sources: u64, first: Option<u8>, flags: i64) -> TorrentRow {
         TorrentRow {
