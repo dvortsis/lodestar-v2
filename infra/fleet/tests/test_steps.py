@@ -506,6 +506,9 @@ bad() { printf '%s\n' "$*" >> "$STUB/badargs"; exit 125; }
 case "$1" in
   info) [ -n "$NO_DOCKER" ] && exit 1; echo 27.0 ;;
   compose)
+    # A recreate replaces a paused gluetun with a running one (only a gluetun
+    # that wouldn't resume is still paused here).
+    [ -e "$STUB/paused" ] && { : > "$STUB/recreated_paused"; rm -f "$STUB/paused"; }
     # gluetun is only ever recreated behind the endpoint guard (X-gluetun-leak).
     [ "$(cat "$STUB/guard" 2>/dev/null)" -gt 0 ] 2>/dev/null || bad "recreated without the guard: $*"
     [ "$(cat "$STUB/host" 2>/dev/null)" -gt 0 ] 2>/dev/null || bad "recreated without the host guard: $*"
@@ -517,6 +520,7 @@ case "$1" in
     case "$*" in
       *Health*) if [ -n "$NO_HANDSHAKE$UNHEALTHY" ] || { [ -e "$STUB/was_blocked" ] && [ -n "$NO_RECOVER" ]; }; then
                   echo unhealthy; else echo healthy; fi ;;
+      *State.Paused*gluetun) [ -e "$STUB/paused" ] && echo true || echo false ;;
       *Config.Env*) printf 'PATH=/usr/bin\nVPN_INTERFACE=%s\n' "${VPN_IFACE-wg0}" ;;
       *Running*gluetun) echo true ;;
       *Running*lodestar-leak-flow) [ -e "$STUB/flow" ] && [ -z "$FLOW_DIES" ] && echo true || echo false ;;
@@ -542,6 +546,20 @@ case "$1" in
   # leftover session, and a new gluetun answers too as it starts; only the
   # guard's ICMP rule keeps those off the wire (the host capture's fixture).
   # ICMP_FLUSHED_AT_STOP: the rule is gone by then (today's rules have none).
+  # A phase B retry holds gluetun still (X-leaktest-vpn-held-down). PAUSE_FAILS:
+  # the pause is refused (PAUSE_FREEZES: refused, and gluetun froze anyway);
+  # UNPAUSE_FAILS: gluetun won't resume. Unpausing one that isn't paused fails,
+  # as Docker's does.
+  pause) [ "$*" = "pause gluetun" ] || bad "$*"
+         [ -e "$STUB/paused" ] && bad "paused twice"
+         echo x >> "$STUB/pauses"
+         [ -n "$PAUSE_FREEZES" ] && : > "$STUB/paused"
+         [ -n "$PAUSE_FAILS$PAUSE_FREEZES" ] && exit 1
+         : > "$STUB/paused" ;;
+  unpause) [ "$*" = "unpause gluetun" ] || bad "$*"
+           [ -e "$STUB/paused" ] || exit 1
+           [ -n "$UNPAUSE_FAILS" ] && exit 1
+           rm -f "$STUB/paused" ;;
   stop) [ "$*" = "stop -t 10 gluetun" ] || bad "$*"
         [ -n "$ICMP_FLUSHED_AT_STOP" ] && echo 0 > "$STUB/icmp"
         [ -n "$STOP_FAIL" ] && exit 1
@@ -553,6 +571,7 @@ case "$1" in
          [ "$(cat "$STUB/icmp" 2>/dev/null || echo 0)" -gt 0 ] || : > "$STUB/host_leak"
          rm -f "$STUB/gluetun_stopped" "$STUB/ifdown"; : > "$STUB/gluetun_started" ;;
   exec)
+    [ -e "$STUB/paused" ] && exit 1  # Docker refuses an exec into a paused container
     case "$*" in
       "exec gluetun cat /sys/class/net/eth0/iflink") echo 7 ;;
       "exec gluetun cat /sys/class/net/eth0/address") echo "${CMAC_OUT-02:42:ac:14:00:02}" ;;
@@ -596,6 +615,11 @@ case "$1" in
       k=$(cat "$STUB/iface_not_run" 2>/dev/null || echo 0)
       if [ "$k" -lt "$IFACE_NOT_RUN" ]; then echo $((k + 1)) > "$STUB/iface_not_run"; exit 125; fi
     fi
+    # BLOCK_PAUSED: while gluetun is paused no interface check runs, so the run
+    # waits there (the test signals it there).
+    if [ -e "$STUB/paused" ] && [ -n "$BLOCK_PAUSED" ] && [ "$1 $2" = "sh -c" ] && [ "$4" = iface ]; then
+      : > "$STUB/held_probe"; exit 125
+    fi
     # IFACE_NOT_RUN_FROM=k: from phase B's k-th interface check on, none runs.
     if [ -e "$STUB/phase_b" ] && [ -n "$IFACE_NOT_RUN_FROM" ] && [ "$1 $2" = "sh -c" ] && [ "$4" = iface ]; then
       k=$(( $(cat "$STUB/iface_checks" 2>/dev/null || echo 0) + 1 )); echo "$k" > "$STUB/iface_checks"
@@ -608,7 +632,7 @@ case "$1" in
     # IFACE_REUP=n: gluetun's own VPN restart brings the interface back just
     # after each of phase B's first n leak probes (REUP_LEAK: and that probe
     # got out; REUP_LEAK_AT=k: only the k-th of them got out).
-    reup=; recreate=; reupno=
+    reup=; recreate=; reupno=; restart=
     case "$*" in "curl -"*|"nc -z"*|"sh -c dig"*|"sh -c echo"*)
       if [ -e "$STUB/ifdown" ] && [ -n "$IFACE_REUP" ]; then
         k=$(cat "$STUB/reups" 2>/dev/null || echo 0)
@@ -619,7 +643,17 @@ case "$1" in
       if [ -e "$STUB/ifdown" ] && [ -n "$IFACE_RECREATE" ]; then
         k=$(cat "$STUB/recreates" 2>/dev/null || echo 0)
         if [ "$k" -lt "$IFACE_RECREATE" ]; then echo $((k + 1)) > "$STUB/recreates"; recreate=1; fi
-      fi ;;
+      fi
+      # GLUETUN_RESTARTS: gluetun v3.41.3's own loop. With the endpoint blocked,
+      # its 6 s startup health check fails on every tunnel it brings up, and each
+      # failure restarts the VPN: the interface deleted and made again, up, with
+      # a new ifindex. Every phase B probe outlasts that, so each one gluetun is
+      # running for sees a restart; a paused gluetun can't restart.
+      if [ -e "$STUB/ifdown" ] && [ -n "$GLUETUN_RESTARTS" ] && [ ! -e "$STUB/paused" ]; then
+        restart=1; recreate=1
+      fi
+      # LEAK_PAUSED: the probe gets out while gluetun is paused.
+      if [ -e "$STUB/ifdown" ] && [ -e "$STUB/paused" ] && [ -n "$LEAK_PAUSED" ]; then leak=1; fi ;;
     esac
     echo "$*" >> "$STUB/probes"
     (
@@ -656,7 +690,7 @@ case "$1" in
       esac
     )
     rc=$?
-    [ -n "$reup" ] && rm -f "$STUB/ifdown"
+    [ -n "$reup$restart" ] && rm -f "$STUB/ifdown"
     [ -n "$recreate" ] && echo $(( $(cat "$STUB/ifindex" 2>/dev/null || echo 7) + 1 )) > "$STUB/ifindex"
     printf '\nprobe_rc=%s\n' "$rc" ;;
   *) bad "$*" ;;
@@ -1792,6 +1826,108 @@ class VMScripts(unittest.TestCase):
         self.assertIn("ok vpn_interface_down_during_probes", lines)
         probes = (self.stub / "probes").read_text().splitlines()
         self.assertEqual(sum(p.startswith("curl -4 -s -m 8") for p in probes[probes.index("ip link set dev wg0 down"):]), 2)
+
+    def held_spans(self):
+        """The probes run in each pause of gluetun (the stub's log, in order)."""
+        spans, cur = [], None
+        for ln in self.log().splitlines():
+            if ln == "docker pause gluetun":
+                cur = []
+            elif ln == "docker unpause gluetun":
+                if cur is not None:
+                    spans.append(cur)
+                cur = None
+            elif cur is not None and ln.startswith("docker run "):
+                cur.append(ln)
+        return spans
+
+    def test_phase_b_holds_gluetun_still_for_a_retry(self):
+        """X-leaktest-vpn-held-down: gluetun's own restart loop (a failed 6 s health
+        check restarts the VPN, which makes the interface again, up, with a new
+        ifindex) lands inside every attempt while gluetun runs. Each probe's first
+        attempt runs with gluetun live and is discarded; the retry pauses gluetun
+        from its first interface check to its last, gets its clean attempt, and
+        gluetun runs again before the verdict. Before the fix, no probe ever got one."""
+        rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 0, raw)
+        self.assertIn("ok vpn_interface_down_during_probes", lines)
+        for p in ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_blocked", "dns_direct_blocked"):
+            self.assertIn(f"ok {p}_ifdown", lines)
+        self.assertFalse([l for l in lines if l.startswith("count held_")], lines)
+        self.assertFalse((self.stub / "paused").exists())  # running again
+        self.assertFalse((self.stub / "recreated_paused").exists())
+        # One pause per probe (its one retry), each holding a whole attempt: the
+        # interface checks, the take-down, both ifindex reads and the probe.
+        spans = self.held_spans()
+        self.assertEqual(len(spans), 6)
+        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 6)
+        for span, probe in zip(spans, ("curl -4", "nc -z", "curl -6", "sh -c dig", "sh -c dig", "sh -c echo probe")):
+            cmds = [ln.split(" probe ", 1)[1] for ln in span]
+            self.assertTrue(cmds[0].startswith("sh -c ip -o link show up"), cmds)  # it starts with a check
+            self.assertTrue(cmds[-1].startswith("sh -c cat"), cmds)  # and ends with the second ifindex read
+            self.assertEqual(sum(c.startswith(probe) for c in cmds), 1, cmds)
+        # Every first attempt ran with gluetun live: six leak probes before the first pause.
+        log = self.log()
+        down = log.index("ip link set dev wg0 down")
+        live = log[down:log.index("docker pause gluetun")]
+        self.assertEqual(live.count("probe curl -4 -s -m 8"), 1)
+        # Nothing ran in gluetun while it was paused but probe containers.
+        self.assertNotIn("docker exec", "\n".join(sum(spans, [])))
+
+    def test_phase_b_without_the_hold_still_fails_held_down(self):
+        """A pause Docker refuses: the retry runs with gluetun live, as before the
+        fix, its restart loop lands in every attempt, and the phase fails
+        vpn_interface_held_down, never a pass and never a leak line."""
+        for flag in ("PAUSE_FAILS", "PAUSE_FREEZES"):
+            with self.subTest(flag):
+                self.setUp()
+                rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, HELD_PHASE_WAIT=20,
+                                                 HELD_ATTEMPT_MIN=1, **{flag: 1})
+                self.assertEqual(rc, 1, raw)
+                self.assertIn("fail vpn_interface_held_down", lines)
+                self.assertIn("skip ipv4_blocked_ifdown", lines)
+                self.assertNotIn("ok vpn_interface_down_during_probes", lines)
+                self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
+                self.assertFalse((self.stub / "paused").exists())  # a pause that froze it anyway was undone
+                self.assertNotIn("fail gluetun_resumed", lines)
+
+    def test_a_gluetun_that_wont_resume_ends_phase_b_as_a_failure(self):
+        """The retry was clean, but gluetun won't resume: no further attempt runs,
+        the phase fails vpn_interface_held_down, and the checks that need gluetun
+        running fail too. The recovery's recreate replaces it, and the exit
+        finds it running."""
+        rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS=1, UNPAUSE_FAILS=1,
+                                         HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail vpn_interface_held_down", lines)
+        self.assertNotIn("ok vpn_interface_down_during_probes", lines)
+        self.assertIn("fail post_rules_after_restart_ipv4", lines)  # no exec into a paused gluetun
+        self.assertEqual(len((self.stub / "pauses").read_text().splitlines()), 1)  # never paused again
+        self.assertTrue((self.stub / "recreated_paused").exists())
+        self.assertGreaterEqual(self.log().count("docker unpause gluetun"), 2)  # the exit tried again
+        self.assertNotIn("fail gluetun_resumed", lines)  # and found it running
+
+    def test_a_leak_while_gluetun_is_held_is_a_leak(self):
+        """A retry's probe that gets out while gluetun is paused fails at once,
+        gluetun runs again, and the capture still judges it."""
+        rc, lines, raw = self.run_script("leak-test.sh", {"ifdown": [sent(47, "198.51.100.9")]},
+                                         GLUETUN_RESTARTS=1, LEAK_PAUSED=1, HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
+        self.assertEqual(rc, 1, raw)
+        self.assertIn("fail ipv4_blocked_ifdown", lines)
+        self.assertNotIn("ok ipv4_blocked_ifdown", lines)
+        self.assertIn("fail no_egress_captured_ifdown", lines)
+        self.assertFalse((self.stub / "paused").exists())
+
+    def test_a_signal_while_gluetun_is_held_resumes_it(self):
+        """TERM in the middle of a held retry: the exit resumes gluetun."""
+        rc, out = self.signal_at("held_probe", GLUETUN_RESTARTS=1, BLOCK_PAUSED=1, HELD_PHASE_WAIT=20,
+                                 HELD_ATTEMPT_MIN=1)
+        self.assertNotEqual(rc, 0)
+        self.assertFalse((self.stub / "paused").exists())
+        self.assertIn("docker unpause gluetun", self.log())
+        self.assertFalse((self.stub / "recreated_paused").exists())  # the exit resumed it, not a recreate
+        self.assertNotIn("fail gluetun_resumed", out)
+        self.assertNotIn("ok leak_test", out)
 
     def kill_stub_leftovers(self):
         """Ends any stub process the run couldn't stop (KILL_DENIED leaves one)."""

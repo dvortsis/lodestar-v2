@@ -94,6 +94,7 @@ in_cap_pid=""
 stuck=()  # captures stop_capture couldn't stop: cleanup tries each once more
 drive=""
 not_run=""
+held_frozen=""  # set while gluetun is paused for a phase B retry (held_hold); cleanup resumes it
 
 pass() { echo "ok $1"; }
 bad() { echo "fail $1"; fails=$((fails + 1)); }
@@ -111,6 +112,8 @@ cleanup() {
   for pid in "$cap_pid" "$host_cap_pid" "$in_cap_pid" "${stuck[@]}"; do  # a last try at any left running
     [[ -n $pid ]] && ours "$pid" && env kill -s KILL "$pid" 2>/dev/null
   done
+  # gluetun never stays frozen after the test: a signal mid-retry left it paused.
+  [[ -z $held_frozen ]] || held_thaw || echo "fail gluetun_resumed"
   [[ -n $drive ]] && timeout 30 docker rm -f "$DRIVE" >/dev/null 2>&1
   # The endpoint block never outlives the test, whatever ended it.
   [[ -n $flow ]] && timeout 30 docker rm -f "$FLOW" >/dev/null 2>&1
@@ -412,8 +415,9 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
 # moment; then the attempt is discarded and run again with the interface
 # taken down first, for as long as the phase's own deadline allows
 # (X-leaktest-wg0-flake: a fixed three tries ran out while gluetun kept
-# restarting). No pause between attempts: each one starts with an interface
-# check, and every check and probe is a container start. A probe that never
+# restarting), with gluetun held still for the retry (held_hold). No wait
+# between attempts: each one starts with an interface check, and every check
+# and probe is a container start. A probe that never
 # gets a clean attempt by the deadline is skipped and fails
 # vpn_interface_held_down, a harness failure of its own, with counts saying
 # why (held_report). A probe that gets out is a leak whatever the interface
@@ -433,6 +437,26 @@ held_was_up=unknown # 1: the last check read it up; empty: down. A return counts
 held_skipped=() # "<name> <attempts>" for each probe that got no clean attempt
 held_need=""  # the time a retry needs before it may start (held_start, then the slowest seen)
 held_retry="" # set while a retry runs: its interface checks are capped at the time left
+# A retry holds gluetun (X-leaktest-vpn-held-down). With the endpoint blocked,
+# gluetun's startup health check (6 s) fails on every tunnel it brings up, and
+# each failure restarts its VPN: the interface is deleted and made again, up,
+# with a new ifindex, every few seconds, which is less than one attempt takes.
+# So a retry pauses gluetun (docker pause: its processes frozen, its kernel
+# state, the firewall included, left as it is) from before the first interface
+# check to after the last, and resumes it before the verdict. The probes still
+# run in its namespace. Each probe's first attempt runs with gluetun live.
+held_hold() {  # 0: frozen, or not frozen and running as before; 1: it may be frozen and won't resume
+  held_frozen=1  # before the pause: a signal in between still has cleanup resume it
+  timeout 30 docker pause "$GLUETUN" >/dev/null 2>&1 && return 0
+  held_thaw  # a pause that failed may still have frozen it; resumed, the retry runs live
+}
+held_thaw() {  # 0: gluetun runs (or was never frozen); 1: it may still be frozen
+  [[ -n $held_frozen ]] || return 0
+  timeout 30 docker unpause "$GLUETUN" >/dev/null 2>&1 \
+    || [[ $(timeout 30 docker inspect --type container -f '{{.State.Paused}}' "$GLUETUN" 2>/dev/null) == false ]] \
+    || return 1
+  held_frozen=""
+}
 held_start() {
   local wait=${HELD_PHASE_WAIT:-180} need=${HELD_ATTEMPT_MIN:-30}
   [[ $wait =~ ^(0|[1-9][0-9]{0,3})$ ]] || wait=180  # no leading zero: (( )) would read it as octal
@@ -466,6 +490,7 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
     try=$((try + 1))
     start=$SECONDS
     saved=$not_run
+    if [[ -n $held_retry ]]; then held_hold || { held_dead=1; break; }; fi
     held_down; rc=$?
     if ((rc == 0)); then
       index=$(iface_index); index_rc=$?
@@ -473,11 +498,13 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
       iface_seen_up >/dev/null 2>&1; after=$?
       held_seen "$after"
       held_retry=""
-      if [[ $n != - ]] && ((rc == 0)); then bad "$n"; return; fi
+      if [[ $n != - ]] && ((rc == 0)); then held_thaw || held_dead=1; bad "$n"; return; fi
       # Down both times and the same interface: gluetun didn't recreate it
       # in between (its ifindex would differ).
       same=""
       ((after == 1 && index_rc == 0)) && [[ $(iface_index) == "$index" ]] && same=1
+      # gluetun runs again before any verdict; one that won't resume ends the phase.
+      held_thaw || { held_dead=1; break; }
       held_took "$start"
       if [[ -n $same ]]; then
         [[ $n == - ]] && return
@@ -486,8 +513,10 @@ held() {  # $1: the probe's line, or - for one only the capture judges; the rest
       fi
       ((after == NOT_RUN)) && { held_dead=1; break; }
     elif ((rc == NOT_RUN)); then
+      held_thaw
       held_dead=1; break  # its deadline already passed: not_run stays set
     else
+      held_thaw || { held_dead=1; break; }
       held_took "$start"
     fi
     not_run=$saved  # a discarded attempt's unrun probe is no verdict either
