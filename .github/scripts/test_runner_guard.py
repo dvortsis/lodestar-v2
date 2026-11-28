@@ -21,7 +21,7 @@ on:
   schedule:
     - cron: "17 3 * * 1"
   push:
-    branches: ["release/**"]
+    branches: ["release/v[0-9]+.[0-9]+", "release/v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
     inputs:
       smoke_only:
@@ -189,11 +189,39 @@ class BenchWorkflow(unittest.TestCase):
         self.assertTrue(self.problems(text))
 
     def test_push_only_to_release(self):
-        for branches in ['["main"]', '["**"]', '["release/**", "feature/**"]', '["release/*"]']:
+        old = '["release/v[0-9]+.[0-9]+", "release/v[0-9]+.[0-9]+.[0-9]+"]'
+        for branches in ['["main"]', '["**"]', '["release/**"]', '["release/*"]', '["release/v*"]']:
             with self.subTest(branches=branches):
-                self.assertTrue(self.problems(BENCH_OK.replace('["release/**"]', branches)))
-        text = BENCH_OK.replace('    branches: ["release/**"]', '    branches: ["release/**"]\n    tags: ["*"]')
+                self.assertTrue(self.problems(BENCH_OK.replace(old, branches)))
+        text = BENCH_OK.replace(f"    branches: {old}", f"    branches: {old}\n    tags: [\"*\"]")
         self.assertTrue(self.problems(text))
+
+    def test_push_matches_release_lines_only(self):
+        def runs(branch):
+            return any(g.filter_matches(p, branch) for p in g.BENCH_PUSH_BRANCHES)
+        for branch in ["release/v1.0", "release/v0.5.1", "release/v10.12", "release/v1.0.3"]:
+            with self.subTest(branch=branch):
+                self.assertTrue(runs(branch))
+        for branch in ["release/v052-rc1", "release/rc3-cut", "release/rc4-docs", "release/R-legal-status",
+                       "release/v052-tokio-notice", "release/v1.0-docs", "release/v1.0/x", "release/v.1", "main",
+                       "release/v1", "release/v1.0.3.4", "slice/release/v1.0"]:
+            with self.subTest(branch=branch):
+                self.assertFalse(runs(branch))
+
+    def test_filter_syntax(self):
+        self.assertTrue(g.filter_matches("feature/*", "feature/a"))
+        self.assertFalse(g.filter_matches("feature/*", "feature/a/b"))
+        self.assertTrue(g.filter_matches("feature/**", "feature/a/b"))
+        self.assertTrue(g.filter_matches("v1.?", "v1."))
+        self.assertTrue(g.filter_matches("v1.?", "v1"))
+        self.assertFalse(g.filter_matches("v[0-9]+", "v"))
+        self.assertTrue(g.filter_matches("v[0-9]+", "v123"))
+
+    def test_the_ref_if_splits_by_event(self):
+        for part in ["github.event_name == 'schedule' && github.ref == 'refs/heads/main'",
+                     "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v')",
+                     "github.event_name == 'workflow_dispatch'"]:
+            self.assertIn(part, g.REF_IF)
 
     def test_dispatch_inputs(self):
         text = BENCH_OK.replace("      smoke_only:", "      ref:\n        type: string\n      smoke_only:")

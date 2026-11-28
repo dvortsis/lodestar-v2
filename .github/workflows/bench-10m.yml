@@ -16,8 +16,10 @@ name: Bench 10M
 on:
   schedule:
     - cron: "17 3 * * 1" # Mondays 03:17Z, on main
+  # Release lines only (release/v1.0, release/v0.5.1), never the backport
+  # PR branches sessions push under release/ (release/rc4-docs, release/v052-rc1).
   push:
-    branches: ["release/**"]
+    branches: ["release/v[0-9]+.[0-9]+", "release/v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
     inputs:
       smoke_only:
@@ -35,9 +37,10 @@ concurrency:
 jobs:
   bench:
     name: bench 10M (dedicated runner)
-    # Not a barrier: a branch can edit this out (OQ1). The machine, the
-    # release/* ruleset and the fork-PR setting are.
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    # Schedule: main only. Push: release lines. Dispatch: main or a release
+    # line. Not a barrier: a branch can edit this out (OQ1). The machine and
+    # the fork-PR setting are.
+    if: (github.event_name == 'schedule' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v')) || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/v')))
     runs-on: lodestar-bench-10m
     permissions:
       contents: read

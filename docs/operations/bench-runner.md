@@ -13,7 +13,7 @@ The risk: **this repository is public, and on a personal (non-organisation) repo
 | Safeguard | What it stops | Step |
 |---|---|---|
 | (a) An isolated machine that's reset after every job | A hostile job finds nothing to steal, can't reach your network and leaves nothing behind | 1, 2 |
-| (b) A ruleset on `release/*` | Only you can create or push release branches, which the benchmark runs on | 3 |
+| (b) A ruleset on release lines (`release/v1.0`, `release/v0.5.1`) | Collaborators and other accounts can't create or push the branches the benchmark runs on | 3 |
 | (c) The `runner-guard` check | Flags any other workflow that names the label or could reach a self-hosted runner | already in the repo |
 | (d) Approval for outside contributors' pull requests | A stranger's fork can't run any workflow until you approve it | 4 |
 
@@ -79,7 +79,7 @@ Each job runs in a fresh container that registers itself for **one** job, with o
        --name bench-$(date +%s) --unattended && unset T && exec ./run.sh'
    ```
    - `--rm` deletes the container when the job ends, so the next job starts clean. Only `/srv/bench` (the dataset disk) survives.
-   - Typing the token at the prompt keeps it out of your shell history and out of the job's process list. Never put it on the command line: a job could read it there and register runners of its own.
+   - Typing the token at the prompt keeps it out of your shell history, out of the job's process list and out of the container's environment. Never put it on the command line or in an `--env-file`: a job can read both (`/proc/1/cmdline`, `/proc/1/environ`) and use the token to register runners of its own.
 
 **Result:** **Settings → Actions → Runners** lists `bench-…` as **Idle**, with the single label `lodestar-bench-10m`. After one job it disappears by itself.
 
@@ -91,15 +91,17 @@ Each job runs in a fresh container that registers itself for **one** job, with o
 
 ## Step 3 (you): Protect release branches
 
-The benchmark runs on pushes to `release/*`, so only you should be able to create or push those branches.
+The benchmark runs on pushes to release lines: branches named like `release/v1.0` or `release/v0.5.1`. The backport branches that sessions push under `release/` (such as `release/rc4-docs` or `release/v052-rc1`) don't match, so they never start it.
+
+**What this does and doesn't stop:** Claude sessions push with your GitHub account, and you are on the bypass list, so the ruleset doesn't stop them. It stops anyone else with write access. Sessions are covered by the other safeguards: the isolated machine, `runner-guard` and the rule that only the bench workflow names the label.
 
 1. Open **Settings → Rules → Rulesets → New ruleset → New branch ruleset**.
 2. Name it `release branches`, set **Enforcement status** to **Active**, and leave the bypass list empty except for yourself (**Repository admin**).
-3. Under **Target branches**, choose **Add target → Include by pattern** and enter `release/*`.
+3. Under **Target branches**, choose **Add target → Include by pattern** and enter `release/v*.*`. Add a second pattern, `release/v*.*.*`. Both need a dot after the version number, so they match the same branches as the workflow (`release/v1.0`, `release/v0.5.1`) and not `release/v052-rc1`.
 4. Tick **Restrict creations**, **Restrict updates**, **Restrict deletions** and **Block force pushes**.
 5. Select **Create**.
 
-**Result:** a session or collaborator that tries `git push origin HEAD:release/test` is refused.
+**Result:** the ruleset lists both patterns as **Active**. A collaborator who tries `git push origin HEAD:release/v9.9` is refused.
 
 **Optional, a hard block on pull requests:** add `runner-guard` to the required status checks in the `main` ruleset. A pull request that names the label then can't merge. The trade-off: every pull request waits for one more check, about a minute.
 

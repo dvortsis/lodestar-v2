@@ -22,7 +22,7 @@ check fails when:
 
 It is a detector, not a barrier: a pushed branch runs its workflows at the
 same time as this check (OQ1). The barriers are the isolated, ephemeral
-machine, the release/* ruleset and the fork-PR approval setting
+machine, the release-line ruleset and the fork-PR approval setting
 (docs/operations/bench-runner.md).
 
 Usage: python3 .github/scripts/runner_guard.py [ROOT]
@@ -53,10 +53,40 @@ DYNAMIC_OK = {("ci.yml", "test", "os"): "${{ fromJSON(needs.changes.outputs.test
 MATRIX_REF = re.compile(r"^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$")
 
 BENCH_TRIGGERS = {"push", "schedule", "workflow_dispatch"}
-BENCH_PUSH_BRANCHES = ["release/**"]
+BENCH_PUSH_BRANCHES = ["release/v[0-9]+.[0-9]+", "release/v[0-9]+.[0-9]+.[0-9]+"]
 BENCH_INPUTS = {"smoke_only"}
-REF_IF = "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')"
+REF_IF = (
+    "(github.event_name == 'schedule' && github.ref == 'refs/heads/main') || "
+    "(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v')) || "
+    "(github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || "
+    "startsWith(github.ref, 'refs/heads/release/v')))"
+)
 PINNED = re.compile(r"^[\w.-]+/[\w.-]+(/[\w./-]+)?@[0-9a-f]{40}$")
+
+
+def filter_matches(pattern, branch):
+    """GitHub's workflow branch-filter syntax: `*` (no `/`), `**`, `?` and `+`
+    (zero-or-one and one-or-more of the previous character) and `[...]`."""
+    out, i = [], 0
+    while i < len(pattern):
+        c = pattern[i]
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+            continue
+        if c == "*":
+            out.append("[^/]*")
+        elif c in "?+":
+            out.append(c)
+        elif c == "[":
+            j = pattern.index("]", i)
+            out.append(pattern[i:j + 1])
+            i = j + 1
+            continue
+        else:
+            out.append(re.escape(c))
+        i += 1
+    return re.fullmatch("".join(out), branch) is not None
 
 
 def triggers(wf):
