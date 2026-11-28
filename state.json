@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T18:39:02Z",
+  "updated_at": "2026-11-28T19:12:09Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11159,7 +11159,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T18:39:02Z",
+    "updated": "2026-11-28T19:12:09Z",
     "items": [
       {
         "slot": 1,
@@ -11179,18 +11179,18 @@
       },
       {
         "slot": 3,
-        "slice": "X-detail-actions-timeout",
+        "slice": "X-row-rail",
         "role": "build",
-        "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
-        "doing": "#1184 docs fix pushed; last e2e job running, then merge",
-        "since": "2026-11-28T17:23:23Z"
+        "agent": "session_01MMjhnD4mmgLjAzYmDkubFy",
+        "doing": "resumed after #1184 merged: size grants, ruling C, self-review, PR",
+        "since": "2026-11-28T19:12:09Z"
       },
       {
         "slot": 4,
         "slice": "M8-PERF-3",
         "role": "build",
         "agent": "session_01MMjhn9RHhXEv4EPdxpobd7",
-        "doing": "building; Q2 answered (release-line trigger narrowed)",
+        "doing": "#1186 open; second delta review running",
         "since": "2026-11-28T18:17:48Z"
       },
       {
@@ -12320,17 +12320,10 @@
   },
   "merge_order": [],
   "next_launch": [
-    "X-row-rail (resume, fill)",
     "X-help (fill)",
     "M8-REL-2 (after X-ci-test-shard)",
     "X-hidden-count-drawer-wrap (fill)",
     "dht proof spill-filter flake fix (once)"
   ],
-  "paused_slices": {
-    "X-row-rail": {
-      "agent": "session_01MMjhnD4mmgLjAzYmDkubFy",
-      "since": "2026-11-28T18:12:29Z",
-      "why": "fill work; slot given to WK-12 (critical path). Step 0 rulings and size grants stand; work pushed to slice/X-row-rail; resume at next free slot (#1184 merge)."
-    }
-  }
+  "paused_slices": {}
 }
