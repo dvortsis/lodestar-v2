@@ -1166,3 +1166,35 @@ fn an_import_refused_before_its_first_write_keeps_the_hot_snapshot() {
     ));
     assert!(start_hot(&config).1, "a refused resume keeps the snapshot");
 }
+
+/// X-import-hot-stamp: the stamp is cleared before the first batch is
+/// written, not after the run, so an import that dies part-way (the
+/// process killed after its first batch) still makes the next start
+/// rebuild the columns and see what that batch stored.
+#[test]
+fn an_import_that_dies_after_its_first_batch_still_forces_a_rebuild() {
+    use lodestar_store::{Col, NEVER};
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("database.sqlite3");
+    magnetico_db(&src, 700);
+    let config = data(&dir.path().join("data"));
+    snapshot_hot(&config);
+    // Stopped right after the first batch commits, as a kill would: no
+    // code after the driver's run gets to execute.
+    super::AFTER_BATCH.with(|h| {
+        *h.borrow_mut() = Some(Box::new(|c: &ImportCounters| {
+            panic!("simulated crash after {} records", c.read)
+        }))
+    });
+    let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        block_on(start(&config, &magnetico(&src), None, true, None))
+    }));
+    super::AFTER_BATCH.with(|h| *h.borrow_mut() = None);
+    assert!(died.is_err(), "the run was stopped part-way");
+
+    let ids = torrent_ids(&config);
+    assert_eq!(ids.len(), 500, "only the first batch is stored");
+    let (hot, from_snapshot) = start_hot(&config);
+    assert!(!from_snapshot, "the clear must come before the first batch");
+    assert!(ids.iter().all(|&id| hot.get(Col::LastSeen, id) != NEVER));
+}
