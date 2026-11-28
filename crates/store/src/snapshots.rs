@@ -314,7 +314,7 @@ pub(crate) struct Plan {
 impl Plan {
     /// The newest schema version this table knows. A new migration must
     /// say here what its schema means for the purge.
-    pub(crate) const KNOWN_THROUGH: i64 = 16;
+    pub(crate) const KNOWN_THROUGH: i64 = 17;
 
     /// Per schema version (see the PR's table and `docs/decisions`):
     ///
@@ -325,7 +325,7 @@ impl Plan {
     /// | 10–12 | purged | purged | purged |
     /// | 13 | purged, and import candidates | purged | purged |
     /// | 14 | purged, with candidates and unverified items | purged | purged |
-    /// | 15–16 | as 14, and identify claims past their retention | purged | purged |
+    /// | 15–17 | as 14, and identify claims past their retention | purged | purged |
     /// | other | skipped with a warning | skipped | skipped |
     pub(crate) fn for_version(version: i64) -> Option<Plan> {
         match version {
@@ -409,6 +409,9 @@ impl Plan {
             // V16 (X-unverified-cap-index) adds an index and the kept
             // per-network counts of unverified items: its triggers count
             // the purge's deletes, so nothing else changes here.
+            // V17 (WK-12) adds `torrent_worker`, which holds no names and
+            // goes with its torrents (`ON DELETE CASCADE`), so a worker's
+            // purged torrents leave every snapshot by the journal.
             15..=Self::KNOWN_THROUGH => Some(Plan {
                 torrents: true,
                 filter: true,
