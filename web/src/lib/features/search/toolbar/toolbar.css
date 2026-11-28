@@ -51,7 +51,8 @@
 }
 /* "N hidden by filters · Show" where the toolbar has room; "N filtered · Show" where the longer
    words would wrap the count or the controls when it arrives (measured: up to 56rem of toolbar).
-   The full words stay the button's description. */
+   The full words stay the button's description. Below 14.5rem even the short form wraps the count
+   line, so no note shows there ("Show hidden" stays in Filters). Nothing moves when it arrives. */
 .tb-short {
 	display: none;
 }
@@ -65,6 +66,22 @@
 	}
 	.tb-short {
 		display: inline;
+	}
+}
+@container tb (width < 14.5rem) or ((width >= 30rem) and (width < 42rem)) {
+	.tb-hid {
+		display: none;
+	}
+}
+/* Room for the note where the controls share its row (below 46rem of toolbar): Sort and View keep
+   their labels as accessible names only, as below 40rem of window. */
+@container tb (width < 46rem) {
+	.tb-lbl > span {
+		position: absolute;
+		overflow: hidden;
+		width: 1px;
+		height: 1px;
+		clip-path: inset(50%);
 	}
 }
 .tb-controls {

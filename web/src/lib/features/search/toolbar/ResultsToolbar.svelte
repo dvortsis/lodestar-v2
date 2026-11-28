@@ -174,18 +174,19 @@
 {#if results.status !== 'empty'}
 	<div class="tb" data-testid="results-toolbar">
 		<p class="tb-count" data-testid="results-count">
-			{count}{#if hidden > 0 && results.status === 'ready'}
-				&nbsp;· <span id="{id}-hidden" class="tb-full" data-testid="results-hidden"
-					>{m.search_toolbar_hidden({ count: formatCount(hidden, locale) })}</span
-				><span class="tb-short" aria-hidden="true"
-					>{m.search_toolbar_hidden_short({ count: formatCount(hidden, locale) })}</span
-				>&nbsp;·
-				<button
-					type="button"
-					class="text-primary underline pointer-coarse:-m-3 pointer-coarse:min-h-0 pointer-coarse:p-3 {FOCUS_RING}"
-					data-testid="results-hidden-show"
-					aria-describedby="{id}-hidden"
-					onclick={showHidden}>{m.search_toolbar_hidden_show()}</button
+			{count}{#if hidden > 0 && results.status === 'ready'}<span class="tb-hid"
+					>&nbsp;· <span id="{id}-hidden" class="tb-full" data-testid="results-hidden"
+						>{m.search_toolbar_hidden({ count: formatCount(hidden, locale) })}</span
+					><span class="tb-short" aria-hidden="true"
+						>{m.search_toolbar_hidden_short({ count: formatCount(hidden, locale) })}</span
+					>&nbsp;·
+					<button
+						type="button"
+						class="text-primary underline pointer-coarse:-m-3 pointer-coarse:min-h-0 pointer-coarse:p-3 {FOCUS_RING}"
+						data-testid="results-hidden-show"
+						aria-describedby="{id}-hidden"
+						onclick={showHidden}>{m.search_toolbar_hidden_show()}</button
+					></span
 				>{/if}
 		</p>
 		<div class="tb-controls">

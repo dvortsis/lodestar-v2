@@ -1463,8 +1463,8 @@ export default [
 	// (large:px-6, large:py-6, print:p-0, max-w-7xl) and the h1's one class string.
 	// X-grid-two-col-large (runner §2.26): 19.79 → 19.80 KB, measured 19,792 B: the large: grid utilities
 	// (grid-cols-2, col-span-2, gap-x-4) of three label | value lists; +9 B over main.
-	// runner §2.26 (X-hidden-count): 19.80 → 19.82 KB, measured 19,812 B: the 44 px touch target on
-	// "N hidden · Show" (pointer-coarse padding and negative margin).
+	// runner §2.26 (X-hidden-count): 19.80 → 19.82 KB, measured 19,816 B: the 44 px touch target on
+	// "N hidden by filters · Show" (pointer-coarse padding, negative margin, min-height reset).
 	entry('CSS', search.css, '19.82 KB'),
 	...(appEntry
 		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
@@ -1867,9 +1867,11 @@ export default [
 	// GS-5 (runner §2.26): 4.6 → 5.01 KB, the Group versions switch (twice: among the controls, and in
 	// More whenever the toolbar is too narrow for it, a container query), its note and the URL write
 	// with Back.
-	// runner §2.26 (X-hidden-count): 5.02 → 5.40 KB, measured 5,399 B: "N hidden · Show", its request
-	// (POST /search/hidden, after the rows paint, aborted by a newer query) and its messages.
-	entry('Results toolbar (lazy)', toolbarLazy, '5.40 KB'),
+	// runner §2.26 (X-hidden-count): 5.02 → 5.60 KB, measured 5,590 B: "N hidden by filters · Show"
+	// and its narrow form "N filtered · Show", its request (POST /search/hidden, after the rows render,
+	// aborted by a newer query), its messages, and the container queries that keep it from moving
+	// anything (toolbar.css).
+	entry('Results toolbar (lazy)', toolbarLazy, '5.60 KB'),
 	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
 	// chunk); the limit falls to the measured size, rounded up at 0.01 kB, so the bytes aren't respent.
 	// GS-5 (runner §2.26): +1 B of shared-chunk noise (no live-banner code changed), rounded up to 0.01 KB.

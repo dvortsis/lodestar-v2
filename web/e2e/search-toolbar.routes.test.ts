@@ -546,3 +546,58 @@ test.describe('"N hidden · Show" under a coarse pointer', () => {
 		expect(target.py).toBeGreaterThan(0);
 	});
 });
+
+// X-hidden-count (runner): the note arrives after the rows and moves nothing at any width. Where
+// even "N filtered · Show" would wrap the count line or the controls it shows no note ("Show hidden"
+// stays in Filters).
+for (const [width, shows] of [
+	[360, false],
+	[390, true],
+	[768, false],
+	[900, true],
+	[1024, true],
+	[1366, true],
+	[2048, true]
+] as const) {
+	test(`at ${width} px the hidden count ${shows ? 'shows' : 'stays out'} and nothing moves`, async ({
+		page,
+		go,
+		mock
+	}) => {
+		await page.setViewportSize({ width, height: 900 });
+		server(mock, () => body(hits(3), { total: 2196 }));
+		let release!: () => void;
+		const held = new Promise<void>((r) => (release = r));
+		mock.on('searchHiddenCount', async () => (await held, { hidden_total: 12 }));
+		await go('/search?q=lantern');
+		await expect(row(page, 1)).toBeVisible();
+		const toolbar = page.getByTestId('results-toolbar');
+		const before = await toolbar.boundingBox();
+		const first = (await row(page, 1).boundingBox())?.y;
+		const sort = await page.getByLabel('Sort').boundingBox();
+		release();
+		const show = page.getByTestId('results-hidden-show');
+		await expect(show).toHaveCount(1);
+		if (shows) await expect(show).toBeVisible();
+		else await expect(show).toBeHidden();
+		expect((await toolbar.boundingBox())?.height).toBe(before?.height);
+		expect((await row(page, 1).boundingBox())?.y).toBe(first);
+		expect((await page.getByLabel('Sort').boundingBox())?.y).toBe(sort?.y);
+	});
+}
+
+test('below 46rem of toolbar Sort and View keep their names, without visible labels', async ({
+	page,
+	go,
+	mock
+}) => {
+	await page.setViewportSize({ width: 1024, height: 900 });
+	server(mock, () => body(hits(3)));
+	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible();
+	for (const name of ['Sort', 'View']) {
+		await expect(page.getByRole('combobox', { name, exact: true })).toBeVisible();
+		const label = page.locator('.tb-lbl > span', { hasText: name }).first();
+		expect((await label.boundingBox())?.width).toBeLessThanOrEqual(1);
+	}
+});
