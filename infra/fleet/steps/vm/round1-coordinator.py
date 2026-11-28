@@ -632,7 +632,7 @@ def cmd_up(cfg, day, host, args):
                 lines.append(f"{'ok' if rc2 == 0 else 'fail'} stack_stopped arm={other}")
             raise Partial(lines, f"arm {arm}'s stack didn't start; every arm's stack, its own too, was stopped again")
         up.append(arm)
-        day.require()["arms"][arm]["up_utc"] = iso(host.now())  # its gluetun log is archived from here
+        day.require()["arms"][arm].setdefault("up_utc", iso(host.now()))  # its gluetun log is archived from here
         day.save()
         lines.append(f"ok up arm={arm}")
     return lines
@@ -659,7 +659,10 @@ def cmd_bring_up(cfg, day, host, args):
         raise Fail("an arm's egress is the uplink's own address: its traffic isn't in the tunnel")
     for arm in day.arms():  # the probe's target is the arm's WireGuard gateway (X-cr-round1-spec-fixes item 4)
         ok, how = gateway_of(cfg, host, arm)
-        if not ok:
+        if not ok:  # fails closed: an earlier check's record doesn't outlive a failed one
+            for k in ("tunnel_target_is_gateway", "tunnel_gateway_check", "tunnel_target_hash"):
+                s["arms"][arm].pop(k, None)
+            day.save()
             raise Fail(f"arm {arm}'s tunnel_target isn't its WireGuard gateway ({how}): declare the gateway")
         readings[arm]["gateway_check"] = how
     exits = {s["arms"][arm]["exit"]: readings[arm]["hash"] for arm in day.arms()}
@@ -1058,7 +1061,8 @@ def cmd_archive(cfg, day, host, args):
                      "collector": {"closed": col["closed"], "reason": col["reason"],
                                    "final_boundary_utc": col["final_boundary_utc"]},
                      "leak_test": leak_summary(st["leak_tests"]), "leak_tests": st["leak_tests"],
-                     "tunnel_target_is_gateway": st.get("tunnel_target_is_gateway") is True}
+                     "tunnel_target_is_gateway": st.get("tunnel_target_is_gateway") is True,
+                     "tunnel_gateway_check": st.get("tunnel_gateway_check")}
         if arm in logs:
             arms[arm]["gluetun_log_sha256"] = logs[arm]
         ev = classify_close(arm, col, s.get("coordinator_stopped", ()))
@@ -1090,8 +1094,9 @@ def cmd_end_attempt(cfg, day, host, args):
                        "solo_confirmation:<arm>, valid_miss:<arm> or other:<slug>, comma-separated")
         if m[2] is not None and m[2] not in own:
             raise Fail(f"--reason {token}: arm {m[2]} isn't in attempt {args.attempt}")
-        if m[1] == "rehearsal_drop" and ran:
-            raise Fail(f"--reason {token}: the rehearsal drops an arm only before the attempt's first day")
+        if m[1] == "rehearsal_drop" and (ran or args.attempt != cfg["decl"]["attempts"][0]["id"]):
+            raise Fail(f"--reason {token}: the rehearsal drops an arm only from the round's first attempt, "
+                       "before its first day")
     ends[args.attempt] = {"reason": args.reason, "days_run": ran}
     save(path, ends)
     return [f"ok attempt_end {args.attempt} days_run={ran}"]

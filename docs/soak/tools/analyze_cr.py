@@ -2392,7 +2392,7 @@ def solo_problems(cand, decl, inputs, attempts, judged_days):
     attempt of the candidate is allowed only (a) after the attempt just before it gave the
     candidate a day with `solo_confirmation_required`, or (b) when the candidate is the only
     arm left: every other arm of that attempt dropped out, as its recorded end says, at the
-    rehearsal (before its first day) or by a product failure the day archives show. At most
+    rehearsal (before its first day, and only the round's first attempt) or by a product failure the day archives show. At most
     one S attempt per candidate per round. Returns the problems, [] when it's allowed."""
     solos = [a for a in attempts if a["layout"] == "S"]
     if not solos:
@@ -2416,7 +2416,7 @@ def solo_problems(cand, decl, inputs, attempts, judged_days):
         m = DROP_TOKEN.fullmatch(token.strip())
         if not m:
             continue
-        if m[1] == "rehearsal_drop" and not end["days_run"]:
+        if m[1] == "rehearsal_drop" and not end["days_run"] and before["id"] == decl["attempts"][0]["id"]:
             dropped.add(m[2])
         elif m[1] == "product_failure" and any(
                 ev.get("class") == "product" and ev.get("diagnosis") != "infrastructure"

@@ -857,8 +857,9 @@ class RehearsalWindowTests(CoordinatorBase):
     def test_watch_stops_every_arm_at_the_cap(self):
         day, _ = self.rehearsal(timedelta(minutes=20))  # the last window would end after 4 h
         self.first = co.first_start(json.loads((day / "state.json").read_text()))
-        argv = ["watch", str(self.cfg_path), "--day-dir", str(day)]
-        self.assertEqual(co.main(argv, host=self.host), 0)
+        cfg = co.load_config(self.cfg_path)
+        out = co.cmd_watch(cfg, co.Day(cfg, day), self.host, None, max_loops=400)  # bounded: 4 h is ~240
+        self.assertNotIn("ok watch paused (test bound)", out)
         self.assertGreaterEqual(self.host.t, self.first + timedelta(hours=4))
         self.assertLess(self.host.t, self.first + timedelta(hours=4, seconds=5))
         self.assertEqual(len([c for c in self.host.commands() if c.endswith(" stop")]), 3)
@@ -900,6 +901,27 @@ class GatewayTests(CoordinatorBase):
         archive = (self.day_dir() / "archive.json").read_text()
         self.assertNotIn("10.0.0.1", archive)
         self.assertTrue(all(a["tunnel_target_is_gateway"] for a in json.loads(archive)["arms"].values()))
+
+    def test_the_echo_must_come_from_the_target_itself(self):
+        for reply in ("64 bytes from 10.9.0.1: icmp_seq=1 ttl=64 time=31.0 ms\n",
+                      "64 bytes from 10.0.0.10: icmp_seq=1 ttl=64 time=31.0 ms\n"):  # another host, a prefix
+            self.setUp()
+            self.host.netns[102]["ping"] = (0, reply)
+            rc, out = self.bring_up()
+            self.assertEqual(rc, 1, reply)
+            self.assertIn("arm A's tunnel_target isn't its WireGuard gateway (first_hop)", out[-1])
+
+    def test_a_failed_recheck_clears_the_earlier_record(self):
+        self.assertEqual(self.bring_up()[0], 0)
+        self.host.netns[102]["ping"] = (1, "From 10.9.0.1 icmp_seq=1 Time to live exceeded\n")
+        self.assertEqual(self.go("bring-up")[0], 1)
+        a = self.state()["arms"]["A"]
+        self.assertNotIn("tunnel_target_is_gateway", a)
+        self.assertNotIn("tunnel_target_hash", a)
+        rc, out = self.go("collect", placement=False)
+        self.assertEqual(rc, 1)
+        self.go("archive", placement=False)
+        self.assertFalse(json.loads((self.day_dir() / "archive.json").read_text())["arms"]["A"]["tunnel_target_is_gateway"])
 
     def test_a_target_beyond_the_gateway_is_refused(self):
         self.host.netns[102]["ping"] = (1, "From 10.9.0.1 icmp_seq=1 Time to live exceeded\n")
@@ -1012,6 +1034,15 @@ class GluetunLogTests(CoordinatorBase):
             for secret in ("192.0.2.91", "203.0.113.21", WG_PRIVATE):
                 self.assertNotIn(secret, log.read_text())
 
+    def test_up_again_keeps_the_logs_start(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("up", placement=False)
+        first = self.state()["arms"]["B"]["up_utc"]
+        self.host.t += timedelta(minutes=5)
+        self.go("up", placement=False)
+        self.assertEqual(self.state()["arms"]["B"]["up_utc"], first)
+
     def test_an_unreadable_log_is_noted_once(self):
         self.pass_leaks()
         self.go("bring-up")
@@ -1033,11 +1064,22 @@ class EndAttemptTests(CoordinatorBase):
             rc, out = self.go("end-attempt", "--attempt", "r1-a1", "--reason", reason)
             self.assertEqual(rc, 0 if ok else 1, (reason, out))
 
+    def test_a_rehearsal_drop_is_only_on_the_rounds_first_attempt(self):
+        decl = json.loads((self.round / "declaration.json").read_text())
+        later = mk.archive("L2", attempt="r1-a2")["declaration"]
+        decl["attempts"] += later["attempts"]
+        decl["arms"] += later["arms"]
+        (self.round / "declaration.json").write_text(json.dumps(decl))
+        rc, out = self.go("end-attempt", "--attempt", "r1-a2", "--reason", "rehearsal_drop:A")
+        self.assertEqual(rc, 1)
+        self.assertIn("first attempt", out[-1])
+        self.assertEqual(self.go("end-attempt", "--attempt", "r1-a1", "--reason", "rehearsal_drop:A")[0], 0)
+
     def test_a_rehearsal_drop_is_only_before_the_first_day(self):
         ManifestTests.make_day(self, 1)
         rc, out = self.go("end-attempt", "--attempt", "r1-a1", "--reason", "rehearsal_drop:C")
         self.assertEqual(rc, 1)
-        self.assertIn("before the attempt's first day", out[-1])
+        self.assertIn("before its first day", out[-1])
 
 
 class LaunchPathTests(unittest.TestCase):

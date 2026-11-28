@@ -1914,6 +1914,25 @@ class SoloBoundTests(SpecFixBase):
         self.assertEqual(self.cand(v, "A")["crawler"], "pass", self.cand(v, "A")["reasons"])
         self.assertEqual(v["selection"]["ships"], "A")
 
+    def test_rule_a_needs_the_breach_in_the_attempt_just_before(self):
+        # Runner review of #1158: L3 (B breaches) -> L2 -> S. The breach was two attempts back.
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))
+        add_attempt(a, "L2", "r1-a2")
+        v = self.gate(add_attempt(a, "S", "r1-a3"))
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_not_after_a_drop"])
+
+    def test_a_rehearsal_drop_on_a_later_attempt_opens_no_solo(self):
+        # Runner review of #1158: the rehearsal runs only before the round's first attempt.
+        a = mk.archive("L3")
+        add_attempt(a, "L2", "r1-a2")
+        a["days"] = [d for d in a["days"] if d["attempt"] != "r1-a2"]
+        v = self.gate_ends(add_attempt(a, "S", "r1-a3"),
+                           {"r1-a2": {"reason": "rehearsal_drop:A", "days_run": []}})
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_not_after_a_drop"])
+
     def test_a_valid_miss_still_stands_beside_a_solo_not_permitted(self):
         a = mk.archive("L3")
         self.day(a, 2)["reports"]["B"]["numerator"]["hourly"][3]["net_per_min"] = 60.0

@@ -25,7 +25,7 @@ The round-1 tools enforce what the fresh review of CR-SPEC-R1 (#1155) found, as 
 
   The arm must be one of the attempt's arms. Free text is refused.
 - **gate-round counts only two tokens as drops:**
-  - `rehearsal_drop:<arm>`, when `days_run` is `[]`;
+  - `rehearsal_drop:<arm>`, when `days_run` is `[]` and the attempt is the declaration's first (the rehearsal runs only before it; `end-attempt` refuses the token on any other attempt);
   - `product_failure:<arm>`, when a day archive of that attempt has a product event on that arm that wasn't reclassified as infrastructure.
 
   A claimed drop that the evidence doesn't show allows no S.
@@ -48,7 +48,7 @@ The round-1 tools enforce what the fresh review of CR-SPEC-R1 (#1155) found, as 
   - `ip route get` sends it through `wg0`, and not as `local`. The interface can't be configured: an override such as `eth0` would let the Docker bridge's gateway pass.
   - It equals the tunnel's peer address, or every `via` on the interface's routes, where gluetun sets one.
 - **Departure from the brief, which said to read the route or peer address "whichever gluetun exposes":** round 1's PIA config is a point-to-point WireGuard `/32` (`infra/pia-bridge/vm/pia-wireguard.sh`). gluetun sets that up with neither a peer address nor a `via`. So when neither exists, the gateway is the tunnel's first hop: the target must answer an echo sent with TTL 1 itself. An address further away answers with the gateway's `Time to live exceeded` and is refused.
-- **Run state and the day archive record `tunnel_target_is_gateway: true` per arm,** plus how it was checked (`tunnel_gateway_check`: `peer_address`, `route_via` or `first_hop`), never the address. gate-round makes a day `not_judged` (`probe_target_unchecked`) for any declared arm whose archive lacks it.
+- **Run state and the day archive record `tunnel_target_is_gateway: true` per arm,** plus how it was checked (`tunnel_gateway_check`: `peer_address`, `route_via` or `first_hop`), never the address. The TTL-1 echo counts only when its reply comes from the target itself (`<n> bytes from <target>:`). A failed re-check removes the earlier record, so the check fails closed. gate-round makes a day `not_judged` (`probe_target_unchecked`) for any declared arm whose archive lacks it.
 - **The checked target is bound to the probed one.** Run state keeps a salted hash of the target (`tunnel_target_hash`). `collect` refuses to start when the config's target no longer matches it, so the sampler pings the address that bring-up checked.
 
 ## 5. Declaration checks present (CR-SPEC-R1 §6; run sheet 8b)
@@ -63,7 +63,7 @@ The round-1 tools enforce what the fresh review of CR-SPEC-R1 (#1155) found, as 
 - **The synthetic fixture's reports now carry these checks,** and its archives the gateway flag. The golden `l3_pass_verdict.json` was regenerated for that reason only: only its input hashes changed.
 
 ## 6. Gluetun logs in the archive (CR-SPEC-R1 §8)
-- **`archive` saves each arm's gluetun log, redacted, as `<arm>/gluetun.log`.** The log runs from the arm's `up_utc` (the day's first exit check if `up` didn't record one) to `shutdown_utc`. It's read with `docker logs --timestamps`, stdout and stderr in order.
+- **`archive` saves each arm's gluetun log, redacted, as `<arm>/gluetun.log`.** The log runs from the arm's first `up_utc` (a second `up` keeps it) (the day's first exit check if `up` didn't record one) to `shutdown_utc`. It's read with `docker logs --timestamps`, stdout and stderr in order.
 - **What's redacted:**
   - Every IPv6 address is replaced by `[ipv6]`. This fails closed: any run of hex digits, colons and dots with two or more colons is replaced, unless it's a time of day (`10:00:00`, `10:00:00.123`). So `ip:2001:db8::1` and an unbracketed `2001:db8::1:51820` go too.
   - Every IPv4 address is replaced by `[ipv4]`.
