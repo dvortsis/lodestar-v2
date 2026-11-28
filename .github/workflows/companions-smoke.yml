@@ -7,17 +7,23 @@ name: Companions smoke
 # real supervisor and sandbox, refuses a tampered download, and removes it.
 # No network beyond loopback. Not part of `ci-ok` unless the runner adds it.
 
+# Pull requests that touch what the gate builds or reads, and by hand. CI's
+# test job already runs the gate on every Rust change, so this adds only the
+# check that the smoke ran, and not on every merge to main.
 on:
-  push:
-    branches: [main]
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - "crates/companions/**"
       - "crates/integrations/**"
+      - "crates/log/**"
       - "crates/sources/**"
+      - "crates/sources-feeds/**"
       - "crates/update/**"
+      - "crates/*/Cargo.toml"
+      - "Cargo.toml"
       - "Cargo.lock"
+      - ".github/workflows/release.yml"
       - ".github/workflows/companions-smoke.yml"
   workflow_dispatch:
 
@@ -54,7 +60,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: companion gate
         run: |
-          cargo test -p lodestar-companions --test gate -- --nocapture 2>&1 | tee gate.log
+          cargo test -p lodestar-companions --test gate 2>&1 | tee gate.log
           test "${PIPESTATUS[0]}" -eq 0
       # A filter or a cfg that compiled the smoke out must not pass as zero
       # tests run.

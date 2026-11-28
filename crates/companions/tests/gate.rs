@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 use lodestar_companions::adapter::{
     AdapterError, BoxFuture, Credentials, GuardedHttp, ProbeRequest, ProbeResponse, Target,
 };
-use lodestar_companions::catalogue::{self, Catalogue, Exposure, Need, PortName, Sha256};
+use lodestar_companions::catalogue::{self, Catalogue, Exposure, Need, PortName, Rule, Sha256};
 use lodestar_companions::compose::{
     self, Bind, DataFolders, Paths, Publish, Route as ComposeRoute, ServiceInput, TemplateError,
 };
@@ -825,11 +825,16 @@ async fn a_download_that_fails_its_checksum_is_refused_and_nothing_runs() {
     assert_eq!(w.run.starts.load(Ordering::SeqCst), 0);
 }
 
-/// Upstream signatures (owner cq2): the pin is the run-time gate for every
-/// artifact, and the only upstream signature checked at run time,
-/// minisign, verifies with the pinned key only. A catalogue can't claim a
-/// signature kind the binary doesn't check, and an entry that breaks a
-/// rule (a host off the list, a malformed hash) is refused whole.
+/// Upstream signatures (owner cq2). The pin is the run-time gate for every
+/// artifact; upstream OpenPGP signatures are checked when a pin is made,
+/// and the catalogue records that as `verified_at_pin` with the key's
+/// fingerprint. A catalogue can't claim a signature kind this build
+/// doesn't check, or a check without its key, and an entry that breaks a
+/// rule is refused whole. `verify::minisign`, the library check for an
+/// upstream that ever publishes minisign signatures, is not on the install
+/// path yet (no catalogue field can name a key, CMP-1's decisions); it is
+/// checked here so the day it is wired, it refuses another key's or
+/// another file's signature.
 #[tokio::test]
 async fn a_signature_that_fails_is_refused() {
     let _g = SERIAL.lock().await;
@@ -868,19 +873,8 @@ async fn a_signature_that_fails_is_refused() {
     );
     file.discard().unwrap_or_else(|e| panic!("{e}"));
 
-    // Every pin in the shipped catalogue is gated by its hash alone or was
-    // checked when it was made; nothing claims a check this build skips.
-    let shipped = lodestar_companions::builtin().unwrap_or_else(|e| panic!("{e:?}"));
-    for e in shipped.entries() {
-        for p in [catalogue::Platform::Linux, catalogue::Platform::Windows] {
-            for a in [catalogue::Arch::X86_64, catalogue::Arch::Aarch64] {
-                if let Some(pin) = e.artifact(p, a).and_then(|x| x.pin().ok()) {
-                    assert_eq!(verify::upstream(pin), verify::Upstream::PinOnly);
-                }
-            }
-        }
-    }
-    // Entries that break a rule are refused, and with them the catalogue.
+    // Entries that break a rule are refused, and with them the catalogue,
+    // each by the rule it breaks.
     let edit = |f: &dyn Fn(&mut serde_json::Value)| {
         let mut v = serde_json::from_str::<serde_json::Value>(&test_text()).unwrap_or_default();
         for e in v["entries"].as_array_mut().into_iter().flatten() {
@@ -889,6 +883,8 @@ async fn a_signature_that_fails_is_refused() {
             }
         }
         Catalogue::from_json(&v.to_string())
+            .map(|_| ())
+            .map_err(|e| e.rule())
     };
     fn pinned(e: &mut serde_json::Value) -> &mut serde_json::Value {
         let arts = e["native"]["artifacts"]
@@ -899,31 +895,58 @@ async fn a_signature_that_fails_is_refused() {
             .map(|a| &mut a["pin"])
             .unwrap_or_else(|| panic!("no pin"))
     }
-    assert!(edit(&|_| {}).is_ok(), "the unedited catalogue must load");
-    assert!(
-        edit(&|e| pinned(e)["upstream_sig"] = serde_json::json!({"kind": "minisign", "key": "x"}))
-            .is_err(),
-        "a signature kind the build doesn't check"
+    let sig = |v: serde_json::Value| edit(&move |e| pinned(e)["upstream_sig"] = v.clone());
+    let fp = "0123456789ABCDEF0123456789ABCDEF01234567";
+    assert_eq!(edit(&|_| {}), Ok(()), "the unedited catalogue must load");
+    for (what, v, rule) in [
+        (
+            "a kind the build doesn't check",
+            serde_json::json!({"kind": "minisign"}),
+            Rule::Syntax,
+        ),
+        (
+            "an unknown field",
+            serde_json::json!({"kind": "none", "extra": 1}),
+            Rule::Syntax,
+        ),
+        (
+            "checked at pin, no key",
+            serde_json::json!({"kind": "verified_at_pin"}),
+            Rule::Fingerprint,
+        ),
+        (
+            "checked at pin, a bad key",
+            serde_json::json!({"kind": "verified_at_pin", "fingerprint": "xyz"}),
+            Rule::Fingerprint,
+        ),
+        (
+            "unsigned, with a key",
+            serde_json::json!({"kind": "none", "fingerprint": fp}),
+            Rule::Fingerprint,
+        ),
+    ] {
+        assert_eq!(sig(v), Err(rule), "{what}");
+    }
+    assert_eq!(
+        sig(serde_json::json!({"kind": "verified_at_pin", "fingerprint": fp})),
+        Ok(()),
+        "a pin checked against a pinned key"
     );
-    assert!(
-        edit(&|e| pinned(e)["upstream_sig"] = serde_json::json!({"kind": "none", "extra": 1}))
-            .is_err(),
-        "an unknown field"
-    );
-    assert!(
-        edit(&|e| pinned(e)["sha256"] = serde_json::json!("00")).is_err(),
+    assert_eq!(
+        edit(&|e| pinned(e)["sha256"] = serde_json::json!("00")),
+        Err(Rule::Sha256),
         "a malformed hash"
     );
+    let off_host = edit(&|e| {
+        pinned(e)["url"] = serde_json::json!(artifact_url().replace("github.com", "evil.example"))
+    });
     assert!(
-        edit(&|e| {
-            pinned(e)["url"] =
-                serde_json::json!(artifact_url().replace("github.com", "evil.example"))
-        })
-        .is_err(),
-        "a URL off the entry's hosts"
+        matches!(off_host, Err(Rule::Host | Rule::HostNotAllowed | Rule::Url)),
+        "a URL off the entry's hosts: {off_host:?}"
     );
-    assert!(
-        edit(&|e| e["hosts"] = serde_json::json!(["github.com", "evil.example"])).is_err(),
+    assert_eq!(
+        edit(&|e| e["hosts"] = serde_json::json!(["github.com", "evil.example"])),
+        Err(Rule::HostNotAllowed),
         "a host off the download list"
     );
 }
@@ -1478,6 +1501,8 @@ async fn credentials_are_sealed_and_never_shown() {
         format!("{:?}", *m.snapshot().borrow()),
         format!("{:?}", l.secrets),
         format!("{:?}", w.rows.rows()),
+        // Compose takes no credential at all (`ServiceInput` has no field
+        // for one); this keeps it that way.
         compose::compose(
             test_catalogue(),
             &prowlarr(),
@@ -1515,6 +1540,10 @@ async fn credentials_are_sealed_and_never_shown() {
     }
     drop(gated);
     sup.shutdown().await;
+    // Nor did any log event while it ran and stopped.
+    for l in log.0.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        assert!(!l.contains(&k), "a log event carries it: {l}");
+    }
 }
 
 // ─── 6. Orphans and uninstall ───────────────────────────────────────────
@@ -1802,7 +1831,15 @@ fn a_release_build_has_no_catalogue_override() {
 
     let release = source(".github/workflows/release.yml");
     assert!(!release.contains("--all-features"));
-    for l in release.lines().filter(|l| l.contains("-p lodestar ")) {
+    let builds: Vec<&str> = release
+        .lines()
+        .filter(|l| l.contains("-p lodestar ") || l.contains("--package lodestar "))
+        .collect();
+    assert!(
+        !builds.is_empty(),
+        "no release build line found; update the gate"
+    );
+    for l in builds {
         assert!(
             l.contains("--no-default-features --features web") && !l.contains("testing"),
             "release build line: {l}"
