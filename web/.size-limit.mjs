@@ -546,8 +546,8 @@ const eventNamesLimits = {
 	// runner §2.26, X-gluetun-restart-recover: measured 6460 B with the two network-watch events, + 10%.
 	system: '7110 B',
 	auth: '1630 B',
-	// runner §2.26 (pending), X-vpn-bind: measured 1170 B with the bootstrap-name event, + 300 B.
-	dht: '1470 B',
+	// runner §2.26, X-vpn-bind: measured 1174 B with the bootstrap-name event, rounded up to 64 B.
+	dht: '1216 B',
 	filters: '1740 B',
 	search: '2250 B',
 	// runner §2.26, UP-1: measured 704 B, the watch labels.
@@ -558,9 +558,9 @@ const eventNamesLimits = {
 	companions: '1160 B',
 	// runner §2.26, X-tls-root-load-event: measured 1220 B with the two root-load events, + 300 B.
 	integrations: '1520 B',
-	// runner §2.26 (pending), X-vpn-bind: measured 3140 B with the three crawl-interface events,
-	// + 300 B.
-	pipeline: '3440 B',
+	// runner §2.26, X-vpn-bind: measured 3144 B with the three crawl-interface events, rounded
+	// up to 64 B.
+	pipeline: '3200 B',
 	fetch: '610 B'
 };
 for (const c of Object.keys(eventNamesLimits)) {
