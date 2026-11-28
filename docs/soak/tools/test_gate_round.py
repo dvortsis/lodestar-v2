@@ -876,10 +876,10 @@ class ValidityTests(RoundBase):
         self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
 
 
-def add_attempt(a, layout, attempt, fresh=None):
-    """Append a fresh attempt (from make_archive) to archive `a`, with distinct run IDs and,
-    by default, days after the existing ones."""
-    later = mk.archive(layout, attempt=attempt)
+def add_attempt(a, layout, attempt, fresh=None, later=None):
+    """Append a fresh attempt (from make_archive, or `later`) to archive `a`, with distinct
+    run IDs and, by default, days after the existing ones."""
+    later = later or mk.archive(layout, attempt=attempt)
     a["declaration"]["attempts"] += later["declaration"]["attempts"]
     a["declaration"]["arms"] += later["declaration"]["arms"]
     shift = timedelta(days=3 * (len(a["declaration"]["attempts"]) - 1))
@@ -1777,7 +1777,7 @@ class ManifestTests(RoundBase):
 
     def test_every_input_hash_is_in_the_verdict(self):
         v = self.gate(mk.archive("L3"))
-        self.assertEqual(len(v["inputs"]), 1 + 1 + 2 * (3 + 2))
+        self.assertEqual(len(v["inputs"]), 1 + 1 + 2 * (3 + 2 + 3))  # + each arm's gluetun log
 
     def test_the_analyzer_hash_is_in_the_verdict_and_the_segment_report(self):
         self.assertEqual(self.gate(mk.archive("L3"))["analyzer_sha256"], analyze_cr.ANALYZER_SHA256)
@@ -1842,6 +1842,20 @@ def thin_coverage(day, arm="B"):
             smp["steal"] = None
 
 
+def solo_of(arm, attempt):
+    """make_archive's S layout for `arm` instead of B: one arm on X, then Y."""
+    later = mk.archive("S", attempt=attempt)
+    decl = later["declaration"]
+    decl["arms"] = [mk.entry(attempt, e["day"], arm, e["exit"]) for e in decl["arms"]]
+    decl["attempts"][0]["candidate_digests"] = {arm: mk.DIGEST}
+    for d in later["days"]:
+        e = next(x for x in decl["arms"] if x["day"] == d["day"])
+        reports = {arm: mk.report(e, f"{attempt}-d{d['day']}-{arm}", mk.DAY_START[d["day"]])}
+        d.update(reports=reports, archive=mk.day_archive(attempt, d["day"], reports, {arm: e["exit"]}),
+                 contention=mk.host_samples(reports), gluetun_logs={arm: mk.gluetun_log(attempt, d["day"], arm)})
+    return later
+
+
 class SpecFixBase(RoundBase):
     def gate_ends(self, a, ends):
         """gate-round on `a` with the manifest's attempt_ends set to `ends`."""
@@ -1884,6 +1898,21 @@ class SoloBoundTests(SpecFixBase):
     def test_a_passing_l3_then_a_solo_attempt_is_not_permitted(self):
         v = self.gate(add_attempt(mk.archive("L3"), "S", "r1-a2"))
         self.assertNotJudged(v, "solo_not_permitted")
+
+    def test_a_host_wide_breach_gives_each_candidate_its_own_solo(self):
+        # Self-review: "the attempt just before" is the candidate's own. A CPU breach hits B
+        # and A alike; B's solo fails, and A's (after B's) is still its one S.
+        a = mk.archive("L2")
+        for smp in self.day(a, 1)["contention"]["samples"]:
+            smp["cpu"] = 0.9
+        add_attempt(a, "S", "r1-a2")
+        for smp in self.day(a, 1, "r1-a2")["contention"]["samples"]:
+            smp["cpu"] = 0.9
+        v = self.gate(add_attempt(a, "S", "r1-a3", later=solo_of("A", "r1-a3")))
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
+        self.assertNotIn("solo_not_permitted", self.cand(v, "A")["reasons"])
+        self.assertEqual(self.cand(v, "A")["crawler"], "pass", self.cand(v, "A")["reasons"])
+        self.assertEqual(v["selection"]["ships"], "A")
 
     def test_a_valid_miss_still_stands_beside_a_solo_not_permitted(self):
         a = mk.archive("L3")
@@ -1990,6 +2019,21 @@ class RepeatRuleTests(SpecFixBase):
         a["days"].append(repeat_of(self.day(a, 1), 1, clean=False))
         a["days"].append(repeat_of(self.day(a, 1), 2))
         self.assertEqual(self.cand(self.gate(a))["crawler"], "pass")
+
+
+class HandshakeEvidenceTests(SpecFixBase):
+    """Self-review: a day needs every declared arm's gluetun log listed, and the archive's own."""
+
+    def test_a_missing_or_other_log_is_not_judged(self):
+        for arm in ("B", "C"):
+            for broken in ("missing", "other"):
+                a = mk.archive("L3")
+                d = self.day(a, 2)
+                if broken == "missing":
+                    del d["gluetun_logs"][arm]
+                else:
+                    d["gluetun_logs"][arm] += "a later line the archive didn't hash\n"
+                self.assertNotJudged(self.gate(a), "handshake_evidence_missing")
 
 
 class DeclarationChecksPresentTests(SpecFixBase):

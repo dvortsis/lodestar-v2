@@ -395,14 +395,14 @@ def gateway_of(cfg, host, arm):
     declared tunnel_target (CR-SPEC-R1 §7; plan line 441: the probe is "ICMP to its WireGuard
     gateway"). Returns (ok, how) and never the address.
 
-    The target must route through the tunnel interface and not be one of the namespace's own
+    The target must route through the tunnel interface (wg0) and not be one of the namespace's own
     addresses (an address that never leaves the namespace never shows loss). Then the gateway
     is the tunnel's peer address or its routes' `via`, where the interface has one; a
     point-to-point WireGuard /32 (PIA's, as gluetun sets it up) has neither, so the gateway is
     the first hop: an echo with TTL 1 that the target itself answers. A target further away
     answers TTL 1 with the gateway's `Time to live exceeded`, and is refused."""
     target = str(cfg["arms"][arm]["tunnel_target"])
-    iface = cfg["arms"][arm].get("tunnel_interface", TUNNEL_INTERFACE)
+    iface = TUNNEL_INTERFACE  # never configurable: another interface would let a non-tunnel gateway pass
     pid = container_pid(host, gluetun(cfg, arm))
     if pid is None:
         return False, "gluetun_not_running"
@@ -678,7 +678,8 @@ def cmd_bring_up(cfg, day, host, args):
     for arm in day.arms():
         how = readings[arm].pop("gateway_check")
         s["arms"][arm]["egress"].append(readings[arm])
-        s["arms"][arm].update(tunnel_target_is_gateway=True, tunnel_gateway_check=how)
+        s["arms"][arm].update(tunnel_target_is_gateway=True, tunnel_gateway_check=how,
+                              tunnel_target_hash=collect.salted_hash(key, "ip", str(cfg["arms"][arm]["tunnel_target"])))
     s["uplink_hash"] = uplink
     day.save()
     return [f"ok exit {s['arms'][arm]['exit']} arm={arm}" for arm in day.arms()]
@@ -716,9 +717,12 @@ def cmd_collect(cfg, day, host, args):
         if not cfg.get(key):
             raise Fail(f"config: {key}")
     lines, started = [], []
+    key = salt(cfg)
     for arm in day.arms():
         if s["arms"][arm]["blocked"]:
             raise Fail(f"arm {arm} is stopped after a failed leak test")
+        if s["arms"][arm].get("tunnel_target_hash") != collect.salted_hash(key, "ip", str(cfg["arms"][arm]["tunnel_target"])):
+            raise Fail(f"arm {arm}'s tunnel_target isn't the one bring-up checked as its gateway: run bring-up again")
     for arm in day.arms():
         st = s["arms"][arm]
         if st.get("collector_pid"):
@@ -758,7 +762,7 @@ def cmd_collect(cfg, day, host, args):
         lines.append("ok host_sampler")
     if s.get("rehearsal"):
         end, cap = rehearsal_ends(s)
-        lines.append(f"{'warn' if end > cap else 'ok'} rehearsal ends by {iso(end)} at the latest; "
+        lines.append(f"{'warn' if end > cap else 'ok'} rehearsal ends about {iso(end)} (an estimate); "
                      f"watch stops every arm at {iso(cap)} (4 h from the first start)" + (" first" if end > cap else ""))
     day.save()
     return lines
@@ -771,9 +775,10 @@ def first_start(s):
 
 
 def rehearsal_ends(s):
-    """(the latest the rehearsal's last window can end, the 4 h cap). The worst case is the
-    last collector's start, its launch allowance, the 30 min warm-up, the 3 h window and the
-    overhang: the stagger between the arms' starts adds to it."""
+    """(an estimate of the rehearsal's last window end, the 4 h cap): the last collector's
+    start, its launch allowance, the 30 min warm-up, the 3 h window and the overhang. Each
+    collector's warm-up waits for its process (sampling suppression), which can add more;
+    the cap in `watch` is what holds."""
     starts = [parse_utc(a["collector_started_utc"]) for a in s["arms"].values() if a.get("collector_started_utc")]
     end = max(starts) + timedelta(seconds=COLLECTOR_START_SECONDS + OVERHANG_SECONDS,
                                   minutes=REHEARSAL_WARMUP_MINUTES, hours=REHEARSAL_HOURS)
@@ -980,26 +985,20 @@ def cmd_stop(cfg, day, host, args):
     return failed_stops(stop_all(cfg, day, host) + cmd_archive(cfg, day, host, args))
 
 
-IPV6_CANDIDATE = re.compile(r"(?i)(?<![0-9a-z:.])[0-9a-f:.]*:[0-9a-f:.]*:[0-9a-f:.]*(?:%[0-9a-z_.-]+)?(?![0-9a-z:])")
+IPV6_RUN = re.compile(r"[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(?:%[0-9A-Za-z_.-]+)?")
+CLOCK = re.compile(r"^[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?$")
 IPV4_LOG = re.compile(r"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])")
 WG_KEY = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=(?![A-Za-z0-9+/=])")
 
 
 def redact_log(text):
     """A gluetun log with every IPv6 and IPv4 address and every WireGuard key (32 bytes,
-    base64) replaced. A candidate IPv6 token is replaced only if it parses as one, so a
-    time like 10:00:00 is kept: the handshake evidence is in the times."""
-    import ipaddress
-
-    def v6(m):
-        token = m[0].split("%", 1)[0].strip(".")
-        try:
-            ipaddress.IPv6Address(token)
-        except ValueError:
-            return m[0]
-        return "[ipv6]"
+    base64) replaced. It fails closed: any run of hex digits, colons and dots with two or
+    more colons is replaced, unless it's a time of day (10:00:00, 10:00:00.123), which is
+    kept because the handshake evidence is in the times. So `ip:2001:db8::1` and an
+    unbracketed `2001:db8::1:51820` go too (with a hex letter before them, if any)."""
     text = WG_KEY.sub("[key]", text)
-    text = IPV6_CANDIDATE.sub(v6, text)
+    text = IPV6_RUN.sub(lambda m: m[0] if CLOCK.fullmatch(m[0]) else "[ipv6]", text)
     return IPV4_LOG.sub("[ipv4]", text)
 
 
@@ -1016,6 +1015,7 @@ def save_gluetun_logs(cfg, day, host):
             continue  # never started: no log for the day
         raw = host.container_logs(gluetun(cfg, arm), since, until)
         if raw is None:
+            (day.dir / arm / "gluetun.log").unlink(missing_ok=True)  # an earlier, partial one isn't the day's
             note = f"arm {arm}: gluetun's log couldn't be read for the archive"
             if not any(n.endswith(note) for n in s["notes"]):
                 s["notes"].append(f"{iso(host.now())} {note}")

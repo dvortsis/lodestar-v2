@@ -2308,6 +2308,10 @@ def judge_day(cand, attempt, decl, day, comparator_ok):
             reasons.append("leak_test_not_passed")
         if info.get("tunnel_target_is_gateway") is not True:  # §7: the probe pinged the WireGuard gateway
             reasons.append("probe_target_unchecked")
+        # §8: the handshake evidence, each arm's gluetun log, listed and the archive's own.
+        log = (day.get("gluetun_logs") or {}).get(arm)
+        if log is None or log != info.get("gluetun_log_sha256"):
+            reasons.append("handshake_evidence_missing")
         if arm in reports:
             got = {c.get("check"): c.get("ok") for c in reports[arm].get("checks") or [] if isinstance(c, dict)}
             if any(got.get(name) is not True for name in DECLARATION_CHECKS):
@@ -2395,11 +2399,12 @@ def solo_problems(cand, decl, inputs, attempts, judged_days):
         return []
     if len(solos) > 1:
         return ["more_than_one_solo_attempt"]
-    order = [a["id"] for a in decl["attempts"]]
-    i = order.index(solos[0]["id"])
+    # "The attempt just before" is the candidate's own previous attempt: with two candidates,
+    # a host-wide breach calls for both solo confirmations, one after the other.
+    i = attempts.index(solos[0])
     if i == 0:
         return ["solo_without_a_preceding_attempt"]
-    before = decl["attempts"][i - 1]
+    before = attempts[i - 1]
     if any(j["attempt"] == before["id"] and j.get("solo_confirmation_required") for j in judged_days):
         return []  # (a)
     others = {e["arm"] for e in decl["arms"] if e["attempt"] == before["id"]} - {cand}

@@ -101,6 +101,11 @@ def comparator():
             "numerator": {"window": {"mean_per_min": 40.0}, "worst_hour_per_min": 30.0}}
 
 
+def gluetun_log(attempt, day, arm):
+    """A stand-in for an arm's redacted gluetun log for the day (X-cr-round1-spec-fixes)."""
+    return f"{attempt} day {day} arm {arm}: INFO [wireguard] Connecting to [ipv4]:1337\n"
+
+
 def day_archive(attempt, day, reports, placed):
     arms, latest = {}, max(datetime.fromisoformat(r["timeline"]["window_end_utc"].replace("Z", "+00:00"))
                            for r in reports.values())
@@ -111,7 +116,8 @@ def day_archive(attempt, day, reports, placed):
         readings += [{"utc": iso(ws + timedelta(hours=k, seconds=30)), "hash": EXITS[placed[arm]]} for k in range(25)]
         arms[arm] = {"exit": placed[arm], "egress": readings, "active_from_utc": iso(start + timedelta(seconds=60)),
                      "active_through_utc": iso(latest + timedelta(minutes=2)),
-                     "leak_test": {"before": "pass", "after": "pass"}, "tunnel_target_is_gateway": True}
+                     "leak_test": {"before": "pass", "after": "pass"}, "tunnel_target_is_gateway": True,
+                     "gluetun_log_sha256": hashlib.sha256(gluetun_log(attempt, day, arm).encode()).hexdigest()}
     return {"schema": 1, "round": 1, "attempt": attempt, "day": day,
             "exits": {label: EXITS[label] for label in sorted(set(placed.values()))}, "arms": arms, "events": []}
 
@@ -140,6 +146,7 @@ def archive(layout="L3", attempt="r1-a1"):
             start = DAY_START[day] + timedelta(minutes=STAGGER[arm])
             reports[arm] = report(e, f"{attempt}-d{day}-{arm}", start)
         days.append({"attempt": attempt, "day": day, "repeat": 0, "reports": reports,
+                     "gluetun_logs": {arm: gluetun_log(attempt, day, arm) for arm in placed},
                      "archive": day_archive(attempt, day, reports, placed), "contention": host_samples(reports)})
     decl = {"schema": 1, "kind": "cr_round1_declaration", "round": 1, "spec_commit": SPEC_COMMIT,
             "image_digest": DIGEST, "host_identity": HOST, "network_identity": dict(NETWORK), "backing_device": DEVICE,
@@ -177,6 +184,14 @@ def write(root, a):
                   "reports": {arm: put(f"{tag}/{arm}.json", r) for arm, r in d["reports"].items()},
                   "archive": put(f"{tag}/archive.json", d["archive"]) if d["archive"] is not None else None,
                   "contention": put(f"{tag}/host-samples.json", d["contention"]) if d["contention"] is not None else None}
+        logs = {}
+        for arm, text in (d.get("gluetun_logs") or {}).items():
+            data = text.encode()
+            (root / tag / arm).mkdir(parents=True, exist_ok=True)
+            (root / tag / arm / "gluetun.log").write_bytes(data)
+            logs[arm] = {"path": f"{tag}/{arm}/gluetun.log", "sha256": hashlib.sha256(data).hexdigest()}
+        if logs:
+            entry_["gluetun_logs"] = logs
         man["days"].append(entry_)
     path = root / "manifest.json"
     path.write_text(json.dumps(man, indent=1, sort_keys=True) + "\n")

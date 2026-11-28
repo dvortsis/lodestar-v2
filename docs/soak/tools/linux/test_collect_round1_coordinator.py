@@ -843,9 +843,9 @@ class RehearsalWindowTests(CoordinatorBase):
 
     def test_the_worst_case_end_is_reported_against_the_cap(self):
         _, out = self.rehearsal()
-        self.assertTrue(any(ln.startswith("ok rehearsal ends by") for ln in out), out)
+        self.assertTrue(any(ln.startswith("ok rehearsal ends about") for ln in out), out)
         _, out = self.rehearsal_again(timedelta(minutes=20))
-        self.assertTrue(any(ln.startswith("warn rehearsal ends by") for ln in out), out)
+        self.assertTrue(any(ln.startswith("warn rehearsal ends about") for ln in out), out)
 
     def rehearsal_again(self, stagger):
         import shutil
@@ -933,6 +933,26 @@ class GatewayTests(CoordinatorBase):
             self.host.netns[101][key] = bad
             self.assertIn("isn't its WireGuard gateway", self.go("bring-up")[1][-1])
 
+    def test_collect_refuses_a_target_changed_after_bring_up(self):
+        self.bring_up()
+        cfg = json.loads(self.cfg_path.read_text())
+        cfg["arms"]["C"]["tunnel_target"] = "10.0.0.7"
+        self.cfg_path.write_text(json.dumps(cfg))
+        rc, out = self.go("collect", placement=False)
+        self.assertEqual(rc, 1)
+        self.assertIn("arm C's tunnel_target isn't the one bring-up checked", out[-1])
+        self.assertEqual(self.host.spawned, [])
+        self.assertNotIn("10.0.0.1", (self.day_dir() / "state.json").read_text())
+
+    def test_the_interface_is_always_wg0(self):
+        cfg = json.loads(self.cfg_path.read_text())
+        cfg["arms"]["B"]["tunnel_interface"] = "eth0"  # ignored: only the tunnel's interface counts
+        self.cfg_path.write_text(json.dumps(cfg))
+        self.bring_up()
+        self.assertTrue(all(c[1][-1] == "wg0" for c in self.host.netns_calls if c[1][:6] == ["ip", "-4", "-o", "addr", "show", "dev"]))
+        self.host.netns[101]["route_get"] = "10.0.0.1 via 172.18.0.1 dev eth0 src 172.18.0.2\n"
+        self.assertIn("target_not_through_the_tunnel", self.go("bring-up")[1][-1])
+
     def test_no_tunnel_interface_is_refused(self):
         self.host.netns[101]["addr_dev"] = ""
         self.assertIn("tunnel_interface_missing", self.bring_up()[1][-1])
@@ -956,7 +976,23 @@ class GluetunLogTests(CoordinatorBase):
         self.assertEqual(co.redact_log("x" * 43 + "=="), "x" * 43 + "==")
         self.assertEqual(co.redact_log("a" * 43 + "="), "a" * 43 + "=")  # its last bits aren't zero
         self.assertEqual(co.redact_log("A" * 43 + "="), "[key]")
-        self.assertEqual(co.redact_log("v3.40.0 10:00:00 1.2.3"), "v3.40.0 10:00:00 1.2.3")
+        self.assertEqual(co.redact_log("v3.40.0 10:00:00 10:00:00.5 1.2.3"), "v3.40.0 10:00:00 10:00:00.5 1.2.3")
+
+    def test_ipv6_redaction_fails_closed(self):
+        for text in ("ip:2001:db8::1", "hostname:fe80::1", "server 2001:db8::1:51820", "x=::1", "[::ffff:10.0.0.1]:53"):
+            out = co.redact_log(text)
+            self.assertIn("[ipv6]", out, text)
+            for part in ("db8", "fe80", "::1", "10.0.0.1"):
+                self.assertNotIn(part, out, text)
+
+    def test_a_stale_log_is_removed_when_the_days_cant_be_read(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("archive", placement=False)
+        self.assertTrue((self.day_dir() / "A" / "gluetun.log").exists())
+        self.host.logs["gluetun-a"] = None
+        self.go("archive", placement=False)
+        self.assertFalse((self.day_dir() / "A" / "gluetun.log").exists())
 
     def test_the_archive_saves_each_arms_log_from_its_start_to_the_shutdown(self):
         self.pass_leaks()
