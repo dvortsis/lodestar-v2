@@ -1,4 +1,4 @@
-# X-ci-test-shard decisions (#PR)
+# X-ci-test-shard decisions (#1189)
 
 Date: 2026-11-28 (UTC). CI only; refines no owner-set number. The runner approved the step 0 design and the rulings below on 2026-11-28.
 

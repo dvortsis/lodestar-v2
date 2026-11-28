@@ -163,6 +163,23 @@ class Plan(unittest.TestCase):
         self.assertEqual(test_shards.main(["test_shards.py"]), 2)
 
 
+class RealWorkspace(unittest.TestCase):
+    """The split of this repository's own workspace, from `cargo metadata` (CI runs this on
+    the lib shard, so a new test file is placed or the job fails)."""
+
+    def test_every_test_target_is_in_exactly_one_shard(self):
+        m = test_shards.metadata()
+        members = set(m["workspace_members"])
+        expected = sorted({t["name"] for p in m["packages"] if p["id"] in members for t in p["targets"]
+                           if t["kind"] == ["test"] and not t.get("required-features")})
+        p = test_shards.plan(m)
+        placed = [n for s in test_shards.SHARDS for line in p[s] for n in sorted(names(line))]
+        self.assertGreater(len(expected), 200)
+        self.assertEqual(sorted(placed), expected)  # none missing, none twice, none unknown
+        flags = [a for s in test_shards.SHARDS for line in p[s] for a in line if not a.startswith("--test=")]
+        self.assertEqual(sorted(flags), ["--bins", "--doc", "--lib"])  # each once
+
+
 class Workflow(unittest.TestCase):
     """ci.yml's `test` job and ci-ok agree with the script (stdlib only: no YAML parser)."""
 
