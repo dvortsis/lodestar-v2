@@ -14,11 +14,17 @@ check fails when:
 - a job in another workflow could reach a self-hosted runner: `runs-on`
   names `self-hosted`, uses a `group:`/`labels:` mapping, names anything but
   a GitHub-hosted image, or is an expression that isn't `matrix.<key>` over
-  a literal matrix (the one dynamic matrix allowed is DYNAMIC_OK);
+  a literal matrix. The one dynamic matrix allowed is DYNAMIC_OK, ci.yml's
+  test job; check_dynamic_chain pins everything that feeds it (the changes
+  job's output and step, and how ci_changes.py sets test_os);
 - a job calls a reusable workflow from another repository (its jobs pick
   their own runners, out of sight of this check);
 - bench-10m.yml itself could run code from a pull request or a fork, or
   holds more than it needs (see check_bench).
+
+Known limit: the chain check reads ci_changes.py's syntax, not what it does
+at run time, so any diff to its test_os code, or to ci.yml's changes or test
+job, is a security-review item (docs/decisions/2026-11-28-M8-PERF-3.md).
 
 It is a detector, not a barrier: a pushed branch runs its workflows at the
 same time as this check (OQ1). The barriers are the isolated, ephemeral
@@ -29,6 +35,7 @@ Usage: python3 .github/scripts/runner_guard.py [ROOT]
 Exit status 0 when clean, 1 with one line per problem.
 """
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -50,16 +57,25 @@ HOSTED = re.compile(r"^(ubuntu|windows|macos)-(latest|\d+(\.\d+)?(-arm)?|\d+-(la
 # ci.yml's test matrix is ci_changes.py's test_os, which names hosted images
 # only (it's scanned for the label like every file under .github/).
 DYNAMIC_OK = {("ci.yml", "test", "os"): "${{ fromJSON(needs.changes.outputs.test_os) }}"}
+# What feeds it, pinned exactly (check_dynamic_chain).
+CHAIN_OUTPUT = "${{ steps.c.outputs.test_os }}"
+CHAIN_RUN = 'python3 .github/scripts/ci_changes.py "$EVENT" "$BASE" "$HEAD" "$LABELS" | tee -a "$GITHUB_OUTPUT"'
+CHAIN_SCRIPT = ".github/scripts/ci_changes.py"
+# Anything else in the changes job that mentions one of these could rewrite
+# the output or the script before step c runs.
+CHAIN_WORDS = re.compile(r"test_os|GITHUB_OUTPUT|ci_changes", re.I)
 MATRIX_REF = re.compile(r"^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$")
 
 BENCH_TRIGGERS = {"push", "schedule", "workflow_dispatch"}
 BENCH_PUSH_BRANCHES = ["release/v[0-9]+.[0-9]+", "release/v[0-9]+.[0-9]+.[0-9]+"]
 BENCH_INPUTS = {"smoke_only"}
+# A release line: release/v1.0 or release/v0.5.1, never release/v052-rc1.
+_REL = ("(startsWith(github.ref, 'refs/heads/release/v') && contains(github.ref_name, '.') "
+        "&& !contains(github.ref_name, '-'))")
 REF_IF = (
     "(github.event_name == 'schedule' && github.ref == 'refs/heads/main') || "
-    "(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v')) || "
-    "(github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || "
-    "startsWith(github.ref, 'refs/heads/release/v')))"
+    f"(github.event_name == 'push' && {_REL}) || "
+    f"(github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || {_REL}))"
 )
 PINNED = re.compile(r"^[\w.-]+/[\w.-]+(/[\w./-]+)?@[0-9a-f]{40}$")
 
@@ -211,7 +227,8 @@ def check_bench(wf, text):
         out.append(f"{name}: no top-level env (each job states its own)")
     for s in walk_strings(wf):
         for expr in re.findall(r"\$\{\{(.*?)\}\}", s, re.S):
-            if re.search(r"\b(secrets|vars)\b|\bgithub\s*\.\s*token\b", expr, re.I):
+            if re.search(r"\b(secrets|vars)\b|\bgithub\s*(\.\s*token\b|\[\s*['\"]token['\"]\s*\])"
+                         r"|\btoJSON\s*\(\s*github\s*\)", expr, re.I):
                 out.append(f"{name}: an expression reads secrets, vars or the token ({expr.strip()[:60]!r})")
     if re.search(r"secrets\s*:\s*inherit", text):
         out.append(f"{name}: secrets: inherit")
@@ -274,6 +291,90 @@ def check_workflow(name, text):
     return out
 
 
+def check_chain_script(source):
+    """ci_changes.py may set test_os only as `X["test_os"] = json.dumps(L)`,
+    L a literal list of hosted images or a conditional between two."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return [f"{CHAIN_SCRIPT}: does not parse ({e.msg})"]
+    out, allowed = [], set()
+
+    def literal_images(node):
+        if isinstance(node, ast.IfExp):
+            return literal_images(node.body) and literal_images(node.orelse)
+        return isinstance(node, ast.List) and all(
+            isinstance(e, ast.Constant) and isinstance(e.value, str) and HOSTED.match(e.value) for e in node.elts)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if (isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)
+                        and t.slice.value == "test_os"):
+                    allowed.add(id(t.slice))
+                    v = node.value
+                    ok = (len(node.targets) == 1 and isinstance(v, ast.Call) and not v.keywords
+                          and len(v.args) == 1 and isinstance(v.func, ast.Attribute) and v.func.attr == "dumps"
+                          and isinstance(v.func.value, ast.Name) and v.func.value.id == "json"
+                          and literal_images(v.args[0]))
+                    if not ok:
+                        out.append(f"{CHAIN_SCRIPT}:{node.lineno}: test_os must be json.dumps of a literal list "
+                                   "of GitHub-hosted images (or a conditional between two)")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and "test_os" in node.value.lower():
+            if id(node) not in allowed:
+                out.append(f"{CHAIN_SCRIPT}:{node.lineno}: test_os named outside a plain assignment")
+        elif isinstance(node, ast.keyword) and node.arg and "test_os" in node.arg.lower():
+            out.append(f"{CHAIN_SCRIPT}:{node.value.lineno}: test_os set as a keyword")
+        elif isinstance(node, ast.Name) and "test_os" in node.id.lower():
+            out.append(f"{CHAIN_SCRIPT}:{node.lineno}: a name containing test_os")
+    if not allowed:
+        out.append(f"{CHAIN_SCRIPT}: test_os is never set")
+    return out
+
+
+def check_dynamic_chain(ci_text, script_source):
+    """The changes job's test_os output, its step c and ci_changes.py: the
+    only route by which a runs-on in another workflow is computed."""
+    name = "ci.yml"
+    try:
+        wf = yaml.safe_load(ci_text)
+    except yaml.YAMLError:
+        return []  # check_workflow reports it
+    jobs = (wf or {}).get("jobs") or {}
+    test = jobs.get("test") or {}
+    matrix_os = ((test.get("strategy") or {}).get("matrix") or {}).get("os")
+    if not (isinstance(matrix_os, str) and "${{" in matrix_os):
+        return []  # no dynamic matrix: nothing to pin
+    out = []
+    changes = jobs.get("changes")
+    if not isinstance(changes, dict):
+        return [f"{name}: the test job's matrix comes from a changes job that isn't there"]
+    if "changes" not in (test.get("needs") if isinstance(test.get("needs"), list) else [test.get("needs")]):
+        out.append(f"{name}: job test must need changes")
+    outputs = changes.get("outputs") or {}
+    if str(outputs.get("test_os", "")).strip() != CHAIN_OUTPUT:
+        out.append(f"{name}: job changes: output test_os must be exactly {CHAIN_OUTPUT}")
+    for k, v in outputs.items():
+        if k != "test_os" and "test_os" in str(v).lower():
+            out.append(f"{name}: job changes: output {k} mentions test_os")
+    steps = [st for st in changes.get("steps") or [] if isinstance(st, dict)]
+    cs = [st for st in steps if st.get("id") == "c"]
+    if len(cs) != 1:
+        out.append(f"{name}: job changes needs exactly one step with id c")
+    for st in steps:
+        if st.get("id") == "c":
+            if str(st.get("run", "")).strip() != CHAIN_RUN:
+                out.append(f"{name}: job changes: step c must run exactly: {CHAIN_RUN}")
+            if st.get("shell", "bash") != "bash" or "uses" in st:
+                out.append(f"{name}: job changes: step c must be a bash run step")
+            continue
+        body = " ".join(walk_strings(st))
+        if CHAIN_WORDS.search(body):
+            out.append(f"{name}: job changes: a step other than c mentions test_os, GITHUB_OUTPUT or ci_changes")
+    return out + check_chain_script(script_source)
+
+
 def check(root):
     root = Path(root)
     out = []
@@ -283,6 +384,10 @@ def check(root):
         out.append(f"{BENCH} is missing")
     for name in names:
         out.extend(check_workflow(name, (wf_dir / name).read_text(encoding="utf-8")))
+    if "ci.yml" in names:
+        script = root / CHAIN_SCRIPT
+        source = script.read_text(encoding="utf-8") if script.is_file() else ""
+        out.extend(check_dynamic_chain((wf_dir / "ci.yml").read_text(encoding="utf-8"), source))
     # The rest of .github/ (scripts, actions, fixtures, any other file in
     # workflows/) mustn't name it either: a script that prints a matrix could
     # feed it to a runs-on.

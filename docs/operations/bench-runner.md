@@ -40,12 +40,24 @@ You need:
 1. Install Ubuntu Server 24.04 LTS. Create one ordinary user, `bench`. Don't copy any SSH keys, password managers, cloud logins or GitHub tokens onto it.
 2. Put it on a network of its own: a guest VLAN or guest Wi-Fi, or a firewall rule that lets it reach the internet but **nothing on your home network** (your router, NAS, Unraid server and other PCs).
 3. Add the dataset disk and mount it at `/srv/bench`:
-   ```sh
-   sudo mkdir -p /srv/bench
-   # Find the disk with lsblk, format it once (this erases it), then add it to /etc/fstab.
-   # The container's user (step 2) has uid 1001.
-   sudo chown 1001:1001 /srv/bench
-   ```
+   1. List the disks: `lsblk -o NAME,SIZE,MODEL,MOUNTPOINT`. Find the new, empty disk by its **size and model**, and check it has no mount point. It's usually `nvme1n1` on a PC, or `vdb` or `sdb` in a virtual machine.
+   2. Format it, using the name you found in place of `nvme1n1`:
+      ```sh
+      sudo mkfs.ext4 -L bench /dev/nvme1n1
+      ```
+      > **Warning:** this erases the whole disk. Check the name twice: picking the system disk destroys the machine's install.
+   3. Mount it now and at every start:
+      ```sh
+      sudo mkdir -p /srv/bench
+      echo 'LABEL=bench /srv/bench ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
+      sudo mount -a
+      # The container's user (step 2) has uid 1001.
+      sudo chown 1001:1001 /srv/bench
+      ```
+   - **In a virtual machine:** add a second virtual disk of at least 100 GB in your hypervisor first, stored on the host's NVMe drive, then follow the same steps.
+   - **Undo:** remove the `LABEL=bench` line from `/etc/fstab` and run `sudo umount /srv/bench`.
+
+   **Result:** `df -h /srv/bench` shows the new disk's size.
 4. Install Docker from Ubuntu's packages: `sudo apt install docker.io`. Each job will run in a new container that is deleted afterwards (step 2).
 
 **Result:** from the machine, `curl -sI https://github.com` answers, and `ping` to your router's address or your NAS fails.
@@ -59,18 +71,35 @@ Each job runs in a fresh container that registers itself for **one** job, with o
 1. On the machine, create `/srv/bench-runner/Dockerfile`:
    ```dockerfile
    FROM ubuntu:24.04
-   RUN apt-get update && apt-get install -y --no-install-recommends \
+   ARG RUNNER_VERSION
+   ARG RUNNER_SHA256
+   # As root: the tools the benchmark builds with, then the runner, checked
+   # against its published checksum, and the libraries it needs (ICU among them).
+   RUN test -n "$RUNNER_VERSION" && test -n "$RUNNER_SHA256" \
+    && apt-get update && apt-get install -y --no-install-recommends \
          build-essential pkg-config curl ca-certificates git python3 \
-       && rm -rf /var/lib/apt/lists/*
-   RUN useradd -m runner && mkdir /bench && chown runner /bench
+    && useradd -m runner && mkdir -p /bench /home/runner/actions-runner \
+    && cd /home/runner/actions-runner \
+    && curl -fsSLo runner.tar.gz \
+         "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+    && echo "${RUNNER_SHA256}  runner.tar.gz" | sha256sum -c - \
+    && tar xzf runner.tar.gz && rm runner.tar.gz \
+    && ./bin/installdependencies.sh \
+    && chown -R runner:runner /home/runner /bench \
+    && rm -rf /var/lib/apt/lists/*
    USER runner
-   WORKDIR /home/runner
-   # Paste the download, checksum and extract lines from GitHub's
-   # "New self-hosted runner" page (Linux, x64) here, each as a RUN line.
+   WORKDIR /home/runner/actions-runner
    ```
-   Build it: `sudo docker build -t lodestar-bench-runner /srv/bench-runner`.
-2. In GitHub, open **Settings → Actions → Runners → New self-hosted runner**, choose **Linux**, and copy the token from the **Configure** box. The token is valid for one hour.
-3. Start one job's runner, and paste the token when it asks (it isn't shown):
+2. Find the current runner version and its checksum: open `github.com/actions/runner/releases`, take the newest release's version number (for example `2.330.0`, without the `v`), and copy the **SHA-256** listed in its notes for `actions-runner-linux-x64-<version>.tar.gz`.
+3. Build the image with both:
+   ```sh
+   sudo docker build --build-arg RUNNER_VERSION=<version> --build-arg RUNNER_SHA256=<sha-256> \
+     -t lodestar-bench-runner /srv/bench-runner
+   ```
+   **Result:** the build ends with `naming to docker.io/library/lodestar-bench-runner` and shows `runner.tar.gz: OK` on the way. A checksum mismatch stops the build: don't work around it, check the version and checksum again.
+   - Rebuild with the newest version about once a month: GitHub refuses runners that fall too far behind.
+4. In GitHub, open **Settings → Actions → Runners → New self-hosted runner**, choose **Linux**, and copy the token from the **Configure** box. It's a short-lived registration token: valid for one hour.
+5. Start one job's runner, and paste the token when it asks (it isn't shown):
    ```sh
    sudo docker run --rm -it --security-opt no-new-privileges -v /srv/bench:/bench lodestar-bench-runner bash -c '
      read -rsp "Token: " T; echo
@@ -78,7 +107,9 @@ Each job runs in a fresh container that registers itself for **one** job, with o
        --ephemeral --no-default-labels --labels lodestar-bench-10m \
        --name bench-$(date +%s) --unattended && unset T && exec ./run.sh'
    ```
-   - `--rm` deletes the container when the job ends, so the next job starts clean. Only `/srv/bench` (the dataset disk) survives.
+   - `--ephemeral` makes the runner take one job and then remove itself from GitHub. `--rm` deletes the container when it ends, so the next job starts clean. Only `/srv/bench` (the dataset disk) survives.
+   - Registering writes the runner's own credentials (`.runner`, `.credentials`, `.credentials_rsaparams`) inside the container. Every job step can read them, but they're good only for this one runner and this one job, and `--rm` deletes them with the container.
+   - To leave the runner going during a run that lasts hours, press **Ctrl-P** then **Ctrl-Q**. That detaches your terminal without stopping it. Or start it inside `tmux`.
    - Typing the token at the prompt keeps it out of your shell history, out of the job's process list and out of the container's environment. Never put it on the command line or in an `--env-file`: a job can read both (`/proc/1/cmdline`, `/proc/1/environ`) and use the token to register runners of its own.
 
 **Result:** **Settings → Actions → Runners** lists `bench-…` as **Idle**, with the single label `lodestar-bench-10m`. After one job it disappears by itself.
@@ -97,13 +128,14 @@ The benchmark runs on pushes to release lines: branches named like `release/v1.0
 
 1. Open **Settings → Rules → Rulesets → New ruleset → New branch ruleset**.
 2. Name it `release branches`, set **Enforcement status** to **Active**, and leave the bypass list empty except for yourself (**Repository admin**).
-3. Under **Target branches**, choose **Add target → Include by pattern** and enter `release/v*.*`. Add a second pattern, `release/v*.*.*`. Both need a dot after the version number, so they match the same branches as the workflow (`release/v1.0`, `release/v0.5.1`) and not `release/v052-rc1`.
+3. Under **Target branches**, choose **Add target → Include by pattern** and enter `release/v*.*`. Add a second pattern, `release/v*.*.*`. They need a dot after the version number, so they cover at least the branches the workflow runs on (`release/v1.0`, `release/v0.5.1`), and not `release/v052-rc1`.
 4. Tick **Restrict creations**, **Restrict updates**, **Restrict deletions** and **Block force pushes**.
 5. Select **Create**.
 
 **Result:** the ruleset lists both patterns as **Active**. A collaborator who tries `git push origin HEAD:release/v9.9` is refused.
 
-**Optional, a hard block on pull requests:** add `runner-guard` to the required status checks in the `main` ruleset. A pull request that names the label then can't merge. The trade-off: every pull request waits for one more check, about a minute.
+**Recommended: make `runner-guard` a required check.** In the `main` ruleset, under **Require status checks to pass**, add `runner-guard`. Otherwise a pull request can merge while the guard is red, because only `ci-ok` is required today. The trade-off: every pull request waits for one more check, about a minute.
+- **Its limit:** a pull request runs its own copy of the guard. A pull request that also changes the guard (`.github/scripts/runner_guard.py`, its test or `runner-guard.yml`) can make it pass. Treat any change to those files, to `ci.yml`'s `changes` or `test` job, or to `ci_changes.py`'s `test_os` lines as something you review yourself before it merges.
 
 **Undo:** set the ruleset's **Enforcement status** to **Disabled**, or delete it.
 
@@ -119,7 +151,7 @@ The benchmark runs on pushes to release lines: branches named like `release/v1.0
 
 ## Step 5 (together): The first run
 
-1. Start a runner (step 2, point 3).
+1. Start a runner (step 2, points 4 and 5).
 2. Open **Actions → Bench 10M → Run workflow**, keep **Branch: main**, tick **Run only the smoke step**, and select **Run workflow**.
 3. Wait a few minutes. The smoke step builds a 20,000-torrent dataset in the job's own folder and runs both tools on it.
 4. Then start a new runner and run it again **without** the tick. The first full run builds the 10M dataset on `/srv/bench` and takes many hours (allow a day). Later runs reuse it and take a few hours.
@@ -143,5 +175,6 @@ Only the dataset disk persists. A hostile job could tamper with the dataset ther
 | The job waits with **Waiting for a runner to pick up this job** | Start a runner (step 2). Check that its label is exactly `lodestar-bench-10m`. |
 | `/bench isn't mounted` | Run the container with `-v /srv/bench:/bench`, and check `/srv/bench` is owned by uid 1001, the container's user (`sudo chown 1001:1001 /srv/bench`). |
 | `The dataset's key or store schema changed: rebuilding it` | Expected after a generator or schema change. The run takes many hours. |
+| `config.sh` stops with `Couldn't find a valid ICU package` | The image was built without `installdependencies.sh`. Rebuild it from the Dockerfile above. |
 | `is not empty and has no dataset.json` | Something else is in `/srv/bench/dataset-10m`, or a machine crash interrupted a build's first step. The job never deletes what it didn't build: check the folder, then delete or move it yourself. |
 | The `runner-guard` check fails on a pull request | A workflow names the label or could reach a self-hosted runner. Tell the runner, and don't merge it. |

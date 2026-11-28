@@ -29,7 +29,8 @@ on:
 
 permissions: {}
 
-# One machine: runs queue, and a run in progress is never cancelled.
+# One machine. A run in progress is never cancelled; GitHub keeps one
+# pending run per group, and a newer one replaces it.
 concurrency:
   group: bench-10m
   cancel-in-progress: false
@@ -40,11 +41,12 @@ jobs:
     # Schedule: main only. Push: release lines. Dispatch: main or a release
     # line. Not a barrier: a branch can edit this out (OQ1). The machine and
     # the fork-PR setting are.
-    if: (github.event_name == 'schedule' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v')) || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/v')))
+    if: (github.event_name == 'schedule' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/release/v') && contains(github.ref_name, '.') && !contains(github.ref_name, '-'))) || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/heads/release/v') && contains(github.ref_name, '.') && !contains(github.ref_name, '-'))))
     runs-on: lodestar-bench-10m
     permissions:
       contents: read
-    timeout-minutes: 1440
+    # Under the job token's 24 h lifetime, so the reports still upload.
+    timeout-minutes: 1380
     defaults:
       run:
         shell: bash
@@ -69,7 +71,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p reports
-          nproc; free -g; uname -a
+          # Only what ubuntu:24.04 has (coreutils): the reports record memory.
+          nproc; uname -a
           test -d "$(dirname "$DATASET")" || { echo "::error::$(dirname "$DATASET") isn't mounted (docs/operations/bench-runner.md step 1)"; exit 1; }
           test -w "$(dirname "$DATASET")" || { echo "::error::$(dirname "$DATASET") isn't writable by the runner"; exit 1; }
           df -h "$(dirname "$DATASET")"
@@ -108,7 +111,10 @@ jobs:
             return "$status"
           }
           if ! run; then
-            if grep -qE "delete (this one|the folder) to rebuild" "$RUNNER_TEMP/size.err"; then
+            # Only the two refusals of a dataset this tool built: another key
+            # ("delete this one to rebuild") or store schema ("never migrated in
+            # place"). A damaged index or anything else stops the job.
+            if grep -qE "delete this one to rebuild|never migrated in place" "$RUNNER_TEMP/size.err"; then
               echo "::warning::The dataset's key or store schema changed: rebuilding it"
               echo "rebuilt" > reports/dataset-rebuilt.txt
               mv -- "$DATASET" "$DATASET.old"

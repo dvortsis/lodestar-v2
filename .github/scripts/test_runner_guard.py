@@ -4,6 +4,8 @@
 Run: python3 .github/scripts/test_runner_guard.py
 """
 
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -217,9 +219,19 @@ class BenchWorkflow(unittest.TestCase):
         self.assertFalse(g.filter_matches("v[0-9]+", "v"))
         self.assertTrue(g.filter_matches("v[0-9]+", "v123"))
 
+    def test_dispatch_on_a_backport_branch_is_refused_by_the_if(self):
+        # A rough evaluator for REF_IF's release clause, as GitHub reads it.
+        def release_line(ref_name):
+            return ref_name.startswith("release/v") and "." in ref_name and "-" not in ref_name
+        self.assertIn("contains(github.ref_name, '.') && !contains(github.ref_name, '-')", g.REF_IF)
+        for name in ["release/v1.0", "release/v0.5.1"]:
+            self.assertTrue(release_line(name))
+        for name in ["release/v052-rc1", "release/v052-tokio-notice", "release/v1.0-docs", "release/rc3-cut"]:
+            self.assertFalse(release_line(name))
+
     def test_the_ref_if_splits_by_event(self):
         for part in ["github.event_name == 'schedule' && github.ref == 'refs/heads/main'",
-                     "github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v')",
+                     "github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/release/v')",
                      "github.event_name == 'workflow_dispatch'"]:
             self.assertIn(part, g.REF_IF)
 
@@ -236,7 +248,8 @@ class BenchWorkflow(unittest.TestCase):
 
     def test_secrets_and_vars(self):
         for ref in ["${{ secrets.TOKEN }}", "${{ secrets['TOKEN'] }}", "${{ vars.X }}", "${{ toJSON(secrets) }}",
-                    "${{ toJSON(vars) }}", "${{ github.token }}", "${{ SECRETS.X }}"]:
+                    "${{ toJSON(vars) }}", "${{ github.token }}", "${{ SECRETS.X }}",
+                    "${{ github['token'] }}", '${{ github["token"] }}', "${{ toJSON(github) }}"]:
             with self.subTest(ref=ref):
                 self.assertTrue(self.problems(BENCH_OK.replace("${{ inputs.smoke_only }}", ref)))
 
@@ -269,6 +282,81 @@ class BenchWorkflow(unittest.TestCase):
                 self.assertTrue(self.problems(BENCH_OK.replace("    runs-on:", extra + "    runs-on:")))
         text = BENCH_OK + "  other:\n    uses: ./.github/workflows/ci.yml\n"
         self.assertTrue(self.problems(text))
+
+
+CI = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+SCRIPT = (ROOT / g.CHAIN_SCRIPT).read_text(encoding="utf-8")
+CHAIN_OUT = "test_os: ${{ steps.c.outputs.test_os }}"
+SCRIPT_LINE = 'out["test_os"] = json.dumps(["ubuntu-latest", "windows-latest"] if rust else [])'
+
+
+class DynamicChain(unittest.TestCase):
+    """Everything that feeds ci.yml's one dynamic runs-on is pinned."""
+
+    def problems(self, ci=CI, script=SCRIPT):
+        return g.check_dynamic_chain(ci, script)
+
+    def test_mains_chain_passes(self):
+        self.assertIn(CHAIN_OUT, CI)
+        self.assertIn(SCRIPT_LINE, SCRIPT)
+        self.assertEqual(self.problems(), [])
+
+    def test_a_label_built_in_the_script(self):
+        for bad in ['out["test_os"] = json.dumps(["lodestar-bench" + "-10m"] if rust else [])',
+                    'out["test_os"] = json.dumps([f"lodestar-bench-{n}"] if rust else [])',
+                    'out["test_os"] = json.dumps(OSES if rust else [])',
+                    'out["test_os"] = json.dumps(["ubuntu-latest", "self-hosted"] if rust else [])',
+                    'out["test_os"] = "[\\"ubuntu-latest\\"]"',
+                    'out["test_os"] = out["test_os"] = json.dumps([])']:
+            with self.subTest(bad=bad):
+                self.assertTrue(self.problems(script=SCRIPT.replace(SCRIPT_LINE, bad)))
+
+    def test_test_os_printed_or_set_another_way(self):
+        for extra in ['    print("test_os=[]")\n', '    print(f"test_os={x}")\n', '    out.update(test_os="[]")\n',
+                      '    out.setdefault("test_os", "[]")\n', '    k = "test_" "os"\n',
+                      '    test_os = "[]"\n', '    out["TEST_OS"] = "[]"\n']:
+            with self.subTest(extra=extra):
+                script = SCRIPT.replace("    emit(out)\n\n\ndef emit", extra + "    emit(out)\n\n\ndef emit")
+                self.assertNotEqual(script, SCRIPT)
+                self.assertTrue(self.problems(script=script))
+
+    def test_the_output_built_another_way(self):
+        for out in ["test_os: ${{ format('[\"lodestar-bench-{0}\"]', '10m') }}", "test_os: ${{ steps.d.outputs.test_os }}",
+                    "test_os: '[\"ubuntu-latest\"]'"]:
+            with self.subTest(out=out):
+                self.assertTrue(self.problems(ci=CI.replace(CHAIN_OUT, out)))
+        self.assertTrue(self.problems(ci=CI.replace(CHAIN_OUT, CHAIN_OUT + "\n      other: ${{ steps.c.outputs.test_os }}")))
+
+    def test_another_step_writes_the_output_or_the_script(self):
+        anchor = "      - run: bash -n .claude/hooks/merge-guard.sh\n"
+        self.assertIn(anchor, CI)
+        for step in ['      - run: echo "test_os=[]" >> "$GITHUB_OUTPUT"\n',
+                     '      - run: echo \'print("x")\' >> .github/scripts/ci_changes.py\n',
+                     '      - run: echo hi >> $GITHUB_OUTPUT\n',
+                     '      - id: c\n        run: echo hi\n']:
+            with self.subTest(step=step):
+                self.assertTrue(self.problems(ci=CI.replace(anchor, anchor + step)))
+
+    def test_step_c_runs_exactly_todays_command(self):
+        self.assertIn(g.CHAIN_RUN, CI)
+        for run in [g.CHAIN_RUN + '; echo "test_os=[]" >> "$GITHUB_OUTPUT"',
+                    g.CHAIN_RUN.replace(".github/scripts/ci_changes.py", "/tmp/x.py")]:
+            with self.subTest(run=run):
+                self.assertTrue(self.problems(ci=CI.replace(g.CHAIN_RUN, run)))
+
+    def test_the_whole_repo_check_runs_the_chain(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        root = Path(d.name)
+        (root / ".github/workflows").mkdir(parents=True)
+        (root / ".github/workflows/bench-10m.yml").write_text(BENCH_OK, encoding="utf-8")
+        (root / ".github/workflows/ci.yml").write_text(CI, encoding="utf-8")
+        (root / ".github/scripts").mkdir()
+        (root / g.CHAIN_SCRIPT).write_text(SCRIPT.replace(SCRIPT_LINE, 'out["test_os"] = json.dumps(["x" + "y"])'),
+                                           encoding="utf-8")
+        self.assertTrue(any(p.startswith(g.CHAIN_SCRIPT) for p in g.check(root)), g.check(root))
+        (root / g.CHAIN_SCRIPT).unlink()
+        self.assertTrue(any("never set" in p for p in g.check(root)), g.check(root))
 
 
 class Repo(unittest.TestCase):
@@ -321,9 +409,13 @@ class Repo(unittest.TestCase):
 
     def test_main_exit_status(self):
         root = self.tree({".github/workflows/bench-10m.yml": BENCH_OK})
-        self.assertEqual(g.main(["x", str(root)]), 0)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(g.main(["x", str(root)]), 0)
+        self.assertIn("only bench-10m.yml", out.getvalue())
         (root / ".github/workflows/b.yml").write_text(job("self-hosted"), encoding="utf-8")
-        self.assertEqual(g.main(["x", str(root)]), 1)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(g.main(["x", str(root)]), 1)
+        self.assertIn("b.yml: job a: runs-on names self-hosted", out.getvalue())
 
 
 if __name__ == "__main__":
