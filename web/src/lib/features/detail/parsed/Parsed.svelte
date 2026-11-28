@@ -1,8 +1,8 @@
 <script lang="ts">
 	// §10.5.3 parsed metadata. Only what the server serves for one torrent: the resolved title with
 	// its provenance, the type, and the title identity's spans (from siblings, fetched when this
-	// section is mounted, on first scroll near). Resolution, codecs, languages, group and edition are not
-	// served yet, so they have no rows rather than a "—" that would claim they were measured.
+	// section is mounted, on first scroll near), then the Release list from the torrent's own parsed
+	// attributes (resolution, codecs, languages, group, edition and the rest), when it has any.
 	import { showBidi } from '$lib/util/bidi';
 	import { m } from '$lib/paraglide/messages.js';
 	import Button from '$lib/ui/controls/Button.svelte';
@@ -10,15 +10,16 @@
 	import type { SearchHit } from '../cache';
 	import { loadSiblings } from '../siblings';
 	import { contentTypeLabel, resolvedVia } from './labels';
-	import { releaseRows } from './release';
+	import { releaseRows, SPAN_KEYS } from './release';
 	import { joinSpans, type Identity } from './spans';
 
 	interface Props {
 		hash: string;
 		hit: SearchHit | null;
 		attributes?: Record<string, string> | null;
+		level?: number;
 	}
-	let { hash, hit, attributes = null }: Props = $props();
+	let { hash, hit, attributes = null, level = 2 }: Props = $props();
 
 	let identity = $state<Identity | null>(null);
 	let status = $state<'loading' | 'ready' | 'error' | 'withheld'>('loading');
@@ -60,16 +61,22 @@
 				).filter((r) => r[1] !== null)
 			: []
 	);
-	// The identity rows above are the title's spans across versions; the Release list leaves a key out
-	// when its row is shown, and shows it (this torrent's own value) when it isn't.
-	const SPAN_KEYS: Record<string, string> = {
+	// The Release list leaves out the keys the identity rows show, and holds them back while those rows
+	// load, so nothing appears and then vanishes. Once the answer is in (or failed), a key whose row isn't
+	// shown appears with this torrent's own value.
+	const SPAN_ROWS: Record<string, string> = {
 		years: 'year',
 		seasons: 'season',
 		episodes: 'episode',
 		absolute: 'absolute'
 	};
 	const release = $derived(
-		releaseRows(attributes, currentLocale(), hit?.title, new Set(rows.map((r) => SPAN_KEYS[r[2]]!)))
+		releaseRows(
+			attributes,
+			currentLocale(),
+			hit?.title,
+			new Set(status === 'loading' ? SPAN_KEYS : rows.map((r) => SPAN_ROWS[r[2]]!))
+		)
 	);
 	const type = $derived(hit?.content_type ? contentTypeLabel(hit.content_type) : null);
 	const adult = $derived(hit?.adult_kind ? contentTypeLabel(hit.adult_kind, 'adult') : null);
@@ -101,7 +108,7 @@
 	</dl>
 	{#if release.length}
 		<div class="ls-detail-stack" data-testid="detail-release">
-			<div class="font-semibold">{m.detail_release()}</div>
+			<div class="font-semibold" role="heading" aria-level={level + 1}>{m.detail_release()}</div>
 			<dl class="ls-detail-facts">
 				{#each release as r (r.key)}
 					<dt>{r.label}</dt>
