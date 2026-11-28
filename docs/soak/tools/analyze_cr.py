@@ -559,8 +559,12 @@ def analyze_segment(root, winners=None, declaration=None):
     else:
         lodestar_checks(checks, run, config, span, span_ok, bounds, complete, treatment, kind, winners, entry)
     if entry is not None:
-        report["round1"]["fresh_store"] = fresh_store(ok)
-        checks.add("6.7", "fresh_store_at_start", report["round1"]["fresh_store"], "invalid")
+        report["round1"]["fresh_store"] = fresh = fresh_store(rows)
+        if fresh is None:  # not measured (§6.4's rule): neither valid nor invalid, and never a pass
+            checks.add("6.7", "fresh_store_at_start", False, "not_measured",
+                       {"note": "no torrents reading within one scrape interval of the start"})
+        else:
+            checks.add("6.7", "fresh_store_at_start", fresh, "invalid")
 
     if complete:
         try:
@@ -698,9 +702,18 @@ def declared_checks(checks, run, config, entry, preset):
     checks.add("5.5", "declared_image_digest", digest_part(digest) == digest_part(entry["image_digest"]), "void")
 
 
-def fresh_store(ok):
-    """Fresh-store evidence (§6.3): the store held no torrents at the first scrape."""
-    return ok[0]["values"].get("torrents") == 0
+def fresh_store(rows):
+    """Fresh-store evidence (§6.3): the store held no torrents at the start. Read from the first
+    scrape with a `torrents` value, if it's within one scrape interval of the first scrape that
+    reached the server (`start_time_seconds` read); `None` (not measured) otherwise, since
+    crawling may have stored rows by then. Since X-healthz-count-async the gauge is absent until
+    the server's start-up count lands, seconds at most: absent is unknown, never 0 and never a
+    pass."""
+    start = next((r for r in rows if number(r["values"].get("start_time_seconds"))), None)
+    first = next((r for r in rows if number(r["values"].get("torrents"))), None)
+    if start is None or first is None or first["e"] - start["e"] > collect.SAMPLE_SECONDS:
+        return None
+    return first["values"]["torrents"] == 0
 
 
 def binding(run, result):

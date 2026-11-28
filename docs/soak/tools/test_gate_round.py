@@ -209,6 +209,53 @@ class DeclarationTests(SegmentBase):
         sim.edits.append((lambda e, i: i == 0, lambda row, lines: row["values"].update(torrents=12)))
         self.assertIn("fresh_store_at_start", self.judge(sim)["verdict_reasons"])
 
+    # X-healthz-count-async: `lodestar_torrents` is absent until the server's start-up count
+    # lands. The collector then records the value as null and fails the sample; the scrape
+    # after the count reads the empty store.
+    @staticmethod
+    def count_pending(scrapes):
+        def edit(row, lines):
+            i = row["sequence"]
+            row["values"]["torrents"] = None if i < scrapes else 0
+            if i < scrapes:
+                row["metrics_ok"] = False
+        return (lambda e, i: i <= scrapes, edit)
+
+    def test_fresh_store_read_at_the_first_scrape(self):
+        report = self.judge(Round1Sim())
+        self.assertIs(report["round1"]["fresh_store"], True)
+        [c] = self.check(report, "fresh_store_at_start")
+        self.assertEqual((c["ok"], c["effect"]), (True, "invalid"))
+
+    def test_a_count_absent_at_the_first_scrape_is_read_at_the_next_within_an_interval(self):
+        sim = Round1Sim()
+        sim.edits.append(self.count_pending(1))
+        report = self.judge(sim)
+        self.assertIs(report["round1"]["fresh_store"], True)
+        [c] = self.check(report, "fresh_store_at_start")
+        self.assertEqual((c["ok"], c["effect"]), (True, "invalid"))
+        self.assertNotIn("fresh_store_at_start", report["verdict_reasons"])
+
+    def test_a_count_absent_past_one_interval_is_not_measured_never_a_pass(self):
+        sim = Round1Sim()
+        sim.edits.append(self.count_pending(2))
+        report = self.judge(sim)
+        self.assertIsNone(report["round1"]["fresh_store"])
+        [c] = self.check(report, "fresh_store_at_start")
+        self.assertEqual((c["ok"], c["effect"]), (False, "not_measured"))
+        # Neither valid evidence nor an invalid window on its own.
+        self.assertNotIn("fresh_store_at_start", report["verdict_reasons"])
+
+    def test_an_absent_count_is_never_read_as_zero(self):
+        rows = [{"e": 0.0, "values": {"start_time_seconds": 1.0, "torrents": None}}]
+        self.assertIsNone(analyze_cr.fresh_store(rows))
+        rows.append({"e": 60.0, "values": {"start_time_seconds": 1.0, "torrents": 3}})
+        self.assertIs(analyze_cr.fresh_store(rows), False)
+        rows[1]["values"]["torrents"] = 0
+        self.assertIs(analyze_cr.fresh_store(rows), True)
+        rows[1]["e"] = 61.0
+        self.assertIsNone(analyze_cr.fresh_store(rows))
+
     def test_declaration_is_only_for_a_comb_arm(self):
         sim = cr.Sim()  # an A/B segment
         with self.assertRaises(ValueError):
