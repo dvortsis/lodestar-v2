@@ -1,5 +1,7 @@
 param(
-    [string]$ProposalAttachment,
+    # Required: the extracted module left the repository on 2026-11-28 (owner-decisions 2.88), so the
+    # original attachment is the only source.
+    [Parameter(Mandatory)][string]$ProposalAttachment,
     [string]$OutputDirectory = (Join-Path ([IO.Path]::GetTempPath()) ('lodestar-scheduler-review-' + [guid]::NewGuid().ToString('N'))),
     [switch]$SyncEvidence
 )
@@ -9,18 +11,13 @@ if ((& rustc --version) -notmatch '^rustc 1\.99\.1 ' -or
     throw 'Use the recorded Rust/Cargo 1.99.1 toolchain; this script does not install toolchains.'
 }
 $expectedHash = 'AFEB690C3765BF07E67A1485D96527CB2BF4BBDFEE60429EA0993F0CF7AC0E68'
-if ($ProposalAttachment) {
-    if ((Get-FileHash -LiteralPath $ProposalAttachment -Algorithm SHA256).Hash -ne $expectedHash) {
-        throw 'Attachment differs from the reviewed proposal.'
-    }
-    $pasted = Get-Content -LiteralPath $ProposalAttachment -Raw
-    $match = [regex]::Match($pasted, '(?s)```rust\r?\n(.*?)\r?\n```')
-    if (-not $match.Success) { throw 'No Rust code block.' }
-    $original = $match.Groups[1].Value.Replace("`r`n", "`n")
-} else {
-    # The extracted module left the repository on 2026-11-28 (owner-decisions 2.88): outside code of unrecorded source.
-    throw 'Pass -ProposalAttachment with the original attachment: the extracted module is no longer in the repository.'
+if ((Get-FileHash -LiteralPath $ProposalAttachment -Algorithm SHA256).Hash -ne $expectedHash) {
+    throw 'Attachment differs from the reviewed proposal.'
 }
+$pasted = Get-Content -LiteralPath $ProposalAttachment -Raw
+$match = [regex]::Match($pasted, '(?s)```rust\r?\n(.*?)\r?\n```')
+if (-not $match.Success) { throw 'No Rust code block.' }
+$original = $match.Groups[1].Value.Replace("`r`n", "`n")
 $sha = [Security.Cryptography.SHA256]::Create()
 try {
     $moduleHash = [Convert]::ToHexString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($original)))

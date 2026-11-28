@@ -2056,7 +2056,7 @@ owner_queue:
   when: Any time
 - n: 43
   type: review
-  action: 'Runner calls since r20 you may want to veto (§2.19; the "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r21.md and -r22.md): the leak test''s held retries and its never-sent-is-never-clean rule, the round-1 gateway check and three stricter round-1 rules, remote workers waiting for the have-filter fill, the 10M re-run after round 1''s day 2, the VPN setting''s DNS limit and restart, remote workers outside the VPN setting until X-vpn-bind-worker, and CMP-G''s privileged test runs and advisory smoke check'
+  action: 'Runner calls since r20 you may want to veto (§2.19; the "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r21.md and -r22.md): the leak test''s held retries and its never-sent-is-never-clean rule, the round-1 gateway check and three stricter round-1 rules, remote workers waiting for the have-filter fill, the 10M re-run after round 1''s day 2, the VPN setting being restart-required, remote workers outside the VPN setting until X-vpn-bind-worker, and CMP-G''s privileged test runs and advisory smoke check'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
 
