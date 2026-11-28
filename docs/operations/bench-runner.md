@@ -122,7 +122,8 @@ The benchmark runs on pushes to `release/*`, so only you should be able to creat
 
 **What a pass looks like:**
 - The job **bench 10M (dedicated runner)** is green.
-- The run's summary has a table with one row per report, each verdict **pass** or **incomplete**. Incomplete is expected for now: some rows stay unavailable until their features land.
+- The run's summary has a table with one row per report. For the full run, each verdict is **pass** or **incomplete**. Incomplete is expected for now: some rows stay unavailable until their features land.
+- The two smoke rows say **(not gated)**. The smoke `size-report` row shows **fail (not gated)** for the per-torrent size rows: 20,000 torrents are too few for those budgets. That's expected; the smoke step only proves both tools run.
 - The artifact **bench-10m-‹commit›** holds the JSON reports (`smoke-size.json`, `smoke-search.json`, and after a full run `size.json`, `size-low.json`, `search.json`, `search-low.json`). They're kept 90 days.
 
 Tell the runner when the smoke run passes: that's the `bench-runner` condition the 1.0 10M gate waits for.

@@ -135,17 +135,29 @@ jobs:
               bad = [x["id"] for x in r.get("rows", []) if x.get("status") == "fail"]
               open_ = [x["id"] for x in r.get("rows", []) if x.get("status") in ("unavailable", "unmeasured")]
               verdict = r.get("verdict", "?")
-              failed |= verdict == "fail" or verdict not in ("pass", "incomplete")
+              if verdict not in ("pass", "incomplete", "fail"):
+                  failed = True
+              elif path.name.startswith("smoke-"):
+                  # 20,000 torrents can't meet per-torrent size budgets (fixed
+                  # costs aren't spread out): the smoke step proves the tools
+                  # run and write a report, and its verdicts are shown only.
+                  verdict += " (not gated)"
+              else:
+                  failed |= verdict == "fail"
               note = ", ".join(bad) if bad else (f"{len(open_)} rows not yet measurable" if open_ else "")
               rows.append(f"| {path.name} | {r.get('tool')} {r.get('mode')} | **{verdict}** | {note} |")
+          want = ["smoke-size.json", "smoke-search.json"]
+          if os.environ.get("SMOKE_ONLY") != "true":
+              want += ["size.json", "size-low.json", "search.json", "search-low.json"]
+          for name in want:
+              if not pathlib.Path("reports", name).exists():
+                  rows.append(f"| {name} | | **missing** | not written |")
+                  failed = True
           out = ["## Bench 10M", "", f"Commit `{os.environ['GITHUB_SHA'][:12]}`, ref `{os.environ['GITHUB_REF_NAME']}`.", ""]
           if pathlib.Path("reports/dataset-rebuilt.txt").exists():
               out += ["The dataset was rebuilt in this run (its key or store schema changed).", ""]
           out += ["| Report | Tool, mode | Verdict | Failing rows |", "|---|---|---|---|", *rows]
-          if not rows:
-              out.append("| (none) | | | no report was written |")
-              failed = True
-          out += ["", "`incomplete` passes: some rows stay unavailable until their features land. G-v1-10m reads the full reports."]
+          out += ["", "`incomplete` passes: some rows stay unavailable until their features land. Smoke verdicts are not gated. G-v1-10m reads the full reports."]
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write("\n".join(out) + "\n")
           if failed:
