@@ -394,9 +394,24 @@ class BindComparatorTests(CoordinatorBase):
             (run / "result.json").write_text(json.dumps({"ended": iso(T0 - timedelta(hours=12, minutes=59))}))
         return run
 
-    def bind(self, run):
+    def setUp(self):
+        super().setUp()
+        comp = json.loads((self.round / "comparator.json").read_text())
+        comp["identity"] = {"binary_sha256": "b" * 64}
+        (self.round / "comparator.json").write_text(json.dumps(comp))
+        self.segmented = []
+
+    def segment(self, run_dir, **change):
+        # The comparator run's own report, as analyze_cr.py segment makes it (faked here: the
+        # analyzer's segment tests cover the real thing).
+        self.segmented.append(Path(run_dir))
+        comp = json.loads((self.round / "comparator.json").read_text())
+        return dict({k: comp.get(k) for k in ("kind", "timeline", "window_hours", "identity")}, **change)
+
+    def bind(self, run, segment=None):
         argv = ["bind-comparator", str(self.cfg_path), "--comparator-run", str(run)]
-        with mock.patch.object(co.collect, "host_key", lambda: "0" * 32):
+        with mock.patch.object(co.collect, "host_key", lambda: "0" * 32), \
+                mock.patch.object(co, "comparator_segment", segment or self.segment):
             import io
             from contextlib import redirect_stdout
             out = io.StringIO()
@@ -416,6 +431,30 @@ class BindComparatorTests(CoordinatorBase):
         self.assertNotIn(UPLINK, json.dumps(b))
         rc, out = self.bind(self.comparator_run())
         self.assertIn("never changed", out[-1])
+
+    def test_refuses_a_run_directory_other_than_the_reports(self):
+        run = self.comparator_run()
+        comp = json.loads((self.round / "comparator.json").read_text())
+        other_window = dict(comp["timeline"], window_start_utc=iso(T0 - timedelta(days=3)))
+        for change in ({"timeline": other_window}, {"identity": {"binary_sha256": "c" * 64}},
+                       {"kind": "comb"}, {"window_hours": 12}):
+            with self.subTest(change=sorted(change)):
+                rc, out = self.bind(run, lambda d, change=change: self.segment(d, **change))
+                self.assertEqual(rc, 1)
+                self.assertIn("isn't the comparator", out[-1])
+                self.assertFalse((self.round / "comparator-binding.json").exists())
+
+        def broken(d):
+            raise ValueError("no samples")
+        self.assertIn("can't be segmented", self.bind(run, broken)[1][-1])
+        self.assertEqual(self.bind(run)[0], 0)
+        self.assertEqual(self.segmented[-1], run)
+
+    def test_the_real_segment_runs_on_the_run_directory(self):
+        sys.path.insert(0, str(HERE.parent))
+        import analyze_cr
+        with mock.patch.object(analyze_cr, "analyze_segment", lambda root: {"root": str(root)}):
+            self.assertEqual(co.comparator_segment(self.tmp), {"root": str(self.tmp)})
 
     def test_refuses_a_running_comparator_or_another_kind(self):
         rc, out = self.bind(self.comparator_run(ended=False))
@@ -580,6 +619,28 @@ class BringUpTests(CoordinatorBase):
         self.go("collect")
         self.host.ip_of_pid[102] = EXIT_IP["Y"]
         self.assertIn("after its start", self.go("bring-up")[1][-1])
+
+    def test_a_check_is_stamped_with_its_first_reading_not_its_end(self):
+        # The reads take time; a check stamped at its end would put its own readings before
+        # it, and the gate would judge them against the check in force before this one.
+        self.pass_leaks()
+        read = self.host.egress_ip
+
+        def slow(pid, url):
+            ip = read(pid, url)
+            self.host.t += timedelta(seconds=7)
+            return ip
+        self.host.egress_ip = slow
+        self.go("bring-up")
+        self.host.ip_of_pid[102] = "203.0.113.99"
+        rc, out = self.go("bring-up")
+        self.assertEqual(rc, 0, out)
+        s = self.state()
+        check = s["exit_checks"][-1]
+        mine = [r["utc"] for a in s["arms"].values() for r in a["egress"][-1:]]
+        self.assertEqual(check["utc"], min(mine))
+        self.assertLess(co.parse_utc(check["utc"]), self.host.now())
+        self.assertTrue(all(co.parse_utc(check["utc"]) <= co.parse_utc(u) for u in mine))
 
     def test_two_arms_on_one_exit_or_an_untunnelled_arm_are_refused(self):
         self.pass_leaks()

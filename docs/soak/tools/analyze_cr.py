@@ -517,7 +517,8 @@ def analyze_segment(root, winners=None, declaration=None):
                and not a.get("collector_finished") and p_e <= a["elapsed_seconds"] <= end_e]
     # Round 1, D3 (plan §8 item 6; owner §2.85; runner, 2026-11-27): a mover run or parity
     # check spares the window only when none of the pools it touches holds the arm's /data
-    # device (the declaration maps pools to devices; an unmapped pool can't be cleared).
+    # device (the declaration maps pools to the VM's kernel device names; an unmapped pool
+    # can't be cleared, and a device in no pool is never exempt).
     # Every other entry still counts.
     if declaration is not None:
         pools, device = declaration.get("pools") or {}, declaration.get("backing_device")
@@ -526,6 +527,7 @@ def analyze_segment(root, winners=None, declaration=None):
             touched = a.get("pools")
             return (a.get("category") == "array_operation" and a.get("kind") in D3_KINDS
                     and isinstance(touched, list) and touched
+                    and any(device in v for v in pools.values())
                     and all(p in pools and device not in pools[p] for p in touched))
         exempt = [a for a in counted if spares(a)]
         counted = [a for a in counted if a not in exempt]
@@ -1848,6 +1850,10 @@ def check_declaration(decl):
     require(isinstance(pools, dict) and all(isinstance(k, str) and isinstance(v, list)
                                             and all(isinstance(x, str) for x in v) for k, v in pools.items()),
             "declaration: pools maps a pool name to its devices' kernel names (D3)")
+    # Runner, 2026-11-27: the map lists the VM's kernel device names (the names identity
+    # records), so the declared /data device must sit in exactly one pool, by exact name.
+    require(not pools or sum(decl.get("backing_device") in v for v in pools.values()) == 1,
+            "declaration: backing_device must be listed in exactly one pool (D3)")
     # Item J: the thresholds are shares of the declared vCPUs (8); host samples must match.
     require(decl.get("vcpus") == DECLARED_VCPUS, f"declaration: vcpus must be {DECLARED_VCPUS} (the box's, §6.3)")
     attempts = decl.get("attempts")
@@ -1900,19 +1906,19 @@ def check_declaration(decl):
     # Runner, 2026-11-27: layouts only shrink (L3 → L2 or L2b → S), so each later attempt that
     # isn't a solo confirmation drops an arm, and the round can't loop through fresh attempts.
     # A solo confirmation (S) is one arm from the attempt before it, outside that chain.
-    for prev, a in zip(attempts, attempts[1:]):
-        require(a["layout"] != "L2c" or prev["layout"] == "L3",
-                f"declaration: attempt {a['id']}'s layout L2c follows only an L3 attempt (B dropped)")
-    require(attempts[0]["layout"] != "L2c", "declaration: L2c follows only an L3 attempt (B dropped)")
+    # L2c follows the chain's L3 attempt (B dropped); a solo confirmation between them is
+    # outside the chain, so L3 → S → L2c holds.
     arms_of = {a["id"]: {e["arm"] for e in arms if e["attempt"] == a["id"]} for a in attempts}
-    chain = None
+    chain, chain_layout = None, None
     for a in attempts:
         own = arms_of[a["id"]]
         if chain is not None and a["layout"] == "S" and len(own) == 1 and own <= chain:
             continue
+        require(a["layout"] != "L2c" or chain_layout == "L3",
+                f"declaration: attempt {a['id']}'s layout L2c follows only an L3 attempt (B dropped)")
         require(chain is None or own < chain,
                 f"declaration: attempt {a['id']} must drop an arm from the attempt before it (layouts only shrink)")
-        chain = own
+        chain, chain_layout = own, a["layout"]
     return decl
 
 
@@ -2583,8 +2589,14 @@ def drop_c(samples, arms):
     rehearsal's host samples (host_samples.py's lines or its assembled JSON); `arms` maps an
     arm to its rehearsal collector's samples.jsonl rows."""
     rows = samples.get("samples") if isinstance(samples, dict) else samples
+    if isinstance(samples, dict):
+        vcpus = {samples.get("vcpus")}
+    else:  # the sampler's header lines: one per start, each naming the vCPUs it saw
+        vcpus = {r.get("vcpus") for r in rows or [] if isinstance(r, dict) and r.get("kind") == "header"}
     rows = sorted((r for r in rows or [] if utc(r.get("utc")) is not None), key=lambda r: r["utc"])
     out = {"thresholds": DROP_C, "arms": {}}
+    if vcpus != {DECLARED_VCPUS}:  # the shares are of the declared 8 vCPU, or they mean nothing
+        return dict(out, decision="not_judged", reasons=["vcpus_differ"])
     if not rows:
         return dict(out, decision="not_judged", reasons=["no_host_samples"])
     end = utc(rows[-1]["utc"]) + timedelta(seconds=CONTENTION["interval_seconds"])

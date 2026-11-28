@@ -126,6 +126,8 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
    ```
 
    Send the runner the four lines, and the box's vCPU count (`nproc`, which must be 8). It writes `host_identity`, `network_identity.uplink_hash`, `backing_device` and `vcpus` into the declaration, and you put `uplink_interface` in the coordinator file. The declaration is append-only: these are filled once, before the rehearsal, and never change.
+
+   Also send the **pool map**: for each Unraid pool (`cache`, `array` and any others), the kernel names, **as this VM sees them** (`lsblk -dno NAME`), of the VM's disks whose storage sits on that pool. Use whole-disk names such as `vdb`, never the Unraid host's own device names (`nvme0n1`, `md1`) or a partition (`vdb1`). The `backing_device` line above must appear in exactly one pool. The runner's records PR writes the map into the declaration as `pools`; without it, no mover run or parity check can spare a window (§8 item 6, D3).
 5a. **Bind the comparator** once it has stopped (its collector wrote `result.json`), before the rehearsal. Its collector predates round 1, so its report carries no binding; the coordinator binds it now, with the round's salt. First its report, then the binding:
 
    ```bash
@@ -133,7 +135,7 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
    $C bind-comparator /root/round1-coordinator.json --comparator-run <the comparator's evidence folder>
    ```
 
-   It writes `<round>/comparator-binding.json` and prints the comparator's run id (`comparator-<folder name>`). Send the runner that line: the declaration's `comparator.run_id` names it. It refuses a comparator that hasn't finished, or that ended before its window's end, and it never rewrites a binding. Then the runner gives you `declaration.json` for `<round>`.
+   It writes `<round>/comparator-binding.json` and prints the comparator's run id (`comparator-<folder name>`). Send the runner that line: the declaration's `comparator.run_id` names it. It refuses a comparator that hasn't finished, that ended before its window's end, or whose folder isn't the one `comparator.json` was made from (it segments the folder again and compares the window and binary), and it never rewrites a binding. Then the runner gives you `declaration.json` for `<round>`.
 6. **Disk.** The coordinator checks free space each day (every arm's expected growth plus the round's archives, plus 20 %). If it refuses, ask the runner; never delete an archive to make room.
 
 ## 4. Each arm's leak test

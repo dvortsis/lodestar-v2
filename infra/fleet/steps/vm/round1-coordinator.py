@@ -475,7 +475,8 @@ def run_leak_test(cfg, host, arm):
 
 
 def leak_lock(cfg):
-    """One leak test at a time on the host: each recreates its own tunnel and sets host rules."""
+    """One leak test at a time per round folder (its lock file lives there): each recreates its
+    own tunnel and sets host rules."""
     fh = open(Path(cfg["round_dir"]) / ".leak-test.lock", "a")
     try:
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -593,7 +594,7 @@ def cmd_bring_up(cfg, day, host, args):
         s["notes"].append(f"{iso(host.now())} exits checked again before the start: "
                           + ", ".join(sorted(k for k in exits if exits[k] != s["exits"].get(k))) + " changed")
     # Stamped with this check's first reading, so every reading it took is in force under it.
-    first = min(r["utc"] for r in readings.values())
+    first = iso(min(parse_utc(r["utc"]) for r in readings.values()))
     s.setdefault("exit_checks", []).append({"utc": first, "exits": exits})
     s["exits"] = exits
     for arm in day.arms():
@@ -1012,6 +1013,15 @@ def comparator_binding(cfg):
     return load(path) if path.exists() else None
 
 
+def comparator_segment(run_dir):
+    """`analyze_cr.py segment` on a run directory, in process (the same analyzer the round's
+    comparator.json came from)."""
+    if str(TOOLS.parent) not in sys.path:
+        sys.path.insert(0, str(TOOLS.parent))
+    import analyze_cr  # noqa: E402  (loaded only here: the other commands don't need it)
+    return analyze_cr.analyze_segment(run_dir)
+
+
 def cmd_bind_comparator(cfg, day, host, args):
     """Bind a comparator that ran under a collector without round-1 binding fields (runner,
     2026-11-27, §2.19): after its window, from its run directory, with the identities computed
@@ -1038,6 +1048,20 @@ def cmd_bind_comparator(cfg, day, host, args):
         raise Fail("the comparator's report (comparator_report) isn't there or has no timeline.window_end_utc")
     if ended < end:
         raise Fail(f"the comparator ended at {iso(ended)}, before its window's end {iso(end)}: it was interrupted")
+    # Runner review (A): the round's comparator.json must be this run's report, or the binding
+    # would pair this run's identity with another comparator's evidence. Segment the run
+    # directory now and require the same window and binary.
+    try:
+        report = load(cfg["comparator_report"])
+        seg = comparator_segment(run_dir)
+    except (OSError, ValueError, KeyError, TypeError):
+        raise Fail("the comparator's run directory can't be segmented (analyze_cr.py segment)") from None
+    sha = (report.get("identity") or {}).get("binary_sha256")
+    if seg.get("kind") != "comparator" or seg.get("timeline") != report.get("timeline") \
+            or seg.get("window_hours") != report.get("window_hours") \
+            or not sha or (seg.get("identity") or {}).get("binary_sha256") != sha:
+        raise Fail("that run directory isn't the comparator the round's comparator.json was made from "
+                   "(its window or binary differs)")
     run_id = "comparator-" + run_dir.resolve().name
     if not collect.RUN_ID.fullmatch(run_id):
         raise Fail("the comparator's run directory name makes no valid run id (letters, digits, _ . : -)")

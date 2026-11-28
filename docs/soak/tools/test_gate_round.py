@@ -1068,9 +1068,19 @@ class DropCTests(unittest.TestCase):
     """Item H: `analyze_cr.py drop-c` on the rehearsal (plan lines 430-432)."""
     T0 = analyze_cr.parse_utc("2026-11-28T20:00:00Z")
 
-    def host(self, minutes=120, cpu=lambda k: 0.5, steal=lambda k: 0.01, skip=()):
-        return [{"utc": mk.iso(self.T0 + timedelta(seconds=10 * k)), "cpu": cpu(k), "steal": steal(k)}
-                for k in range(minutes * 6) if k not in skip]
+    def host(self, minutes=120, cpu=lambda k: 0.5, steal=lambda k: 0.01, skip=(), vcpus=8):
+        header = [{"kind": "header", "started_utc": mk.iso(self.T0), "device": mk.DEVICE, "tunnels": [],
+                   "vcpus": vcpus}]
+        return header + [{"utc": mk.iso(self.T0 + timedelta(seconds=10 * k)), "cpu": cpu(k), "steal": steal(k)}
+                         for k in range(minutes * 6) if k not in skip]
+
+    def test_samples_on_other_vcpus_or_without_a_header_are_refused(self):
+        arms = {a: self.arm() for a in "BAC"}
+        for samples in (self.host(vcpus=16), self.host()[1:], {"vcpus": 4, "samples": self.host()[1:]}):
+            with self.subTest(samples=type(samples).__name__):
+                out = analyze_cr.drop_c(samples, arms)
+                self.assertEqual((out["decision"], out["reasons"]), ("not_judged", ["vcpus_differ"]))
+        self.assertEqual(analyze_cr.drop_c({"vcpus": 8, "samples": self.host()[1:]}, arms)["decision"], "keep")
 
     def arm(self, crawl_after_min=5, minutes=120):
         rows = []
@@ -1128,14 +1138,35 @@ class D3ExemptionTests(SegmentBase):
             d["pools"] = pools
         return analyze_cr.check_declaration(d)
 
-    def segment_with(self, kind, touched, pools=POOLS):
+    def segment_with(self, kind, touched, pools=POOLS, checked=True):
         sim = Round1Sim()
         entry = {"category": "array_operation", "elapsed_seconds": 4000.0, "same_boot": True,
                  "collector_finished": False, "text": ""}
         if kind:
             entry.update(kind=kind, pools=touched)
         sim.activity = [entry]
-        return self.judge(sim, self.decl(pools))
+        if checked:
+            return self.judge(sim, self.decl(pools))
+        return self.judge(sim, dict(mk.archive("L3")["declaration"], pools=pools))  # past check_declaration
+
+    def test_the_declared_device_must_sit_in_exactly_one_pool(self):
+        # Runner, 2026-11-27: the map lists the VM's kernel names; a host-side map
+        # (vdb in no pool), a device in two pools or a partition name is refused.
+        for pools in ({"ssd_apps": ["sdz"], "array": ["md1"]},
+                      {"ssd_apps": [mk.DEVICE], "cache": [mk.DEVICE], "array": ["md1"]},
+                      {"ssd_apps": [mk.DEVICE + "p1"], "array": ["md1"]}):
+            with self.subTest(pools=pools), self.assertRaises(ValueError):
+                self.decl(pools)
+        self.decl(self.POOLS)  # exactly one: accepted
+        self.decl({})  # no map: accepted, and nothing is exempt
+
+    def test_a_device_in_no_pool_is_never_exempt(self):
+        for pools in ({"ssd_apps": ["sdz"], "array": ["md1"]},
+                      {"ssd_apps": [mk.DEVICE + "p1"], "array": ["md1"]}):
+            with self.subTest(pools=pools):
+                report = self.segment_with("mover", ["ssd_apps", "array"], pools, checked=False)
+                self.assertFalse(self.check(report, "no_host_activity")[0]["ok"])
+                self.assertEqual(report["activity_exempt_d3"], [])
 
     def test_mover_and_parity_off_the_arms_pool_spare_the_window(self):
         for kind, touched in (("mover", ["cache", "array"]), ("parity", ["array"])):
@@ -1204,6 +1235,17 @@ class L2cTests(RoundBase):
         self.assertEqual(self.cand(v, "A")["layout"], "L2c")
         self.assertEqual(self.cand(v, "A")["crawler"], "pass", self.cand(v, "A")["reasons"])
 
+    def test_l3_then_a_solo_confirmation_then_l2c(self):
+        # Runner review (G): a solo confirmation of B sits outside the chain, so L2c still
+        # follows L3; A and C go on in it.
+        a = mk.archive("L3")
+        add_attempt(a, "S", "r1-a2")
+        add_attempt(a, "L2c", "r1-a3")
+        analyze_cr.check_declaration(a["declaration"])
+        v = self.gate(a)
+        self.assertEqual(self.cand(v, "A")["layout"], "L2c")
+        self.assertEqual(self.cand(v, "A")["crawler"], "pass", self.cand(v, "A")["reasons"])
+
     def test_l2c_follows_only_l3(self):
         a = mk.archive("L2c")
         with self.assertRaises(ValueError):
@@ -1236,6 +1278,29 @@ class DigestFormTests(SegmentBase):
         self.assertFalse(self.check(report, "declared_image_digest")[0]["ok"])
 
 
+class GateDigestTests(RoundBase):
+    """Item K, at the gate: a report is judged on its digest part, never on a prefix of it or
+    on its repository name."""
+
+    def digest(self, value):
+        a = mk.archive("L3")
+        for d in a["days"]:
+            d["reports"]["B"]["identity"]["image_digest"] = value
+        return self.cand(self.gate(a))
+
+    def test_another_image_fails(self):
+        for value in ("sha256:" + "e" * 64, "sha256:" + "d" * 63 + "e", "sha256:" + "d" * 32):
+            with self.subTest(value=value):
+                c = self.digest(value)
+                self.assertIn("image_digest_differs", c["days"][0]["reasons"])
+                self.assertNotEqual(c["crawler"], "pass")
+
+    def test_the_same_digest_under_another_repository_name_passes(self):
+        for value in ("sha256:" + "d" * 64, "ghcr.io/someone/lodestar@sha256:" + "d" * 64):
+            with self.subTest(value=value):
+                self.assertEqual(self.digest(value)["crawler"], "pass")
+
+
 class ExitRecheckTests(RoundBase):
     """Item C: a repair before the start re-checks the exits; readings are judged against the
     exit in force at their time, so the pre-repair reading is history, not a fault."""
@@ -1257,6 +1322,22 @@ class ExitRecheckTests(RoundBase):
     def test_a_repair_then_a_recheck_keeps_the_day_judged(self):
         v = self.gate(self.repaired())
         self.assertEqual(self.cand(v)["days"][0]["status"], "pass", self.cand(v)["days"][0]["reasons"])
+
+    def test_a_recheck_inside_the_window_that_moves_the_exit_is_a_fault(self):
+        # Readings match the exit in force at ws, but a later check (and so the day's final
+        # exits) names another server for X: the arm's exit changed under it.
+        a = mk.archive("L3")
+        day = self.day(a, 1)
+        arc = day["archive"]
+        ws = analyze_cr.parse_utc(day["reports"]["B"]["timeline"]["window_start_utc"])
+        start = analyze_cr.parse_utc(day["reports"]["B"]["timeline"]["process_start_utc"])
+        moved = dict(arc["exits"], X=mk.h("exit-x-after-ws"))
+        arc["exit_checks"] = [{"utc": mk.iso(start - timedelta(minutes=10)), "exits": dict(arc["exits"])},
+                              {"utc": mk.iso(ws + timedelta(hours=2)), "exits": moved}]
+        arc["exits"] = moved
+        day_out = self.cand(self.gate(a))["days"][0]
+        self.assertIn("egress_assignment_missing", day_out["reasons"])
+        self.assertNotEqual(day_out["status"], "pass")
 
     def test_the_old_exit_inside_the_window_is_still_a_fault(self):
         v = self.gate(self.repaired(in_window_old=True))

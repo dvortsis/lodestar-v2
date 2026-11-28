@@ -112,3 +112,11 @@ This is the schema `docs/decisions/2026-11-27-X-cr-round1-gate.md` drafted, as m
 - **L.** Round-1 segment reports (`round1.round1_spec`) and the verdict (`round1_spec`) name `docs/decisions/2026-11-27-CR-SPEC-round1.md`; `spec` stays CR-SPEC for old runs.
 - **The golden verdict** (`fixtures/round1/l3_pass_verdict.json`) is regenerated: `make_archive.py`'s digest is now `lodestar@sha256:…` and its declaration carries `vcpus` and the new layout; the verdict gains `round1_spec` and `comparator_bound_after_window`, and the days' digests read `lodestar@sha256:…`.
 - **Append-only declaration** (the runner's CR-SPEC-R1 ruling): identities, `vcpus` and the digest are filled once before the rehearsal; the run sheet says so.
+
+## Review of d6fe7407 (runner, 2026-11-27)
+- **B1. The pool map uses the VM's kernel names** (runner's ruling): for each pool, the kernel names of the VM's disks whose storage sits on it, the names `identity` records. With a non-empty `pools`, `check_declaration` requires `backing_device` in exactly one pool's list, by exact name (a host-side name or a partition is refused, exit 2), and a D3 entry is exempt only when the device is in some pool. The run sheet's step 5 has the operator report the map; the records PR writes it.
+- **A. `bind-comparator` segments the run directory** (`analyze_segment`, in process) and refuses it unless its `kind`, `timeline`, `window_hours` and `identity.binary_sha256` match the round's `comparator.json`, so one comparator's identity can't be paired with another's evidence.
+- **G. L2c follows the chain's L3 attempt:** a solo confirmation between them is outside the chain, so L3 → S → L2c holds.
+- **H. `drop-c` refuses samples not on the declared 8 vCPU** (the header lines' `vcpus`, or the assembled JSON's), as `not_judged`, `vcpus_differ`.
+- **Tests added** for `image_digest_differs` at the gate (another digest part, a prefix, another repository name), a re-check inside the window that moves an exit, and a check stamped with its first reading. Each was confirmed to fail against the weakened code the review named.
+- The bring-up check's stamp parses the readings' times before taking the earliest; the leak lock's docstring says it's per round folder.
