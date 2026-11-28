@@ -58,7 +58,8 @@
 	async function fix(q: string, signal: AbortSignal): Promise<Found['fix']> {
 		try {
 			fieldsOnce ??= api
-				.get('/search/fields', { signal })
+				// Not tied to this query's abort: a later query reuses the same request. Only the limit applies.
+				.get('/search/fields', { signal: AbortSignal.timeout(limitMs) })
 				.then((r) => r.fields)
 				.catch((e) => {
 					fieldsOnce = undefined;
@@ -93,27 +94,32 @@
 		const ctl = new AbortController();
 		void (async () => {
 			await null; // the cached path settles after the panel's own reset for this text
-			let found = last?.q === q ? last.found : null;
-			if (!found) {
-				// Past the limit the requests stop and the rescue settles with no offer.
-				const limit = AbortSignal.any([ctl.signal, AbortSignal.timeout(limitMs)]);
-				const [f, n] = await Promise.all([fix(q, limit), chips(q, limit)]);
-				if (ctl.signal.aborted) return; // a newer text owns the block
-				found = { fix: f, natural: n };
-				if (!limit.aborted) last = { q, found };
+			try {
+				let found = last?.q === q ? last.found : null;
+				if (!found) {
+					// Past the limit the requests stop and the rescue settles with no offer.
+					const limit = AbortSignal.any([ctl.signal, AbortSignal.timeout(limitMs)]);
+					const [f, n] = await Promise.all([fix(q, limit), chips(q, limit)]);
+					if (ctl.signal.aborted) return; // a newer text owns the block
+					found = { fix: f, natural: n };
+					// A failed field list (it is dropped from `fieldsOnce`) or a timeout is not remembered.
+					if (!limit.aborted && fieldsOnce) last = { q, found };
+				}
+				if (ctl.signal.aborted) return;
+				didYouMean = found.fix;
+				natural = found.natural;
+				suggesting = !!found.fix;
+				if (found.fix) said = m.search_rescue_didyoumean({ query: found.fix.text });
+				else if (found.natural) {
+					const count = found.natural.chips.length;
+					said = (
+						count === 1 ? m.search_rescue_chips_ready_one : m.search_rescue_chips_ready_other
+					)({ count });
+				}
+			} finally {
+				// Whatever happened, the panel stops waiting (unless a newer text owns the block).
+				if (!ctl.signal.aborted) settled = true;
 			}
-			if (ctl.signal.aborted) return;
-			didYouMean = found.fix;
-			natural = found.natural;
-			suggesting = !!found.fix;
-			if (found.fix) said = m.search_rescue_didyoumean({ query: found.fix.text });
-			else if (found.natural) {
-				const count = found.natural.chips.length;
-				said = (count === 1 ? m.search_rescue_chips_ready_one : m.search_rescue_chips_ready_other)({
-					count
-				});
-			}
-			settled = true;
 		})();
 		return () => {
 			ctl.abort();

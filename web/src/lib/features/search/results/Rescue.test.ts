@@ -98,6 +98,113 @@ describe('Rescue', () => {
 	});
 
 	it('drops an answer for older text, and asks the fields once', async () => {
+		let releaseOld!: () => void;
+		let releaseNew!: () => void;
+		const heldOld = new Promise<void>((r) => (releaseOld = r));
+		const heldNew = new Promise<void>((r) => (releaseNew = r));
+		let oldReturned = false;
+		api.get.mockImplementation(async (path: string, opts: { query?: { q: string } }) => {
+			if (path === '/search/fields') return { fields: [field] };
+			if (opts.query?.q === 'seeders:>5') {
+				await heldOld; // the first text's check is slow
+				oldReturned = true;
+			}
+			if (opts.query?.q === 'size>1gb') await heldNew; // so is the newer text's natural parse
+			return { ast: {}, canonical: opts.query?.q };
+		});
+		let settled = false;
+		render(Rescue, {
+			get settled() {
+				return settled;
+			},
+			set settled(v: boolean) {
+				settled = v;
+			}
+		});
+		setQ('seeders>5');
+		await waitFor(() => expect(calls('/parse')).toHaveLength(2), WAIT); // held fix + natural
+		setQ('size>1gb'); // newer text; its field is unknown, so no correction
+		await waitFor(() => expect(calls('/parse')).toHaveLength(3), WAIT);
+		releaseOld();
+		await waitFor(() => expect(oldReturned).toBe(true), WAIT);
+		await new Promise((r) => setTimeout(r, 0)); // a macrotask: every microtask of the old chain has run
+		// The old text's answer arrived while the newer one is still out: it shows nothing and settles nothing.
+		expect(screen.queryByRole('button')).toBeNull();
+		expect(settled).toBe(false);
+		releaseNew();
+		await waitFor(() => expect(settled).toBe(true), WAIT);
+		expect(screen.queryByRole('button')).toBeNull();
+		expect(calls('/search/fields')).toHaveLength(1);
+	});
+
+	it('a new text aborting the old one does not poison the field list', async () => {
+		let releaseFields!: () => void;
+		const heldFields = new Promise<void>((r) => (releaseFields = r));
+		api.get.mockImplementation(async (path: string, opts: { query?: { q: string } }) => {
+			if (path === '/search/fields') {
+				await heldFields;
+				return { fields: [field] };
+			}
+			return { ast: {}, canonical: opts.query?.q };
+		});
+		render(Rescue);
+		setQ('seeders>5');
+		await waitFor(() => expect(calls('/search/fields')).toHaveLength(1), WAIT);
+		setQ('seeders>6'); // aborts the first text while the field list is still on its way
+		releaseFields();
+		const offer = await screen.findByTestId('rescue-didyoumean', {}, WAIT);
+		expect(offer.textContent).toContain('seeders:>6');
+		expect(calls('/search/fields')).toHaveLength(1);
+	});
+
+	it('settles even when the answer throws', async () => {
+		api.get.mockImplementation(async (path: string, opts: { query?: { q: string } }) => {
+			if (path === '/search/fields') return { fields: [field] };
+			return { ast: {}, canonical: opts.query?.q, natural: { chips: null } }; // chips.length throws
+		});
+		let settled = false;
+		render(Rescue, {
+			get settled() {
+				return settled;
+			},
+			set settled(v: boolean) {
+				settled = v;
+			}
+		});
+		setQ('seeders>5');
+		await waitFor(() => expect(settled).toBe(true), WAIT);
+	});
+
+	it('offers the corrected clause once the parser accepts it, and asks nothing for an empty query', async () => {
+		render(Rescue);
+		await Promise.resolve();
+		expect(api.get).not.toHaveBeenCalled();
+		setQ('seeders>5');
+		const offer = await screen.findByTestId('rescue-didyoumean', {}, WAIT);
+		expect(offer.textContent).toContain('Did you mean seeders:>5?');
+		expect(within(offer).getByRole('button', { name: 'Apply' })).toBeTruthy();
+		const asked = calls('/parse').map((c) => JSON.stringify(c[1].query));
+		expect(asked.sort()).toEqual(
+			[
+				JSON.stringify({ q: 'seeders:>5' }),
+				JSON.stringify({ q: 'seeders>5', natural: true })
+			].sort()
+		);
+	});
+
+	it('does not offer a correction the parser rejects', async () => {
+		api.get.mockImplementation(async (path: string, opts: { query?: { q: string } }) => {
+			if (path === '/search/fields') return { fields: [field] };
+			if (opts.query?.q === 'seeders:>5') throw new Error('rejected');
+			return { ast: {}, canonical: opts.query?.q };
+		});
+		render(Rescue);
+		setQ('seeders>5');
+		await waitFor(() => expect(calls('/parse')).toHaveLength(2), WAIT);
+		expect(screen.queryByRole('button')).toBeNull();
+	});
+
+	it('drops an answer for older text, and asks the fields once', async () => {
 		let release!: () => void;
 		const held = new Promise<void>((r) => (release = r));
 		api.get.mockImplementation(async (path: string, opts: { query?: { q: string } }) => {

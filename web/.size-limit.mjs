@@ -1859,8 +1859,8 @@ export default [
 	// Alerts -1.58 KB, drawer -0.23 KB).
 	entry('Search index-state banners (on demand)', indexStateLazy, '4.1 KB'),
 	entry('Search Block settle (on demand)', settleLazy, '0.6 KB'),
-	// X-zero-rescue: measured 2,143 B (the chunk with the modules only it reaches), rounded up to 0.01 KB.
-	entry('Search zero-result rescue (on demand)', rescueLazy, '2.15 KB'),
+	// X-zero-rescue: measured 2,162 B (the chunk with the modules only it reaches), rounded up to 0.01 KB.
+	entry('Search zero-result rescue (on demand)', rescueLazy, '2.17 KB'),
 	// runner §2.26, SRC-17: the Source facet and Show unverified (16,800 B → 17,696 B, the measured 831 B over rounded up to 64 B).
 	// X-labels (runner §2.26): 17,635 → 18,825 B, the value names (codecs, HDR, languages, types),
 	// and Find matching the code as well as the label (review).

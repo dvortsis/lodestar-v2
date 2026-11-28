@@ -289,6 +289,10 @@ describe('autocomplete rows', () => {
 		suggestKind = 'chip';
 		await type(first.editor, '2160p ');
 		await waitFor(() => expect(screen.getByRole('option').textContent).toContain('Filter'), LAZY);
+		await fireEvent.keyDown(first.editor, { key: 'Escape' });
+		suggestKind = 'field';
+		await type(first.editor, '2160p  ');
+		await waitFor(() => expect(screen.getByRole('option').textContent).toContain('Field'), LAZY);
 	});
 });
 
