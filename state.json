@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T06:04:41Z",
+    "updated": "2026-11-28T06:05:03Z",
     "items": [
       {
         "slot": 1,
@@ -11139,8 +11139,8 @@
         "slot": 3,
         "slice": "X-watch-search-wait",
         "role": "build",
-        "agent": "pending",
-        "doing": "launching",
+        "agent": "session_01MMjhnCF2snpRadmsyJojfV",
+        "doing": "step 0: find why search lags",
         "since": "2026-11-28T06:04:41Z"
       },
       {
