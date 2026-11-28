@@ -1306,16 +1306,13 @@ fn bench_alone() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-#[test]
-fn the_benches_run_alone() {
-    // Every ignored test here is a bench, and each takes the lock first.
-    // A Windows checkout has CRLF line endings.
-    let src = include_str!("props.rs").replace("\r\n", "\n");
-    let src = src.as_str();
-    let mut benches = 0;
-    // Each `#[ignore` attribute at the start of a line, however it's
-    // written, and the first statement of the function it marks.
-    // Only a column-0 `#[ignore` counts: the benches are top-level fns.
+/// Each ignored test in `src` and its first statement, trimmed. Only a
+/// column-0 `#[ignore` counts, however it's written: the benches are
+/// top-level fns. CRLF line endings, as a Windows checkout has, read the
+/// same as LF.
+fn benches(src: &str) -> Vec<(String, String)> {
+    let src = src.replace("\r\n", "\n");
+    let mut found = Vec::new();
     let mut at = 0;
     for line in src.split_inclusive('\n') {
         at += line.len();
@@ -1330,12 +1327,33 @@ fn the_benches_run_alone() {
         };
         let body = &rest[f..];
         let open = body.find("{\n").expect("a body");
-        let name = &body[3..open];
-        let first = body[open + 2..].lines().next().unwrap();
-        assert_eq!(first.trim(), "let _alone = bench_alone();", "{name}");
-        benches += 1;
+        let first = body[open + 2..].lines().next().unwrap_or("");
+        found.push((body[3..open].trim().to_owned(), first.trim().to_owned()));
     }
-    assert!(benches >= 3, "found {benches} benches");
+    found
+}
+
+#[test]
+fn the_bench_check_reads_crlf_and_every_ignore_form() {
+    let lf = "#[test]\n#[ignore]\nfn a() {\n    let _alone = bench_alone();\n}\n\
+              #[ignore = \"slow\"]\n#[test]\nfn b() {\n    other();\n}\n\
+              fn c() {\n    #[ignore]\n}\n";
+    let want = vec![
+        ("a()".to_owned(), "let _alone = bench_alone();".to_owned()),
+        ("b()".to_owned(), "other();".to_owned()),
+    ];
+    assert_eq!(benches(lf), want);
+    assert_eq!(benches(&lf.replace('\n', "\r\n")), want);
+}
+
+#[test]
+fn the_benches_run_alone() {
+    // Every ignored test here is a bench, and each takes the lock first.
+    let benches = benches(include_str!("props.rs"));
+    assert!(benches.len() >= 3, "found {benches:?}");
+    for (name, first) in &benches {
+        assert_eq!(first, "let _alone = bench_alone();", "{name}");
+    }
     // A bench that panics doesn't leave the lock unusable.
     // `resume_unwind` unwinds without the panic hook, so nothing prints.
     let _ = std::thread::spawn(|| {
