@@ -191,11 +191,14 @@ test.describe('status pill', () => {
 		await expect(page.getByTestId('status-pill-count')).toHaveText('· 1.2M searchable');
 		await expect(pill).toHaveAttribute('href', '/insights');
 
-		events.send('crawler', crawlerEvent({ fetch_active: 0, fetch_pending: 0, searchable: 0 }));
+		await events.send(
+			'crawler',
+			crawlerEvent({ fetch_active: 0, fetch_pending: 0, searchable: 0 })
+		);
 		await expect(pill).toHaveAttribute('data-state', 'idle');
 		await expect(page.getByTestId('status-pill-count')).toHaveText('· 0 searchable');
 
-		events.send('rebuild', {
+		await events.send('rebuild', {
 			done: 1500,
 			error: null,
 			from: 'v3',
