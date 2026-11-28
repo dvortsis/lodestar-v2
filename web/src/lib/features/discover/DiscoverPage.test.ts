@@ -396,11 +396,11 @@ describe('rows', () => {
 		);
 	});
 
-	it('marks a backfill discovery', async () => {
+	it("keeps the backfill marker off the row (§10.4: it is the drawer's)", async () => {
 		handler = () => response({ newest: newest({ hits: [hit(1, { flags: ['backfill'] })] }) });
 		mount();
 		const row = await screen.findByTestId(`discover-row-${hash(1)}`);
-		expect(within(row).getByText('First seen during backfill')).toBeTruthy();
+		expect(within(row).queryByText('First seen during backfill')).toBeNull();
 	});
 
 	it('uses the single-line Compact row without the composition bar', async () => {

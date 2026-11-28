@@ -21,7 +21,6 @@
 	// Opening the row (click, Enter) is the list's (VirtualList onActivate): no links inside a row.
 	import type { Snippet } from 'svelte';
 	import ArrowUp from '~icons/ph/arrow-up-bold';
-	import History from '~icons/ph/clock-counter-clockwise-bold';
 	import Warning from '~icons/ph/warning-bold';
 	import CategoryBar from '$lib/charts/CategoryBar.svelte';
 	import { formatShare } from '$lib/format';
@@ -44,21 +43,10 @@
 		matched?: boolean;
 		/** Search's row actions (copy, more), loaded lazily by the list; Discover and Alerts have none. */
 		actions?: Snippet<[SearchHit]>;
-		/** Discover's Newest: say a discovery from the first crawl was backfill (recency is its point). */
-		backfill?: boolean;
 		/** A feature's own fact, first on the facts line so it never clips (Alerts: "Matched 3 h ago"). */
 		extra?: Snippet;
 	}
-	let {
-		hit,
-		density,
-		testid: id,
-		root = true,
-		matched = false,
-		backfill = false,
-		actions,
-		extra
-	}: Props = $props();
+	let { hit, density, testid: id, root = true, matched = false, actions, extra }: Props = $props();
 
 	const locale = $derived(currentLocale());
 	const comfortable = $derived(density === 'comfortable');
@@ -214,12 +202,6 @@
 			<span class="rr-fact rr-discovered">
 				<span class="sr-only">{m.discovered()}: </span>
 				<span data-testid="{id}-discovered"><RelativeTime seconds={hit.discovered_at} /></span>
-				{#if backfill && hit.flags.includes('backfill')}
-					<span class="rr-fact" title={m.backfill()} data-testid="{id}-backfill">
-						<History class="rr-icon" aria-hidden="true" />
-						<span class={comfortable ? '' : 'sr-only'}>{m.backfill()}</span>
-					</span>
-				{/if}
 			</span>
 		</div>
 		{#if comfortable && matched}

@@ -1519,14 +1519,13 @@ export default [
 	// StateScene check costs ~80 B on this route.
 	// runner §2.26, X-discover-headroom: measured 42.4 KB after the keys moved on demand.
 	// Don't import the key registry (`$lib/keys`) or `./commands` statically; j/k register after mount.
-	// X-row-rail (runner §2.26, 2026-11-28): 35,350 → 35,456 B, measured 35,401 B (+0.36 kB over main): the two-tier row's code in the shared row chunk.
 	routeEntry(
 		'Discover route (own JS + CSS)',
 		own('/discover', {
 			onDemand: [/^chunk:keys$/, /features\/discover\/commands\.ts$/],
 			byChunk: true
 		}),
-		'35456 B'
+		'35.35 KB'
 	),
 	// Logs (S-logs-1): the live log's own JS + CSS, with the virtual list, the stream client and
 	// both languages' messages. Limit = measured + 10% (measured 35.97 KB).
@@ -1549,8 +1548,8 @@ export default [
 	// X-web-followups-1124 (a raise for the runner's §2.26 call): 35.03 → 35.10 KB, measured 35,099 B (+69 B): VirtualList
 	// keeps a focused row active through a new resetKey (the list's side of #1115's table fix).
 	// X-import-verified-no (runner §2.26): 35.10 → 35.39 KB, measured 35,390 B (+290 B): the Imported badge and its help.
-	// X-row-rail (runner §2.26, 2026-11-28): 35.39 KB → 35,840 B, measured 35,788 B (+0.37 kB: the row chunk), rounded up to 64 B.
-	routeEntry('Alert route (own JS + CSS)', alertView, '35840 B'),
+	// X-row-rail (runner §2.26, 2026-11-28): 35.39 KB → 35,520 B, measured 35,488 B (+0.37 kB: the row chunk), rounded up to 64 B.
+	routeEntry('Alert route (own JS + CSS)', alertView, '35520 B'),
 	routeEntry(
 		'Settings overview (own JS + CSS)',
 		own('/settings', { onDemand: [...settingsFirstView, ...settingsAbout] }),
@@ -1852,8 +1851,8 @@ export default [
 	// X-import-verified-no (runner §2.26): 43.76 → 44.09 KB, measured 44,089 B (+329 B): the Imported badge and its help.
 	// UX-start (runner §2.26): 44.09 -> 44.224 KB, measured 44,195 B (one trim round, compacting pillState's branches, saved nothing): shell/status.ts, which this chunk carries, gained the "warming up" branch and the found/stored fields.
 	// X-zero-rescue (runner §2.26): 44,224 → 44,416 B, measured 44,377 B (+153 B), rounded up to 64 B: the panel's lazy mount of the rescue chunk and the hint it hides. The rescue itself is its own entry below.
-	// X-row-rail (runner §2.26, 2026-11-28): 44,416 → 44,928 B, measured 44,901 B (+0.45 kB, ceiling 45.0 kB): the row's badges.ts, +N chip, badge buttons and seeders words, and Discover's backfill prop.
-	entry('Search results (lazy)', resultsFirst, '44928 B'),
+	// X-row-rail (runner §2.26, 2026-11-28): 44,416 → 44,608 B, measured 44,579 B (+0.45 kB, ceiling 45.0 kB): the row's badges.ts, +N chip, badge buttons and seeders words.
+	entry('Search results (lazy)', resultsFirst, '44608 B'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	// runner §2.26 (X-hidden-count): 2.71 → 2.72 KB, measured 2,717 B: "Search {count} searchable
 	// torrents" (en, zh).
@@ -1908,8 +1907,8 @@ export default [
 	// X-web-build-determinism (runner §2.26): 7,998 B with stable names (7,992 B with content hashes).
 	// GS-5 (runner §2.26): 8.01 → 8.15 KB, a grouped card's "+N other versions" fact.
 	// X-import-verified-no (runner §2.26): 8.15 → 8.17 KB, measured 8,162 B (+12 B): the Imported badge and its help.
-	// X-row-rail (runner §2.26, 2026-11-28): 8.17 KB → 8,640 B, measured 8,604 B (+0.42 kB): the row chunk, counted here because the card imports its helpers; one shared chunk, not copied (checked).
-	entry('Search cards (lazy)', cardsLazy, '8640 B'),
+	// X-row-rail (runner §2.26, 2026-11-28): 8.17 KB → 8,960 B, measured 8,929 B (+0.42 kB): the row chunk, counted here because the card imports its helpers; one shared chunk, not copied (checked).
+	entry('Search cards (lazy)', cardsLazy, '8960 B'),
 	// X-row-rail (runner §2.26, 2026-11-28): 6.5 KB → 6,784 B, measured 6,737 B (+0.41 kB): the row chunk, as the cards.
 	entry('Search table mode (on demand)', tableLazy, '6784 B'),
 	// GS-5: measured 3.01 KB (the rows, their logic, styles and messages), rounded up to 0.01 KB.
@@ -1931,8 +1930,7 @@ export default [
 	// X-page-frame (runner §2.26): 8.43 → 8.44 KB, measured 8,432 B.
 	// X-facet-group-case (runner §2.26): +11 B, valueLabel's optional `label` argument in
 	// label-release, which the Builder shares with the Facet rail.
-	// X-row-rail (runner §2.26, 2026-11-28): 8.45 KB → 8,512 B, measured 8,451 B (+1 B of shared-chunk noise), rounded up to 64 B.
-	entry('Builder (on demand)', builderLazy, '8512 B'),
+	entry('Builder (on demand)', builderLazy, '8.45 KB'),
 	// X-detail-headroom: the settings subscription (L3's visibility revalidation) and its event client
 	// load on demand, from visibility-events.ts, so they are no longer in this first view.
 	// X-detail-headroom: detail.css is split so each entry carries only its own rules: host.css (drawer
@@ -1955,8 +1953,7 @@ export default [
 	// focus step itself is in Related, which loads on demand.
 	// X-detail-attributes-ui (runner §2.26): 28.27 → 28,352 B, measured 28,301 B (+32 B: the attributes and level props and
 	// the larger message barrel); rounded up to 64 B.
-	// X-row-rail (runner §2.26, 2026-11-28): 28,352 → 28,480 B, measured 28,454 B (+0.14 kB: the row chunk the drawer's Related list shares), rounded up to 64 B.
-	entry('Detail drawer (own JS + CSS)', drawerView, '28480 B'),
+	entry('Detail drawer (own JS + CSS)', drawerView, '28352 B'),
 	// Raised by the runner (§2.26): +~40 B gzip noise from re-hashed chunk names, no code change in the route (#275).
 	// Raised by the runner (§2.26): +35 B from the chunk re-split when /logs was added (S-logs-1).
 	// runner §2.26, S-send: Send to client, the §10.5 primary action (+~0.16 KB)

@@ -337,13 +337,7 @@
 											style:--i={index}
 											data-testid="discover-row-{hit.hash}"
 										>
-											<ResultRow
-												{hit}
-												{density}
-												testid="discover-row-{hit.hash}"
-												root={false}
-												backfill
-											/>
+											<ResultRow {hit} {density} testid="discover-row-{hit.hash}" root={false} />
 										</div>
 									{/snippet}
 								</VirtualList>
