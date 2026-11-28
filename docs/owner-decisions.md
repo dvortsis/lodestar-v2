@@ -870,6 +870,52 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - The runner's calls listed for veto (items 11, 23, 25, 28, 41, 42 and the later records files' flags) stand unless the owner vetoes one.
     - **IAM changes are still applied by the owner.** The slice X-testvm-iam-volumes edits `infra/dev-vm/aws-claude-testvm.json`, and the owner applies the reviewed policy in AWS.
     - **Runner's reading:** "as quickly as possible with high throughput" restates §2.85's priority (performance first, then the quickest sure route to 1.0). It doesn't change the session limits (§2.85 D6: four build sessions, two test sessions).
+      - *The build-session limit is raised to six by §2.91 (2026-11-28).*
+
+89. **No CPU load tests at night; soaks may run unsupervised, and the test VM shares the owner's uplink** (owner, 2026-11-28, said in the runner session; the first message reached the runner from another of the owner's chats with the owner's approval).
+    - **11:01Z:** "No load tests at night while unsupervised. Stop any load or soak test running now, and don't schedule or start one overnight unless I'm around to supervise." The owner stopped the test VM's Aggressive screen directly. The comparator kept running: it's the owner's own soak-type run.
+    - **11:03Z, the owner's correction:** soak tests are fine overnight unsupervised; only CPU load tests are barred at night. So the rehearsal and CR-R1's two days go ahead as planned.
+    - **11:10Z, the hours:** the owner gave the night hours. The runner records them in UTC as 06:00Z–15:00Z (05:00Z–14:00Z from 2027-03-14T09:00Z to 2027-11-07T08:00Z). No CPU load test starts or runs in those hours; soaks may run at any time.
+    - **17:31Z, the uplink:** asked whether the test-VM laptop shares the box's internet connection: "Yes, same internet connection".
+    - **Runner's reading:**
+      - Until the owner classes it, the X-test-vm Aggressive (A) screen counts as a CPU load test, so it never runs at night.
+      - Because the uplink is shared, it also never runs during a measured window on the box: the comparator, the rehearsal, CR-R1's days 1 and 2, and the drills. That leaves the gap after the rehearsal, outside the night hours, ending at least 60 min before day 1.
+      - The runner schedules this itself. It doesn't change any owner number.
+
+90. **A Windows-only `unsafe` call for the VPN binding: "Yes"** (owner, 2026-11-28T17:30Z, in the runner session, answering "1. Windows VPN binding").
+    - **The exception.** `crates/network-policy` may hold one small, Windows-only `unsafe` `setsockopt` that sets `IP_UNICAST_IF` / `IPV6_UNICAST_IF` on crawl sockets. It closes Windows' weak-host send path that `docs/decisions/2026-11-28-X-vpn-bind.md` describes. It's built like §2.35's store exception (runner's reading of "like the store exception"): the crate's lint is `deny` instead of `forbid`, the `allow` sits on the smallest block with a `// SAFETY:` comment, and nothing else in that crate or any other crate is covered.
+    - **The bar:** a failure to set the option fails closed (a refused pin). The slice, X-vpn-bind-win, needs a fresh Opus review and a `/security-review` before merge, and records the `unsafe` block in its decisions file.
+    - **Unchanged:** any other `unsafe` still needs the owner (§2.35).
+
+91. **Six build slots** (owner, 2026-11-28T18:01Z, in the runner session): "Yes, increase to 6 slots".
+    - The runner had proposed going from four to six, with low-risk work in the two extra slots and stepping back if CI queues grow. `runner/slices.yaml` records it as `limits.phase_total: 6`. It replaces §2.85 D6's four build sessions; D6's two test sessions are unchanged (`limits.extra_shared` 2).
+    - **The runner's speed-up commitments, made with the proposal.** They don't change the bar (runner/standards.md, the fresh Opus review, green CI):
+      - the fresh review starts when the PR opens, in parallel with CI, not after it;
+      - worst cases are measured before the runner rules on a layout or budget, so a ruling isn't redone;
+      - X-ci-test-shard splits the slow test jobs;
+      - M8-DR is split: an early part on screens that are already final (M8-DR-a), and the rest with a delta later. G-v1-design is unchanged.
+    - In the same exchange the owner asked to register the bench runner early and to do queue item 26 (the walkthrough) now.
+
+92. **An ongoing throughput review** (owner, 2026-11-28, in the runner session).
+    - **18:03Z:** "an ongoing review to ensure we're proceeding as quickly as possible, without sacrificing quality." And: "The review should continually reassess the plan and update as inefficiencies are identified or improvements in strategy are identified, always keeping the end goal in mind, along with app principals."
+    - **19:45Z:** "have the recurring review also update the roadmap status dashboard's plan and estimates."
+    - **How the runner runs it:** every 6 h, as a scheduled task in the runner session. The rules are on the `runner-state` branch in `reviews/throughput.md`, with its log beside them. Each run measures CI and merge times, looks for waste, changes the plan where that's the runner's call (§2.19, §2.26), brings anything else to the owner, and refreshes the dashboard's estimates (`notes.now`, "Estimates") in the runner's next records PR.
+    - **Unchanged:** the quality bar and the owner's numbers. "Without sacrificing quality" is part of the instruction.
+
+93. **D1's scope list is approved, and v0.5.2 isn't released** (owner, 2026-11-28 about 19:45Z, in the runner session, answering the runner's two questions).
+    - **"Do you approve the D1 scope list?": "Yes".** D1 of `docs/plan/2026-11-26-fastest-1.0-proposal.md` (§3, §7), as the runner drew it from `runner/slices.yaml`:
+      - **Moved to 1.1:**
+        - the unstarted v0.7 tails OUT-1, OUT-3, UN-3, UN-4, IRC-2, IRC-3, SRC-3b and ENR-13b, and the gate G-v07-scale;
+        - every v0.8 slice not yet merged: PL-0, PL-1, PL-2, PL-3, PL-4, PL-5, PL-6, PL-7a, PL-7b, PL-8, CW-0, CW-1, CW-2, CW-3, NOS-3, LEM-1, ADH-0, DOC-v08 and the gate G-v08. The merged parsers (NOS-0, NOS-1, NOS-2a, NOS-2b and LEM-0) ship switched off.
+      - **Kept for 1.0:** WK-12, WK-13, WK-16, WK-19 and WK-G; Track Q; all of M8; RX-2.
+      - **Track U is fill work.** Whatever of it isn't merged when `release/v1.0` is cut moves to 1.1.
+      - **G-v07's safety checks fold into G-v1-audits** (outputs and enrichment never carry private, held or hidden adult items; uploads and the watch folder go through the safety floor; consent bypass). They run on the 1.0 release candidate. No separate v0.7 gate runs.
+      - **The M6 manual installs** (`ext:owner-m6-manual`, for G-m6) are done on the 1.0 release candidate.
+    - **"Is v0.5.2 still going to ship?": "We don't need to ship that version as a public release. We can wait until a major version".**
+      - There is no public v0.5.2; the next public release is 1.0. `release/v0.5.2` stays untagged, and X-tokio-1541-v052, its last pre-tag PR, is closed.
+      - The "Allow workers" setting that the runner found linked on `release/v0.5.2`, against that branch's feature manifest, is moot: nothing ships from that branch.
+      - **Runner's reading:** v0.6 and v0.7 stay milestones and gates in the plan, not public releases.
+    - The rewiring of `runner/slices.yaml` and `runner/dashboard.yaml` is in `docs/decisions/2026-11-28-runner-records-r24.md`.
 
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
