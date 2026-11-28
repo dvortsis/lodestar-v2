@@ -11116,15 +11116,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T08:19:24Z",
+    "updated": "2026-11-28T09:16:10Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-vpn-bind",
         "role": "build",
         "agent": "session_01MMjhnBk6q6p8uDAteN1GqD",
-        "doing": "#1167 review round 1 fixes (one push)",
-        "since": "2026-11-28T05:01:56Z"
+        "doing": "#1167 round 1 push (A-F, Windows gated until X-vpn-bind-win)",
+        "since": "2026-11-28T09:16:10Z"
       },
       {
         "slot": 2,
@@ -11140,8 +11140,8 @@
         "slice": "X-zero-rescue",
         "role": "build",
         "agent": "session_01MMjhnAXT3pCUkPv79nyKsi",
-        "doing": "step 0: plan for U8, U9, P10",
-        "since": "2026-11-28T07:53:22Z"
+        "doing": "#1171 CI and runner review",
+        "since": "2026-11-28T09:16:10Z"
       },
       {
         "slot": 4,
