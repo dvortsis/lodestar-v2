@@ -237,14 +237,21 @@ pub struct SearchResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub groups_approx: Option<bool>,
-    /// Matches a filter rule hid, which `hidden=true` ("N hidden · Show")
-    /// would add to `total`: counted under the same verified default and
-    /// Adult visibility, so it's exactly what showing them brings back
-    /// (never Adult while it's hidden; quarantined and dropped torrents
-    /// are never indexed). First page only, without `hidden=true` and
-    /// when the query doesn't name `hidden` itself; null otherwise, and
-    /// when the count ran out of time or would be an estimate.
-    #[serde(default)]
+}
+
+/// `POST /search/hidden`: what "N hidden · Show" says beside the results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({"hidden_total": 12}))]
+pub struct SearchHiddenCount {
+    /// Matches of the query a filter rule hid, which `hidden=true` would
+    /// add: counted under the request's verified default and Adult
+    /// visibility, so never Adult while it's hidden, and never unverified
+    /// torrents ("Show" doesn't bring them back). Quarantined and dropped
+    /// torrents are never indexed. 0 at once when nothing in the index is
+    /// hidden. Null when there's nothing to offer: the request already
+    /// sends `hidden=true`, the query names `hidden` itself, the count ran
+    /// out of its time budget, or it would be an estimate.
+    #[schema(required = true)]
     pub hidden_total: Option<usize>,
 }
 

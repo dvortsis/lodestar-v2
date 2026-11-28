@@ -56,8 +56,6 @@ export function createResults() {
 	let hits = $state.raw<SearchHit[]>([]);
 	let total = $state(0);
 	let totalApprox = $state(false);
-	// Matches a filter rule hid ("N hidden · Show"): the first page's answer; null when none was sent.
-	let hiddenTotal = $state<number | null>(null);
 	let notices = $state.raw<Notice[]>([]);
 	/** Per-clause counts of an empty first page (zero-result recovery). */
 	let recovery = $state.raw<Recovery | null>(null);
@@ -75,6 +73,8 @@ export function createResults() {
 	let moreError = $state.raw<ApiError | null>(null);
 	/** The query the rows answer, as a key; a reload of the same query keeps them. */
 	let shownKey = $state<string | null>(null);
+	/** The query the rows answer (null with none): the toolbar's hidden count follows it. */
+	let shownQuery = $state.raw<ResultsQuery | null>(null);
 	/** The query of the request in flight, and of the last one answered or failed, as keys. */
 	let inflightKey: string | null = null;
 	let settledKey: string | null = null;
@@ -122,13 +122,13 @@ export function createResults() {
 			hits = [];
 			total = 0;
 			totalApprox = false;
-			hiddenTotal = null;
 			notices = [];
 			recovery = null;
 			grouped = {};
 			error = null;
 			refining = false;
 			shownKey = null;
+			shownQuery = null;
 			inflightKey = null;
 			settledKey = null;
 			lease = null;
@@ -147,8 +147,6 @@ export function createResults() {
 				api.post('/search', { body: body(q, null, size), signal })
 			);
 			let rows = r.hits;
-			// Sent with the first page only: a kept place reads on with cursors, which carry none.
-			const hidden = r.hidden_total ?? null;
 			while (rows.length < keep && r.next_cursor) {
 				const after = r.next_cursor;
 				r = await slot.run((signal) => api.post('/search', { body: body(q, after, size), signal }));
@@ -157,7 +155,6 @@ export function createResults() {
 			hits = rows;
 			total = r.total;
 			totalApprox = r.total_approx;
-			hiddenTotal = hidden;
 			notices = r.notices;
 			recovery = r.recovery ?? null;
 			grouped = {
@@ -169,6 +166,7 @@ export function createResults() {
 			cursor = r.next_cursor;
 			lease = r.next_cursor;
 			shownKey = key;
+			shownQuery = q;
 			settledKey = key;
 			status = 'ready';
 		} catch (e) {
@@ -220,9 +218,8 @@ export function createResults() {
 		get totalApprox() {
 			return totalApprox;
 		},
-		/** Matches a filter rule hid, which "Show" adds (`hidden=true`); null when there's none to offer. */
-		get hiddenTotal() {
-			return hiddenTotal;
+		get query() {
+			return shownQuery;
 		},
 		get notices() {
 			return notices;
@@ -294,7 +291,6 @@ export function createResults() {
 			hits = [];
 			total = 0;
 			totalApprox = false;
-			hiddenTotal = null;
 			notices = [];
 			recovery = null;
 			grouped = {};
@@ -303,6 +299,7 @@ export function createResults() {
 			lease = null;
 			moreError = null;
 			shownKey = null;
+			shownQuery = null;
 			expired = false;
 			refining = false;
 			loadingMore = false;

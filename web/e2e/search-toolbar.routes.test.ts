@@ -7,6 +7,7 @@ import {
 	expect,
 	hits,
 	indexState,
+	toAst,
 	resultsCalls,
 	row,
 	rowOf,
@@ -48,11 +49,24 @@ test('"N hidden · Show" counts what a filter rule hid, and Show adds them (P7)'
 }) => {
 	server(mock, (sent) =>
 		(sent as { hidden?: boolean }).hidden
-			? body(hits(5), { total: 5, hidden_total: null })
-			: body(hits(3), { total: 3, hidden_total: 2 })
+			? body(hits(5), { total: 5 })
+			: body(hits(3), { total: 3 })
 	);
+	// Asked after the rows, with the rows' query; held a moment so the count shows alone first.
+	let release!: () => void;
+	const held = new Promise<void>((r) => (release = r));
+	mock.on('searchHiddenCount', async () => (await held, { hidden_total: 2 }));
 	await go('/search?q=lantern');
+	await expect(row(page, 1)).toBeVisible();
+	await expect(count(page)).toHaveText('3 results');
+	const box = await count(page).boundingBox();
+	release();
 	await expect(count(page)).toHaveText('3 results · 2 hidden · Show');
+	// The line keeps its height: nothing under it moves.
+	expect((await count(page).boundingBox())?.height).toBe(box?.height);
+	const sent = mock.calls('searchHiddenCount').map((r) => r.postDataJSON());
+	expect(sent).toHaveLength(1);
+	expect(sent[0]).toMatchObject({ hidden: false, ast: toAst('lantern') });
 	const show = page.getByRole('button', { name: 'Show', exact: true });
 	await expect(show).toHaveAccessibleDescription('2 hidden');
 	await show.click();

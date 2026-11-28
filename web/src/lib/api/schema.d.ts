@@ -1815,6 +1815,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/search/hidden": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What "N hidden · Show" says beside the results: the matches of the
+         *     query a filter rule hid, which `hidden=true` would add. The UI asks
+         *     once the first page is on screen, so the first page never waits for
+         *     it. Takes the search's own body (`q` or `ast`, `hidden`, `tz`; the
+         *     rest is ignored).
+         */
+        post: operations["searchHiddenCount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search/live": {
         parameters: {
             query?: never;
@@ -8672,6 +8695,25 @@ export interface components {
             fields: components["schemas"]["SearchField"][];
         };
         /**
+         * @description `POST /search/hidden`: what "N hidden · Show" says beside the results.
+         * @example {
+         *       "hidden_total": 12
+         *     }
+         */
+        SearchHiddenCount: {
+            /**
+             * @description Matches of the query a filter rule hid, which `hidden=true` would
+             *     add: counted under the request's verified default and Adult
+             *     visibility, so never Adult while it's hidden, and never unverified
+             *     torrents ("Show" doesn't bring them back). Quarantined and dropped
+             *     torrents are never indexed. 0 at once when nothing in the index is
+             *     hidden. Null when there's nothing to offer: the request already
+             *     sends `hidden=true`, the query names `hidden` itself, the count ran
+             *     out of its time budget, or it would be an estimate.
+             */
+            hidden_total: number | null;
+        };
+        /**
          * @description One search result: the torrent summary (`docs/metrics.md` §7.1), its
          *     relevance and, for a query with a file clause, the files that matched.
          */
@@ -9074,16 +9116,6 @@ export interface components {
             groups?: number;
             /** @description `groups` is an estimate (shown with "≈"); sent with `groups`. */
             groups_approx?: boolean;
-            /**
-             * @description Matches a filter rule hid, which `hidden=true` ("N hidden · Show")
-             *     would add to `total`: counted under the same verified default and
-             *     Adult visibility, so it's exactly what showing them brings back
-             *     (never Adult while it's hidden; quarantined and dropped torrents
-             *     are never indexed). First page only, without `hidden=true` and
-             *     when the query doesn't name `hidden` itself; null otherwise, and
-             *     when the count ran out of time or would be an estimate.
-             */
-            hidden_total?: number | null;
             hits: components["schemas"]["SearchHit"][];
             /**
              * @description The fields this query's clauses name that the index can't fully
@@ -16022,6 +16054,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchFieldsResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    searchHiddenCount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchHiddenCount"];
+                };
+            };
+            /** @description `bad_json` (not JSON), `bad_body` (the body couldn't be read), `query_syntax`, `q_and_ast`, `invalid_ast` or `bad_tz`. Each names the parameter at fault in `field`; `query_syntax` also gives `start` and `end`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];

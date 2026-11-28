@@ -40,20 +40,15 @@ const sent = (n: number) => post.mock.calls[n]![1].body;
 beforeEach(() => post.mockReset());
 
 describe('the results store', () => {
-	it("keeps the first page's hidden count through later pages, and drops it with the query", async () => {
-		post.mockResolvedValueOnce(page([1, 2], { next_cursor: 'c1', hidden_total: 12 }));
+	it('names the query the rows answer, for the hidden count, and none without rows', async () => {
+		post.mockResolvedValueOnce(page([1]));
 		const r = createResults();
-		expect(r.hiddenTotal).toBeNull();
-		await r.load(query());
-		expect(r.hiddenTotal).toBe(12);
-		post.mockResolvedValueOnce(page([3], { hidden_total: null }));
-		await r.loadMore();
-		expect(r.hiddenTotal).toBe(12);
-		post.mockResolvedValueOnce(page([4]));
-		await r.load(query('other'));
-		expect(r.hiddenTotal).toBeNull();
-		await r.load({ ...query(), ast: null as unknown as Ast });
-		expect(r.hiddenTotal).toBeNull();
+		expect(r.query).toBeNull();
+		const q = query();
+		await r.load(q);
+		expect(r.query).toBe(q);
+		await r.load({ ...q, ast: null });
+		expect(r.query).toBeNull();
 	});
 
 	it('browses match-all only when requested, with pagination and a distinct request identity', async () => {

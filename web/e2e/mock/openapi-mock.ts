@@ -195,6 +195,15 @@ export class OpenApiMock {
 		if (op.id === 'releaseSearchLive' && override === undefined) {
 			return route.fulfill({ status: 204 });
 		}
+		// The toolbar (X-hidden-count) asks how many a filter rule hid once rows show: none by default,
+		// so specs that don't test "N hidden · Show" see the count alone.
+		if (op.id === 'searchHiddenCount' && override === undefined) {
+			return route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: '{"hidden_total":null}'
+			});
+		}
 		// The facet rail (S-search-2b) asks for counts beside the results at x-large: no groups by
 		// default, so specs that don't test the rail needn't mock it.
 		if (op.id === 'facetsPost' && override === undefined) {

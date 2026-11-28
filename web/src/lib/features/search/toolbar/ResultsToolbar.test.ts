@@ -27,15 +27,15 @@ vi.mock('$lib/state/search.svelte', async (original) => ({
 	...(await original<typeof import('$lib/state/search.svelte')>()),
 	search
 }));
-const results = vi.hoisted(() => ({
-	status: 'ready',
-	hits: [] as unknown[],
-	total: 0,
-	totalApprox: false,
-	hiddenTotal: null as number | null,
-	grouped: {} as Record<string, unknown>
+vi.mock('../results/results.svelte', async () => ({
+	results: (await import('./testing.svelte')).fakeResults
 }));
-vi.mock('../results/results.svelte', () => ({ results }));
+const post = vi.hoisted(() => vi.fn());
+vi.mock('$lib/api/client', async (original) => ({
+	...(await original<typeof import('$lib/api/client')>()),
+	api: { post }
+}));
+const { fakeResults: results } = await import('./testing.svelte');
 
 const { default: ResultsToolbar } = await import('./ResultsToolbar.svelte');
 const { visit } = await import('../query/testing.svelte');
@@ -49,12 +49,13 @@ beforeEach(() => {
 	search.sort = 'relevance';
 	search.hidden = false;
 	search.setHidden.mockReset();
+	post.mockReset();
 	Object.assign(results, {
 		status: 'ready',
 		hits: [hit(1)],
 		total: 1284,
 		totalApprox: false,
-		hiddenTotal: null,
+		query: null,
 		grouped: {}
 	});
 });
@@ -62,9 +63,16 @@ beforeEach(() => {
 const count = () => screen.getByTestId('results-count').textContent?.trim();
 
 describe('ResultsToolbar', () => {
-	it('says how many a filter rule hid, and Show adds them (P7)', async () => {
-		results.hiddenTotal = 1200;
+	const lantern = { ast: { op: 'term', value: 'lantern' }, hidden: false };
+	const asked = () => post.mock.calls.filter(([path]) => path === '/search/hidden');
+
+	it('asks for the hidden count once the rows show, and Show adds them (P7)', async () => {
+		post.mockResolvedValue({ hidden_total: 1200 });
+		results.query = lantern;
 		render(ResultsToolbar);
+		await waitFor(() => expect(screen.getByTestId('results-hidden-show')).toBeTruthy(), WAIT);
+		expect(asked()).toHaveLength(1);
+		expect(asked()[0]![1].body).toMatchObject({ ast: lantern.ast, hidden: false });
 		expect(count()?.replace(/\s+/g, ' ')).toBe('1,284 results · 1,200 hidden · Show');
 		const show = screen.getByRole('button', { name: 'Show' });
 		const described = document.getElementById(show.getAttribute('aria-describedby')!);
@@ -73,21 +81,51 @@ describe('ResultsToolbar', () => {
 		expect(search.setHidden).toHaveBeenCalledWith(true);
 	});
 
-	it('offers nothing extra for none, an unknown count, hidden already shown, or no answer', () => {
-		for (const set of [
-			() => (results.hiddenTotal = 0),
-			() => (results.hiddenTotal = null),
-			() => ((results.hiddenTotal = 5), (search.hidden = true)),
-			() => ((results.hiddenTotal = 5), (results.status = 'loading'))
-		]) {
-			set();
+	it('drops a late answer for rows no longer shown, and aborts its request', async () => {
+		let answer!: (v: unknown) => void;
+		const signals: AbortSignal[] = [];
+		post.mockImplementationOnce(
+			(_: string, o: { signal: AbortSignal }) => (
+				signals.push(o.signal),
+				new Promise((r) => (answer = r))
+			)
+		);
+		post.mockResolvedValueOnce({ hidden_total: 3 });
+		results.query = lantern;
+		render(ResultsToolbar);
+		await waitFor(() => expect(asked()).toHaveLength(1), WAIT);
+		// A new query's rows: the old request is aborted, its late answer ignored.
+		results.query = { ast: { op: 'term', value: 'other' }, hidden: false };
+		await waitFor(() => expect(asked()).toHaveLength(2), WAIT);
+		expect(signals[0]!.aborted).toBe(true);
+		answer({ hidden_total: 999 });
+		await waitFor(
+			() => expect(screen.getByTestId('results-hidden').textContent).toBe('3 hidden'),
+			WAIT
+		);
+		await tick();
+		expect(screen.getByTestId('results-hidden').textContent).toBe('3 hidden');
+	});
+
+	it('offers nothing for none, an unknown count, a failure, or hidden already shown', async () => {
+		for (const [shown, answer] of [
+			[lantern, () => Promise.resolve({ hidden_total: 0 })],
+			[lantern, () => Promise.resolve({ hidden_total: null })],
+			[lantern, () => Promise.reject(new Error('down'))],
+			[{ ...lantern, hidden: true }, () => Promise.resolve({ hidden_total: 5 })]
+		] as const) {
+			post.mockReset();
+			post.mockImplementation(answer);
+			results.query = shown;
 			const { unmount } = render(ResultsToolbar);
+			if (!shown.hidden) await waitFor(() => expect(asked()).toHaveLength(1), WAIT);
+			await tick();
 			expect(screen.queryByTestId('results-hidden')).toBeNull();
 			expect(screen.queryByTestId('results-hidden-show')).toBeNull();
 			unmount();
-			search.hidden = false;
-			results.status = 'ready';
 		}
+		// Already shown: nothing is asked.
+		expect(asked()).toHaveLength(0);
 	});
 
 	it('counts the results: exact, one, none, and ≈ compact only when the server says so', () => {

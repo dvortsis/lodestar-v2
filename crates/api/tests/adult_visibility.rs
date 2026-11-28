@@ -323,6 +323,13 @@ async fn adult_is_hidden_by_default_in_results_and_counts() {
     assert_eq!(names(&body), sorted(&[2, 3, 4]));
 }
 
+/// `POST /search/hidden` with the search's body: its `hidden_total`.
+async fn hidden(f: &Fixture, c: &str, body: Value) -> Value {
+    let (status, body) = json_call(&f.app, post("/api/v1/search/hidden", Some(c), body)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["hidden_total"].clone()
+}
+
 #[tokio::test]
 async fn the_hidden_count_never_counts_adult_while_it_is_hidden() {
     // An adult torrent (0) and a film (2), both hidden by a filter rule.
@@ -332,31 +339,43 @@ async fn the_hidden_count_never_counts_adult_while_it_is_hidden() {
     assert_eq!(names(&body), sorted(&[3, 4]));
     assert_eq!(body["total"], 2);
     // Only the film: Adult stays out of the count while it's hidden.
-    assert_eq!(body["hidden_total"], 1);
+    assert_eq!(hidden(&f, &c, json!({})).await, 1);
     // "Show" brings back exactly that one.
     let (_, shown) = json_call(&f.app, get("/api/v1/search?hidden=true", &c)).await;
     assert_eq!(names(&shown), sorted(&[2, 3, 4]));
-    assert_eq!(shown["total"], 3);
     // Nothing more to offer once they're shown.
-    assert_eq!(shown["hidden_total"], Value::Null);
+    assert_eq!(hidden(&f, &c, json!({ "hidden": true })).await, Value::Null);
     // A query that matches only the adult one counts nothing.
-    let (_, body) = json_call(&f.app, get("/api/v1/search?q=studio", &c)).await;
-    assert_eq!(body["hidden_total"], 0);
+    assert_eq!(hidden(&f, &c, json!({ "q": "studio" })).await, 0);
     // A query naming `hidden` itself gets no count.
-    let (_, body) = json_call(&f.app, get("/api/v1/search?q=hidden%3Ayes", &c)).await;
-    assert_eq!(body["hidden_total"], Value::Null);
+    assert_eq!(
+        hidden(&f, &c, json!({ "q": "hidden:yes" })).await,
+        Value::Null
+    );
     // With Adult shown, both count, and "Show" brings back both.
     f.show.send(true).unwrap();
+    assert_eq!(hidden(&f, &c, json!({})).await, 2);
     let (_, body) = json_call(&f.app, get("/api/v1/search", &c)).await;
-    assert_eq!(body["hidden_total"], 2);
     let (_, shown) = json_call(&f.app, get("/api/v1/search?hidden=true", &c)).await;
     assert_eq!(
         shown["total"].as_u64().unwrap() - body["total"].as_u64().unwrap(),
         2
     );
-    // A later page carries no count.
-    let (_, body) = json_call(&f.app, get("/api/v1/search?offset=1&limit=1", &c)).await;
-    assert_eq!(body["hidden_total"], Value::Null);
+}
+
+#[tokio::test]
+async fn the_hidden_count_is_zero_at_once_with_nothing_hidden() {
+    let f = fixture();
+    let c = session(&f).await;
+    assert_eq!(hidden(&f, &c, json!({ "q": "movie" })).await, 0);
+    // A bad query is refused as a search refuses it.
+    let (status, body) = json_call(
+        &f.app,
+        post("/api/v1/search/hidden", Some(&c), json!({ "q": "\"open" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "query_syntax");
 }
 
 #[tokio::test]

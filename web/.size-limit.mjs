@@ -1463,7 +1463,9 @@ export default [
 	// (large:px-6, large:py-6, print:p-0, max-w-7xl) and the h1's one class string.
 	// X-grid-two-col-large (runner §2.26): 19.79 → 19.80 KB, measured 19,792 B: the large: grid utilities
 	// (grid-cols-2, col-span-2, gap-x-4) of three label | value lists; +9 B over main.
-	entry('CSS', search.css, '19.80 KB'),
+	// runner §2.26 (X-hidden-count): 19.80 → 19.82 KB, measured 19,812 B: the 44 px touch target on
+	// "N hidden · Show" (pointer-coarse padding and negative margin).
+	entry('CSS', search.css, '19.82 KB'),
 	...(appEntry
 		? [entry('Route table (app.js)', [appEntry], `${(1.26 + 0.04 * routeCount).toFixed(2)} KB`)]
 		: []),
@@ -1835,7 +1837,9 @@ export default [
 	// UX-start (runner §2.26): 44.09 -> 44.224 KB, measured 44,195 B (one trim round, compacting pillState's branches, saved nothing): shell/status.ts, which this chunk carries, gained the "warming up" branch and the found/stored fields.
 	entry('Search results (lazy)', resultsFirst, '44.224 KB'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
-	entry('Search home (lazy)', homeLazy, '2.71 KB'),
+	// runner §2.26 (X-hidden-count): 2.71 → 2.72 KB, measured 2,717 B: "Search {count} searchable
+	// torrents" (en, zh).
+	entry('Search home (lazy)', homeLazy, '2.72 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
 	// Over the 15 KB target (§10.1; runner, 2026-10-24: 16.8 KB). The self-review added Release year,
 	// the unavailable and stale-lease states, the staged-count announcement and day-snapped brushes.
@@ -1863,7 +1867,9 @@ export default [
 	// GS-5 (runner §2.26): 4.6 → 5.01 KB, the Group versions switch (twice: among the controls, and in
 	// More whenever the toolbar is too narrow for it, a container query), its note and the URL write
 	// with Back.
-	entry('Results toolbar (lazy)', toolbarLazy, '5.02 KB'),
+	// runner §2.26 (X-hidden-count): 5.02 → 5.40 KB, measured 5,399 B: "N hidden · Show", its request
+	// (POST /search/hidden, after the rows paint, aborted by a newer query) and its messages.
+	entry('Results toolbar (lazy)', toolbarLazy, '5.40 KB'),
 	// X-ui-guards (runner §2.26): 2,938 → 2,576 B with Bold icons (its glyphs moved to the results
 	// chunk); the limit falls to the measured size, rounded up at 0.01 kB, so the bytes aren't respent.
 	// GS-5 (runner §2.26): +1 B of shared-chunk noise (no live-banner code changed), rounded up to 0.01 KB.
