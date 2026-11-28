@@ -11125,6 +11125,11 @@
         "words": "Correction to the rule: soak tests are fine, unsupervised overnight included. Just no load tests on the CPU at night.",
         "via": "same relay, owner's Allow"
       }
+    },
+    {
+      "at": "2026-11-28T11:10:09Z",
+      "text": "Night for CPU load tests is 06:00Z-15:00Z now, and 05:00Z-14:00Z from 2027-03-14T09:00Z until 2027-11-07T08:00Z. No CPU load tests in those hours. Soaks are fine at any time.",
+      "recorded": "2026-11-28T11:10:27Z"
     }
   ],
   "slots": {
@@ -11299,7 +11304,7 @@
     }
   ],
   "heartbeat": "2026-11-28T09:39:03Z",
-  "updated": "2026-11-24T23:10Z",
+  "updated": "2026-11-28T11:10:27Z",
   "pause": {
     "state": "resumed",
     "resumed_at": "2026-11-27T01:31Z",
