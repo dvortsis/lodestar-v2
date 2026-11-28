@@ -11116,16 +11116,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-27T22:12:13Z",
+    "updated": "2026-11-28T00:17:49Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-cr-round1-collect-fixes",
+        "slice": "X-healthz-cold-start",
         "role": "build",
-        "agent": "session_01MMjhn8M4fhd4HMMFyJ8q2e",
-        "session": "session_01MMjhn8dWsf8cB7dBNZrTcU",
-        "doing": "hung leak-test cleanup, failed-arm stop, retry stamp, partial-hour coverage; #1150 merged",
-        "since": "2026-11-27T21:37:36Z"
+        "agent": "session_01MMjhnCzBhE8ykoynB1suXZ",
+        "doing": "have-filter fill off the start path; /healthz in seconds at 10M",
+        "since": "2026-11-28T00:17:49Z"
       },
       {
         "slot": 2,
@@ -11133,7 +11132,7 @@
         "role": "build",
         "agent": "session_01MMjhnCn4By6e7ABfiZeNct",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "PR #1152 under fresh review",
+        "doing": "PR #1152 review fixes local; blocked on a permission prompt for web/.size-limit.mjs",
         "since": "2026-11-27T20:57:42Z"
       },
       {
@@ -11141,7 +11140,7 @@
         "slice": "X-import-hot-stamp",
         "role": "build",
         "agent": "session_01MMjhnBn3f7qkA5KY7VQ2nx",
-        "doing": "offline import clears hot_stamp; writer audit",
+        "doing": "PR #1154 green; fresh review running",
         "since": "2026-11-27T22:12:13Z"
       },
       {
@@ -11150,7 +11149,7 @@
         "role": "build",
         "agent": "claude",
         "session": "session_01MMjhn8Vk45KrXtoM9AXh1o",
-        "doing": "step 0: drain memory measurement",
+        "doing": "PR #1153 fixing two-part review findings",
         "since": "2026-11-27T17:25Z"
       }
     ],
