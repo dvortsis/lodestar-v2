@@ -12,6 +12,7 @@ gates on (architecture §3, §8, §17). Run each in release:
 | `search-bench --dataset` | Every §3 latency row at 10M, steady-state RSS, new torrent → searchable under ingest, cold start, with a JSON report | none yet (M8-PERF-3) |
 | `reporting-overhead` (an example: it needs the API crate, a dev-dependency) | Insights' cost: search p95 and ingest with Insights open and the digest running, rollup bytes per year | `reporting overhead (§3)`, nightly |
 | `cold-start` (an example) | Time from a start to the first `/healthz` (`Pipeline::start`) and until crawling starts (the have-filter filled), on a synthetic store of N torrents. `cargo run --release -p lodestar-bench --example cold-start -- [TORRENTS] [DIR]` (X-healthz-cold-start) | none (reported) |
+| `mem-titles` (an example) | The title-suggestion build's peak memory doesn't grow with the store: peak `Anonymous` at 2N within 8 MiB of N (X-import-drain-memory) | `soak screen (release candidates)` (`soak-screen.yml`: release branches and by hand), as shipped (musl) |
 
 ## 10M mode
 

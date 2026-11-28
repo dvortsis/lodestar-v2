@@ -298,12 +298,14 @@ fn follow(
     let mut since = Instant::now();
     let mut pending = Pending::default();
     while !stop.load(Ordering::Relaxed) {
+        let step = indexer.catch_up_counted(store, config.batch)?;
+        titles.set_behind(backlog(&step, config.batch));
         let CatchUp {
             added,
             adult_added: adult,
             replayed,
             backfilled,
-        } = indexer.catch_up_counted(store, config.batch)?;
+        } = step;
         let replayed = replayed + backfilled;
         pending.added += added as u64;
         pending.adult += adult as u64;
@@ -333,6 +335,14 @@ fn follow(
         *reported = indexer.last_id();
     }
     Ok(())
+}
+
+/// Whether a catch-up step says more is waiting (an import's drain): a
+/// full step of new or changed torrents. Title builds wait until a step
+/// comes back short. A population backfill fills every step while its
+/// walk lasts, so it isn't counted and never holds titles back.
+fn backlog(step: &CatchUp, batch: usize) -> bool {
+    step.added + step.replayed >= batch
 }
 
 /// What's been read since the last commit, for the counters and the hook.
@@ -586,6 +596,151 @@ mod tests {
                     && !n.ends_with(".lock")
             })
             .count() as u64
+    }
+
+    #[test]
+    fn a_full_step_is_a_backlog() {
+        let step = |added, replayed, backfilled| CatchUp {
+            added,
+            adult_added: 0,
+            replayed,
+            backfilled,
+        };
+        assert!(backlog(&step(50, 0, 0), 50));
+        assert!(backlog(&step(30, 20, 0), 50));
+        assert!(!backlog(&step(49, 0, 0), 50));
+        assert!(!backlog(&step(0, 0, 0), 50));
+        // A population backfill's walk never holds titles back.
+        assert!(!backlog(&step(0, 0, 50), 50));
+        assert!(!backlog(&step(10, 0, 40), 50));
+    }
+
+    /// Torrents named `names` in one transaction, so the indexer finds
+    /// them all at once.
+    fn add_all(store: &mut Store, names: &[String]) {
+        use lodestar_bencode::{OwnedValue, to_vec};
+        let raws: Vec<Vec<u8>> = names
+            .iter()
+            .map(|name| {
+                let b = |s: &str| OwnedValue::Bytes(s.as_bytes().to_vec());
+                to_vec(&OwnedValue::Dict(
+                    [
+                        ("length", OwnedValue::Int(1 << 20)),
+                        ("name", b(name)),
+                        ("piece length", OwnedValue::Int(1 << 16)),
+                        ("pieces", OwnedValue::Bytes(vec![0; 20])),
+                    ]
+                    .into_iter()
+                    .map(|(k, v)| (k.as_bytes().to_vec(), v))
+                    .collect(),
+                ))
+            })
+            .collect();
+        let infos: Vec<_> = raws
+            .iter()
+            .map(|r| lodestar_metainfo::Info::parse(r).unwrap())
+            .collect();
+        let rows: Vec<_> = infos
+            .iter()
+            .zip(&raws)
+            .map(|(info, raw)| lodestar_store::NewTorrent {
+                info,
+                raw_info: Some(raw),
+                discovered_at: 1_700_000_000,
+                metadata_at: 1_700_000_001,
+                extra_flags: 0,
+                source: lodestar_store::SourceId::new(0).unwrap(),
+            })
+            .collect();
+        store.insert(&rows).unwrap();
+    }
+
+    fn enrich_all(store: &mut Store) {
+        while lodestar_pipeline::enrich::enrich_stored(store, 0, 500)
+            .unwrap()
+            .is_some()
+        {}
+    }
+
+    /// X-import-drain-memory: while the indexer reads a backlog in full
+    /// steps, no title build starts, whatever it commits; once it has
+    /// caught up, the set is built again and has the new titles.
+    #[test]
+    fn titles_wait_for_a_backlog_and_build_once_caught_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, dir) = (tmp.path().join("s.db"), tmp.path().join("index"));
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        let first: Vec<String> = (0..11)
+            .map(|i| format!("First.Title.{i}.2001.mkv"))
+            .collect();
+        add_all(&mut writer, &first);
+        enrich_all(&mut writer);
+        let index = SearchIndex::open(&dir).unwrap();
+        let titles = index.titles().clone();
+        titles.set_interval(Duration::from_millis(1));
+        let reader = Store::open_reader(&db, StoreConfig::default()).unwrap();
+        // One torrent a step: every step of a backlog is full.
+        let config = LiveConfig {
+            batch: 1,
+            ..quick()
+        };
+        let live = LiveIndexer::spawn(index.clone(), reader, config).unwrap();
+        let (stats, thread) = (live.stats(), live.thread.as_ref());
+        let shown = crate::suggest::Shown {
+            adult: false,
+            hidden: false,
+        };
+        let has = |p: &str| {
+            titles
+                .current()
+                .is_some_and(|s| !s.lookup(p, shown, 1).is_empty())
+        };
+        eventually(&stats, thread, 0, "the first 11 indexed and built", || {
+            stats.indexed.load(Ordering::Relaxed) >= 11
+                && !titles.is_behind()
+                && !titles.is_running()
+                && has("first title")
+        });
+        let before = titles.current().unwrap();
+        // A backlog, found all at once.
+        let backlog: Vec<String> = (0..2000)
+            .map(|i| format!("Fresh.Title.{i}.2002.mkv"))
+            .collect();
+        add_all(&mut writer, &backlog);
+        let start = Instant::now();
+        while !titles.is_behind() {
+            assert!(start.elapsed() < Duration::from_secs(10), "never behind");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let mut checked = 0;
+        loop {
+            // Behind across all three reads: no build can have started.
+            let (b1, current, running, b2) = (
+                titles.is_behind(),
+                titles.current().unwrap(),
+                titles.is_running(),
+                titles.is_behind(),
+            );
+            if !(b1 && b2) {
+                break;
+            }
+            assert!(Arc::ptr_eq(&current, &before), "a build ran while behind");
+            assert!(!running, "a builder started while behind");
+            checked += 1;
+            assert!(start.elapsed() < Duration::from_secs(300), "still behind");
+        }
+        assert!(checked > 0);
+        assert!(stats.commits.load(Ordering::Relaxed) > 0);
+        // Caught up: the new titles arrive (their enrichment is replayed).
+        enrich_all(&mut writer);
+        eventually(
+            &stats,
+            thread,
+            0,
+            "the new titles after catching up",
+            || has("fresh title"),
+        );
+        live.stop().unwrap();
     }
 
     /// X-mmap-cache-prune: the prune after each commit keeps only live

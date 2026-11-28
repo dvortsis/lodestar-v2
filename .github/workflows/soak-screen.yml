@@ -78,6 +78,11 @@ jobs:
           rm -f "$out"
           cargo zigbuild --locked --release -p lodestar-bench --example mem-cheap --target x86_64-unknown-linux-musl
           "$out" "$N" "$R" > "$RUNNER_TEMP/cheap-off.csv"
+      - name: title-suggestion build stays bounded (X-import-drain-memory)
+        if: ${{ !cancelled() }}
+        run: |
+          cargo zigbuild --locked --release -p lodestar-bench --example mem-titles --target x86_64-unknown-linux-musl --features mimalloc-override
+          target/x86_64-unknown-linux-musl/release/examples/mem-titles | tee -a "$GITHUB_STEP_SUMMARY"
       - name: SCREEN
         if: ${{ !cancelled() }}
         run: |

@@ -74,7 +74,7 @@ So: **the host is never idle, and build slots never wait for it.**
 6. **Import pilots** (Track I), in the gaps between crawler runs: G-import-1M → G-import-10M and G-rebuild-10M → G-import-50M → the owner approves the numbers → CR-3 and the full library.
 7. **v0.8:** the parsers and transports first, since they wait on no gate (NOS-0, NOS-2a, LEM-0, ADH-0, then NOS-1, NOS-2b, NOS-3, LEM-1); plug-ins and companions on workers (PL-0 to PL-8, CW-0 to CW-3) after WK-G and CMP-G; PL-7b after the owner approves the per-worker consent wording; then DOC-v08 and **G-v08**.
 8. **M8 hardening:** what waits on no gate starts now (M8-SEC-0, then the security reviews as each surface settles; M8-REL-1, M8-REL-2; M8-PERF-1, M8-PERF-3; M8-DOC-2); after WK-G: M8-CHAOS-1 to M8-CHAOS-4, then M8-PERF-2 and M8-CI, which need M8-CHAOS-1; after G-m6, G-v07 and G-v08: M8-POL, M8-PURGE, M8-DR, the other M8-DOC slices and the last security reviews. Each slice's exact `deps` are in `runner/slices.yaml`.
-9. **The 1.0 release candidate:** R-v1-cut, the owner tags the rc, the eleven G-v1-* gates run on it, then **G-v1** and the owner tags v1.0.0.
+9. **The 1.0 release candidate:** R-v1-cut, the owner tags the rc, the twelve G-v1-* gates run on it, then **G-v1** and the owner tags v1.0.0.
 10. **Backlog and polish** (Track B) in whatever slots remain. The cloud operator slices and their gate OP-G run in the cloud-testing slots (§2.64) and, where cloud testing needs them, ahead of the ladder (§2.62), once the owner finishes the operator setup.
 
 After 1.0: the Unraid Community Apps submission and package installers (owner), then v1.1 I2P, v1.2 eD2k and v1.3 IPFS (§3 below, architecture §14).
@@ -418,7 +418,7 @@ Checkpoint 1's report carries the measured ledger and this build's state as the 
 | G-v07-scale, G-v07 | architecture §14 and §18.9, plan `2026-11-05-v07-m7.md` | open |
 | G-v08 | architecture §19.8 and §18.9, plan `2026-11-06-v08.md` | open |
 | §20.8 filter budget (50 µs) | architecture §20.8, owner §2.20 | held; the Neutralize case is reported, not held, at ~55 µs on Intel 8573C runners. Checked on the reference CPU in G-v1-audits |
-| G-v1 and the eleven G-v1-* gates (CI on the rc, relevance, 10M performance and size, crawler re-measured, Windows soak, Linux soak, chaos, audits, security, design, UI) | architecture §17, plan `2026-11-06-m8-hardening.md` | open; relevance has a synthetic NDCG@10 of 0.9186 |
+| G-v1 and the twelve G-v1-* gates (CI on the rc, relevance, 10M performance and size, crawler re-measured, Windows soak, Linux soak, chaos, audits, security, design, UI, better than bitmagnet) | architecture §17, plan `2026-11-06-m8-hardening.md` | open; relevance has a synthetic NDCG@10 of 0.9186 |
 
 ### 0.7 Dependencies and serial points
 ```mermaid
@@ -651,7 +651,7 @@ Feature work on workers, companions and sources continues in parallel; only the 
 ### P7: M8 hardening → 1.0
 - **[M]**
   - The relevance judgment set and `relevance` bin, with an NDCG@10 gate.
-  - 10M performance and size gates on a dedicated runner, plus the owner-approved 50M import-scale numbers (§0.6).
+  - 10M performance and size gates on a dedicated runner. The owner-approved 50M import-scale numbers (§0.6) move to 1.0.x unless the host has spare time in weeks 2–4 and the import runs then (owner-decisions §2.85 D5).
   - The crawler gate re-measured on the release candidate.
   - The Windows soak test.
   - A full-system security review.
