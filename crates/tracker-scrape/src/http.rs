@@ -72,6 +72,50 @@ pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwe
         .map_err(|e| Error::Http(e.to_string()))
 }
 
+/// [`client`], sending only through `iface` (X-vpn-bind): pinned to the
+/// device on Linux (`SO_BINDTODEVICE`), bound to the interface's IPv4
+/// address on Windows (the strong host model keeps it there; an IPv6-only
+/// tracker then fails). An interface that can't be used fails the build,
+/// so HTTP trackers stay off rather than going out by the normal route.
+pub fn client_through(
+    iface: &lodestar_network_policy::iface::Interface,
+    deny: Option<&crate::Deny>,
+) -> Result<reqwest::Client> {
+    through(iface, deny)?
+        .build()
+        .map_err(|e| Error::Http(e.to_string()))
+}
+
+#[cfg(target_os = "linux")]
+fn through(
+    iface: &lodestar_network_policy::iface::Interface,
+    deny: Option<&crate::Deny>,
+) -> Result<reqwest::ClientBuilder> {
+    Ok(builder(None, deny, None)?.interface(iface.name()))
+}
+
+#[cfg(windows)]
+fn through(
+    iface: &lodestar_network_policy::iface::Interface,
+    deny: Option<&crate::Deny>,
+) -> Result<reqwest::ClientBuilder> {
+    let link = lodestar_network_policy::iface::check(iface)
+        .map_err(|d| Error::Http(format!("network interface {iface}: {}", d.code())))?;
+    let v4 = link.addrs.iter().copied().find(IpAddr::is_ipv4);
+    let v4 = v4.ok_or_else(|| Error::Http(format!("{iface} has no IPv4 address")))?;
+    builder(Some(v4), deny, None)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn through(
+    iface: &lodestar_network_policy::iface::Interface,
+    _: Option<&crate::Deny>,
+) -> Result<reqwest::ClientBuilder> {
+    Err(Error::Http(format!(
+        "crawling through {iface} isn't supported here"
+    )))
+}
+
 /// [`client`]'s builder, with `roots` in place of the routed roots when
 /// bound (tests pass their own CA).
 fn builder(

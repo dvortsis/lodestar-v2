@@ -177,6 +177,9 @@ pub(crate) struct ClientTask {
     pub max_wait: Duration,
     pub status: Arc<Mutex<TrackerStatus>>,
     pub gate: Arc<Gate>,
+    /// X-vpn-bind: while the crawl's interface is down, jobs are skipped
+    /// (no request, no failure counted against the tracker).
+    pub guard: Option<Arc<lodestar_network_policy::iface::Guard>>,
 }
 
 impl ClientTask {
@@ -226,7 +229,8 @@ impl ClientTask {
             .unwrap_or(usize::MAX)
             .saturating_mul(per_request)
             .min(job.hashes.len());
-        if take == 0 {
+        let down = self.guard.as_ref().is_some_and(|g| !g.state().is_up());
+        if take == 0 || down {
             return (Vec::new(), Outcome::Skipped, 0);
         }
         let hashes = &job.hashes[..take];

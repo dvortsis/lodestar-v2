@@ -102,6 +102,21 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     }
 
     render_egress(&mut o, &m.sources());
+    // X-vpn-bind: only with an interface set.
+    if let Some(guard) = m.vpn() {
+        o.one(
+            "crawl_interface_up",
+            "gauge",
+            "Whether the network interface the crawl is limited to is usable (0: VPN down).",
+            u8::from(guard.state().is_up()),
+        );
+        o.one(
+            "crawl_interface_trips_total",
+            "counter",
+            "Times the crawl's network interface went from usable to down.",
+            guard.trips(),
+        );
+    }
 
     let i = m.intake_stats();
     o.one(

@@ -5,31 +5,44 @@
 use std::fmt;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, RwLock};
 
 use crate::socket::{Config, DualSink, PacketSink, UtpSocket};
 
-/// The sink until the port's owner attaches: sends are refused (and uTP
-/// retransmits or times out), and no family is reachable.
+/// The sink until the port's owner attaches, and again once it detaches:
+/// sends are refused (and uTP retransmits or times out), and no family is
+/// reachable.
 #[derive(Default)]
-struct LateSink(OnceLock<DualSink>);
+struct LateSink(RwLock<Option<DualSink>>);
+
+impl LateSink {
+    fn get(&self) -> std::sync::RwLockReadGuard<'_, Option<DualSink>> {
+        self.0.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn set(&self) -> std::sync::RwLockWriteGuard<'_, Option<DualSink>> {
+        self.0.write().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 impl PacketSink for LateSink {
     fn send_to(&self, packet: &[u8], to: SocketAddr) -> io::Result<()> {
-        match self.0.get() {
+        match &*self.get() {
             Some(sink) => sink.send_to(packet, to),
             None => Err(io::ErrorKind::NotConnected.into()),
         }
     }
 
     fn reaches(&self, to: SocketAddr) -> bool {
-        self.0.get().is_some_and(|s| s.reaches(to))
+        self.get().as_ref().is_some_and(|s| s.reaches(to))
     }
 }
 
 /// A [`UtpSocket`] sharing a port: the owner of the UDP sockets calls
-/// [`attach`](Self::attach) once with its sending halves and passes uTP
-/// datagrams to [`feed`](Self::feed). Clones share everything.
+/// [`attach`](Self::attach) with its sending halves and passes uTP
+/// datagrams to [`feed`](Self::feed); one owner at a time, and an owner
+/// that goes away [`detach`](Self::detach)es, so the next can attach.
+/// Clones share everything.
 #[derive(Clone)]
 pub struct SharedPort {
     socket: UtpSocket,
@@ -57,14 +70,26 @@ impl SharedPort {
         self.socket.clone()
     }
 
-    /// Routes sends through the owner's sockets, by family. Only the first
-    /// call takes effect; it returns whether this one did.
+    /// Routes sends through the owner's sockets, by family. Only an
+    /// attach while none is attached takes effect; it returns whether this
+    /// one did.
     pub fn attach(&self, sink: DualSink) -> bool {
-        self.sink.0.set(sink).is_ok()
+        let mut slot = self.sink.set();
+        if slot.is_some() {
+            return false;
+        }
+        *slot = Some(sink);
+        true
+    }
+
+    /// The owner's sockets are gone: sends are refused again until the
+    /// next [`attach`](Self::attach).
+    pub fn detach(&self) {
+        *self.sink.set() = None;
     }
 
     pub fn attached(&self) -> bool {
-        self.sink.0.get().is_some()
+        self.sink.get().is_some()
     }
 
     /// A datagram the owner classified as uTP ([`crate::classify`]).
@@ -102,5 +127,13 @@ mod tests {
                 .reaches("[::ffff:127.0.0.1]:9".parse().unwrap())
         );
         assert!(!port.socket().reaches(v6), "no IPv6 socket attached");
+        // The owner goes away: refused again, and the next one attaches.
+        port.detach();
+        assert!(!port.attached() && !port.socket().reaches(v4));
+        assert!(port.attach(DualSink {
+            v4: None,
+            v6: Some(owner),
+        }));
+        assert!(port.socket().reaches(v6) && !port.socket().reaches(v4));
     }
 }

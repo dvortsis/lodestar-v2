@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_dht::node::{self as dht, HarvestConfig, Intensity};
+use lodestar_network_policy::iface::Interface;
 use lodestar_peer_wire::{Encryption, FetchOptions};
 use lodestar_pipeline::PipelineConfig;
 use lodestar_pipeline::health::HealthConfig;
@@ -250,6 +251,13 @@ pub struct Dht {
     /// by default (docs/decisions/2026-11-21-CR-SAMPLE-BACKOFF-ESCALATE.md);
     /// not in the Settings UI.
     pub sample_backoff_escalate: bool,
+    /// X-vpn-bind: crawl only through this network interface (`wg0`,
+    /// `tun0`; on Windows the adapter's name). Every DHT, peer and tracker
+    /// socket is pinned to it, and while it's missing or down the crawl
+    /// pauses ("VPN down") rather than use the normal route. Unset or
+    /// empty: any route, as before. Takes effect at the next start
+    /// (`crawler.interface` in the Settings API).
+    pub interface: Option<String>,
 }
 
 impl Default for Dht {
@@ -278,6 +286,19 @@ impl Default for Dht {
             route_backoff: false,
             sampler_cooldown_split: false,
             sample_backoff_escalate: false,
+            interface: None,
+        }
+    }
+}
+
+impl Dht {
+    /// `interface` checked ([`Interface::parse`]); `None` for any route.
+    pub fn crawl_interface(&self) -> Result<Option<Interface>, ConfigError> {
+        match self.interface.as_deref() {
+            None | Some("") => Ok(None),
+            Some(name) => Interface::parse(name)
+                .map(Some)
+                .map_err(|e| ConfigError(format!("dht.interface: {e}"))),
         }
     }
 }
@@ -984,6 +1005,7 @@ impl Config {
         if let Some(v) = watch_dir {
             config.watch.folder = v;
         }
+        config.dht.crawl_interface()?;
         config.ranking.check()?;
         config.updates.check()?;
         config.cluster.check()?;

@@ -187,7 +187,14 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
     let clock = Clock::new();
     s.cfg.udp.deny = s.cfg.deny.clone();
     s.cfg.http.deny = s.cfg.deny.clone();
-    let client = match http::client(s.cfg.udp.bind.map(|a| a.ip()), s.cfg.deny.as_ref()) {
+    // X-vpn-bind: with a guard, HTTP scrapes go only through its
+    // interface; a client that can't be built that way leaves HTTP
+    // trackers off rather than on the normal route.
+    let client = match &s.cfg.udp.guard {
+        Some(guard) => http::client_through(guard.interface(), s.cfg.deny.as_ref()),
+        None => http::client(s.cfg.udp.bind.map(|a| a.ip()), s.cfg.deny.as_ref()),
+    };
+    let client = match client {
         Ok(c) => Some(c),
         Err(e) => {
             lodestar_log::log_event!(
@@ -247,6 +254,7 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             max_wait,
             status: status.clone(),
             gate: gate.clone(),
+            guard: s.cfg.udp.guard.clone(),
         };
         // The longest one request can take: over UDP a connect and a
         // scrape, each with its retries. Capped at half a round, so a

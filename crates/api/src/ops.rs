@@ -48,12 +48,13 @@ use crate::ApiState;
 use crate::auth;
 use crate::dto::jobs::{BackgroundJob, PurgeJob, PurgePreview, PurgeRequest, PurgeStage};
 pub use crate::dto::ops::{
-    CompanionNeed, CompanionNeedState, ConsentClass, CrawlerIntensity, CrawlerPatch, CrawlerState,
-    CrawlerStatus, CredentialField, CredentialKind, CredentialsPatch, DhtStatus, EgressCounts,
-    EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress, FetchStatus,
-    NetworkCheck, PortMapping, ReachReason, RiskLevel, SamplingBlocked, SocksDns, Source,
-    SourceAgents, SourceAttribution, SourceEgress, SourceHealth, SourceKind, SourceList,
-    SourceNeed, SourcePatch, SourcePriority, SourceSchedule, SourceState, StatsResponse,
+    CompanionNeed, CompanionNeedState, ConsentClass, CrawlerIntensity, CrawlerInterface,
+    CrawlerPatch, CrawlerState, CrawlerStatus, CredentialField, CredentialKind, CredentialsPatch,
+    DhtStatus, EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState, ExternalAddress,
+    FetchStatus, InterfaceState, NetworkCheck, PortMapping, ReachReason, RiskLevel,
+    SamplingBlocked, SocksDns, Source, SourceAgents, SourceAttribution, SourceEgress, SourceHealth,
+    SourceKind, SourceList, SourceNeed, SourcePatch, SourcePriority, SourceSchedule, SourceState,
+    StatsResponse,
 };
 use crate::error::{ApiError, ApiResult, internal};
 use crate::events::EventHub;
@@ -97,6 +98,11 @@ pub struct CrawlerRuntime {
 /// What these routes ask of the running process.
 pub trait OpsApi: Send + Sync + fmt::Debug {
     fn crawler(&self) -> CrawlerRuntime;
+    /// X-vpn-bind: the interface the crawl is limited to and its state;
+    /// `None` (the default) for any route.
+    fn crawler_interface(&self) -> Option<CrawlerInterface> {
+        None
+    }
     /// Applies the registry's `crawler` section as it is *now* (pause,
     /// and the intensity's event), after a save. It reads the section
     /// under the same lock every change takes, so concurrent saves leave
@@ -349,14 +355,21 @@ async fn status(s: &ApiState) -> ApiResult<CrawlerStatus> {
     let intensity: CrawlerIntensity =
         serde_json::from_value(intensity.value.clone()).map_err(internal)?;
     let rt = ops.crawler();
+    let interface = ops.crawler_interface();
+    let vpn_down = interface
+        .as_ref()
+        .is_some_and(|i| i.state == InterfaceState::Down);
     Ok(CrawlerStatus {
         dht: rt.dht,
         fetch: rt.fetch,
+        interface,
         intensity,
         intensity_env,
         paused,
         since: rt.since,
-        state: if paused {
+        state: if vpn_down {
+            CrawlerState::VpnDown
+        } else if paused {
             CrawlerState::Paused
         } else {
             CrawlerState::Running

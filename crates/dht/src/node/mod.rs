@@ -248,6 +248,12 @@ pub struct Config {
     /// together sample it no faster than one install. 1 (the default) is
     /// a single install; 0 reads as 1.
     pub sample_interval_scale: u8,
+    /// X-vpn-bind: crawl only through this guard's network interface.
+    /// Every socket is pinned to it before it binds
+    /// ([`lodestar_network_policy::iface::pin`]), so a missing interface
+    /// fails [`Node::start`]; a send that says the interface went away
+    /// trips the guard at once. `None` (the default) binds as before.
+    pub guard: Option<std::sync::Arc<lodestar_network_policy::iface::Guard>>,
     /// X-sampler-cooldown-split (`dht.sampler_cooldown_split`): a full
     /// sampler table moves the cooldowns that end soonest into a bounded
     /// filter instead of stopping admission. Off keeps today's table and
@@ -348,6 +354,7 @@ impl Default for Config {
             utp: None,
             shard: None,
             sample_interval_scale: 1,
+            guard: None,
             sampler_cooldown_split: false,
             sample_backoff_escalate: false,
         }
@@ -1275,9 +1282,19 @@ impl NodeHandle {
 /// seen the socket become writable, which drops a fresh node's first
 /// (bootstrap) packets. IPv6 sockets are IPv6-only, so an IPv4 and an IPv6
 /// socket can share a port.
-fn bind(addr: SocketAddr) -> io::Result<(UdpSocket, std::net::UdpSocket)> {
+///
+/// With an interface (X-vpn-bind), the socket is pinned to it first, and
+/// binds the address the pin gives (Windows: the interface's own).
+fn bind(
+    addr: SocketAddr,
+    iface: Option<&lodestar_network_policy::iface::Interface>,
+) -> io::Result<(UdpSocket, std::net::UdpSocket)> {
     use socket2::{Domain, Protocol, Socket, Type};
     let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
+    let addr = match iface {
+        Some(iface) => lodestar_network_policy::iface::pin(&socket, iface, addr)?,
+        None => addr,
+    };
     if addr.is_ipv6() {
         socket.set_only_v6(true)?;
     }
@@ -1311,6 +1328,10 @@ pub struct Node {
     stats: Arc<Stats>,
     local_addrs: Vec<SocketAddr>,
     task: JoinHandle<Result<(), StateError>>,
+    /// The uTP port this node attached, detached again at shutdown so
+    /// the next node (a rebind after the interface came back,
+    /// X-vpn-bind) can attach its own sockets.
+    utp: Option<lodestar_utp::SharedPort>,
 }
 
 impl Node {
@@ -1339,8 +1360,9 @@ impl Node {
         }
         let mut sockets = Vec::new();
         let mut utp_sink = lodestar_utp::DualSink::default();
+        let iface = config.guard.as_ref().map(|g| g.interface());
         for addr in &config.bind {
-            let (recv, send) = bind(*addr)?;
+            let (recv, send) = bind(*addr, iface)?;
             if config.utp.is_some() {
                 let half: Arc<dyn lodestar_utp::PacketSink> = Arc::new(send.try_clone()?);
                 if addr.is_ipv4() {
@@ -1382,6 +1404,7 @@ impl Node {
         // burst of admitted requests fits as it did (CR-1c).
         let (commands, command_rx) = mpsc::channel(32 + config.peer_slots());
         let (shutdown, shutdown_rx) = watch::channel(false);
+        let utp = config.utp.clone();
         let task = tokio::spawn(actor::run(
             config,
             sockets,
@@ -1397,6 +1420,7 @@ impl Node {
             stats,
             local_addrs,
             task,
+            utp,
         }
     }
 
@@ -1444,10 +1468,15 @@ impl Node {
     /// Stops the node, saving its state when persistence is on.
     pub async fn shutdown(self) -> Result<(), StateError> {
         let _ = self.shutdown.send(true);
-        match self.task.await {
+        let result = match self.task.await {
             Ok(result) => result,
             Err(e) => Err(StateError::Io(io::Error::other(e))),
+        };
+        // The actor and its sockets are gone: the port is free again.
+        if let Some(utp) = &self.utp {
+            utp.detach();
         }
+        result
     }
 }
 

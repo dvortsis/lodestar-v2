@@ -20,7 +20,19 @@ use lodestar_metainfo::InfoHash;
 use tokio::net::UdpSocket;
 use tokio::time::{Instant, timeout_at};
 
+use lodestar_network_policy::iface::{self, State};
+
 use crate::{Counts, Error, Reply, Result, check_batch, message};
+
+/// A UDP socket pinned to the guard's interface before it binds.
+fn pinned(bind: SocketAddr, guard: &iface::Guard) -> std::io::Result<UdpSocket> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::for_address(bind), Type::DGRAM, Some(Protocol::UDP))?;
+    let bind = iface::pin(&socket, guard.interface(), bind)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&bind.into())?;
+    UdpSocket::from_std(socket.into())
+}
 
 /// Most hashes one scrape packet may carry: 8 + 74 × 12 bytes of reply
 /// fits a 900-byte datagram, under every path MTU.
@@ -49,6 +61,9 @@ pub struct UdpConfig {
     pub resolve_every: Duration,
     /// Blocklisted addresses, checked before every request.
     pub deny: Option<crate::Deny>,
+    /// X-vpn-bind: send only through this guard's network interface, and
+    /// not at all while it's down. `None` binds as before.
+    pub guard: Option<std::sync::Arc<lodestar_network_policy::iface::Guard>>,
 }
 
 impl Default for UdpConfig {
@@ -59,6 +74,7 @@ impl Default for UdpConfig {
             bind: None,
             resolve_every: Duration::from_secs(3600),
             deny: None,
+            guard: None,
         }
     }
 }
@@ -165,6 +181,8 @@ pub struct UdpTracker {
     cfg: UdpConfig,
     socket: Option<(UdpSocket, Instant)>,
     connection: Option<(u64, Instant)>,
+    /// The guard's generation the socket was made under (X-vpn-bind).
+    generation: u64,
 }
 
 impl UdpTracker {
@@ -175,6 +193,7 @@ impl UdpTracker {
             cfg,
             socket: None,
             connection: None,
+            generation: 0,
         }
     }
 
@@ -263,6 +282,25 @@ impl UdpTracker {
         let stale = self.socket.as_ref().is_none_or(|(s, at)| {
             at.elapsed() >= self.cfg.resolve_every || s.peer_addr().map_or(true, denied)
         });
+        // X-vpn-bind: nothing leaves while the interface is down, and a
+        // socket made before it went is made again.
+        if let Some(guard) = &self.cfg.guard {
+            let generation = match guard.state() {
+                State::Up { generation } => generation,
+                State::Down(_) => {
+                    self.socket = None;
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::NetworkDown,
+                        "the crawl's network interface is down",
+                    )));
+                }
+            };
+            if self.generation != generation {
+                self.socket = None;
+                self.generation = generation;
+            }
+        }
+        let stale = stale || self.socket.is_none();
         if stale {
             self.socket = None;
             let addrs: Vec<SocketAddr> = tokio::net::lookup_host((self.host.as_str(), self.port))
@@ -281,7 +319,10 @@ impl UdpTracker {
                 SocketAddr::V4(_) => SocketAddr::from(([0, 0, 0, 0], 0)),
                 SocketAddr::V6(_) => SocketAddr::from(([0u16; 8], 0)),
             });
-            let socket = UdpSocket::bind(bind).await?;
+            let socket = match &self.cfg.guard {
+                None => UdpSocket::bind(bind).await?,
+                Some(guard) => pinned(bind, guard).inspect_err(|e| guard.trip(e))?,
+            };
             socket.connect(addr).await?;
             self.socket = Some((socket, Instant::now()));
             self.connection = None;

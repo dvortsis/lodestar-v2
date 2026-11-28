@@ -10,6 +10,7 @@ use lodestar_dht::node::{
 };
 #[cfg(test)]
 use lodestar_metainfo::InfoHash;
+use lodestar_network_policy::iface::{Down, State};
 use lodestar_sources::{
     BoxFuture, Consent, Endpoint, Found, Kind, LookupSession, Manifest, Network, PeerRequest,
     PluginError, Priority, Risk, SessionAdmission, SourceCtx, SourcePlugin, Terminal,
@@ -50,6 +51,9 @@ pub(crate) static MANIFEST: Manifest = Manifest {
     always_adult: false,
     finds_private: false,
 };
+
+const PIN_RETRY_FIRST: Duration = Duration::from_secs(2);
+const PIN_RETRY_MAX: Duration = Duration::from_secs(60);
 
 pub struct DhtSource {
     config: Config,
@@ -193,50 +197,134 @@ impl SourcePlugin for DhtSource {
         Box::pin(async move {
             let (tx, mut harvests) = mpsc::channel(4096);
             let mut paused = self.paused.subscribe();
-            let config = Config {
-                paused: *paused.borrow_and_update(),
-                ..self.config.clone()
-            };
-            let node = Node::start(config, Some(tx))
-                .await
-                .map_err(|e| PluginError(format!("DHT bind failed: {e}")))?;
-            lodestar_log::log_event!(
-                crate::log_events::DHT_STARTED,
-                sockets = node.local_addrs().len()
-            );
-            *self.node.lock().expect("dht handle lock") = Some(node.handle());
-            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            let mut vpn = self.config.guard.as_ref().map(|g| g.subscribe());
             let mut requests_open = true;
+            // Between pin failures (an old kernel without `CAP_NET_RAW`
+            // fails every time): 2 s doubling to a minute.
+            let mut retry = PIN_RETRY_FIRST;
             loop {
-                tokio::select! {
-                    biased;
-                    _ = ctx.shutdown.requested() => break,
-                    Ok(()) = paused.changed() => {
-                        let p = *paused.borrow_and_update();
-                        node.handle().set_paused(p).await;
-                    }
-                    req = next_request(&mut ctx.peer_requests), if requests_open => match req {
-                        Some(request) => forward(&node.handle(), request),
-                        None => requests_open = false,
+                // X-vpn-bind: no node, so no packet, until the interface
+                // is up; each time it comes back, a node on fresh sockets.
+                let generation = match vpn.as_mut() {
+                    None => None,
+                    Some(rx) => loop {
+                        let state = *rx.borrow_and_update();
+                        if let State::Up { generation } = state {
+                            break Some(generation);
+                        }
+                        tokio::select! {
+                            biased;
+                            _ = ctx.shutdown.requested() => return Ok(()),
+                            changed = rx.changed() => {
+                                if changed.is_err() {
+                                    // The guard is gone: stay down.
+                                    ctx.shutdown.requested().await;
+                                    return Ok(());
+                                }
+                            }
+                            // Refused (dropped) while there's no node.
+                            req = next_request(&mut ctx.peer_requests), if requests_open => {
+                                requests_open = req.is_some();
+                            }
+                        }
                     },
-                    _ = tick.tick() => {
-                        *self.stats.lock().expect("dht stats lock") = Some(node.stats());
+                };
+                let config = Config {
+                    paused: *paused.borrow_and_update(),
+                    ..self.config.clone()
+                };
+                let node = match (
+                    Node::start(config, Some(tx.clone())).await,
+                    &self.config.guard,
+                ) {
+                    (Ok(node), _) => node,
+                    (Err(e), Some(guard)) => {
+                        // Fail closed: down until the next check finds
+                        // the interface usable, then tried again.
+                        lodestar_log::log_event!(
+                            crate::log_events::VPN_PIN_FAILED,
+                            error = lodestar_log::Error::new(&e)
+                        );
+                        guard.down(Down::BindFailed);
+                        tokio::select! {
+                            biased;
+                            _ = ctx.shutdown.requested() => return Ok(()),
+                            () = tokio::time::sleep(retry) => {}
+                        }
+                        retry = (retry * 2).min(PIN_RETRY_MAX);
+                        continue;
                     }
-                    Some(h) = harvests.recv() => {
-                        // Lookups answer the pool's requests; the rest is
-                        // discovery.
-                        match (&ctx.peer_replies, h.source) {
-                            (Some(replies), Source::Lookup) => replies.try_emit(found(h)),
-                            _ => ctx.emitter.try_emit(found(h)),
-                        };
+                    (Err(e), None) => return Err(PluginError(format!("DHT bind failed: {e}"))),
+                };
+                lodestar_log::log_event!(
+                    crate::log_events::DHT_STARTED,
+                    sockets = node.local_addrs().len()
+                );
+                retry = PIN_RETRY_FIRST;
+                *self.node.lock().expect("dht handle lock") = Some(node.handle());
+                let mut tick = tokio::time::interval(Duration::from_secs(1));
+                let stopping = loop {
+                    tokio::select! {
+                        biased;
+                        _ = ctx.shutdown.requested() => break true,
+                        () = left(&mut vpn, generation) => break false,
+                        Ok(()) = paused.changed() => {
+                            let p = *paused.borrow_and_update();
+                            node.handle().set_paused(p).await;
+                        }
+                        req = next_request(&mut ctx.peer_requests), if requests_open => match req {
+                            Some(request) => forward(&node.handle(), request),
+                            None => requests_open = false,
+                        },
+                        _ = tick.tick() => {
+                            *self.stats.lock().expect("dht stats lock") = Some(node.stats());
+                        }
+                        Some(h) = harvests.recv() => {
+                            // Lookups answer the pool's requests; the rest is
+                            // discovery.
+                            match (&ctx.peer_replies, h.source) {
+                                (Some(replies), Source::Lookup) => replies.try_emit(found(h)),
+                                _ => ctx.emitter.try_emit(found(h)),
+                            };
+                        }
                     }
+                };
+                *self.node.lock().expect("dht handle lock") = None;
+                let saved = node
+                    .shutdown()
+                    .await
+                    .map_err(|e| PluginError(format!("saving DHT state failed: {e}")));
+                if stopping {
+                    return saved;
+                }
+                // The interface went: the next node starts from the
+                // state just saved, on sockets bound once it's back.
+                if let Err(e) = saved {
+                    lodestar_log::log_event!(
+                        crate::log_events::SOURCE_FAILED,
+                        plugin = MANIFEST.id,
+                        error = lodestar_log::Error::new(&e)
+                    );
                 }
             }
-            *self.node.lock().expect("dht handle lock") = None;
-            node.shutdown()
-                .await
-                .map_err(|e| PluginError(format!("saving DHT state failed: {e}")))
         })
+    }
+}
+
+/// Returns once the guard's state is no longer `Up` under `generation`;
+/// never without a guard.
+async fn left(vpn: &mut Option<watch::Receiver<State>>, generation: Option<u64>) {
+    let (Some(rx), Some(generation)) = (vpn.as_mut(), generation) else {
+        return std::future::pending().await;
+    };
+    loop {
+        if *rx.borrow_and_update() != (State::Up { generation }) {
+            return;
+        }
+        if rx.changed().await.is_err() {
+            // The guard is gone: nothing can change any more.
+            return std::future::pending().await;
+        }
     }
 }
 

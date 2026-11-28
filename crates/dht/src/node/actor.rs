@@ -1205,8 +1205,12 @@ impl Actor {
                 Sent::Yes
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Sent::Throttled,
-            Err(_) => {
+            Err(e) => {
                 Stats::inc(&self.stats.send_errors);
+                // X-vpn-bind: a pinned socket whose interface went away.
+                if let Some(guard) = &self.cfg.guard {
+                    guard.trip(&e);
+                }
                 Sent::Failed
             }
         }

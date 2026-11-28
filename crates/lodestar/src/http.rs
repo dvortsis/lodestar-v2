@@ -263,15 +263,18 @@ async fn status(State(s): State<AppState>) -> Response {
         "started_at": m.started_at(),
         "torrents": m.torrents(),
         // Why it's paused: "setup" while it waits for setup (LEGAL-2),
+        // "vpn_down" while the crawl's interface is down (X-vpn-bind),
         // "user" for the crawler setting, null while it runs.
         "crawler": s.crawl.as_ref().map(|c| {
             let st = c.status();
+            let vpn_down = st.vpn.is_some_and(|v| v.down.is_some());
             json!({
                 "paused": st.paused,
-                "reason": match (st.paused, st.waiting_for_setup) {
-                    (false, _) => Value::Null,
-                    (true, true) => "setup".into(),
-                    (true, false) => "user".into(),
+                "reason": match (st.paused, st.waiting_for_setup, vpn_down) {
+                    (false, _, _) => Value::Null,
+                    (true, true, _) => "setup".into(),
+                    (true, false, true) => "vpn_down".into(),
+                    (true, false, false) => "user".into(),
                 },
             })
         }),

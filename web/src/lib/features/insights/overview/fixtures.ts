@@ -176,6 +176,7 @@ export function crawlerFixture(over: Partial<Crawler> = {}): Crawler {
 		fetch: { in_flight: 0, lookups: 0, queued: 0 },
 		intensity: 'balanced',
 		intensity_env: null,
+		interface: null,
 		paused: false,
 		since: NOW - 86_400,
 		state: 'running',

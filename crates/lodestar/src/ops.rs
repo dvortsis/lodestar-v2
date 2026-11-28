@@ -617,6 +617,21 @@ impl OpsApi for Ops {
         }
     }
 
+    fn crawler_interface(&self) -> Option<lodestar_api::dto::ops::CrawlerInterface> {
+        use lodestar_api::dto::ops::{CrawlerInterface, InterfaceState};
+        let interface = self.control.vpn_interface()?;
+        let down = self.control.status().vpn.and_then(|v| v.down);
+        Some(CrawlerInterface {
+            interface,
+            state: if down.is_some() {
+                InterfaceState::Down
+            } else {
+                InterfaceState::Up
+            },
+            reason: down.map(str::to_owned),
+        })
+    }
+
     fn sync_crawler(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             self.control
