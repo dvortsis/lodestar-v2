@@ -95,14 +95,21 @@ jobs:
         if: env.SMOKE_ONLY != 'true'
         run: |
           set -euo pipefail
+          # A rebuild moves the old dataset aside first, so an interrupted
+          # delete never leaves a half-empty folder the next run refuses.
+          rm -rf -- "$DATASET.old"
           run() {
-            target/release/size-report --dataset "$DATASET" --torrents "$TORRENTS" --json reports/size.json 2> >(tee "$RUNNER_TEMP/size.err" >&2)
+            status=0
+            target/release/size-report --dataset "$DATASET" --torrents "$TORRENTS" --json reports/size.json 2> "$RUNNER_TEMP/size.err" || status=$?
+            cat "$RUNNER_TEMP/size.err" >&2
+            return "$status"
           }
           if ! run; then
             if grep -qE "delete (this one|the folder) to rebuild" "$RUNNER_TEMP/size.err"; then
               echo "::warning::The dataset's key or store schema changed: rebuilding it"
               echo "rebuilt" > reports/dataset-rebuilt.txt
-              rm -rf -- "$DATASET"
+              mv -- "$DATASET" "$DATASET.old"
+              rm -rf -- "$DATASET.old"
               run
             else
               exit 1

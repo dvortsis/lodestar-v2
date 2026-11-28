@@ -113,6 +113,30 @@ class OtherWorkflows(unittest.TestCase):
         self.ok(text, "ci.yml")
         self.bad(text, "other.yml")
 
+    def test_the_allowed_dynamic_matrix_still_checks_include(self):
+        base = ("name: x\non: push\njobs:\n  test:\n    strategy:\n      matrix:\n"
+                "        os: ${{ fromJSON(needs.changes.outputs.test_os) }}\n{inc}    runs-on: ${{ matrix.os }}\n    steps: []\n")
+        for inc in ["        include:\n          - os: ${{ format('lodestar-bench-{0}', '10m') }}\n",
+                    '        include:\n          - os: "lodestar\\x2dbench-10m"\n',
+                    "        include:\n          - os: self-hosted\n",
+                    "        include: ${{ fromJSON(needs.changes.outputs.inc) }}\n"]:
+            with self.subTest(inc=inc):
+                self.bad(base.replace("{inc}", inc), "ci.yml")
+        self.ok(base.replace("{inc}", "        include:\n          - os: macos-latest\n"), "ci.yml")
+
+    def test_only_the_exact_dynamic_expression_is_allowed(self):
+        for expr in ["${{ fromJSON(needs.other.outputs.test_os) }}", "${{ fromJSON(needs.changes.outputs.os) }}",
+                     "${{ fromJSON(inputs.os) }}"]:
+            with self.subTest(expr=expr):
+                text = (f"name: x\non: push\njobs:\n  test:\n    strategy:\n      matrix:\n        os: {expr}\n"
+                        "    runs-on: ${{ matrix.os }}\n    steps: []\n")
+                self.bad(text, "ci.yml")
+
+    def test_an_escaped_label_is_caught(self):
+        self.bad(job('"lodestar\\x2dbench-10m"'))
+        self.bad("name: x\non: push\nenv:\n  R: \"LODESTAR\\u002dBENCH-10M\"\njobs:\n  a:\n    runs-on: ubuntu-latest\n"
+                 "    steps: []\n")
+
     def test_self_hosted_without_the_label(self):
         self.bad(job("self-hosted"))
         self.bad(job("[self-hosted, linux, x64]"))
@@ -152,7 +176,9 @@ class BenchWorkflow(unittest.TestCase):
         self.assertEqual(self.problems(BENCH_OK), [])
 
     def test_untrusted_triggers_fail(self):
-        for event in sorted(g.UNTRUSTED) + ["repository_dispatch", "workflow_call", "merge_group"]:
+        for event in ["pull_request", "pull_request_target", "workflow_run", "issue_comment", "pull_request_review",
+                      "pull_request_review_comment", "discussion_comment", "repository_dispatch", "workflow_call",
+                      "merge_group"]:
             with self.subTest(event=event):
                 text = BENCH_OK.replace("on:\n", f"on:\n  {event}:\n", 1)
                 self.assertTrue(any(repr(event) in p for p in self.problems(text)), self.problems(text))
@@ -181,9 +207,14 @@ class BenchWorkflow(unittest.TestCase):
         self.assertTrue(self.problems(BENCH_OK.replace("contents: read", "contents: read\n      actions: write")))
 
     def test_secrets_and_vars(self):
-        for ref in ["${{ secrets.TOKEN }}", "${{ secrets['TOKEN'] }}", "${{ vars.X }}"]:
+        for ref in ["${{ secrets.TOKEN }}", "${{ secrets['TOKEN'] }}", "${{ vars.X }}", "${{ toJSON(secrets) }}",
+                    "${{ toJSON(vars) }}", "${{ github.token }}", "${{ SECRETS.X }}"]:
             with self.subTest(ref=ref):
                 self.assertTrue(self.problems(BENCH_OK.replace("${{ inputs.smoke_only }}", ref)))
+
+    def test_no_expression_inside_run(self):
+        text = BENCH_OK.replace('run: echo "$SMOKE"', 'run: echo "${{ github.event.head_commit.message }}"')
+        self.assertTrue(self.problems(text))
 
     def test_ref_check_on_the_labelled_job(self):
         self.assertTrue(self.problems(BENCH_OK.replace(f"    if: {REF_IF}\n", "")))
@@ -245,6 +276,14 @@ class Repo(unittest.TestCase):
         problems = g.check(root)
         self.assertTrue(any("missing" in p for p in problems))
         self.assertTrue(any(p.startswith("a.yaml") for p in problems))
+
+    def test_upper_case_suffixes_and_other_files_in_workflows_are_checked(self):
+        root = self.tree({".github/workflows/bench-10m.yml": BENCH_OK,
+                          ".github/workflows/X.YML": job("self-hosted"),
+                          ".github/workflows/notes.txt": "lodestar-bench-10m\n"})
+        problems = g.check(root)
+        self.assertTrue(any(p.startswith("X.YML") for p in problems), problems)
+        self.assertTrue(any(p.startswith(".github/workflows/notes.txt") for p in problems), problems)
 
     def test_a_script_naming_the_label_is_caught(self):
         root = self.tree({".github/workflows/bench-10m.yml": BENCH_OK,

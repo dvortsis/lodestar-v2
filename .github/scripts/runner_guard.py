@@ -49,17 +49,12 @@ HOSTED = re.compile(r"^(ubuntu|windows|macos)-(latest|\d+(\.\d+)?(-arm)?|\d+-(la
 # The one runs-on allowed to come from a job output, as (workflow, job):
 # ci.yml's test matrix is ci_changes.py's test_os, which names hosted images
 # only (it's scanned for the label like every file under .github/).
-DYNAMIC_OK = {("ci.yml", "test")}
-DYNAMIC_MATRIX = re.compile(r"^\$\{\{\s*fromJSON\(\s*needs\.[\w-]+\.outputs\.[\w-]+\s*\)\s*\}\}$")
+DYNAMIC_OK = {("ci.yml", "test", "os"): "${{ fromJSON(needs.changes.outputs.test_os) }}"}
 MATRIX_REF = re.compile(r"^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$")
 
 BENCH_TRIGGERS = {"push", "schedule", "workflow_dispatch"}
 BENCH_PUSH_BRANCHES = ["release/**"]
 BENCH_INPUTS = {"smoke_only"}
-# Triggers that run code a pull request or a fork controls, or that a
-# comment can start.
-UNTRUSTED = {"pull_request", "pull_request_target", "workflow_run", "issue_comment",
-             "pull_request_review", "pull_request_review_comment", "discussion_comment"}
 REF_IF = "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')"
 PINNED = re.compile(r"^[\w.-]+/[\w.-]+(/[\w./-]+)?@[0-9a-f]{40}$")
 
@@ -74,11 +69,6 @@ def triggers(wf):
     if isinstance(on, dict):
         return on
     return {}
-
-
-def names_label(value):
-    """True if the label appears anywhere in a runs-on value."""
-    return LABEL in str(value).lower()
 
 
 def runs_on_problems(name, job_id, job):
@@ -119,21 +109,25 @@ def label_value_problems(name, job_id, job, value):
     if not isinstance(matrix, dict):
         return [f"runs-on {value!r}: the job has no matrix"]
     raw = matrix.get(key)
-    if isinstance(raw, str) and DYNAMIC_MATRIX.match(raw.strip()):
-        if (name, job_id) in DYNAMIC_OK:
-            return []
-        return [f"runs-on {value!r}: matrix.{key} comes from a job output ({raw.strip()})"]
+    dynamic = False
     candidates = []
-    if isinstance(raw, list):
+    if isinstance(raw, str) and "${{" in raw:
+        if DYNAMIC_OK.get((name, job_id, key)) != raw.strip():
+            return [f"runs-on {value!r}: matrix.{key} is an expression ({raw.strip()})"]
+        dynamic = True  # written by ci_changes.py, which is scanned for the label
+    elif isinstance(raw, list):
         candidates.extend(raw)
     elif raw is not None:
         return [f"runs-on {value!r}: matrix.{key} is not a list ({raw!r})"]
-    for entry in matrix.get("include") or []:
-        if isinstance(entry, dict) and key in entry:
+    include = matrix.get("include")
+    if include is not None and not isinstance(include, list):
+        return [f"runs-on {value!r}: matrix.include is not a list ({include!r})"]
+    for entry in include or []:
+        if not isinstance(entry, dict):
+            return [f"runs-on {value!r}: a matrix.include entry is not a mapping ({entry!r})"]
+        if key in entry:
             candidates.append(entry[key])
-    if isinstance(matrix.get("include"), str):
-        return [f"runs-on {value!r}: matrix.include is an expression"]
-    if not candidates:
+    if not candidates and not dynamic:
         return [f"runs-on {value!r}: matrix.{key} has no values"]
     out = []
     for c in candidates:
@@ -186,8 +180,9 @@ def check_bench(wf, text):
     if "env" in wf:
         out.append(f"{name}: no top-level env (each job states its own)")
     for s in walk_strings(wf):
-        if re.search(r"\b(secrets|vars)\s*[.\[]", s) or "secrets: inherit" in s:
-            out.append(f"{name}: references secrets or vars ({s.strip()[:60]!r})")
+        for expr in re.findall(r"\$\{\{(.*?)\}\}", s, re.S):
+            if re.search(r"\b(secrets|vars)\b|\bgithub\s*\.\s*token\b", expr, re.I):
+                out.append(f"{name}: an expression reads secrets, vars or the token ({expr.strip()[:60]!r})")
     if re.search(r"secrets\s*:\s*inherit", text):
         out.append(f"{name}: secrets: inherit")
     jobs = wf.get("jobs") or {}
@@ -212,6 +207,8 @@ def check_bench(wf, text):
         if "environment" in job or "services" in job or "container" in job:
             out.append(f"{where}: no environment, services or container")
         for step in job.get("steps") or []:
+            if isinstance(step, dict) and "${{" in str(step.get("run", "")):
+                out.append(f"{where}: an expression inside run: (pass it through env:)")
             uses = step.get("uses") if isinstance(step, dict) else None
             if uses is None:
                 continue
@@ -234,7 +231,9 @@ def check_workflow(name, text):
     if name == BENCH:
         return check_bench(wf, text)
     out = []
-    if LABEL in text.lower():
+    # The raw text catches comments; the parsed strings catch YAML escapes
+    # ("lodestar\x2dbench-10m") that the raw text hides.
+    if LABEL in text.lower() or any(LABEL in v.lower() for v in walk_strings(wf)):
         out.append(f"{name}: names the bench runner's label {LABEL!r}; only {BENCH} may")
     jobs = wf.get("jobs") or {}
     if not isinstance(jobs, dict):
@@ -249,17 +248,18 @@ def check(root):
     root = Path(root)
     out = []
     wf_dir = root / ".github" / "workflows"
-    names = sorted(p.name for p in wf_dir.iterdir() if p.is_file() and p.suffix in {".yml", ".yaml"})
+    names = sorted(p.name for p in wf_dir.iterdir() if p.is_file() and p.suffix.lower() in {".yml", ".yaml"})
     if BENCH not in names:
         out.append(f"{BENCH} is missing")
     for name in names:
         out.extend(check_workflow(name, (wf_dir / name).read_text(encoding="utf-8")))
-    # The rest of .github/ (scripts, actions, fixtures) mustn't name it either:
-    # a script that prints a matrix could feed it to a runs-on.
+    # The rest of .github/ (scripts, actions, fixtures, any other file in
+    # workflows/) mustn't name it either: a script that prints a matrix could
+    # feed it to a runs-on.
     for path in sorted((root / ".github").rglob("*")):
         rel = path.relative_to(root).as_posix()
-        if (not path.is_file() or rel.startswith(".github/workflows/") or rel in NAMES_LABEL
-                or "__pycache__" in path.parts):
+        if (not path.is_file() or rel in NAMES_LABEL or "__pycache__" in path.parts
+                or (path.parent == wf_dir and path.name in names)):
             continue
         try:
             body = path.read_text(encoding="utf-8")

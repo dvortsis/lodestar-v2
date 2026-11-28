@@ -1,6 +1,6 @@
 # The 10M benchmark runner: setup
 
-This page is for the owner. It sets up the machine that runs the 10M benchmark (`.github/workflows/bench-10m.yml`), the workflow that checks every §3 size and speed figure on a synthetic store of 10 million torrents. Steps 1, 2 and 4 are yours. Step 3 is yours too unless you ask the runner to prepare it. Step 5 is a test run together.
+This page is for the owner. It sets up the machine that runs the 10M benchmark (`.github/workflows/bench-10m.yml`), the workflow that checks every §3 size and speed figure on a synthetic store of 10 million torrents. Steps 1–4 are yours: they need the machine or the repository's settings. Step 5 is a test run with the runner.
 
 **What this needs from you:** about two hours, a spare machine (or a virtual machine) you can wipe, and admin access to the repository's settings.
 
@@ -70,14 +70,16 @@ Each job runs in a fresh container that registers itself for **one** job, with o
    ```
    Build it: `sudo docker build -t lodestar-bench-runner /srv/bench-runner`.
 2. In GitHub, open **Settings → Actions → Runners → New self-hosted runner**, choose **Linux**, and copy the token from the **Configure** box. The token is valid for one hour.
-3. Start one job's runner:
+3. Start one job's runner, and paste the token when it asks (it isn't shown):
    ```sh
-   sudo docker run --rm -it -v /srv/bench:/bench lodestar-bench-runner bash -c '
-     ./config.sh --url https://github.com/dvortsis/lodestar-v2 --token PASTE_TOKEN \
+   sudo docker run --rm -it --security-opt no-new-privileges -v /srv/bench:/bench lodestar-bench-runner bash -c '
+     read -rsp "Token: " T; echo
+     ./config.sh --url https://github.com/dvortsis/lodestar-v2 --token "$T" \
        --ephemeral --no-default-labels --labels lodestar-bench-10m \
-       --name bench-$(date +%s) --unattended && ./run.sh'
+       --name bench-$(date +%s) --unattended && unset T && exec ./run.sh'
    ```
-   `--rm` deletes the container when the job ends, so the next job starts clean. Only `/srv/bench` (the dataset disk) survives.
+   - `--rm` deletes the container when the job ends, so the next job starts clean. Only `/srv/bench` (the dataset disk) survives.
+   - Typing the token at the prompt keeps it out of your shell history and out of the job's process list. Never put it on the command line: a job could read it there and register runners of its own.
 
 **Result:** **Settings → Actions → Runners** lists `bench-…` as **Idle**, with the single label `lodestar-bench-10m`. After one job it disappears by itself.
 
@@ -87,7 +89,7 @@ Each job runs in a fresh container that registers itself for **one** job, with o
 
 **Undo:** in **Settings → Actions → Runners**, remove the runner. On the machine, `sudo docker rm -f $(sudo docker ps -aq)`, and wipe `/srv/bench` if you're retiring it.
 
-## Step 3: Protect release branches
+## Step 3 (you): Protect release branches
 
 The benchmark runs on pushes to `release/*`, so only you should be able to create or push those branches.
 
@@ -139,5 +141,5 @@ Only the dataset disk persists. A hostile job could tamper with the dataset ther
 | The job waits with **Waiting for a runner to pick up this job** | Start a runner (step 2). Check that its label is exactly `lodestar-bench-10m`. |
 | `/bench isn't mounted` | Run the container with `-v /srv/bench:/bench`, and check `/srv/bench` is owned by uid 1001, the container's user (`sudo chown 1001:1001 /srv/bench`). |
 | `The dataset's key or store schema changed: rebuilding it` | Expected after a generator or schema change. The run takes many hours. |
-| `is not empty and has no dataset.json` | Something else is in `/srv/bench/dataset-10m`. The job never deletes what it didn't build: move it away yourself. |
+| `is not empty and has no dataset.json` | Something else is in `/srv/bench/dataset-10m`, or a machine crash interrupted a build's first step. The job never deletes what it didn't build: check the folder, then delete or move it yourself. |
 | The `runner-guard` check fails on a pull request | A workflow names the label or could reach a self-hosted runner. Tell the runner, and don't merge it. |
