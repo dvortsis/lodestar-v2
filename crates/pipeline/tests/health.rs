@@ -9,7 +9,9 @@ use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::{Info, InfoHash};
 use lodestar_pipeline::health::trackers::Health;
 use lodestar_pipeline::health::{HealthConfig, Outcome};
-use lodestar_pipeline::{HealthSetup, Pipeline, PipelineConfig, metric, open_hot, save_hot};
+use lodestar_pipeline::{
+    HealthSetup, Pipeline, PipelineConfig, invalidate_hot, metric, open_hot, save_hot,
+};
 use lodestar_sources::{
     BoxFuture, Consent, Found, Kind, Manifest, Network, PluginError, Priority, Risk, SourceCtx,
     SourcePlugin,
@@ -674,4 +676,26 @@ fn hot_columns_survive_a_clean_restart_and_rebuild_after_a_crash() {
     assert!(!from_snapshot);
     assert_eq!(again.get(Col::Dht, t[0].0 as u64), NEVER);
     assert_eq!(again.get(Col::Seeders, t[0].0 as u64), 7);
+}
+
+/// X-import-hot-stamp: a writer other than the pipeline marks a saved
+/// snapshot stale, and the next open rebuilds from SQLite. Idempotent, and
+/// fine on a store with no stamp.
+#[test]
+fn invalidate_hot_makes_the_next_open_rebuild() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.db");
+    let hot_dir = dir.path().join("hot");
+    let t = seed(&db, &["a"]);
+    let mut store = Store::open(&db, StoreConfig::default()).unwrap();
+    invalidate_hot(store.connection()).unwrap();
+    let (hot, _) = open_hot(&mut store, &hot_dir).unwrap();
+    // A value only the snapshot has.
+    hot.set(Col::Dht, t[0].0 as u64, 99);
+    save_hot(&mut store, &hot, &hot_dir).unwrap();
+    invalidate_hot(store.connection()).unwrap();
+    invalidate_hot(store.connection()).unwrap();
+    let (back, from_snapshot) = open_hot(&mut store, &hot_dir).unwrap();
+    assert!(!from_snapshot);
+    assert_eq!(back.get(Col::Dht, t[0].0 as u64), NEVER);
 }

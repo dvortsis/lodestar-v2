@@ -1743,7 +1743,20 @@ pub(crate) fn unix_now() -> i64 {
 
 /// `settings` key holding the stamp of the hot-column snapshot that's
 /// current, or 0 while the columns are live and the snapshot is stale.
+/// Absent reads as 0.
 const HOT_STAMP: &str = "hot_stamp";
+
+/// Marks the hot-column snapshot stale, so the next [`open_hot`] rebuilds
+/// from SQLite. Anything but the running pipeline that changes the rows
+/// the columns are built from (`swarm`, `torrents`; [`Store::load_hot`])
+/// calls this before its first such write, so a crash part-way through
+/// still forces the rebuild (X-import-hot-stamp). `conn` may be a store's
+/// connection or a raw copy of one.
+pub fn invalidate_hot(conn: &lodestar_store::rusqlite::Connection) -> Result<(), Error> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", [HOT_STAMP])
+        .map_err(|e| Error::Store(e.into()))?;
+    Ok(())
+}
 
 /// Loads the hot columns (blocking): the snapshot in `dir` when it's the
 /// one the last clean shutdown recorded, else a rebuild from SQLite. The
