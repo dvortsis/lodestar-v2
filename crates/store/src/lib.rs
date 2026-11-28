@@ -489,8 +489,8 @@ pub struct WriteBatch<'a> {
     pub swarm: &'a [SwarmUpdate],
     /// The worker that prepared each of `prepared`, in order (WK-12,
     /// §19.4): the authenticated session's id, 0 for the built-in worker.
-    /// Empty when every one is the built-in worker's; otherwise as long as
-    /// `prepared`, or the write is refused with nothing written. A remote
+    /// May be empty when every one is the built-in worker's; otherwise as
+    /// long as `prepared`, or the write is refused with nothing written. A remote
     /// worker's new row, or the partial import its record upgrades, is
     /// recorded in `torrent_worker` in this transaction
     /// ([`workers`](crate::workers)).

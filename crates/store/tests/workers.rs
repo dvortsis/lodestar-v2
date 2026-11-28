@@ -384,7 +384,7 @@ proptest! {
     #[test]
     fn purge_by_worker_removes_exactly_its_rows(
         by in proptest::collection::vec(0u32..=4, 1..40),
-        again in proptest::collection::vec((0usize..40, 1u32..=4), 0..10),
+        again in proptest::collection::vec((0usize..40, 0u32..=4), 0..10),
         target in 1u32..=4,
         step in 1usize..8,
     ) {
@@ -393,7 +393,8 @@ proptest! {
         let ps: Vec<_> = (0..by.len()).map(|i| prepared(&store, &format!("t{i}"))).collect();
         let refs: Vec<_> = ps.iter().collect();
         let out = commit(&mut store, &refs, src, &by);
-        // Seen again by other workers: provenance stays the first's.
+        // Seen again by other workers or the built-in one: provenance
+        // stays the first's.
         for &(i, w) in &again {
             if let Some(p) = ps.get(i) {
                 commit(&mut store, &[p], src, &[w]);
@@ -527,6 +528,12 @@ fn a_purged_workers_torrents_leave_the_snapshots() {
         )
         .unwrap();
     assert_eq!(orphans, 0);
+    let fk: i64 = conn
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(fk, 0, "no child row left without its torrent");
     let ok: String = conn
         .query_row("PRAGMA quick_check", [], |r| r.get(0))
         .unwrap();
