@@ -29,7 +29,7 @@ Developer and operator doc. Follow it top to bottom, one step at a time. The ope
 | Step | What | Where in this sheet |
 |---|---|---|
 | 1 | One-time setup: salt, stacks, the coordinator file, identities for the runner | §3 |
-| 2 | **Rehearsal** (2 h of each arm on its day-1 exit, inside the 12 h after the comparator) | §5 |
+| 2 | **Rehearsal** (up to 3 h of each arm on its day-1 exit, inside the 12 h after the comparator; the 3 h needs X-rehearsal-window) | §5 |
 | 3 | **Day 1**: three arms, 24 h windows, staggered starts | §6 |
 | 4 | Copy-off, `segment`, read-back; then the exit swap | §7 |
 | 5 | **Day 2**: the same, on the day-2 exits | §6 |
@@ -43,7 +43,10 @@ The layouts (the runner picks one at the rehearsal, and it holds for both days):
 | L3 | B–X, A–Y, C–Z | B–Y, A–Z, C–X |
 | L2 | B–X, A–Y | B–Y, A–X |
 | L2b | B–X, C–Y | B–Y, C–X |
+| L2c | A–X, C–Y | A–Y, C–X |
 | S | the candidate alone, one exit | the candidate alone, another exit |
+
+L2c is only for the attempt after an L3 attempt, when B is out (A goes on as the candidate, C as the diagnostic).
 
 ## 2. The rules that decide what you do
 
@@ -64,14 +67,17 @@ The layouts (the runner picks one at the rehearsal, and it holds for both days):
 
 Do this once, before the rehearsal. Run everything as root on the experiment VM, from a checkout of this repository at the commit the runner names, with Python 3.10 or later.
 
-1. **Pin the build.** The runner gives you the image tag, the source commit and the spec commit. Pull the image by its tag **once**, and read the digest Docker gives it:
+1. **Pin the build.** The runner gives you the image tag, the source commit and the spec commit. Pull the image by its tag **once**, check which commit it was built from, and read the digest Docker gives it:
 
    ```bash
    docker pull <image>:<tag>
+   docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' <image>:<tag>
    docker inspect --format '{{index .RepoDigests 0}}' <image>:<tag>
    ```
 
-   Send the runner that line (`<image>@sha256:<64 hex>`): it goes into the declaration as `image_digest`, and into the coordinator file as `image`. From then on everything runs by that digest, never the tag. Every arm and both days use it.
+   The first `inspect` prints the image's revision label. It must equal the source commit the runner gave you, the commit the round declares. If it doesn't, **stop**: don't send the digest, and tell the runner what it printed. The tag moves every day, so this check is what ties the digest to the commit.
+
+   Otherwise, send the runner the second line (`<image>@sha256:<64 hex>`): it goes into the declaration as `image_digest`, and into the coordinator file as `image`. From then on everything runs by that digest, never the tag. Every arm and both days use it.
 2. **Make the salt** (once for the round; never copy it into the round's folder):
 
    ```bash
@@ -127,7 +133,7 @@ Do this once, before the rehearsal. Run everything as root on the experiment VM,
 
    Send the runner the four lines, and the box's vCPU count (`nproc`, which must be 8). It writes `host_identity`, `network_identity.uplink_hash`, `backing_device` and `vcpus` into the declaration, and you put `uplink_interface` in the coordinator file. The declaration is append-only: these are filled once, before the rehearsal, and never change.
 
-   Also send the **pool map**: for each Unraid pool (`cache`, `array` and any others), the kernel names, **as this VM sees them** (`lsblk -dno NAME`), of the VM's disks whose storage sits on that pool. Use whole-disk names such as `vdb`, never the Unraid host's own device names (`nvme0n1`, `md1`) or a partition (`vdb1`). The `backing_device` line above must appear in exactly one pool. The runner's records PR writes the map into the declaration as `pools`; without it, no mover run or parity check can spare a window (§8 item 6, D3).
+   Also send the **pool map**: for each Unraid pool (`cache`, `array` and any others), the kernel names, **as this VM sees them** (`lsblk -dno NAME`), of the VM's disks whose storage sits on that pool. Use whole-disk names such as `vdb`, never the Unraid host's own device names (`nvme0n1`, `md1`) or a partition (`vdb1`). Write each pool's name in lowercase letters, digits and `_` only, at most 32 characters (`[a-z0-9_]{1,32}`), the form `collect.py note --pool` accepts: a name in any other form can never match a note, so that pool could never spare a window. The `backing_device` line above must appear in exactly one pool. The runner's records PR writes the map into the declaration as `pools`; without it, no mover run or parity check can spare a window (§8 item 6, D3).
 5a. **Bind the comparator** once it has stopped (its collector wrote `result.json`), before the rehearsal. Its collector predates round 1, so its report carries no binding; the coordinator binds it now, with the round's salt. First its report, then the binding:
 
    ```bash
@@ -191,7 +197,13 @@ The rehearsal checks the setup and the timing. Its stores are deleted afterwards
    tmux new -d -s round1-rehearsal "$C watch $D"
    ```
 
-6. **It ends** when every arm has had 60 active minutes in the rehearsal's last hour (the runner reads it), or at 4 h. The collectors close after 2 h windows and the coordinator stops everything at the last one + 2 min. At 4 h, if it's still running, stop the watch's `tmux` session, then stop every arm with the coordinator, and tell the runner:
+6. **When it ends.** Each collector runs a 30 min warm-up, then a 3 h window (needs X-rehearsal-window), and the coordinator stops everything at the last window's end + 2 min. An arm's active minutes run from its `crawling_from_utc` (step 8c's output) to the rehearsal's end; the runner reads them and states them in the rehearsal report.
+   - **Once every arm has had 60 active minutes,** run step 8c's `drop-c` while the rehearsal runs, and send the runner its output.
+   - **On `keep` or `drop`,** the runner may end the rehearsal early. When the runner says so, stop it (below).
+   - **On `not_judged`** for any reason but `vcpus_differ`, leave it running and run `drop-c` again later.
+   - **At 4 h from the first start,** if it's still running, stop it and tell the runner.
+
+   To stop it, stop the watch's `tmux` session, then every arm with the coordinator:
 
    ```bash
    tmux kill-session -t round1-rehearsal; $C stop $D
@@ -220,15 +232,20 @@ The rehearsal checks the setup and the timing. Its stores are deleted afterwards
    done
    ```
 
-   Every check named `declared_*`, `effective_switches_recorded` and `safe_restart_on` must read ok (a rehearsal is never a measurement, whatever its verdict). If one doesn't, stop and tell the runner.
-8c. **The drop-C rule.** Run it on the rehearsal and send the runner its output:
+   Every check named `declared_*`, `effective_switches_recorded`, `safe_restart_on`, `preset_stayed_declared` and `switches_stayed_declared` must read ok (a rehearsal is never a measurement, whatever its verdict). If one doesn't, stop and tell the runner.
+8c. **The drop-C rule.** Run it during the rehearsal (step 6), then once more after the rehearsal stops, and send the runner each output:
 
    ```bash
    python3 docs/soak/tools/analyze_cr.py drop-c <round>/rehearsal/host-samples.jsonl \
      --arm B=<round>/rehearsal/B --arm A=<round>/rehearsal/A --arm C=<round>/rehearsal/C
    ```
 
-   It prints `keep` or `drop` with its numbers (the last 60 min once every arm crawled; host CPU p95 over 70 % or steal p95 over 3 % drops C). **The runner selects the layout** from it and tells you.
+   It prints `keep` or `drop` with its numbers (the last 60 min once every arm crawled; host CPU p95 over 70 % or steal p95 over 3 % drops C), and each arm's `crawling_from_utc`. **The runner selects the layout** from the last output and tells you.
+
+   It can also print `not_judged` with a reason. Send that to the runner too; the runner decides as follows:
+   - **`vcpus_differ`:** the rehearsal fails. Stop it (step 6). The box or the declaration is fixed, and the rehearsal is repeated.
+   - **Any other reason** (no host samples, an arm that never crawled, fewer than 60 crawling minutes): the rehearsal keeps running, and `drop-c` is run again later.
+   - **Still `not_judged` at the end** (the 3 h window's end or the 4 h cap, whichever comes first): C is dropped (layout L2, or L2b if A is dropped too), since C is only diagnostic and keeping it unjudged risks B's measurement. The runner records the reason in the round's archive.
 9. Delete each arm's rehearsal `data` and `witness` folders. Keep `<round>/rehearsal` itself.
 
 ## 6. A day, step by step
@@ -304,7 +321,7 @@ Day folder: `<round>/<attempt>/day<1|2>`. A repeated day gets a new folder `day<
 
 ## 7. After each day, before the exit swap
 
-1. **Each arm's segment report,** against the declaration. List the layout's arms for today (L3: `B A C`; L2: `B A`; L2b: `B C`; S: the candidate):
+1. **Each arm's segment report,** against the declaration. List the layout's arms for today (L3: `B A C`; L2: `B A`; L2b: `B C`; L2c: `A C`; S: the candidate):
 
    ```bash
    for arm in <the layout's arms>; do
