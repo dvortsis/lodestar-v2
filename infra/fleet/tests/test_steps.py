@@ -1881,26 +1881,32 @@ class VMScripts(unittest.TestCase):
         self.assertNotIn("docker exec", "\n".join(sum(spans, [])))  # nothing but probes while paused
 
     def test_dns_blocked_is_never_held(self):
-        """The runner's call: dns_blocked asks gluetun's own forwarder, so it never
-        runs under a hold. On a slow host every live attempt meets a restart:
-        every other probe passes held, dns_blocked keeps running live, gets no
-        clean attempt and fails vpn_interface_held_down, as before the fix."""
+        """The runner's calls: dns_blocked asks gluetun's own forwarder, so it never
+        runs under a hold, and it runs last, so its live retries can't starve the
+        others. On a slow host every live attempt meets a restart: every other
+        probe, dns_direct_blocked and the UDP probe included, passes held;
+        dns_blocked keeps running live, gets no clean attempt and fails
+        vpn_interface_held_down, as before the fix."""
         rc, lines, raw = self.run_script("leak-test.sh", GLUETUN_RESTARTS="all", HELD_PHASE_WAIT=20, HELD_ATTEMPT_MIN=1)
         self.assertEqual(rc, 1, raw)
         self.assertIn("fail vpn_interface_held_down", lines)
         self.assertIn("skip dns_blocked_ifdown", lines)
+        self.assertEqual([l for l in lines if l.startswith("skip ")], ["skip dns_blocked_ifdown"])
         self.assertGreater(int(next(l for l in lines if l.startswith("count held_attempts_dns_blocked_ifdown ")).split()[2]), 1)
+        self.assertEqual([l for l in lines if l.startswith("count held_attempts_")],
+                         [next(l for l in lines if l.startswith("count held_attempts_dns_blocked_ifdown "))])
         self.assertFalse([l for l in lines if l.endswith("_ifdown") and l.startswith("fail ")], lines)
-        # The three before it passed held. Its live retries used the phase up, so
-        # the two after it got only their (discarded) first attempts.
         clean = sorted(l for l in lines if l.startswith("count clean_"))
         self.assertEqual(clean, sorted(f"count clean_held_{p}_ifdown 1" for p in
-                                       ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked")))
-        self.assertIn("skip dns_direct_blocked_ifdown", lines)
-        self.assertIn("count held_attempts_dns_direct_blocked_ifdown 1", lines)
+                                       ("ipv4_blocked", "tcp_literal_blocked", "ipv6_blocked", "dns_direct_blocked", "udp")))
         spans = self.held_spans()
-        self.assertEqual(len(spans), 3)
-        self.assertNotIn("dig", "\n".join(sum(spans, [])))  # the forwarder's query never ran held
+        self.assertEqual(len(spans), 5)
+        held = "\n".join(sum(spans, []))
+        self.assertIn("dig +short +time=3 +tries=1 example.edu @1.1.1.1", held)  # the direct query is held
+        self.assertNotRegex(held, r"tries=1 example\.edu +\|")  # the forwarder's never
+        # dns_blocked's attempts all came after the last held one.
+        log = self.log()
+        self.assertGreater(log.index("tries=1 example.edu  |"), log.rindex("docker unpause gluetun"))
         self.assertFalse((self.stub / "paused").exists())
 
     def test_phase_b_without_the_hold_still_fails_held_down(self):

@@ -402,14 +402,16 @@ down_probes() {  # $1: phase; $2: a name not asked before (no cache can answer i
   "$judge" "tcp_literal_blocked_$1" probe nc -z -w 5 1.1.1.1 443  # no DNS needed
   "$judge" "ipv6_blocked_$1" probe curl -6 -s -m 8 "$V6_URL"
   if [[ $judge == held ]]; then
-    held --live "dns_blocked_$1" resolves "$2" 3  # gluetun's own forwarder: never held (the runner)
+    # Phase B: the held probes first, then the one that's never held (the
+    # runner): gluetun's own forwarder, whose live retries can't use up the
+    # phase's deadline before the others get theirs. The direct query never
+    # reaches the forwarder, so the name is still new to its cache.
+    held "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
+    held - probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53'  # the capture judges it
+    held --live "dns_blocked_$1" resolves "$2" 3
   else
     "$judge" "dns_blocked_$1" resolves "$2" 3
-  fi
-  "$judge" "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
-  if [[ $judge == held ]]; then
-    held - probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53'  # the capture judges it
-  else
+    "$judge" "dns_direct_blocked_$1" resolves "$2" 3 @1.1.1.1
     probe sh -c 'echo probe | nc -u -w 2 1.1.1.1 53' >/dev/null 2>&1  # the capture judges it
   fi
 }

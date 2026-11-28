@@ -26,7 +26,10 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
 - **`dns_blocked_ifdown` is never held** (runner). It asks gluetun's own DNS forwarder at 127.0.0.1, and its point is that the forwarder, running with the interface down, doesn't leak.
   - A paused forwarder proves nothing, and a query it took in while paused could leave through a new tunnel once it resumes.
   - So every attempt of this probe runs live, as before this PR (`held --live`). A clean attempt still needs the interface down before and after, with the same ifindex, and a probe with none by the deadline still fails `vpn_interface_held_down`.
-  - So this probe is exactly where it was. When the restart lands in every live attempt (on a slow host), it still fails `vpn_interface_held_down`, and its live retries use up the phase's deadline, so the probes after it (`dns_direct_blocked`, the UDP probe) get only their first attempts.
+  - So this probe is exactly where it was. When the restart lands in every live attempt (on a slow host), it still fails `vpn_interface_held_down`.
+  - **It runs last in phase B** (runner). Its live retries can use up the phase's deadline, and they'd leave the probes after it with only their first attempts. So phase B runs the held probes first (`dns_direct_blocked`, then the UDP probe), and `dns_blocked` gets whatever time is left. Phase A's order is unchanged.
+    - The direct query goes to 1.1.1.1 and never reaches gluetun's forwarder, so the name `dns_blocked` asks is still new to the forwarder's cache.
+    - No verdict changes: DNS still needs a clean live attempt or fails `vpn_interface_held_down`.
   - **The alternative, if the live DNS probe keeps losing on the VMs** (for the runner). Stop the VPN for that probe through gluetun's control server, with `PUT /v1/vpn/status`, which is unprotected by default in v3.41.3 (`internal/server/middlewares/auth/middleware.go`).
     - A stop runs the VPN loop's `cleanup` and cancels the VPN. That deletes `wg0` and stops the health checker, so no restart loop runs.
     - The VPN cleanup doesn't touch the DNS loop, so the forwarder keeps running live.
@@ -62,7 +65,7 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
     - one pause per retry, each covering a whole attempt;
     - that every first attempt runs live;
     - the `clean_held` and `clean_live` counts.
-  - `test_dns_blocked_is_never_held`: no `dig` to the forwarder ever runs under a pause. When every live attempt meets a restart, the probe fails `vpn_interface_held_down` as before.
+  - `test_dns_blocked_is_never_held`: no `dig` to the forwarder ever runs under a pause, and every attempt it makes comes after the last held one. On a slow host, where every live attempt meets a restart, it fails `vpn_interface_held_down` as before, while `dns_direct_blocked` and the UDP probe still pass on held attempts.
   - A refused pause, and one that froze gluetun anyway, both still fail `vpn_interface_held_down`.
   - A gluetun that won't resume ends the phase as a failure, and the post-rule checks fail with it.
   - A leak while gluetun is held fails at once, and the capture judges it.
