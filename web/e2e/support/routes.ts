@@ -176,10 +176,16 @@ export const ROUTES: RouteCase[] = [
 		path: `/t/${HASH}`,
 		key: true,
 		mock: (m) => mockTorrent(m),
-		// The page has no heading of its own, and loads every section at once: wait for the
-		// torrent, then for the last section to render (its placeholder is a bare skeleton).
+		// The page loads every section at once, and its h1 changes when the search hit lands
+		// (the raw name until then, the title after, with the "Raw name" block above): wait for
+		// the torrent, for the settled title and raw name, and for the last section to render
+		// (its placeholder is a bare skeleton). None of these has a loading marker.
 		ready: async (page) => {
 			await expect(page.getByTestId('detail-view')).toBeVisible();
+			await expect(
+				page.getByRole('heading', { level: 1, name: 'Show', exact: true })
+			).toBeVisible();
+			await expect(page.getByTestId('detail-raw-name')).toBeVisible();
 			await expect(page.locator('[data-section="technical"]')).toBeVisible({ timeout: 10_000 });
 		}
 	}
