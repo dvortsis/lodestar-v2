@@ -21,7 +21,7 @@ This replaces the earlier X-rehearsal-window brief; item 1 is that work.
 2. **Bounded solo attempts** (analyze_cr.py `check_declaration` around 1906–1921, and `judge_candidate`). Today any number of one-arm S attempts that are subsets of the chain are accepted, so S becomes an unbudgeted retry. The reviewer's probe showed B passing after L3 void → S void → S.
    - An S attempt is allowed in only two cases:
      - (a) its arm's candidate had `solo_confirmation_required` in the attempt just before it;
-     - (b) it is B alone, declared at the rehearsal, after both C and A have dropped. In that case its `attempt_ends` predecessors are `[]`, or it is the first attempt.
+     - (b) its arm is the only arm left. Every other arm of the preceding attempt has dropped, either at the rehearsal or by a class 2 product failure. Plan §6.3 covers both: "S if both are gone", and "the other candidate continues in a fresh attempt with the remaining arms". The drop shows in that attempt's `attempt_ends` `reason`. Define the reason values it accepts, at least `rehearsal_drop` and `product_failure:<arm>`, and have the coordinator's `end-attempt` take them.
    - Each candidate gets at most one S attempt per round.
    - Anything else makes the candidate `not_judged` with a new reason, `solo_not_permitted`.
    - L2, L2b and L2c stay bounded by the shrinking chain, unchanged.
