@@ -722,32 +722,43 @@ const SPEED: std::ops::RangeInclusive<f64> = 0.4..=2.0;
 /// follow its fastest ([`Timing`]).
 const DRIFT: f64 = 0.15;
 
-/// The most a host may have slowed between an attempt and a re-measure,
-/// by the calibrations either side of it, for the re-measure to be scaled
-/// by that slowdown (X-filter-budget-drift). More than this and the
-/// re-measure is void: the top of [`SPEED`] over its bottom would allow
-/// more, but a host twice as slow as it was a moment ago isn't steady.
-const MAX_SLOWED: f64 = 2.0;
-
 /// The least slowdown, by the calibrations beside a re-measure, that
 /// scales it (X-filter-budget-drift). Below this the calibrations' own
-/// noise could be all it is (their fastest passes moved 1-4% on a steady
-/// build VM), so the re-measure keeps the attempt's scale: noise never
-/// loosens the gate.
-const MIN_SLOWED: f64 = 1.05;
+/// noise could be all it is: their fastest passes moved 1-4% on a steady
+/// build VM, and the reference model calibrates in two bands about 5%
+/// apart at the same engine time. So the re-measure keeps the attempt's
+/// scale, and noise never loosens the gate.
+const MIN_SLOWED: f64 = 1.10;
+
+/// The most a host may have slowed between an attempt and a re-measure,
+/// by the calibrations beside it, for the re-measure to be scaled by that
+/// slowdown (X-filter-budget-drift). A host twice as slow as it was a
+/// moment ago isn't steady enough to trust one pair of calibrations.
+const MAX_SLOWED: f64 = 2.0;
 
 /// A held case over budget, measured again on its own at the end of the
 /// run (X-filter-budget-remeasure), with a calibration either side of it.
 #[derive(Debug)]
 enum Remeasure {
-    /// The calibrations either side agreed within [`DRIFT`] and showed the
-    /// host no more than [`MAX_SLOWED`] slower than in the attempt: the
-    /// reading decides.
+    /// The calibrations either side agreed within [`DRIFT`], and any
+    /// slowdown they show is within [`MAX_SLOWED`] and keeps the host
+    /// inside [`SPEED`]: the reading decides.
     Read(Remeasured),
-    /// They didn't: the host's speed changed during the re-measure, or it
-    /// slowed past [`MAX_SLOWED`], so the reading can't decide. It's
-    /// measured once more (X-filter-budget-drift).
-    Void(String),
+    /// They didn't agree, or couldn't be read: the host's speed changed
+    /// during the re-measure. `strict` is the reading at the strictest
+    /// scale, never scaled by a slowdown (none when a calibration can't be
+    /// read): under budget even so, the case passes; otherwise the run's
+    /// first void is measured once more, and any other fails
+    /// (X-filter-budget-drift).
+    Void {
+        why: String,
+        strict: Option<Remeasured>,
+    },
+    /// They agreed, but the slowdown they show is past [`MAX_SLOWED`] or
+    /// puts the host past [`SPEED`]. The slowdown is never clamped to fit:
+    /// the case passes only if `strict`, the reading not scaled by it, is
+    /// under budget, and fails otherwise.
+    PastCap { why: String, strict: Remeasured },
 }
 
 /// A re-measure the gate can read.
@@ -757,35 +768,17 @@ struct Remeasured {
     per: f64,
     /// The divisor: the scaling of `scale_us`, times `slowed`.
     speed: f64,
-    /// The calibration that scales it, in µs per torrent: the attempt's, or
-    /// the faster calibration beside the re-measure where that's faster.
+    /// The calibration that scales it, in µs per torrent: the attempt's
+    /// scale, or the faster calibration beside the re-measure where that's
+    /// faster.
     scale_us: f64,
-    /// How much slower than in the attempt the host ran during the
+    /// How much slower than in its attempt the host ran during the
     /// re-measure, by its calibrations: 1 when it didn't, or by less than
     /// [`MIN_SLOWED`].
     slowed: f64,
 }
 
-/// `again` read as the gate reads a case. `before` and `after` are the
-/// fastest calibration passes either side of it; `scale_us` the
-/// calibration that scaled the attempt; `speed` the divisor a calibration
-/// gives ([`scaling`]).
-///
-/// - A faster calibration beside it scales it, stricter than the attempt
-///   (X-filter-budget-remeasure): noise can't make a calibration faster.
-/// - A slower one, on both sides alike (within [`DRIFT`], the attempt's
-///   own rule for its before and after), means the host slowed between
-///   the attempt and the re-measure, as a shared host's neighbours or a
-///   bench beside it can: the case is scaled by that slowdown too, from
-///   [`MIN_SLOWED`] up, so a
-///   host slowed uniformly reads as it would quiet. A slower engine slows
-///   the case and not the calibration, so it reads over still
-///   (X-filter-budget-drift).
-/// - Calibrations that disagree, or a host more than [`MAX_SLOWED`]
-///   slower, void the re-measure.
-///
-/// The slowdown is relative, so the reference model, which reads raw,
-/// gets it as well.
+/// [`remeasure`] where the attempt was scaled by its own calibration.
 fn remeasured(
     again: &Timing,
     before: f64,
@@ -793,31 +786,88 @@ fn remeasured(
     scale_us: f64,
     speed: impl Fn(f64) -> f64,
 ) -> Remeasure {
-    let near = before.min(after);
-    let apart = before.max(after) / near - 1.0;
+    remeasure(again, before, after, scale_us, scale_us, speed)
+}
+
+/// `again` read as the gate reads a case. `before` and `after` are the
+/// fastest calibration passes either side of it; `scale_us` the
+/// calibration that scaled the attempt, and `attempt_us` the attempt's own
+/// calibration (after a busy attempt, `scale_us` is the fastest of any
+/// attempt and may be faster); `speed` the divisor a calibration gives
+/// ([`scaling`]).
+///
+/// - A faster calibration beside it scales it, stricter than the attempt
+///   (X-filter-budget-remeasure): noise can't make a calibration faster.
+/// - A slower one, on both sides alike (within [`DRIFT`], the attempt's
+///   own rule for its before and after), by [`MIN_SLOWED`] or more against
+///   `attempt_us`, means the host slowed between the attempt and the
+///   re-measure, as a shared host's neighbours can: the case is scaled by
+///   that slowdown too, so a host slowed uniformly reads as it would
+///   quiet. A slower engine slows the case and not the calibration, so it
+///   reads over still (X-filter-budget-drift). The slowdown is against the
+///   attempt's own calibration, never `scale_us`, so the gap between two
+///   attempts' calibration draws can't read as one.
+/// - Calibrations that disagree void the re-measure; a slowdown past
+///   [`MAX_SLOWED`] or [`SPEED`] puts it past the cap. Either way the
+///   strict reading still decides a case under budget.
+///
+/// The slowdown is relative, so the reference model, which reads raw,
+/// gets it as well.
+fn remeasure(
+    again: &Timing,
+    before: f64,
+    after: f64,
+    scale_us: f64,
+    attempt_us: f64,
+    speed: impl Fn(f64) -> f64,
+) -> Remeasure {
     let readable = |c: f64| c.is_finite() && c > 0.0;
-    if !readable(before) || !readable(after) || apart > DRIFT {
-        return Remeasure::Void(format!(
-            "the calibration was {before:.2} µs before it and {after:.2} µs after, {:.0}% apart",
-            apart * 100.0
-        ));
+    let read_at = |scale_us: f64, slowed: f64| {
+        let speed = speed(scale_us) * slowed;
+        Remeasured {
+            per: again.at / speed,
+            speed,
+            scale_us,
+            slowed,
+        }
+    };
+    if !readable(before) || !readable(after) {
+        return Remeasure::Void {
+            why: format!("the calibration read {before} µs before it and {after} µs after"),
+            strict: None,
+        };
     }
-    let slowed = near / scale_us;
-    if slowed > MAX_SLOWED {
-        return Remeasure::Void(format!(
-            "the calibration beside it, {near:.2} µs, is {slowed:.2}× the attempt's \
-             {scale_us:.2} µs, more than {MAX_SLOWED}×"
-        ));
+    let near = before.min(after);
+    let strict = read_at(scale_us.min(near), 1.0);
+    let apart = before.max(after) / near - 1.0;
+    if apart > DRIFT {
+        return Remeasure::Void {
+            why: format!(
+                "the calibration was {before:.2} µs before it and {after:.2} µs after, \
+                 {:.0}% apart",
+                apart * 100.0
+            ),
+            strict: Some(strict),
+        };
     }
-    let slowed = if slowed >= MIN_SLOWED { slowed } else { 1.0 };
-    let scale_us = scale_us.min(near);
-    let speed = speed(scale_us) * slowed;
-    Remeasure::Read(Remeasured {
-        per: again.at / speed,
-        speed,
-        scale_us,
-        slowed,
-    })
+    let slowed = near / attempt_us;
+    if slowed < MIN_SLOWED {
+        return Remeasure::Read(strict);
+    }
+    // The attempt's speed against the reference, times the slowdown: the
+    // host's during the re-measure.
+    let host = attempt_us * 1e3 / CALIB_REF_NS * slowed;
+    if slowed > MAX_SLOWED || !SPEED.contains(&host) {
+        return Remeasure::PastCap {
+            why: format!(
+                "the calibration beside it, {near:.2} µs, is {slowed:.2}× the attempt's \
+                 {attempt_us:.2} µs, which puts the host at {host:.2}× the reference's time; \
+                 the cap is {MAX_SLOWED}× and {SPEED:?}"
+            ),
+            strict,
+        };
+    }
+    Remeasure::Read(read_at(scale_us.min(near), slowed))
 }
 
 /// Whether a re-measured case fails the gate: over budget again. At the
@@ -832,7 +882,8 @@ fn still_over(r: &Remeasured) -> bool {
 fn read(r: Remeasure) -> Remeasured {
     match r {
         Remeasure::Read(r) => r,
-        Remeasure::Void(why) => panic!("void: {why}"),
+        Remeasure::Void { why, .. } => panic!("void: {why}"),
+        Remeasure::PastCap { why, .. } => panic!("past the cap: {why}"),
     }
 }
 
@@ -904,12 +955,12 @@ fn a_host_slowed_through_the_re_measure_reads_as_it_would_quiet() {
     let again = timing(vec![37.2, 36.7, 36.9, 36.9, 36.8, 36.4, 36.5]);
     assert!(matches!(
         remeasured(&again, 7.07, 10.56, calib, speed),
-        Remeasure::Void(_)
+        Remeasure::Void { .. }
     ));
     let again = timing(vec![46.3, 47.8, 47.2, 51.7, 54.6, 57.3, 54.6]);
     assert!(matches!(
         remeasured(&again, 10.57, 12.47, calib, speed),
-        Remeasure::Void(_)
+        Remeasure::Void { .. }
     ));
 }
 
@@ -952,20 +1003,111 @@ fn a_faster_calibration_beside_the_re_measure_scales_it_stricter() {
 }
 
 #[test]
-fn a_calibration_that_moves_or_slows_too_far_voids_the_re_measure() {
+fn a_calibration_that_moves_voids_the_re_measure() {
     let again = timing(vec![40.0; 7]);
     let raw = |_: f64| 1.0;
-    let void = |b: f64, a: f64| matches!(remeasured(&again, b, a, 10.0, raw), Remeasure::Void(_));
+    let void =
+        |b: f64, a: f64| matches!(remeasured(&again, b, a, 10.0, raw), Remeasure::Void { .. });
     // Apart by more than DRIFT, either way round.
     assert!(void(10.0, 10.0 * (1.0 + DRIFT) * 1.001));
     assert!(void(10.0 * (1.0 + DRIFT) * 1.001, 10.0));
     assert!(!void(10.0, 10.0 * (1.0 + DRIFT) * 0.999));
-    // Slowed past MAX_SLOWED.
-    assert!(void(10.0 * MAX_SLOWED * 1.001, 10.0 * MAX_SLOWED * 1.001));
-    assert!(!void(10.0 * MAX_SLOWED, 10.0 * MAX_SLOWED));
     // Calibrations that can't be read.
     assert!(void(0.0, 10.0));
     assert!(void(f64::NAN, 10.0));
+}
+
+#[test]
+fn a_slowdown_past_the_speed_cap_fails_rather_than_clamps() {
+    // The attempt's calibration 11.0 µs: the host at 11.0 ÷ 10.45 of the
+    // reference's time. A slowdown beside the re-measure may take it to
+    // SPEED's top, 2.0×, and no further.
+    let top = CALIB_REF_NS / 1e3 * SPEED.end();
+    for cpu in MODELS {
+        let speed = |s: f64| scaling(cpu, s, 40.0).speed;
+        // 45 µs once scaled by the slowdown, so a clamp would pass it;
+        // about 82 µs at the strict scale, so it fails.
+        let again = timing(vec![speed(11.0) * 45.0 * (top / 11.0); 7]);
+        let r = read(remeasured(&again, top * 0.999, top * 0.999, 11.0, speed));
+        assert!(!still_over(&r) && r.slowed > 1.8, "{cpu}: {r:?}");
+        let past = remeasured(&again, top * 1.001, top * 1.001, 11.0, speed);
+        let Remeasure::PastCap { strict, .. } = &past else {
+            panic!("{cpu}: {past:?}");
+        };
+        assert!(
+            still_over(strict) && strict.slowed == 1.0,
+            "{cpu}: {past:?}"
+        );
+        // Past MAX_SLOWED, inside SPEED: an attempt at 8.0 µs, the
+        // calibration beside the re-measure 2.01× that.
+        let again = timing(vec![speed(8.0) * 45.0 * 2.01; 7]);
+        let past = remeasured(&again, 16.08, 16.08, 8.0, speed);
+        assert!(
+            matches!(&past, Remeasure::PastCap { strict, .. } if still_over(strict)),
+            "{cpu}: {past:?}"
+        );
+    }
+    // A slowdown under MIN_SLOWED isn't applied, so it's never past the cap:
+    // the attempt itself was inside SPEED.
+    let again = timing(vec![10.0; 7]);
+    let r = remeasured(&again, 20.9 * 1.09, 20.9 * 1.09, 20.9, |_| 1.0);
+    assert!(matches!(r, Remeasure::Read(_)), "{r:?}");
+}
+
+#[test]
+fn a_void_re_measure_under_budget_at_the_strict_scale_passes() {
+    let (cpu, calib, mixed) = DRIFTED_6973P;
+    let speed = |s: f64| scaling(cpu, s, mixed).speed;
+    // The calibrations 49% apart, the case 30 µs here: 42 µs at the
+    // attempt's scale, the strictest, so no slowdown is needed to pass it.
+    let again = timing(vec![30.0; 7]);
+    let r = remeasured(&again, 7.07, 10.56, calib, speed);
+    let Remeasure::Void {
+        strict: Some(s), ..
+    } = &r
+    else {
+        panic!("{r:?}");
+    };
+    assert!(
+        !still_over(s) && s.slowed == 1.0 && s.scale_us == calib,
+        "{r:?}"
+    );
+    // Over budget at that scale: the strict reading fails it.
+    let again = timing(vec![36.0; 7]);
+    let r = remeasured(&again, 7.07, 10.56, calib, speed);
+    assert!(
+        matches!(&r, Remeasure::Void { strict: Some(s), .. } if still_over(s)),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_gap_between_attempts_calibrations_is_no_slowdown() {
+    // After a busy attempt, scaled by the fastest calibration of any
+    // attempt (7.0 µs) while this attempt calibrated at 7.6 µs. Steady
+    // calibrations of 7.6 beside the re-measure show no slowdown against
+    // this attempt, so the case keeps the stricter scale and fails.
+    let speed = |s: f64| scaling("Some Other CPU", s, 40.0).speed;
+    let again = timing(vec![35.5; 7]);
+    let r = read(remeasure(&again, 7.6, 7.6, 7.0, 7.6, speed));
+    assert_eq!(r.slowed, 1.0);
+    assert_eq!(r.scale_us, 7.0);
+    assert!(still_over(&r), "{r:?}");
+    // Against the fastest calibration it would have read 1.086× slower and
+    // passed.
+    assert!(35.5 / (speed(7.0) * 7.6 / 7.0) < BUDGET_US);
+    // A real slowdown past this attempt's calibration still counts, and the
+    // stricter scale stays.
+    let r = read(remeasure(
+        &timing(vec![35.5 * 1.5; 7]),
+        11.4,
+        11.4,
+        7.0,
+        7.6,
+        speed,
+    ));
+    assert!((r.slowed - 1.5).abs() < 1e-9 && r.scale_us == 7.0, "{r:?}");
+    assert!(still_over(&r), "{r:?}");
 }
 
 #[test]
@@ -1001,6 +1143,9 @@ const MODELS: [&str; 3] = [
 ];
 
 proptest! {
+    // Pure arithmetic, milliseconds per property: the default count, pinned.
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
     /// With the calibrations beside it no slower than the attempt's,
     /// whatever noise its passes pick up, a re-measured case never reads
     /// faster than its clean passes scaled as the attempt was
@@ -1061,7 +1206,7 @@ proptest! {
     #[test]
     fn a_uniformly_slowed_host_gives_the_quiet_verdict(
         passes in prop::collection::vec(10.0f64..100.0, 7),
-        calib in 5.0f64..20.0,
+        calib in 5.0f64..10.0,
         in_attempt in 1.0f64..=2.0,
         in_remeasure in 1.0f64..=2.0,
         during in 0.0f64..0.14,
@@ -1105,13 +1250,37 @@ proptest! {
         }
     }
 
+    /// The case and the calibrations beside its re-measure slowed by
+    /// different factors: the reading is never below the quiet one times
+    /// the case's factor over the calibrations'. So a slowdown that hits
+    /// the calibration harder than the engine loosens the gate in that
+    /// proportion, and no further; one that hits the engine harder, as a
+    /// regression does, reads over in that proportion.
+    #[test]
+    fn a_case_and_its_calibrations_slowed_apart_read_in_proportion(
+        passes in prop::collection::vec(10.0f64..100.0, 7),
+        calib in 5.0f64..10.0,
+        case_k in 1.0f64..=2.0,
+        calib_k in 1.0f64..=2.0,
+        model in 0usize..3,
+    ) {
+        let speed = |s: f64| scaling(MODELS[model], s, 40.0).speed;
+        let quiet = timing(passes.clone()).at / speed(calib);
+        let again = timing(passes.iter().map(|p| p * case_k).collect());
+        let r = read(remeasured(&again, calib * calib_k, calib * calib_k, calib, speed));
+        prop_assert!(r.per >= quiet * case_k / calib_k * (1.0 - 1e-9), "{quiet} → {r:?}");
+        if case_k >= calib_k && quiet >= BUDGET_US {
+            prop_assert!(still_over(&r), "{quiet} → {r:?}");
+        }
+    }
+
     /// The reference reads raw, so a host already slow in its attempt reads
     /// slow there, as before. A slowdown between the attempt and the
     /// re-measure reads as the attempt did.
     #[test]
     fn the_reference_reads_a_drift_after_its_attempt_as_the_attempt(
         passes in prop::collection::vec(10.0f64..100.0, 7),
-        calib in 5.0f64..20.0,
+        calib in 5.0f64..10.0,
         k in MIN_SLOWED..=2.0,
     ) {
         let speed = |s: f64| scaling(MODELS[0], s, 40.0).speed;
@@ -1142,21 +1311,36 @@ fn the_benches_run_alone() {
     // Every ignored test here is a bench, and each takes the lock first.
     let src = include_str!("props.rs");
     let mut benches = 0;
-    for (i, _) in src.match_indices("#[test]\n#[ignore]\nfn ") {
-        let body = &src[i..];
+    // Each `#[ignore` attribute at the start of a line, however it's
+    // written, and the first statement of the function it marks.
+    let mut at = 0;
+    for line in src.split_inclusive('\n') {
+        at += line.len();
+        if !line.starts_with("#[ignore") {
+            continue;
+        }
+        let rest = &src[at..];
+        let f = if rest.starts_with("fn ") {
+            0
+        } else {
+            rest.find("\nfn ").expect("an ignored test's fn") + 1
+        };
+        let body = &rest[f..];
         let open = body.find("{\n").expect("a body");
+        let name = &body[3..open];
         let first = body[open + 2..].lines().next().unwrap();
-        let name = &body["#[test]\n#[ignore]\nfn ".len()..open];
         assert_eq!(first.trim(), "let _alone = bench_alone();", "{name}");
         benches += 1;
     }
     assert!(benches >= 3, "found {benches} benches");
     // A bench that panics doesn't leave the lock unusable.
+    // `resume_unwind` unwinds without the panic hook, so nothing prints.
     let _ = std::thread::spawn(|| {
         let _alone = bench_alone();
-        panic!("a bench failed (expected by this test)");
+        std::panic::resume_unwind(Box::new("a bench failed"));
     })
     .join();
+    assert!(BENCH.is_poisoned());
     let held = bench_alone();
     assert!(
         matches!(BENCH.try_lock(), Err(std::sync::TryLockError::WouldBlock)),
@@ -1537,14 +1721,18 @@ fn sigs_at_cap(items: &[Item]) -> std::sync::Arc<lodestar_filter::spam_sigs::Spa
 /// either side, and fails only if it's over again ([`remeasured`]): a
 /// shared host can slow a run of whole cases alike, which neither their
 /// spread nor the calibrations around the attempt show
-/// (`docs/decisions/2026-11-21-X-filter-budget-remeasure.md`). If the
-/// calibrations beside the re-measure agree and show the host slowed
-/// since the attempt, the re-measure is scaled by that slowdown; if they
-/// disagree, it's void and measured once more, and a second void fails
+/// (`docs/decisions/2026-11-21-X-filter-budget-remeasure.md`). After a
+/// busy attempt, a scaled model is scaled by the fastest calibration of
+/// any attempt, the strictest, so a fresh draw can't loosen it.
+///
+/// If the calibrations beside a re-measure agree and show the host at
+/// least 10% slower than in its attempt, the re-measure is scaled by that
+/// slowdown, up to 2× and inside the speed range. If they disagree, a case
+/// under budget at the strictest scale still passes; otherwise the run's
+/// one void re-run measures it again, and a second void fails
 /// (`docs/decisions/2026-11-28-X-filter-budget-drift.md`). The benches
-/// here never run side by side ([`BENCH`]). From then on, a scaled model is scaled by the fastest calibration of any
-/// attempt, the strictest, so a fresh draw can't loosen it. Raw passes, the
-/// divisor and where it came from are printed too.
+/// here never run side by side ([`BENCH`]). Raw passes, the divisor and
+/// where it came from are printed too.
 ///
 /// This is a budget gate, not a regression gate: a slowdown that keeps a
 /// case under 50 µs passes (about +40% at 10% on today's code).
@@ -2065,11 +2253,14 @@ fn budget() {
              {speed:.2}× its time, so measuring each such case again: {lines:?}"
         );
         let mut still = Vec::new();
+        // One void re-measure may be measured again per run, not one per
+        // case (X-filter-budget-drift).
+        let mut void_rerun = true;
+        let mut voids = Vec::new();
         for (what, per, line) in &over {
             // A re-measure whose calibrations show the host's speed moved
-            // under it is void and measured once more; a second void fails
-            // (X-filter-budget-drift).
-            let mut voids = Vec::new();
+            // under it is void: the run's first is measured once more, any
+            // other fails (X-filter-budget-drift).
             let r = loop {
                 let near_before = calibration(&format!("before re-measuring {what}"));
                 let again = measure(Some(what));
@@ -2077,28 +2268,51 @@ fn budget() {
                 let [(_, again, _)] = again.as_slice() else {
                     panic!("{what}: measured {} cases again, not one", again.len());
                 };
-                match remeasured(again, near_before, near_after, scale_us, |s| {
+                let r = remeasure(again, near_before, near_after, scale_us, calib_us, |s| {
                     scaling(&cpu, s, mixed).speed
-                }) {
-                    Remeasure::Read(r) => break Some((r, again.at, near_before, near_after)),
-                    Remeasure::Void(why) => {
-                        voids.push(why);
-                        if voids.len() == 2 {
-                            break None;
-                        }
+                });
+                let read = |r| Ok((r, again.at, near_before, near_after));
+                match r {
+                    Remeasure::Read(r) => break read(r),
+                    // Under budget at the strictest scale: no slowdown is
+                    // needed to pass it.
+                    Remeasure::Void {
+                        strict: Some(r), ..
+                    }
+                    | Remeasure::PastCap { strict: r, .. }
+                        if !still_over(&r) =>
+                    {
+                        break read(r);
+                    }
+                    Remeasure::Void { why, .. } if void_rerun => {
+                        void_rerun = false;
                         println!(
-                            "::warning::re-measure of {what} void, measuring once more: {}",
-                            voids[0]
+                            "::warning::re-measure of {what} void, measuring once more (the \
+                             run's one void re-run): {why}"
                         );
+                        voids.push(format!("{what}: {why}"));
+                    }
+                    Remeasure::Void { why, .. } => {
+                        break Err(format!(
+                            "void, the host's speed moving under it, and the run's one void \
+                             re-run spent ({voids:?}): {why}"
+                        ));
+                    }
+                    Remeasure::PastCap { why, strict } => {
+                        break Err(format!(
+                            "past the cap, and {:.1} µs not scaled by the slowdown: {why}",
+                            strict.per
+                        ));
                     }
                 }
             };
-            let Some((r, raw, near_before, near_after)) = r else {
-                println!("void twice on re-measure: {what}: {voids:?}");
-                still.push(format!(
-                    "{line}; then void twice, the host's speed moving under it: {voids:?}"
-                ));
-                continue;
+            let (r, raw, near_before, near_after) = match r {
+                Ok(r) => r,
+                Err(why) => {
+                    println!("untrusted on re-measure: {what}: {why}");
+                    still.push(format!("{line}; then {why}"));
+                    continue;
+                }
             };
             let both = format!(
                 "{per:.1} µs, calibration {scale_us:.2} µs; re-measured {:.1} µs \
