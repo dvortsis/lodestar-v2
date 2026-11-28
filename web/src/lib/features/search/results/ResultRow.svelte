@@ -139,14 +139,16 @@
 							{@const f = b.filter}
 							<button
 								type="button"
-								class="rr-badge rr-badge-btn rr-optional"
+								class="rr-badge rr-badge-btn {b.keep ? '' : 'rr-optional'}"
 								tabindex="-1"
 								aria-label={m.search_results_badge_filter({ label: b.label })}
 								data-testid="{id}-badge-{b.key}"
 								onclick={(e) => filterBy(f.facet, f.value, e)}>{b.label}</button
 							>
 						{:else}
-							<span class="rr-badge rr-optional" data-testid="{id}-badge-{b.key}">{b.label}</span>
+							<span class="rr-badge {b.keep ? '' : 'rr-optional'}" data-testid="{id}-badge-{b.key}"
+								>{b.label}</span
+							>
 						{/if}
 					{/each}
 					{#if comfortable && collapsed.hidden !== null}
@@ -188,22 +190,27 @@
 				>
 			{/if}
 			<span class="rr-fact rr-swarm" data-testid="{id}-swarm">
-				{#if !comfortable || hit.seeders === null}
-					<span class="sr-only">{m.seeders()}: </span>
-				{/if}
-				{#if !comfortable}<ArrowUp class="rr-icon" aria-hidden="true" />{/if}
 				{#if hit.seeders === null}
+					<span class="sr-only">{m.seeders()}: </span>
 					<span role="img" aria-label={m.never_scraped()} data-testid="{id}-never-scraped">—</span>
 				{:else}
-					<span data-testid="{id}-seeders"
-						>{comfortable
-							? (hit.seeders === 1 ? m.search_results_seeders_one : m.search_results_seeders_other)(
-									{
-										count: formatCount({ value: hit.seeders, approx: hit.seeders_approx }, locale)
-									}
-								)
-							: formatCount({ value: hit.seeders, approx: hit.seeders_approx }, locale)}</span
-					>
+					{@const count = formatCount({ value: hit.seeders, approx: hit.seeders_approx }, locale)}
+					{#if comfortable}
+						<!-- In words; a row under 480 px wide shows the arrow and the number (row.css), so
+						     the line never reflows when the fonts arrive. -->
+						<span class="rr-swarm-words" data-testid="{id}-seeders"
+							>{(hit.seeders === 1 && !hit.seeders_approx
+								? m.search_results_seeders_one
+								: m.search_results_seeders_other)({ count })}</span
+						>
+						<span class="rr-swarm-num" aria-hidden="true"><ArrowUp class="rr-icon" />{count}</span>
+					{:else}
+						<span class="sr-only">{m.seeders()}: </span><ArrowUp
+							class="rr-icon"
+							aria-hidden="true"
+						/>
+						<span data-testid="{id}-seeders">{count}</span>
+					{/if}
 				{/if}
 			</span>
 			<span class="rr-fact rr-discovered">

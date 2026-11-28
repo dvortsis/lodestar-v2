@@ -56,6 +56,10 @@ test('clicking a badge filters by it and does not open the row', async ({ page, 
 	await badge.click();
 	await expect.poll(() => q(page)).toBe('lantern res:1080p');
 	await expect(page.getByTestId('drawer')).toHaveCount(0);
+	// "Filter by 1080p" adds only: a second click keeps the filter, it doesn't widen the results.
+	await page.getByTestId(`result-${hashOf(1)}-badge-res`).click();
+	await page.waitForLoadState('networkidle');
+	expect(q(page)).toBe('lantern res:1080p');
 });
 
 test('the rail keeps its decided order, and Seeders offers plain presets', async ({

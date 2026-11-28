@@ -61,7 +61,7 @@ describe('ResultRow, Comfortable', () => {
 		expect(text('r-files')).toBe('1 file');
 	});
 
-	it('says one seeder in the singular and marks an estimate with ≈', () => {
+	it('says one seeder in the singular and marks an estimate with ≈ (also for one)', () => {
 		const { unmount } = render(ResultRow, {
 			hit: hit(9, { seeders: 1 }),
 			density: 'comfortable',
@@ -69,6 +69,13 @@ describe('ResultRow, Comfortable', () => {
 		});
 		expect(text('r-seeders')).toBe('1 seeder');
 		unmount();
+		const est = render(ResultRow, {
+			hit: hit(9, { seeders: 1, seeders_approx: true }),
+			density: 'comfortable',
+			testid: 'r'
+		});
+		expect(text('r-seeders')).toContain('≈');
+		est.unmount();
 		render(ResultRow, {
 			hit: hit(9, { seeders_approx: true, swarm_suspect: true }),
 			density: 'comfortable',

@@ -12,13 +12,14 @@
 	let { range, onrange }: Props = $props();
 
 	// What the person has typed; it follows the clause when the clause changes elsewhere.
+	let error = $state<string | null>(null);
 	let from = $state('');
 	let to = $state('');
 	$effect(() => {
 		from = dayText(range?.lo ?? null);
 		to = dayText(range?.hi ?? null);
+		error = null;
 	});
-	let error = $state<string | null>(null);
 
 	function apply() {
 		const r = rangeOfTyped(from, to);

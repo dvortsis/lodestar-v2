@@ -153,7 +153,8 @@
 	height: var(--icon-size-row);
 }
 @media (pointer: coarse) {
-	.fr-value {
+	.fr-value,
+	.fr-date-input {
 		min-height: var(--target-min);
 	}
 }
@@ -184,7 +185,7 @@
 	color: var(--color-muted-text);
 }
 .fr-date-input {
-	min-height: calc(var(--spacing) * 9);
+	min-height: var(--control-height-dense);
 	padding-inline: calc(var(--spacing) * 2);
 	border: var(--border) solid var(--color-field-border);
 	border-radius: var(--radius-field);

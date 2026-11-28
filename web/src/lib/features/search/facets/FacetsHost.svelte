@@ -18,7 +18,7 @@
 	import { ensureSearchPath } from '../query/path';
 	import { results } from '../results/results.svelte';
 	import { createFacets, MORE } from './facets.svelte';
-	import { fieldOf, toggleValue } from './toggle';
+	import { fieldOf, selection, toggleValue } from './toggle';
 
 	type Mode = 'rail' | 'left' | 'bottom';
 	// design-tokens.md §7: x-large 1024 px, large 640 px.
@@ -120,7 +120,9 @@
 		const onBadge = (e: Event) => {
 			const { facet, value } = (e as CustomEvent<{ facet: string; value: string }>).detail;
 			const field = fieldOf(facet);
-			if (field) apply(toggleValue(base, field, value));
+			// Add only: a badge says "Filter by X", so a click on a value already in the query keeps it.
+			if (field && !selection(base, field).include.includes(value))
+				apply(toggleValue(base, field, value));
 		};
 		addEventListener(ROW_FILTER, onBadge);
 		return () => removeEventListener(ROW_FILTER, onBadge);

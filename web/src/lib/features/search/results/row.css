@@ -99,8 +99,13 @@
 	font-size: var(--text-caption);
 	line-height: var(--text-caption--line-height);
 }
-/* A badge you can click is a real button: the tag's look, no button chrome, and a hit area as
-   tall as the row's line (the list is the tab stop, so the button is out of the tab order). */
+/* A badge you can click is a real button: the tag's look, no button chrome, out of the tab order (the list is the tab stop). */
+/* Availability: in words, or the arrow and number once the row is narrow (below). */
+.rr-swarm-num {
+	display: none;
+	align-items: center;
+	gap: var(--spacing);
+}
 .rr-badge-btn {
 	font: inherit;
 	font-size: var(--text-caption);
@@ -183,6 +188,12 @@
 	}
 }
 @container result-row (max-width: 480px) {
+	.rr-swarm-words {
+		display: none;
+	}
+	.rr-swarm-num {
+		display: inline-flex;
+	}
 	.rr-raw,
 	.rr-facts > :not(.rr-size):not(.rr-swarm):not(.rr-discovered):not(.rr-extra):not(.rr-badges),
 	.rr-optional,

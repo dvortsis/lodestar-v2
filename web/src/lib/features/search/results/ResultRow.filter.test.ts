@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRawSnippet } from 'svelte';
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import ResultRow from './ResultRow.svelte';
@@ -13,8 +13,11 @@ describe('ResultRow: click a badge to filter (§4c)', () => {
 	let opened = vi.fn();
 	const sent = vi.fn();
 	const on = (e: Event) => sent((e as CustomEvent).detail);
-	window.addEventListener(ROW_FILTER, on);
-	afterEach(() => sent.mockClear());
+	beforeEach(() => window.addEventListener(ROW_FILTER, on));
+	afterEach(() => {
+		window.removeEventListener(ROW_FILTER, on);
+		sent.mockClear();
+	});
 
 	it('sends the facet and value, and does not open the row', async () => {
 		opened = vi.fn();
