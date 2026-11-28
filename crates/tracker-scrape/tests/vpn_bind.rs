@@ -144,7 +144,7 @@ async fn trackers_named_by_host_are_not_looked_up() {
 }
 
 /// The control: without an interface the same tracker's name is looked
-/// up (and the scrape works), so the counter above does count lookups.
+/// up, so the counter above does count lookups.
 #[tokio::test]
 async fn without_an_interface_the_name_is_looked_up() {
     let _one = LOOKUP_COUNTER.lock().await;
@@ -159,7 +159,11 @@ async fn without_an_interface_the_name_is_looked_up() {
     };
     let mut t = Tracker::new(&url, cfg, HttpConfig::default(), &client).unwrap();
     let before = lodestar_tracker_scrape::lookups();
-    assert_eq!(t.scrape(&[LIVE]).await.unwrap().counts, [Some(SWARM)]);
+    // Where `localhost` resolves to `::1` first, the scrape goes there and
+    // finds no tracker (the fake listens on IPv4); either way the name was
+    // looked up, which is all this control shows.
+    let r = t.scrape(&[LIVE]).await;
+    assert!(!matches!(r, Err(Error::Resolve)), "{r:?}");
     assert!(
         lodestar_tracker_scrape::lookups() > before,
         "the name went to the system resolver"
