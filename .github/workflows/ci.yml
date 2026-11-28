@@ -213,6 +213,7 @@ jobs:
       # A shard with two invocations (tests-a's --doc) runs both, then fails
       # if either did.
       - name: cargo test --workspace (${{ matrix.shard }})
+        if: runner.os != 'Windows'
         shell: bash
         env:
           SHARD: ${{ matrix.shard }}
@@ -243,6 +244,41 @@ jobs:
             END { printf "%s %s: %d passed, %d failed, %d ignored in %d test binaries\n", os, shard, p, f, i, b }' \
             shard-test.log | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$rc"
+      # The same on Windows, in pwsh as before, never Git bash: MSYS makes the
+      # user, not Administrators, the default owner of what a process
+      # creates, and the ACL tests (acl.rs, the updater's staging folder, the
+      # virtual-account service) then refuse their own folders as not private.
+      - name: cargo test --workspace (${{ matrix.shard }}, Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          $plan = @(python .github/scripts/test_shards.py $env:SHARD)
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($plan.Count -eq 0) { Write-Output "::error::no plan for $env:SHARD"; exit 1 }
+          $rc = 0
+          foreach ($line in $plan) {
+            $filters = "$line".Trim()
+            # An empty line would run the whole workspace on this shard.
+            if (-not $filters) { Write-Output "::error::empty filters for $env:SHARD"; exit 1 }
+            Write-Output "cargo test --workspace --no-fail-fast $filters"
+            $words = $filters -split ' '
+            # Test output is cargo's stdout; Tee-Object is a cmdlet, so
+            # $LASTEXITCODE stays cargo's.
+            cargo test --workspace --no-fail-fast @words | Tee-Object -FilePath shard-test.log -Append
+            if ($LASTEXITCODE -ne 0) { $rc = $LASTEXITCODE }
+          }
+          $p = 0; $f = 0; $i = 0; $b = 0
+          foreach ($l in Get-Content shard-test.log) {
+            $l = $l -replace "`e\[[0-9;]*m", ''
+            if ($l -match '^test result: \S+\. (\d+) passed; (\d+) failed; (\d+) ignored') {
+              $b++; $p += [int]$Matches[1]; $f += [int]$Matches[2]; $i += [int]$Matches[3]
+            }
+          }
+          "Windows ${env:SHARD}: $p passed, $f failed, $i ignored in $b test binaries" |
+            Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          exit $rc
       # Plain `cargo test` also builds every example (it never runs them).
       # `--profile test` builds exactly the units it does (checked: every unit
       # fresh after a full `cargo test --workspace --no-run`). After the tests,

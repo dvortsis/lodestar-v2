@@ -233,6 +233,15 @@ class Workflow(unittest.TestCase):
             picked |= set(re.findall(r'"([a-z]+-latest)"', line))
         self.assertEqual(picked, {"ubuntu-latest", "windows-latest", "macos-latest"})
 
+    def test_windows_runs_cargo_from_pwsh_not_git_bash(self):
+        # Git bash makes the user the default owner of new folders, which the
+        # Windows ACL tests refuse as not private.
+        body = self.job("test")
+        self.assertTrue("if: runner.os != 'Windows'\n        shell: bash\n" in body)
+        self.assertTrue("if: runner.os == 'Windows'\n        shell: pwsh\n" in body)
+        self.assertEqual(body.count("python .github/scripts/test_shards.py"), 1)
+        self.assertEqual(body.count('"$py" .github/scripts/test_shards.py'), 1)
+
     def test_the_bins_shard_builds_the_examples(self):
         body = self.job("test")
         self.assertTrue("if: ${{ !cancelled() && matrix.shard == 'bins' }}\n"

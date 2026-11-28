@@ -29,6 +29,7 @@ Date: 2026-11-28 (UTC). CI only; refines no owner-set number. The runner approve
   - Checked: after a full `cargo test --workspace --no-run`, every unit that command builds is fresh.
   - `--examples` on `cargo test` would build them as test harnesses instead.
   - The step runs after the tests (`!cancelled()`), so a broken example can't hide a failing test.
+- **Windows runs the shard step in pwsh, as main always did, never Git bash.** The first CI run used `shell: bash` everywhere and 4 Windows tests failed (`acl::tests::*_for_real`, the updater's `staging_is_private_for_real`, `windows_service`'s virtual-account test): MSYS sets the process token's default owner to the user, so the folders those tests create "belong to LA" and Lodestar's privacy checks rightly refuse them. Linux and macOS keep bash; a test checks the split.
 - **`--no-fail-fast` is kept.** A shard with two invocations runs both and fails if either did. `fail-fast: false` keeps the other shards running when one fails.
 - **The matrix is literal** (runner, from #1186's security review).
   - `os: [ubuntu-latest, windows-latest, macos-latest]` × `shard: [lib, bins, tests-a, tests-b]`. `exclude:` entries computed from `needs.changes.outputs.test_os` drop the operating systems a change doesn't need. `exclude` can only remove entries, so `runs-on` never takes a value from repository code.
