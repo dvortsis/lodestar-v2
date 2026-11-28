@@ -39,6 +39,24 @@ def iso(t):
     return t.isoformat().replace("+00:00", "Z")
 
 
+NETNS = {
+    "addr_dev": "4: wg0    inet 10.1.2.3/32 scope global wg0\\       valid_lft forever preferred_lft forever\n",
+    "addr_all": "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever\n"
+                "3: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0\\       valid_lft forever\n"
+                "4: wg0    inet 10.1.2.3/32 scope global wg0\\       valid_lft forever preferred_lft forever\n",
+    "route_get": "TARGET dev wg0 table 51820 src 10.1.2.3 uid 0 \n    cache \n",
+    "routes": "default dev wg0 table 51820 scope link \n",
+    "ping": (0, "PING 10.0.0.1 (10.0.0.1) 56(84) bytes of data.\n64 bytes from 10.0.0.1: icmp_seq=1 ttl=64 time=31.0 ms\n"),
+}
+WG_PRIVATE = "kPZ3hA5lq0dYkR0Jv3m1yYbqC8b0xq1v5m6iHq0mH2E="
+GLUETUN_LOG = ("2026-11-29T08:00:01.123456789Z 2026-11-29T08:00:01Z INFO [wireguard] Connecting to 192.0.2.91:1337\n"
+               "2026-11-29T08:00:02.000000000Z 2026-11-29T08:00:02Z INFO [wireguard] peer key " + WG_PRIVATE + "\n"
+               "2026-11-29T08:00:03.000000000Z 2026-11-29T08:00:03Z INFO [ip getter] Public IP address is 203.0.113.21\n"
+               "2026-11-29T08:00:04.000000000Z 2026-11-29T08:00:04Z INFO [dns] listening on [2001:db8::53%eth0]:53, "
+               "fe80::1 and ::ffff:198.51.100.7\n"
+               "2026-11-29T09:10:00.000000000Z 2026-11-29T09:10:00Z WARN [wireguard] handshake older than 180s\n").encode()
+
+
 class FakeHost:
     """Docker, namespaces, HTTP and the clock, as the coordinator calls them."""
 
@@ -52,6 +70,11 @@ class FakeHost:
         self.dead = set()  # PIDs that have exited
         self.leak_out, self.leak_runs = "", []  # what leak-test.sh prints, and each run
         self.leak_rc, self.leak_timeouts = None, []  # a forced exit code, and each run's limits
+        # Each gluetun namespace, as `ip` and `ping` show it (X-cr-round1-spec-fixes item 4):
+        # PIA's point-to-point /32 wg0, whose gateway 10.0.0.1 is its first hop.
+        self.netns = {pid: dict(NETNS) for pid in self.pids.values()}
+        self.netns_calls = []
+        self.logs, self.log_calls = {}, []  # container -> its log (bytes), and each read
 
     def alive(self, pid, needle):
         return pid is not None and pid not in self.dead
@@ -105,6 +128,22 @@ class FakeHost:
 
     def egress_ip(self, pid, url):
         return self.ip_of_pid[pid]
+
+    def netns_run(self, pid, argv, timeout=15):
+        self.netns_calls.append((pid, list(argv)))
+        ns = self.netns[pid]
+        if argv[:2] == ["ping", "-n"]:
+            return ns["ping"]
+        key = {("ip", "-4", "-o", "addr", "show", "dev"): "addr_dev", ("ip", "-4", "-o", "addr", "show"): "addr_all",
+               ("ip", "-4", "route", "get"): "route_get", ("ip", "-4", "route", "show", "table"): "routes"}
+        for prefix, name in key.items():
+            if tuple(argv[:len(prefix)]) == prefix and (name != "addr_all" or len(argv) == len(prefix)):
+                return 0, ns[name].replace("TARGET", argv[-1])
+        return 1, ""
+
+    def container_logs(self, name, since, until):
+        self.log_calls.append((name, since, until))
+        return self.logs.get(name, GLUETUN_LOG)
 
     def commands(self):
         return [" ".join(c[0]) for c in self.calls if c[0][:2] != ["docker", "inspect"]]
@@ -755,6 +794,294 @@ class WatchTests(CoordinatorBase):
         self.assertFalse([c for c in self.host.commands() if c.endswith(" stop")])
 
 
+class RehearsalWindowTests(CoordinatorBase):
+    """X-cr-round1-spec-fixes item 1: a 30 min warm-up and a 3 h window for the rehearsal only,
+    and the 4 h cap from the first start."""
+
+    def rehearsal(self, stagger=timedelta(0)):
+        self.host.t = T0 - timedelta(hours=5)
+        day = self.round / "rehearsal"
+        argv = ["--day-dir", str(day), "--attempt", "r1-a1", "--day", "1", "--rehearsal"]
+        for arm in mk.LAYOUTS["L3"][1]:
+            self.assertEqual(self.main(["leak", str(self.cfg_path), *argv, "--arm", arm, "--phase", "before",
+                                        "--log", str(self.leak_log())]), 0)
+        self.assertEqual(co.main(["bring-up", str(self.cfg_path), *argv], host=self.host), 0)
+        self.first = self.host.t
+        spawn = self.host.spawn
+
+        def slow_spawn(argv_, log, env=None):  # the coordinator's own stagger between collectors
+            pid = spawn(argv_, log, env)
+            if "collect.py" in argv_[2]:
+                (Path(argv_[argv_.index("--root") + 1])).mkdir(parents=True, exist_ok=True)
+                (Path(argv_[argv_.index("--root") + 1]) / "run.json").write_text("{}")
+                self.host.t += stagger
+            return pid
+        self.host.spawn = slow_spawn
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(co.main(["collect", str(self.cfg_path), "--day-dir", str(day)], host=self.host), 0)
+        return day, out.getvalue().splitlines()
+
+    def test_the_rehearsals_collectors_run_30_min_then_3_h(self):
+        self.rehearsal()
+        for argv in (a for a in self.host.spawned if "collect.py" in a[2]):
+            self.assertEqual(argv[argv.index("--warmup-minutes") + 1], "30")
+            self.assertEqual(argv[argv.index("--baseline-hours") + 1], "3")
+            self.assertIn("--rehearsal", argv)
+
+    def test_a_measurement_day_keeps_rule_1_1s_warm_up(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("collect")
+        collectors = [a for a in self.host.spawned if "collect.py" in a[2]]
+        self.assertEqual(len(collectors), 3)
+        for argv in collectors:
+            for flag in ("--warmup-minutes", "--baseline-hours", "--rehearsal"):
+                self.assertNotIn(flag, argv)
+
+    def test_the_worst_case_end_is_reported_against_the_cap(self):
+        _, out = self.rehearsal()
+        self.assertTrue(any(ln.startswith("ok rehearsal ends about") for ln in out), out)
+        _, out = self.rehearsal_again(timedelta(minutes=20))
+        self.assertTrue(any(ln.startswith("warn rehearsal ends about") for ln in out), out)
+
+    def rehearsal_again(self, stagger):
+        import shutil
+        shutil.rmtree(self.round / "rehearsal")
+        self.host.spawned.clear()
+        del self.host.spawn
+        return self.rehearsal(stagger)
+
+    def test_watch_stops_every_arm_at_the_cap(self):
+        day, _ = self.rehearsal(timedelta(minutes=20))  # the last window would end after 4 h
+        self.first = co.first_start(json.loads((day / "state.json").read_text()))
+        cfg = co.load_config(self.cfg_path)
+        out = co.cmd_watch(cfg, co.Day(cfg, day), self.host, None, max_loops=400)  # bounded: 4 h is ~240
+        self.assertNotIn("ok watch paused (test bound)", out)
+        self.assertGreaterEqual(self.host.t, self.first + timedelta(hours=4))
+        self.assertLess(self.host.t, self.first + timedelta(hours=4, seconds=5))
+        self.assertEqual(len([c for c in self.host.commands() if c.endswith(" stop")]), 3)
+        state = json.loads((day / "state.json").read_text())
+        self.assertIn("4 h cap", state["notes"][-1])
+        self.assertTrue((day / "archive.json").exists())
+
+    def test_a_measurement_day_has_no_cap(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("collect")
+        self.host.t = T0 + timedelta(hours=5)  # past 4 h from the start: a measurement day keeps going
+        rc, out = self.main_watch(max_loops=2)
+        self.assertEqual(out, ["ok watch paused (test bound)"])
+
+    def main_watch(self, max_loops):
+        cfg = co.load_config(self.cfg_path)
+        day = co.Day(cfg, self.day_dir())
+        return 0, co.cmd_watch(cfg, day, self.host, None, max_loops=max_loops)
+
+
+class GatewayTests(CoordinatorBase):
+    """Item 4: bring-up refuses a tunnel_target that isn't the arm's WireGuard gateway, and
+    records only that it was."""
+
+    def bring_up(self):
+        self.pass_leaks()
+        return self.go("bring-up")
+
+    def test_the_first_hop_gateway_is_recorded_without_its_address(self):
+        rc, out = self.bring_up()
+        self.assertEqual(rc, 0, out)
+        s = self.state()
+        for arm in s["arms"].values():
+            self.assertEqual((arm["tunnel_target_is_gateway"], arm["tunnel_gateway_check"]), (True, "first_hop"))
+        self.assertIn(["ping", "-n", "-c", "1", "-t", "1", "-W", "2", "10.0.0.1"], [c[1] for c in self.host.netns_calls])
+        self.assertNotIn("10.0.0.1", (self.day_dir() / "state.json").read_text())
+        self.go("archive", placement=False)
+        archive = (self.day_dir() / "archive.json").read_text()
+        self.assertNotIn("10.0.0.1", archive)
+        self.assertTrue(all(a["tunnel_target_is_gateway"] for a in json.loads(archive)["arms"].values()))
+
+    def test_the_echo_must_come_from_the_target_itself(self):
+        for reply in ("64 bytes from 10.9.0.1: icmp_seq=1 ttl=64 time=31.0 ms\n",
+                      "64 bytes from 10.0.0.10: icmp_seq=1 ttl=64 time=31.0 ms\n"):  # another host, a prefix
+            self.setUp()
+            self.host.netns[102]["ping"] = (0, reply)
+            rc, out = self.bring_up()
+            self.assertEqual(rc, 1, reply)
+            self.assertIn("arm A's tunnel_target isn't its WireGuard gateway (first_hop)", out[-1])
+
+    def test_a_failed_recheck_clears_the_earlier_record(self):
+        self.assertEqual(self.bring_up()[0], 0)
+        self.host.netns[102]["ping"] = (1, "From 10.9.0.1 icmp_seq=1 Time to live exceeded\n")
+        self.assertEqual(self.go("bring-up")[0], 1)
+        a = self.state()["arms"]["A"]
+        self.assertNotIn("tunnel_target_is_gateway", a)
+        self.assertNotIn("tunnel_target_hash", a)
+        rc, out = self.go("collect", placement=False)
+        self.assertEqual(rc, 1)
+        self.go("archive", placement=False)
+        self.assertFalse(json.loads((self.day_dir() / "archive.json").read_text())["arms"]["A"]["tunnel_target_is_gateway"])
+
+    def test_a_target_beyond_the_gateway_is_refused(self):
+        self.host.netns[102]["ping"] = (1, "From 10.9.0.1 icmp_seq=1 Time to live exceeded\n")
+        rc, out = self.bring_up()
+        self.assertEqual(rc, 1)
+        self.assertIn("arm A's tunnel_target isn't its WireGuard gateway (first_hop)", out[-1])
+        self.assertEqual(self.state()["exits"], {})
+
+    def test_a_namespace_address_is_refused(self):
+        for addr in ("10.0.0.1/32 scope global wg0", "10.0.0.1/16 brd 10.0.255.255 scope global eth0"):
+            self.host.netns[101]["addr_all"] = NETNS["addr_all"] + f"5: x    inet {addr}\n"
+            self.assertIn("target_is_a_namespace_address", self.bring_up()[1][-1])
+
+    def test_a_target_outside_the_tunnel_is_refused(self):
+        for route in ("local 10.0.0.1 dev lo table local src 10.0.0.1\n", "10.0.0.1 dev eth0 src 172.18.0.2\n"):
+            self.host.netns[103]["route_get"] = route
+            self.assertIn("target_not_through_the_tunnel", self.bring_up()[1][-1])
+
+    def test_a_peer_address_or_a_via_route_must_equal_the_target(self):
+        for key, ok, bad in (("addr_dev", "inet 10.1.2.3 peer 10.0.0.1/32 scope global wg0\n",
+                              "inet 10.1.2.3 peer 10.0.0.9/32 scope global wg0\n"),
+                             ("routes", "default via 10.0.0.1 dev wg0 table 51820\n",
+                              "default via 10.0.0.9 dev wg0 table 51820\n")):
+            self.setUp()
+            self.host.netns[101][key] = ok
+            self.host.netns[101]["ping"] = (1, "")  # never reached: the interface says it
+            rc, out = self.bring_up()
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(self.state()["arms"]["B"]["tunnel_gateway_check"],
+                             "peer_address" if key == "addr_dev" else "route_via")
+            self.host.netns[101][key] = bad
+            self.assertIn("isn't its WireGuard gateway", self.go("bring-up")[1][-1])
+
+    def test_collect_refuses_a_target_changed_after_bring_up(self):
+        self.bring_up()
+        cfg = json.loads(self.cfg_path.read_text())
+        cfg["arms"]["C"]["tunnel_target"] = "10.0.0.7"
+        self.cfg_path.write_text(json.dumps(cfg))
+        rc, out = self.go("collect", placement=False)
+        self.assertEqual(rc, 1)
+        self.assertIn("arm C's tunnel_target isn't the one bring-up checked", out[-1])
+        self.assertEqual(self.host.spawned, [])
+        self.assertNotIn("10.0.0.1", (self.day_dir() / "state.json").read_text())
+
+    def test_the_interface_is_always_wg0(self):
+        cfg = json.loads(self.cfg_path.read_text())
+        cfg["arms"]["B"]["tunnel_interface"] = "eth0"  # ignored: only the tunnel's interface counts
+        self.cfg_path.write_text(json.dumps(cfg))
+        self.bring_up()
+        self.assertTrue(all(c[1][-1] == "wg0" for c in self.host.netns_calls if c[1][:6] == ["ip", "-4", "-o", "addr", "show", "dev"]))
+        self.host.netns[101]["route_get"] = "10.0.0.1 via 172.18.0.1 dev eth0 src 172.18.0.2\n"
+        self.assertIn("target_not_through_the_tunnel", self.go("bring-up")[1][-1])
+
+    def test_no_tunnel_interface_is_refused(self):
+        self.host.netns[101]["addr_dev"] = ""
+        self.assertIn("tunnel_interface_missing", self.bring_up()[1][-1])
+
+
+class GluetunLogTests(CoordinatorBase):
+    """Item 6: each arm's gluetun log for the day, redacted, in the archive and the manifest."""
+
+    def test_redaction_removes_addresses_and_keys_and_keeps_times(self):
+        text = co.redact_log(GLUETUN_LOG.decode())
+        for secret in ("192.0.2.91", "203.0.113.21", "198.51.100.7", "2001:db8::53", "fe80::1", WG_PRIVATE):
+            self.assertNotIn(secret, text)
+        self.assertEqual(text.count("[ipv4]"), 2)
+        self.assertEqual(text.count("[ipv6]"), 3)
+        self.assertEqual(text.count("[key]"), 1)
+        self.assertIn("2026-11-29T09:10:00.000000000Z 2026-11-29T09:10:00Z WARN [wireguard] handshake older than 180s",
+                      text)
+        self.assertIn("[ipv4]:1337", text)
+
+    def test_a_key_is_only_a_44_character_base64_value(self):
+        self.assertEqual(co.redact_log("x" * 43 + "=="), "x" * 43 + "==")
+        self.assertEqual(co.redact_log("a" * 43 + "="), "a" * 43 + "=")  # its last bits aren't zero
+        self.assertEqual(co.redact_log("A" * 43 + "="), "[key]")
+        self.assertEqual(co.redact_log("v3.40.0 10:00:00 10:00:00.5 1.2.3"), "v3.40.0 10:00:00 10:00:00.5 1.2.3")
+
+    def test_ipv6_redaction_fails_closed(self):
+        for text in ("ip:2001:db8::1", "hostname:fe80::1", "server 2001:db8::1:51820", "x=::1", "[::ffff:10.0.0.1]:53"):
+            out = co.redact_log(text)
+            self.assertIn("[ipv6]", out, text)
+            for part in ("db8", "fe80", "::1", "10.0.0.1"):
+                self.assertNotIn(part, out, text)
+
+    def test_a_stale_log_is_removed_when_the_days_cant_be_read(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("archive", placement=False)
+        self.assertTrue((self.day_dir() / "A" / "gluetun.log").exists())
+        self.host.logs["gluetun-a"] = None
+        self.go("archive", placement=False)
+        self.assertFalse((self.day_dir() / "A" / "gluetun.log").exists())
+
+    def test_the_archive_saves_each_arms_log_from_its_start_to_the_shutdown(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("up", placement=False)
+        up = self.host.t
+        self.go("collect", placement=False)
+        self.host.t += timedelta(hours=25)
+        self.go("stop", placement=False)
+        s = self.state()
+        self.assertEqual(sorted(self.host.log_calls), sorted((f"gluetun-{a.lower()}", iso(up), s["shutdown_utc"])
+                                                             for a in "BAC"))
+        archive = json.loads((self.day_dir() / "archive.json").read_text())
+        for arm in "BAC":
+            log = self.day_dir() / arm / "gluetun.log"
+            self.assertEqual(archive["arms"][arm]["gluetun_log_sha256"], co.sha256(log))
+            for secret in ("192.0.2.91", "203.0.113.21", WG_PRIVATE):
+                self.assertNotIn(secret, log.read_text())
+
+    def test_up_again_keeps_the_logs_start(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.go("up", placement=False)
+        first = self.state()["arms"]["B"]["up_utc"]
+        self.host.t += timedelta(minutes=5)
+        self.go("up", placement=False)
+        self.assertEqual(self.state()["arms"]["B"]["up_utc"], first)
+
+    def test_an_unreadable_log_is_noted_once(self):
+        self.pass_leaks()
+        self.go("bring-up")
+        self.host.logs["gluetun-a"] = None
+        self.go("archive", placement=False)
+        self.go("archive", placement=False)
+        notes = [n for n in self.state()["notes"] if "gluetun's log" in n]
+        self.assertEqual(len(notes), 1)
+        self.assertNotIn("gluetun_log_sha256", json.loads((self.day_dir() / "archive.json").read_text())["arms"]["A"])
+
+
+class EndAttemptTests(CoordinatorBase):
+    """Item 2: end-attempt's reasons, which gate-round reads for an S attempt."""
+
+    def test_reasons_are_tokens_naming_the_attempts_arms(self):
+        for reason, ok in (("rehearsal_drop:A,rehearsal_drop:C", True), ("product_failure:A", True),
+                           ("other:runner_ruled", True), ("drop_c", False), ("product_failure:D", False),
+                           ("rehearsal_drop:a", False), ("A failed", False)):
+            rc, out = self.go("end-attempt", "--attempt", "r1-a1", "--reason", reason)
+            self.assertEqual(rc, 0 if ok else 1, (reason, out))
+
+    def test_a_rehearsal_drop_is_only_on_the_rounds_first_attempt(self):
+        decl = json.loads((self.round / "declaration.json").read_text())
+        later = mk.archive("L2", attempt="r1-a2")["declaration"]
+        decl["attempts"] += later["attempts"]
+        decl["arms"] += later["arms"]
+        (self.round / "declaration.json").write_text(json.dumps(decl))
+        rc, out = self.go("end-attempt", "--attempt", "r1-a2", "--reason", "rehearsal_drop:A")
+        self.assertEqual(rc, 1)
+        self.assertIn("first attempt", out[-1])
+        self.assertEqual(self.go("end-attempt", "--attempt", "r1-a1", "--reason", "rehearsal_drop:A")[0], 0)
+
+    def test_a_rehearsal_drop_is_only_before_the_first_day(self):
+        ManifestTests.make_day(self, 1)
+        rc, out = self.go("end-attempt", "--attempt", "r1-a1", "--reason", "rehearsal_drop:C")
+        self.assertEqual(rc, 1)
+        self.assertIn("before its first day", out[-1])
+
+
 class LaunchPathTests(unittest.TestCase):
     def test_the_commands_it_launches_exist_in_this_checkout(self):
         self.assertTrue((co.TOOLS / "collect.py").is_file())
@@ -844,6 +1171,9 @@ class ManifestTests(CoordinatorBase):
                                                              "binding": {"run_id": rid}}))
         (d / "archive.json").write_text("{}")
         (d / "host-samples.json").write_text("{}")
+        for arm in arms:
+            (d / arm).mkdir(exist_ok=True)
+            (d / arm / "gluetun.log").write_text(f"redacted log of {arm}\n")
 
     def test_the_manifest_lists_every_input_by_hash(self):
         self.make_day(1)
@@ -870,10 +1200,10 @@ class ManifestTests(CoordinatorBase):
 
     def test_attempt_ends_records_the_days_run(self):
         self.make_day(1)
-        rc, out = self.go("end-attempt", "--attempt", "r1-a1", "--reason", "drop_c")
+        rc, out = self.go("end-attempt", "--attempt", "r1-a1", "--reason", "product_failure:C")
         self.assertEqual(rc, 0, out)
         self.assertEqual(json.loads((self.round / "attempt-ends.json").read_text()),
-                         {"r1-a1": {"reason": "drop_c", "days_run": [1]}})
+                         {"r1-a1": {"reason": "product_failure:C", "days_run": [1]}})
         self.go("manifest")
         self.assertEqual(json.loads((self.round / "manifest.json").read_text())["attempt_ends"]["r1-a1"]["days_run"], [1])
 

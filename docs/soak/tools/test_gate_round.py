@@ -550,8 +550,11 @@ class LayoutTests(RoundBase):
         self.assertNotIn("A", v["candidates"])
 
     def test_solo_confirmation_one_arm_two_days_on_two_exits(self):
-        v = self.gate(mk.archive("S"))
-        self.assertEqual(self.cand(v)["crawler"], "pass")
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))  # the breach that calls for it (SoloBoundTests)
+        v = self.gate(add_attempt(a, "S", "r1-a2"))
+        self.assertEqual(self.cand(v)["layout"], "S")
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
 
     def test_solo_on_one_exit_twice_is_not_judged(self):
         a = mk.archive("S")
@@ -775,18 +778,20 @@ class ValidityTests(RoundBase):
             for s in d["contention"]["samples"]:
                 s["cpu"] = 0.9
         v = self.repeat_day1(mk.archive("L3"), breach)
-        self.assertNotJudged(v, "repeat_without_infrastructure_fault")
+        self.assertNotJudged(v, "repeat_of_a_non_repeatable_day")
         self.assertTrue(self.cand(v)["solo_confirmation_required"])
 
     def test_a_product_failure_under_diagnosis_is_not_repeated(self):
         v = self.repeat_day1(mk.archive("L3"), lambda d: d["archive"].update(
             events=[{"class": "product", "arms": ["B"], "diagnosis": "pending"}]))
-        self.assertNotJudged(v, "repeat_without_infrastructure_fault")
+        self.assertNotJudged(v, "repeat_of_a_non_repeatable_day")
         self.assertIsNone(v["selection"]["ships"])
 
-    def test_a_void_day_is_not_repeated(self):
+    def test_a_void_day_is_repeated(self):
+        # The runner's ruling on CR-SPEC-R1's review: §6.3's retry rule repeats a void day.
         v = self.repeat_day1(mk.archive("L3"), lambda d: d["reports"]["B"].update(verdict="void"))
-        self.assertNotJudged(v, "repeat_without_infrastructure_fault")
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
+        self.assertEqual([d["reasons"] for d in self.cand(v)["replaced_days"]], [["segment_void"]])
 
     def test_a_repeat_of_a_passing_day_is_not_judged(self):
         a = mk.archive("L3")
@@ -871,10 +876,10 @@ class ValidityTests(RoundBase):
         self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
 
 
-def add_attempt(a, layout, attempt, fresh=None):
-    """Append a fresh attempt (from make_archive) to archive `a`, with distinct run IDs and,
-    by default, days after the existing ones."""
-    later = mk.archive(layout, attempt=attempt)
+def add_attempt(a, layout, attempt, fresh=None, later=None):
+    """Append a fresh attempt (from make_archive, or `later`) to archive `a`, with distinct
+    run IDs and, by default, days after the existing ones."""
+    later = later or mk.archive(layout, attempt=attempt)
     a["declaration"]["attempts"] += later["declaration"]["attempts"]
     a["declaration"]["arms"] += later["declaration"]["arms"]
     shift = timedelta(days=3 * (len(a["declaration"]["attempts"]) - 1))
@@ -1673,7 +1678,7 @@ class CohortTests(RoundBase):
     bound; the latency cohort keeps carry-in samples and charges dropped ones above 600 s."""
 
     def with_edge(self, le600, gross_mean, carry_mean):
-        a = mk.archive("S")
+        a = mk.archive("L3")  # B's day 1 (a lone S attempt is no longer allowed: SoloBoundTests)
         r = self.day(a, 1)["reports"]["B"]
         lat = analyze_cr.latency(*edge_scrapes(le600, 10000, 100))
         r["latency"] = lat
@@ -1772,7 +1777,7 @@ class ManifestTests(RoundBase):
 
     def test_every_input_hash_is_in_the_verdict(self):
         v = self.gate(mk.archive("L3"))
-        self.assertEqual(len(v["inputs"]), 1 + 1 + 2 * (3 + 2))
+        self.assertEqual(len(v["inputs"]), 1 + 1 + 2 * (3 + 2 + 3))  # + each arm's gluetun log
 
     def test_the_analyzer_hash_is_in_the_verdict_and_the_segment_report(self):
         self.assertEqual(self.gate(mk.archive("L3"))["analyzer_sha256"], analyze_cr.ANALYZER_SHA256)
@@ -1810,6 +1815,308 @@ class ManifestTests(RoundBase):
         self.assertNotIn("report_not_bound_to_its_declaration", day1["reasons"])
         self.assertNotIn("no_fresh_store_evidence", day1["reasons"])
         self.assertTrue(day1["tests"]["mean_passes"])
+
+
+# ----------------------------------------------------------------- X-cr-round1-spec-fixes
+def repeat_of(day, k, clean=True):
+    """A repeat k of `day`: the same layout and exits from fresh stores, its own run IDs;
+    by default clean (no events, fresh host samples, valid reports)."""
+    again = json.loads(json.dumps(day))
+    again["repeat"] = k
+    if clean:
+        again["archive"]["events"] = []
+        again["contention"] = mk.host_samples(again["reports"])
+    for r in again["reports"].values():
+        if clean:
+            r["verdict"] = "valid"
+        r["binding"]["placement"]["repeat"] = k
+        r["binding"]["run_id"] += f"-repeat{k}"
+    return again
+
+
+def thin_coverage(day, arm="B"):
+    """The first 30 min of the arm's window without a steal reading: coverage under 98 %."""
+    ws = analyze_cr.parse_utc(day["reports"][arm]["timeline"]["window_start_utc"])
+    for smp in day["contention"]["samples"]:
+        if ws <= analyze_cr.parse_utc(smp["utc"]) < ws + timedelta(minutes=30):
+            smp["steal"] = None
+
+
+def solo_of(arm, attempt):
+    """make_archive's S layout for `arm` instead of B: one arm on X, then Y."""
+    later = mk.archive("S", attempt=attempt)
+    decl = later["declaration"]
+    decl["arms"] = [mk.entry(attempt, e["day"], arm, e["exit"]) for e in decl["arms"]]
+    decl["attempts"][0]["candidate_digests"] = {arm: mk.DIGEST}
+    for d in later["days"]:
+        e = next(x for x in decl["arms"] if x["day"] == d["day"])
+        reports = {arm: mk.report(e, f"{attempt}-d{d['day']}-{arm}", mk.DAY_START[d["day"]])}
+        d.update(reports=reports, archive=mk.day_archive(attempt, d["day"], reports, {arm: e["exit"]}),
+                 contention=mk.host_samples(reports), gluetun_logs={arm: mk.gluetun_log(attempt, d["day"], arm)})
+    return later
+
+
+class SpecFixBase(RoundBase):
+    def gate_ends(self, a, ends):
+        """gate-round on `a` with the manifest's attempt_ends set to `ends`."""
+        self.n += 1
+        path = mk.write(self.root / f"e{self.n}", a)
+        man = json.loads(path.read_text())
+        man["attempt_ends"] = ends
+        path.write_text(json.dumps(man))
+        return analyze_cr.gate_round(analyze_cr.load_manifest(path))
+
+
+class SoloBoundTests(SpecFixBase):
+    """Item 2: an S attempt only as a solo confirmation (O4) or for the only arm left, at most
+    one per candidate per round (CR-SPEC-R1 §5)."""
+
+    def test_a_lone_solo_attempt_is_not_permitted(self):
+        v = self.gate(mk.archive("S"))
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_without_a_preceding_attempt"])
+
+    def test_the_reviewers_case_l3_void_then_s_void_then_s_never_passes(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["reports"]["B"]["verdict"] = "void"
+        add_attempt(a, "S", "r1-a2")
+        self.day(a, 1, "r1-a2")["reports"]["B"]["verdict"] = "void"
+        add_attempt(a, "S", "r1-a3")
+        v = self.gate(a)
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["more_than_one_solo_attempt"])
+        self.assertNotEqual(v["selection"]["ships"], "B")
+        self.assertEqual(v["selection"]["state"], "pending_retry")  # B isn't terminal, so A waits
+
+    def test_a_void_day_then_a_solo_attempt_is_not_permitted(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["reports"]["B"]["verdict"] = "void"
+        v = self.gate(add_attempt(a, "S", "r1-a2"))
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_not_after_a_drop"])
+
+    def test_a_passing_l3_then_a_solo_attempt_is_not_permitted(self):
+        v = self.gate(add_attempt(mk.archive("L3"), "S", "r1-a2"))
+        self.assertNotJudged(v, "solo_not_permitted")
+
+    def test_a_host_wide_breach_gives_each_candidate_its_own_solo(self):
+        # Self-review: "the attempt just before" is the candidate's own. A CPU breach hits B
+        # and A alike; B's solo fails, and A's (after B's) is still its one S.
+        a = mk.archive("L2")
+        for smp in self.day(a, 1)["contention"]["samples"]:
+            smp["cpu"] = 0.9
+        add_attempt(a, "S", "r1-a2")
+        for smp in self.day(a, 1, "r1-a2")["contention"]["samples"]:
+            smp["cpu"] = 0.9
+        v = self.gate(add_attempt(a, "S", "r1-a3", later=solo_of("A", "r1-a3")))
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
+        self.assertNotIn("solo_not_permitted", self.cand(v, "A")["reasons"])
+        self.assertEqual(self.cand(v, "A")["crawler"], "pass", self.cand(v, "A")["reasons"])
+        self.assertEqual(v["selection"]["ships"], "A")
+
+    def test_rule_a_needs_the_breach_in_the_attempt_just_before(self):
+        # Runner review of #1158: L3 (B breaches) -> L2 -> S. The breach was two attempts back.
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))
+        add_attempt(a, "L2", "r1-a2")
+        v = self.gate(add_attempt(a, "S", "r1-a3"))
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_not_after_a_drop"])
+
+    def test_a_rehearsal_drop_on_a_later_attempt_opens_no_solo(self):
+        # Runner review of #1158: the rehearsal runs only before the round's first attempt.
+        a = mk.archive("L3")
+        add_attempt(a, "L2", "r1-a2")
+        a["days"] = [d for d in a["days"] if d["attempt"] != "r1-a2"]
+        v = self.gate_ends(add_attempt(a, "S", "r1-a3"),
+                           {"r1-a2": {"reason": "rehearsal_drop:A", "days_run": []}})
+        self.assertNotJudged(v, "solo_not_permitted")
+        self.assertEqual(self.cand(v)["solo_problems"], ["solo_not_after_a_drop"])
+
+    def test_a_valid_miss_still_stands_beside_a_solo_not_permitted(self):
+        a = mk.archive("L3")
+        self.day(a, 2)["reports"]["B"]["numerator"]["hourly"][3]["net_per_min"] = 60.0
+        v = self.gate(add_attempt(a, "S", "r1-a2"))
+        self.assertIn("solo_not_permitted", self.cand(v)["reasons"])
+        self.assertEqual(self.cand(v)["crawler"], "fail")
+
+    def product_drop(self, event=True):
+        """L2: A fails on day 1 (class 2), the attempt ends; B goes on alone in S."""
+        a = mk.archive("L2")
+        if event:
+            self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": ["A"], "diagnosis": "pending"}]
+        a["days"] = [d for d in a["days"] if d["day"] == 1]
+        return self.gate_ends(add_attempt(a, "S", "r1-a2"),
+                              {"r1-a1": {"reason": "product_failure:A", "days_run": [1]}})
+
+    def test_the_only_arm_left_after_a_product_failure_goes_solo(self):
+        v = self.product_drop()
+        self.assertEqual(self.cand(v)["layout"], "S")
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
+
+    def test_a_product_drop_the_archive_doesnt_show_is_refused(self):
+        self.assertNotJudged(self.product_drop(event=False), "solo_not_permitted")
+
+    def rehearsal_drop(self, reason, days_run=()):
+        a = mk.archive("L3")
+        a["days"] = [d for d in a["days"] if d["day"] in days_run]
+        return self.gate_ends(add_attempt(a, "S", "r1-a2"), {"r1-a1": {"reason": reason, "days_run": list(days_run)}})
+
+    def test_both_others_dropped_at_the_rehearsal(self):
+        v = self.rehearsal_drop("rehearsal_drop:A,rehearsal_drop:C")
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
+
+    def test_one_other_arm_left_is_no_solo(self):
+        self.assertNotJudged(self.rehearsal_drop("rehearsal_drop:C"), "solo_not_permitted")
+
+    def test_a_rehearsal_drop_after_a_day_ran_is_no_drop(self):
+        self.assertNotJudged(self.rehearsal_drop("rehearsal_drop:A,rehearsal_drop:C", days_run=(1,)),
+                             "solo_not_permitted")
+
+    def test_free_text_is_no_drop(self):
+        self.assertNotJudged(self.rehearsal_drop("A and C dropped"), "solo_not_permitted")
+
+
+class RepeatRuleTests(SpecFixBase):
+    """Item 3: a repeat replaces any not_judged day but contention, a product failure and a
+    failed solo confirmation, within the budget of 2."""
+
+    def test_a_coverage_miss_repeated_then_passing(self):
+        a = mk.archive("L3")
+        thin_coverage(self.day(a, 1))
+        a["days"].append(repeat_of(self.day(a, 1), 1))
+        v = self.gate(a)
+        self.assertEqual(self.cand(v)["crawler"], "pass", self.cand(v)["reasons"])
+        self.assertEqual([d["reasons"] for d in self.cand(v)["replaced_days"]], [["contention_not_judged"]])
+
+    def test_an_uplink_counter_reset_repeated_then_passing(self):
+        a = mk.archive("L3")
+        smp = self.day(a, 1)["contention"]["samples"]
+        for s_ in smp[len(smp) // 2:]:
+            s_["uplink_drops_total"] = -1
+        a["days"].append(repeat_of(self.day(a, 1), 1))
+        self.assertEqual(self.cand(self.gate(a))["crawler"], "pass")
+
+    def test_a_repeat_of_a_product_failure_day_is_refused_its_own_or_a_peers(self):
+        for arm, diagnosis in (("B", "product"), ("A", "pending"), ("C", "product")):
+            a = mk.archive("L3")
+            self.day(a, 1)["archive"]["events"] = [{"class": "product", "arms": [arm], "diagnosis": diagnosis}]
+            a["days"].append(repeat_of(self.day(a, 1), 1))
+            self.assertNotJudged(self.gate(a), "repeat_of_a_non_repeatable_day")
+
+    def test_a_repeat_of_an_unclassed_event_day_is_refused(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["archive"]["events"] = [{"class": "unclassified", "arms": ["B"], "cause": "x"}]
+        a["days"].append(repeat_of(self.day(a, 1), 1))
+        self.assertNotJudged(self.gate(a), "repeat_of_a_non_repeatable_day")
+
+    def test_a_repeat_of_a_failed_solo_day_is_refused_and_stays_terminal(self):
+        a = mk.archive("L3")
+        lose_b_probes(self.day(a, 1))
+        add_attempt(a, "S", "r1-a2")
+        lose_b_probes(self.day(a, 1, "r1-a2"))  # the solo confirmation breaches
+        a["days"].append(repeat_of(self.day(a, 1, "r1-a2"), 1))
+        v = self.gate(a)
+        self.assertNotJudged(v, "repeat_of_a_non_repeatable_day")
+        self.assertTrue(self.cand(v)["solo_confirmation_failed"])
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
+
+    def test_a_third_repeat_exhausts_the_budget(self):
+        a = mk.archive("L3")
+        thin_coverage(self.day(a, 1))
+        for k in (1, 2):
+            again = repeat_of(self.day(a, 1), k, clean=False)  # the miss recurs
+            a["days"].append(again)
+        a["days"].append(repeat_of(self.day(a, 1), 3))
+        v = self.gate(a)
+        self.assertNotJudged(v, "retry_budget_exhausted")
+        self.assertEqual(v["selection"]["trail"][0]["disposition"], "out_of_retries")
+
+    def test_two_repeats_are_within_the_budget(self):
+        a = mk.archive("L3")
+        thin_coverage(self.day(a, 1))
+        a["days"].append(repeat_of(self.day(a, 1), 1, clean=False))
+        a["days"].append(repeat_of(self.day(a, 1), 2))
+        self.assertEqual(self.cand(self.gate(a))["crawler"], "pass")
+
+
+class HandshakeEvidenceTests(SpecFixBase):
+    """Self-review: a day needs every declared arm's gluetun log listed, and the archive's own."""
+
+    def test_a_missing_or_other_log_is_not_judged(self):
+        for arm in ("B", "C"):
+            for broken in ("missing", "other"):
+                a = mk.archive("L3")
+                d = self.day(a, 2)
+                if broken == "missing":
+                    del d["gluetun_logs"][arm]
+                else:
+                    d["gluetun_logs"][arm] += "a later line the archive didn't hash\n"
+                self.assertNotJudged(self.gate(a), "handshake_evidence_missing")
+
+
+class DeclarationChecksPresentTests(SpecFixBase):
+    """Item 5: every declaration check present and ok in every arm's report of the day."""
+
+    def test_a_report_without_its_declaration_checks_is_not_judged(self):
+        a = mk.archive("L3")
+        self.day(a, 1)["reports"]["B"]["checks"] = []  # the entry wasn't found: none was emitted
+        self.assertNotJudged(self.gate(a), "declaration_checks_missing")
+
+    def test_each_named_check_is_required(self):
+        for name in analyze_cr.DECLARATION_CHECKS:
+            a = mk.archive("L3")
+            r = self.day(a, 2)["reports"]["B"]
+            r["checks"] = [c for c in r["checks"] if c["check"] != name]
+            self.assertNotJudged(self.gate(a), "declaration_checks_missing")
+
+    def test_a_peers_missing_or_failed_check_takes_the_day(self):
+        for broken in ("missing", "failed"):
+            a = mk.archive("L3")
+            r = self.day(a, 1)["reports"]["C"]
+            if broken == "missing":
+                r["checks"] = r["checks"][1:]
+            else:
+                r["checks"][-1]["ok"] = False
+            self.assertNotJudged(self.gate(a), "declaration_checks_missing")
+
+    def test_a_real_segment_report_carries_every_check(self):
+        report = analyze_cr.analyze_segment(Round1Sim().write(self.root / "seg-dc"), None, declaration())
+        got = {c["check"]: c["ok"] for c in report["checks"]}
+        self.assertEqual({n: got.get(n) for n in analyze_cr.DECLARATION_CHECKS},
+                         {n: True for n in analyze_cr.DECLARATION_CHECKS})
+
+
+class ProbeTargetTests(SpecFixBase):
+    """Item 4: a day whose archive doesn't show every arm's probe target checked as its
+    WireGuard gateway is not judged."""
+
+    def test_an_arm_without_the_gateway_check_is_not_judged(self):
+        for arm in ("B", "C"):
+            for value in (None, False):
+                a = mk.archive("L3")
+                info = self.day(a, 1)["archive"]["arms"][arm]
+                if value is None:
+                    del info["tunnel_target_is_gateway"]
+                else:
+                    info["tunnel_target_is_gateway"] = value
+                self.assertNotJudged(self.gate(a), "probe_target_unchecked")
+
+    def test_gluetun_logs_are_checked_by_hash(self):
+        a = mk.archive("L3")
+        path = mk.write(self.root / "logs", a)
+        log = self.root / "logs" / "r1-a1" / "day1" / "B" / "gluetun.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_bytes(b"2026-11-28T10:00:00Z INFO [wireguard] handshake [ipv4]\n")
+        man = json.loads(path.read_text())
+        ref = {"path": "r1-a1/day1/B/gluetun.log", "sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
+        man["days"][0]["gluetun_logs"] = {"B": ref}
+        path.write_text(json.dumps(man))
+        v = analyze_cr.gate_round(analyze_cr.load_manifest(path))
+        self.assertIn("r1-a1/day1/B/gluetun.log", v["inputs"])
+        log.write_bytes(b"edited\n")
+        with self.assertRaises(ValueError):
+            analyze_cr.load_manifest(path)
 
 
 if __name__ == "__main__":

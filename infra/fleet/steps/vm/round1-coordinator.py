@@ -64,6 +64,19 @@ SPACING = timedelta(hours=12)  # rule 2.2: after the comparator's window end
 GAP_SECONDS = 180  # rule 6.6: two scrapes further apart than this are missing evidence
 DISK_MARGIN = 1.20
 COLLECTOR_START_SECONDS = 60  # each collector writes run.json within this, or the launch is reported
+# The rehearsal (CR-SPEC-R1 §6, X-cr-round1-spec-fixes item 1): a 30 min warm-up, then a 3 h
+# window, stopped at 4 h from the first start whatever is still running. Measurement days
+# keep rule 1.1's 60 min warm-up (collect.py's own default for a spec kind).
+REHEARSAL_WARMUP_MINUTES = 30
+REHEARSAL_HOURS = 3
+REHEARSAL_CAP = timedelta(hours=4)
+TUNNEL_INTERFACE = "wg0"  # gluetun's VPN_INTERFACE in round 1's stacks (the image defaults to tun0)
+# Why an attempt ended short (end-attempt, the manifest's attempt_ends): comma-separated
+# tokens. `rehearsal_drop:<arm>` (the rehearsal dropped it: only for an attempt that ran no
+# day) and `product_failure:<arm>` (a class 2 failure on it) are the drops gate-round reads
+# for an S attempt's "only arm left" (CR-SPEC-R1 §5); `solo_confirmation:<arm>` and
+# `valid_miss:<arm>` name the other ends, and `other:<slug>` anything the runner rules.
+END_REASON = re.compile(r"^(?:(rehearsal_drop|product_failure|solo_confirmation|valid_miss):([A-Z])|other:[a-z0-9_]{1,40})$")
 ARM = re.compile(r"^[A-Z]$")
 EXIT_LABELS = ("X", "Y", "Z")
 STACK_ENV = {"LODESTAR_ARM_SUFFIX", "LODESTAR_UI_PORT"}
@@ -194,6 +207,20 @@ class Host:
     def egress_ip(self, pid, url):
         return collect.netns_ip_echo(f"/proc/{pid}/ns/net", url)
 
+    def netns_run(self, pid, argv, timeout=15):
+        """`argv` inside the PID's network namespace (the host's own iproute2 and ping)."""
+        return self.run(["nsenter", f"--net=/proc/{int(pid)}/ns/net", *argv], timeout=timeout)
+
+    def container_logs(self, name, since, until):
+        """A container's log between two times, stdout and stderr together (gluetun logs to both)."""
+        try:
+            done = subprocess.run(["docker", "logs", "--timestamps", "--since", since, "--until", until, name],
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300, check=False,
+                                  env=base_env())
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 else None
+
     def sleep(self, seconds):
         time.sleep(seconds)
 
@@ -225,7 +252,7 @@ def load_config(path):
         if not re.fullmatch(r"-[a-z]", a["suffix"]) or not isinstance(a["port"], int) or not 1024 < a["port"] < 65536:
             raise Fail(f"config: arm {arm}'s suffix is -<letter> and its port 1025-65535")
         if not re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", str(a["tunnel_target"])):
-            raise Fail(f"config: arm {arm}'s tunnel_target is the IPv4 address its probe pings (declared before the rehearsal)")
+            raise Fail(f"config: arm {arm}'s tunnel_target is its WireGuard gateway's IPv4 address (declared before the rehearsal)")
         if a["port"] in ports or a["suffix"] in suffixes:
             raise Fail("config: every arm has its own port and suffix")
         ports.add(a["port"])
@@ -358,6 +385,50 @@ def read_egress(cfg, host, arm, key):
     except (OSError, ValueError, UnicodeError, AttributeError):
         return None
     return {"utc": iso(host.now()), "hash": collect.salted_hash(key, "ip", ip)}
+
+
+IPV4_TEXT = re.compile(r"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])")
+
+
+def gateway_of(cfg, host, arm):
+    """The arm's WireGuard gateway, read inside its gluetun namespace, compared with its
+    declared tunnel_target (CR-SPEC-R1 §7; plan line 441: the probe is "ICMP to its WireGuard
+    gateway"). Returns (ok, how) and never the address.
+
+    The target must route through the tunnel interface (wg0) and not be one of the namespace's own
+    addresses (an address that never leaves the namespace never shows loss). Then the gateway
+    is the tunnel's peer address or its routes' `via`, where the interface has one; a
+    point-to-point WireGuard /32 (PIA's, as gluetun sets it up) has neither, so the gateway is
+    the first hop: an echo with TTL 1 that the target itself answers. A target further away
+    answers TTL 1 with the gateway's `Time to live exceeded`, and is refused."""
+    target = str(cfg["arms"][arm]["tunnel_target"])
+    iface = TUNNEL_INTERFACE  # never configurable: another interface would let a non-tunnel gateway pass
+    pid = container_pid(host, gluetun(cfg, arm))
+    if pid is None:
+        return False, "gluetun_not_running"
+    rc, out = host.netns_run(pid, ["ip", "-4", "-o", "addr", "show", "dev", iface])
+    if rc != 0 or " inet " not in f" {out or ''}":
+        return False, "tunnel_interface_missing"
+    local = set(IPV4_TEXT.findall(re.sub(r"peer [0-9.]+", "", out or "")))
+    peer = re.search(r" peer ([0-9.]+)(?:/32)?", out or "")
+    rc, out = host.netns_run(pid, ["ip", "-4", "-o", "addr", "show"])
+    local |= set(IPV4_TEXT.findall(re.sub(r"(peer|brd) [0-9.]+", "", out or ""))) if rc == 0 else set()
+    if target in local:
+        return False, "target_is_a_namespace_address"
+    rc, out = host.netns_run(pid, ["ip", "-4", "route", "get", target])
+    words = (out or "").split()
+    if rc != 0 or not words or words[0] in ("local", "broadcast", "unreachable", "prohibit", "blackhole") \
+            or "dev" not in words or words[words.index("dev") + 1:words.index("dev") + 2] != [iface]:
+        return False, "target_not_through_the_tunnel"
+    if peer:
+        return peer[1] == target, "peer_address"
+    rc, out = host.netns_run(pid, ["ip", "-4", "route", "show", "table", "all", "dev", iface])
+    vias = set(re.findall(r" via ([0-9.]+)", out or "")) if rc == 0 else set()
+    if vias:
+        return vias == {target}, "route_via"
+    rc, out = host.netns_run(pid, ["ping", "-n", "-c", "1", "-t", "1", "-W", "2", target])
+    answered = rc == 0 and re.search(r"(?m)^\d+ bytes from " + re.escape(target) + r": ", out or "") is not None
+    return answered, "first_hop"
 
 
 # ------------------------------------------------------------------ commands
@@ -561,6 +632,8 @@ def cmd_up(cfg, day, host, args):
                 lines.append(f"{'ok' if rc2 == 0 else 'fail'} stack_stopped arm={other}")
             raise Partial(lines, f"arm {arm}'s stack didn't start; every arm's stack, its own too, was stopped again")
         up.append(arm)
+        day.require()["arms"][arm].setdefault("up_utc", iso(host.now()))  # its gluetun log is archived from here
+        day.save()
         lines.append(f"ok up arm={arm}")
     return lines
 
@@ -584,6 +657,14 @@ def cmd_bring_up(cfg, day, host, args):
         raise Fail("two arms share an egress address: each arm needs its own exit (§8 item 2)")
     if uplink in hashes:
         raise Fail("an arm's egress is the uplink's own address: its traffic isn't in the tunnel")
+    for arm in day.arms():  # the probe's target is the arm's WireGuard gateway (X-cr-round1-spec-fixes item 4)
+        ok, how = gateway_of(cfg, host, arm)
+        if not ok:  # fails closed: an earlier check's record doesn't outlive a failed one
+            for k in ("tunnel_target_is_gateway", "tunnel_gateway_check", "tunnel_target_hash"):
+                s["arms"][arm].pop(k, None)
+            day.save()
+            raise Fail(f"arm {arm}'s tunnel_target isn't its WireGuard gateway ({how}): declare the gateway")
+        readings[arm]["gateway_check"] = how
     exits = {s["arms"][arm]["exit"]: readings[arm]["hash"] for arm in day.arms()}
     started = any(a.get("collector_pid") for a in s["arms"].values())
     if s["exits"] and s["exits"] != exits:
@@ -598,7 +679,10 @@ def cmd_bring_up(cfg, day, host, args):
     s.setdefault("exit_checks", []).append({"utc": first, "exits": exits})
     s["exits"] = exits
     for arm in day.arms():
+        how = readings[arm].pop("gateway_check")
         s["arms"][arm]["egress"].append(readings[arm])
+        s["arms"][arm].update(tunnel_target_is_gateway=True, tunnel_gateway_check=how,
+                              tunnel_target_hash=collect.salted_hash(key, "ip", str(cfg["arms"][arm]["tunnel_target"])))
     s["uplink_hash"] = uplink
     day.save()
     return [f"ok exit {s['arms'][arm]['exit']} arm={arm}" for arm in day.arms()]
@@ -613,8 +697,8 @@ def collector_argv(cfg, day, arm, run_id):
             "--storage-path", str(Path(a["stack"]) / "data"),
             "--round", str(s["round"]), "--attempt", s["attempt"], "--day", str(s["day"]), "--arm", arm,
             "--repeat", str(s["repeat"]), "--run-id", run_id, "--identity-salt-file", cfg["salt_file"]]
-    if s.get("rehearsal"):  # the 2 h rehearsal (§6.3): marked in run.json, never a measurement
-        argv += ["--rehearsal", "--baseline-hours", "2"]
+    if s.get("rehearsal"):  # the rehearsal (CR-SPEC-R1 §6): marked in run.json, never a measurement
+        argv += ["--rehearsal", "--warmup-minutes", str(REHEARSAL_WARMUP_MINUTES), "--baseline-hours", str(REHEARSAL_HOURS)]
     for item in cfg.get("checklist", []):
         argv += ["--checklist", item]
     for item in cfg.get("next_run", []):
@@ -636,9 +720,12 @@ def cmd_collect(cfg, day, host, args):
         if not cfg.get(key):
             raise Fail(f"config: {key}")
     lines, started = [], []
+    key = salt(cfg)
     for arm in day.arms():
         if s["arms"][arm]["blocked"]:
             raise Fail(f"arm {arm} is stopped after a failed leak test")
+        if s["arms"][arm].get("tunnel_target_hash") != collect.salted_hash(key, "ip", str(cfg["arms"][arm]["tunnel_target"])):
+            raise Fail(f"arm {arm}'s tunnel_target isn't the one bring-up checked as its gateway: run bring-up again")
     for arm in day.arms():
         st = s["arms"][arm]
         if st.get("collector_pid"):
@@ -646,6 +733,7 @@ def cmd_collect(cfg, day, host, args):
         run_id = run_id_for(day, arm)
         st["run_id"] = run_id
         st["collector_pid"] = host.spawn(collector_argv(cfg, day, arm, run_id), str(day.dir / f"collector-{arm}.log"))
+        st["collector_started_utc"] = iso(host.now())
         day.save()  # every PID recorded as soon as it exists
         started.append(arm)
         lines.append(f"ok collector arm={arm} run_id={run_id}")
@@ -675,8 +763,29 @@ def cmd_collect(cfg, day, host, args):
                 argv += ["--tunnel", f"{arm}={gluetun(cfg, arm)}:{cfg['arms'][arm]['tunnel_target']}"]
         s["sampler_pid"] = host.spawn(argv, str(day.dir / "host-samples.log"))
         lines.append("ok host_sampler")
+    if s.get("rehearsal"):
+        end, cap = rehearsal_ends(s)
+        lines.append(f"{'warn' if end > cap else 'ok'} rehearsal ends about {iso(end)} (an estimate); "
+                     f"watch stops every arm at {iso(cap)} (4 h from the first start)" + (" first" if end > cap else ""))
     day.save()
     return lines
+
+
+def first_start(s):
+    """The day's first start: the earliest `up` or collector start any arm recorded."""
+    times = [parse_utc(a.get(k)) for a in s["arms"].values() for k in ("up_utc", "collector_started_utc") if a.get(k)]
+    return min(times) if times else None
+
+
+def rehearsal_ends(s):
+    """(an estimate of the rehearsal's last window end, the 4 h cap): the last collector's
+    start, its launch allowance, the 30 min warm-up, the 3 h window and the overhang. Each
+    collector's warm-up waits for its process (sampling suppression), which can add more;
+    the cap in `watch` is what holds."""
+    starts = [parse_utc(a["collector_started_utc"]) for a in s["arms"].values() if a.get("collector_started_utc")]
+    end = max(starts) + timedelta(seconds=COLLECTOR_START_SECONDS + OVERHANG_SECONDS,
+                                  minutes=REHEARSAL_WARMUP_MINUTES, hours=REHEARSAL_HOURS)
+    return end, first_start(s) + REHEARSAL_CAP
 
 
 def metric(text, name):
@@ -820,10 +929,18 @@ def cmd_watch(cfg, day, host, args, max_loops=None):
         when = shutdown_at(states)
         if when is not None and (when == "now" or host.now() >= when + timedelta(seconds=OVERHANG_SECONDS)):
             break
+        first = first_start(s) if s.get("rehearsal") else None
+        if first is not None and host.now() >= first + REHEARSAL_CAP:  # CR-SPEC-R1 §6: the 4 h cap
+            s["notes"].append(f"{iso(host.now())} the rehearsal reached its 4 h cap from the first start "
+                              f"({iso(first)}): every arm stopped")
+            break
         loops += 1
         if max_loops is not None and loops >= max_loops:
             return ["ok watch paused (test bound)"]
-        host.sleep(SCRAPE_SECONDS)
+        wait = SCRAPE_SECONDS
+        if first is not None:  # wake at the cap, not up to a minute after it
+            wait = max(1, min(wait, int((first + REHEARSAL_CAP - host.now()).total_seconds()) + 1))
+        host.sleep(wait)
     key = salt(cfg)
     lines = []
     for arm in day.arms():  # egress through the last boundary, before anything stops
@@ -871,10 +988,56 @@ def cmd_stop(cfg, day, host, args):
     return failed_stops(stop_all(cfg, day, host) + cmd_archive(cfg, day, host, args))
 
 
+IPV6_RUN = re.compile(r"[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*(?:%[0-9A-Za-z_.-]+)?")
+CLOCK = re.compile(r"^[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?$")
+IPV4_LOG = re.compile(r"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])")
+WG_KEY = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=(?![A-Za-z0-9+/=])")
+
+
+def redact_log(text):
+    """A gluetun log with every IPv6 and IPv4 address and every WireGuard key (32 bytes,
+    base64) replaced. It fails closed: any run of hex digits, colons and dots with two or
+    more colons is replaced, unless it's a time of day (10:00:00, 10:00:00.123), which is
+    kept because the handshake evidence is in the times. So `ip:2001:db8::1` and an
+    unbracketed `2001:db8::1:51820` go too (with a hex letter before them, if any)."""
+    text = WG_KEY.sub("[key]", text)
+    text = IPV6_RUN.sub(lambda m: m[0] if CLOCK.fullmatch(m[0]) else "[ipv6]", text)
+    return IPV4_LOG.sub("[ipv4]", text)
+
+
+def save_gluetun_logs(cfg, day, host):
+    """Each arm's gluetun log for the day, from its start (`up`) to the shutdown, redacted, as
+    <arm>/gluetun.log (X-cr-round1-spec-fixes item 6): the evidence for handshake events.
+    Returns {arm: sha256}; an arm whose log can't be read is noted and has none."""
+    s, out = day.require(), {}
+    until = s.get("shutdown_utc") or iso(host.now())
+    for arm in day.arms():
+        st = s["arms"][arm]
+        since = st.get("up_utc") or ((s.get("exit_checks") or [{}])[0].get("utc"))
+        if not since:
+            continue  # never started: no log for the day
+        raw = host.container_logs(gluetun(cfg, arm), since, until)
+        if raw is None:
+            (day.dir / arm / "gluetun.log").unlink(missing_ok=True)  # an earlier, partial one isn't the day's
+            note = f"arm {arm}: gluetun's log couldn't be read for the archive"
+            if not any(n.endswith(note) for n in s["notes"]):
+                s["notes"].append(f"{iso(host.now())} {note}")
+                day.save()
+            continue
+        data = redact_log(raw.decode("utf-8", "replace")).encode("utf-8")
+        path = day.dir / arm / "gluetun.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        out[arm] = hashlib.sha256(data).hexdigest()
+    return out
+
+
 def cmd_archive(cfg, day, host, args):
     """The day archive gate-round reads: exits, and per arm its egress, activity and leak tests,
-    and the day's events."""
+    whether its probe target was checked as its gateway, its gluetun log's hash, and the
+    day's events."""
     s = day.require()
+    logs = save_gluetun_logs(cfg, day, host)
     rows = []
     log = day.dir / "activity.jsonl"
     if log.exists():
@@ -897,7 +1060,11 @@ def cmd_archive(cfg, day, host, args):
                      "activity_scrapes": sum(1 for r in rows if r.get("arm") == arm),
                      "collector": {"closed": col["closed"], "reason": col["reason"],
                                    "final_boundary_utc": col["final_boundary_utc"]},
-                     "leak_test": leak_summary(st["leak_tests"]), "leak_tests": st["leak_tests"]}
+                     "leak_test": leak_summary(st["leak_tests"]), "leak_tests": st["leak_tests"],
+                     "tunnel_target_is_gateway": st.get("tunnel_target_is_gateway") is True,
+                     "tunnel_gateway_check": st.get("tunnel_gateway_check")}
+        if arm in logs:
+            arms[arm]["gluetun_log_sha256"] = logs[arm]
         ev = classify_close(arm, col, s.get("coordinator_stopped", ()))
         if ev is not None and not any(e.get("cause") == ev["cause"] and e.get("arms") == ev["arms"] for e in events):
             events.append(ev)
@@ -919,6 +1086,17 @@ def cmd_end_attempt(cfg, day, host, args):
     ran = sorted({d["day"] for d in list_days(cfg) if d["attempt"] == args.attempt})
     if ran not in ([], [1], [1, 2]):
         raise Fail(f"attempt {args.attempt} ran days {ran}: only [], [1] or [1, 2] can be recorded")
+    own = {e["arm"] for e in cfg["decl"]["arms"] if e["attempt"] == args.attempt}
+    for token in args.reason.split(","):
+        m = END_REASON.fullmatch(token)
+        if not m:
+            raise Fail(f"--reason {token!r}: give one or more of rehearsal_drop:<arm>, product_failure:<arm>, "
+                       "solo_confirmation:<arm>, valid_miss:<arm> or other:<slug>, comma-separated")
+        if m[2] is not None and m[2] not in own:
+            raise Fail(f"--reason {token}: arm {m[2]} isn't in attempt {args.attempt}")
+        if m[1] == "rehearsal_drop" and (ran or args.attempt != cfg["decl"]["attempts"][0]["id"]):
+            raise Fail(f"--reason {token}: the rehearsal drops an arm only from the round's first attempt, "
+                       "before its first day")
     ends[args.attempt] = {"reason": args.reason, "days_run": ran}
     save(path, ends)
     return [f"ok attempt_end {args.attempt} days_run={ran}"]
@@ -975,9 +1153,16 @@ def cmd_manifest(cfg, day, host, args):
         for name in ("archive.json", "host-samples.json"):
             if not (d["dir"] / name).exists():
                 raise Fail(f"{d['dir'] / name} is missing")
+        logs = {}
+        for arm in sorted(reports):  # the runner's handshake classification is checked against these
+            p = d["dir"] / arm / "gluetun.log"
+            if not p.exists():
+                raise Fail(f"{p} is missing: run `archive` for that day again")
+            logs[arm] = ref(p)
         repeats.setdefault((d["attempt"], d["day"]), []).append(d["repeat"])
         days.append({"attempt": d["attempt"], "day": d["day"], "repeat": d["repeat"], "reports": reports,
-                     "archive": ref(d["dir"] / "archive.json"), "contention": ref(d["dir"] / "host-samples.json")})
+                     "archive": ref(d["dir"] / "archive.json"), "contention": ref(d["dir"] / "host-samples.json"),
+                     "gluetun_logs": logs})
     if None in run_ids or len(set(run_ids)) != len(run_ids):
         raise Fail("run IDs must be present and unique across the manifest, the comparator's included")
     for key, reps in repeats.items():
