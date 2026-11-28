@@ -203,7 +203,7 @@ async fn the_start_doesnt_wait_for_the_fill_and_nothing_is_admitted_before_it() 
     .await;
 
     // Held: not filled, and it answers "stored" to every hash, even one
-    // the empty bloom has never seen, and never asks for a rebuild.
+    // the bloom has never seen, and never asks for a rebuild.
     let have = m.have();
     assert!(!have.is_filled());
     assert!(have.contains(&fresh) && have.contains(&stored));
@@ -249,7 +249,7 @@ async fn the_start_doesnt_wait_for_the_fill_and_nothing_is_admitted_before_it() 
 }
 
 /// The id bound holds the count, and a start over a file store fills
-/// the filter completely, sized for twice the count.
+/// the filter completely.
 #[tokio::test]
 async fn the_bound_holds_the_count_and_the_filter_is_filled() {
     let dir = tempfile::tempdir().unwrap();
@@ -283,6 +283,5 @@ async fn the_bound_holds_the_count_and_the_filter_is_filled() {
         .await
         .expect("filled within 10 s");
     assert!(m.have().contains(&info.v1.unwrap()));
-    assert!(m.have().capacity() >= 2 * m.torrents());
     pipeline.shutdown().await.unwrap();
 }

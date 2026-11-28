@@ -46,8 +46,8 @@ pub trait HaveObserver: Send + Sync + 'static {
     fn inserted(&self, hash: &InfoHash);
 }
 
-/// Run on the fill's thread before it scans the store: a test holds the
-/// fill with it ([`PipelineConfig::fill_gate`](crate::PipelineConfig)).
+/// Run on the fill's thread after its scan, before the filter is marked
+/// filled: a test holds the fill with it ([`PipelineConfig::fill_gate`](crate::PipelineConfig)).
 #[derive(Clone)]
 pub struct FillGate(Arc<dyn Fn() + Send + Sync>);
 
