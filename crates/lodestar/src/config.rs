@@ -301,12 +301,13 @@ impl Dht {
                 Interface::parse(name).map_err(|e| ConfigError(format!("dht.interface: {e}")))?
             }
         };
-        // Windows binds the interface's own address, so a specific
-        // `dht.bind` address would conflict with it.
-        if cfg!(windows) && self.bind.iter().any(|a| !a.ip().is_unspecified()) {
+        // A specific `dht.bind` address may belong to another interface
+        // (Linux would then send through the VPN with that address), and
+        // Windows binds the interface's own address anyway.
+        if self.bind.iter().any(|a| !a.ip().is_unspecified()) {
             return Err(ConfigError(
-                "dht.interface: on Windows, dht.bind must use the unspecified address \
-                 (0.0.0.0 or [::]) with an interface; the interface's own address is used"
+                "dht.interface: dht.bind must use the unspecified address (0.0.0.0 or [::]) \
+                 with an interface; the interface's own address is used"
                     .into(),
             ));
         }
@@ -1288,6 +1289,50 @@ fn parse_hex20(s: &str) -> Option<[u8; 20]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// X-vpn-bind: `dht.interface` is checked at load.
+    #[test]
+    fn the_crawl_interface_is_checked() {
+        let dht = |interface: Option<&str>, bind: &str| Dht {
+            interface: interface.map(str::to_owned),
+            bind: vec![bind.parse().unwrap()],
+            ..Dht::default()
+        };
+        // Unset or empty: any route.
+        assert!(
+            dht(None, "0.0.0.0:6881")
+                .crawl_interface()
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            dht(Some(""), "0.0.0.0:6881")
+                .crawl_interface()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            dht(Some("wg0"), "0.0.0.0:6881")
+                .crawl_interface()
+                .unwrap()
+                .unwrap()
+                .name(),
+            "wg0"
+        );
+        // A name the platform's rule refuses.
+        let bad = if cfg!(windows) { " wg0" } else { "wg/0" };
+        let e = dht(Some(bad), "0.0.0.0:6881")
+            .crawl_interface()
+            .unwrap_err();
+        assert!(e.to_string().starts_with("dht.interface:"), "{e}");
+        // A specific bind address could belong to another interface.
+        let e = dht(Some("wg0"), "192.168.1.5:6881")
+            .crawl_interface()
+            .unwrap_err();
+        assert!(e.to_string().contains("unspecified"), "{e}");
+        // Without an interface a specific bind is fine, as before.
+        assert!(dht(None, "192.168.1.5:6881").crawl_interface().is_ok());
+    }
 
     fn no_env(_: &str) -> Option<String> {
         None

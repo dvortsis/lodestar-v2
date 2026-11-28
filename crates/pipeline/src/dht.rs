@@ -80,6 +80,11 @@ impl DhtSource {
         self.paused.send_replace(paused);
     }
 
+    /// The crawler's pause as last handed to the node.
+    pub fn is_paused(&self) -> bool {
+        *self.paused.borrow()
+    }
+
     /// The running node, for BEP 33 scrapes: set once it has started and
     /// cleared when it stops. Clone the handle out rather than holding the
     /// lock across a scrape.
@@ -263,12 +268,15 @@ impl SourcePlugin for DhtSource {
                                 // Gone meanwhile: wait for it as usual.
                                 break None;
                             }
+                            // Read before the start: a link that changes
+                            // while it binds makes this node stale at once.
+                            let generation = guard.generation();
                             let config = Config {
                                 paused: *paused.borrow_and_update(),
                                 ..self.config.clone()
                             };
                             match Node::start(config, Some(tx.clone())).await {
-                                Ok(node) => break Some(node),
+                                Ok(node) => break Some((node, generation)),
                                 Err(e) if iface::is_refused(&e) => {}
                                 Err(e) => {
                                     guard.release();
@@ -277,13 +285,8 @@ impl SourcePlugin for DhtSource {
                             }
                         };
                         guard.release();
-                        let Some(node) = started else { continue };
-                        // The generation the hold ended under; one that's
-                        // already down stops this node at once (0 is
-                        // never a generation).
-                        let generation = match guard.state() {
-                            State::Up { generation } => generation,
-                            State::Down(_) => 0,
+                        let Some((node, generation)) = started else {
+                            continue;
                         };
                         (node, Some(generation))
                     }

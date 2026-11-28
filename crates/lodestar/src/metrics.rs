@@ -102,21 +102,7 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
     }
 
     render_egress(&mut o, &m.sources());
-    // X-vpn-bind: only with an interface set.
-    if let Some(guard) = m.vpn() {
-        o.one(
-            "crawl_interface_up",
-            "gauge",
-            "Whether the network interface the crawl is limited to is usable (0: VPN down).",
-            u8::from(guard.state().is_up()),
-        );
-        o.one(
-            "crawl_interface_trips_total",
-            "counter",
-            "Times the crawl's network interface went from usable to down.",
-            guard.trips(),
-        );
-    }
+    render_vpn(&mut o, m.vpn().map(|g| &**g));
 
     let i = m.intake_stats();
     o.one(
@@ -734,6 +720,24 @@ pub fn render(m: &Monitor, dht: Option<&StatsSnapshot>, fetch: &FetchStats) -> S
 
 /// The core re-judge's stalled ranges (X-rejudge-stall), as the writer
 /// last set them.
+/// X-vpn-bind: the crawl's interface, only with one set. Whether it's up
+/// and how often it went down; never its name or addresses.
+fn render_vpn(o: &mut Out, guard: Option<&lodestar_network_policy::iface::Guard>) {
+    let Some(guard) = guard else { return };
+    o.one(
+        "crawl_interface_up",
+        "gauge",
+        "Whether the network interface the crawl is limited to is usable (0: VPN down).",
+        u8::from(guard.state().is_up()),
+    );
+    o.one(
+        "crawl_interface_trips_total",
+        "counter",
+        "Times the crawl's network interface went from usable to down.",
+        guard.trips(),
+    );
+}
+
 fn render_core_rejudge(o: &mut Out, w: &lodestar_pipeline::WriterStats) {
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
     o.one(
@@ -1915,6 +1919,35 @@ pub fn render_caches(
 mod tests {
     use super::*;
     use lodestar_pipeline::gate::{Excluded, Origin};
+
+    /// X-vpn-bind: the two series exist only with an interface set, and
+    /// follow the guard.
+    #[test]
+    fn the_crawl_interface_series() {
+        use lodestar_network_policy::iface::{Down, Guard, Interface, Link};
+        let mut o = Out(String::new());
+        render_vpn(&mut o, None);
+        assert!(o.0.is_empty(), "nothing without an interface");
+        let up = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let u = up.clone();
+        let guard = Guard::with_probe(Interface::parse("wg0").unwrap(), move |_| {
+            if u.load(Ordering::SeqCst) {
+                Ok(Link::default())
+            } else {
+                Err(Down::Missing)
+            }
+        });
+        render_vpn(&mut o, Some(&guard));
+        assert!(o.0.contains("lodestar_crawl_interface_up 1\n"), "{}", o.0);
+        assert!(o.0.contains("lodestar_crawl_interface_trips_total 0\n"));
+        assert!(!o.0.contains("wg0"), "never the interface's name");
+        up.store(false, Ordering::SeqCst);
+        guard.poll();
+        let mut o = Out(String::new());
+        render_vpn(&mut o, Some(&guard));
+        assert!(o.0.contains("lodestar_crawl_interface_up 0\n"), "{}", o.0);
+        assert!(o.0.contains("lodestar_crawl_interface_trips_total 1\n"));
+    }
 
     #[test]
     fn the_mmap_cache_gauge_is_labelled_by_index_and_absent_for_a_ram_index() {

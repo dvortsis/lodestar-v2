@@ -20,6 +20,7 @@ use lodestar_api::ops::{
     SourceEgress, SourceHealth, SourceKind, SourceNeed, SourcePatch, SourcePriority,
     SourceSchedule, SourceState, StatsResponse,
 };
+use lodestar_api::ops::{CrawlerInterface, InterfaceState};
 use lodestar_api::ops::{EgressCounts, EgressLive, EgressRoute, EgressSetting, EgressState};
 use lodestar_api::settings::{
     Imported, Saved, SectionValues, SettingSource, SettingValue, SettingsApi, SettingsBatch,
@@ -126,6 +127,8 @@ struct FakeOps {
     purge_permits: Mutex<u32>,
     purge_steps: Mutex<u32>,
     purge_wake: tokio::sync::Notify,
+    /// X-vpn-bind: what `crawler_interface` answers.
+    interface: Mutex<Option<CrawlerInterface>>,
 }
 
 fn dht_source() -> Source {
@@ -230,6 +233,10 @@ fn restricted_source() -> Source {
 }
 
 impl OpsApi for FakeOps {
+    fn crawler_interface(&self) -> Option<CrawlerInterface> {
+        self.interface.lock().unwrap().clone()
+    }
+
     fn crawler(&self) -> CrawlerRuntime {
         CrawlerRuntime {
             since: 1_700_000_000,
@@ -698,6 +705,41 @@ async fn crawler_controls() {
             r#"paused=false intensity="low""#,
         ]
     );
+}
+
+/// X-vpn-bind: with the crawl's interface down, `GET /crawler` says
+/// `vpn_down` (whatever the pause setting says) and why, as stable codes.
+#[tokio::test]
+async fn the_crawler_reports_its_interface() {
+    let f = fixture();
+    let cookie = session(&f).await;
+    let c = Some(cookie.as_str());
+    *f.ops.interface.lock().unwrap() = Some(CrawlerInterface {
+        interface: "wg0".into(),
+        state: InterfaceState::Down,
+        reason: Some("missing".into()),
+    });
+    let down = golden(
+        &f,
+        "crawler_vpn_down",
+        req("GET", "/api/v1/crawler", c, None),
+    )
+    .await;
+    assert_eq!(down["state"], json!("vpn_down"));
+    assert_eq!(
+        down["interface"],
+        json!({ "interface": "wg0", "reason": "missing", "state": "down" })
+    );
+    *f.ops.interface.lock().unwrap() = Some(CrawlerInterface {
+        interface: "wg0".into(),
+        state: InterfaceState::Up,
+        reason: None,
+    });
+    let (_, body) = send(&f, req("GET", "/api/v1/crawler", c, None)).await;
+    let up: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(up["state"], json!("running"));
+    assert_eq!(up["interface"]["state"], json!("up"));
+    assert_eq!(up["interface"]["reason"], Value::Null);
 }
 
 #[tokio::test]

@@ -62,10 +62,11 @@ async fn a_missing_interface_fails_the_start_and_binds_nothing() {
     let before = iface::pins();
     let e = Node::start(cfg, None).await.unwrap_err();
     assert_eq!(
-        e.raw_os_error(),
+        iface::pin_failure(&e).and_then(std::io::Error::raw_os_error),
         Some(19),
         "ENODEV, not an unpinned bind: {e}"
     );
+    assert!(iface::is_refused(&e), "a pin's refusal, so the crawl holds");
     assert!(iface::pins() > before, "the socket went through the pin");
 }
 

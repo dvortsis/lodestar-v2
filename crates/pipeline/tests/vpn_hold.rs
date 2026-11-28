@@ -32,8 +32,16 @@ impl Fetcher for NoFetch {
     }
 }
 
+/// Loopback as a link: Windows binds its address.
+fn loopback() -> Link {
+    Link {
+        index: Some(1),
+        addrs: vec!["127.0.0.1".parse().unwrap()],
+    }
+}
+
 /// A guard whose probe the test switches between up (`lo`'s real check
-/// on Linux, a fixed link elsewhere) and down.
+/// on Linux, loopback's address elsewhere) and down.
 fn switched() -> (Arc<Guard>, Arc<AtomicBool>) {
     let up = Arc::new(AtomicBool::new(false));
     let u = up.clone();
@@ -44,7 +52,7 @@ fn switched() -> (Arc<Guard>, Arc<AtomicBool>) {
         if cfg!(target_os = "linux") {
             lodestar_network_policy::iface::check(i)
         } else {
-            Ok(Link::default())
+            Ok(loopback())
         }
     });
     (guard, up)
@@ -62,12 +70,12 @@ struct Started {
 async fn start(guard: Arc<Guard>, paused: bool) -> Started {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
-    // Pinned to a device (Linux), so `lo`'s own addresses.
+    // Pinned to `lo` on Linux, bound to its address on Windows.
     let dht = Arc::new(DhtSource::new(DhtConfig {
         bind: vec![SocketAddr::from(([127, 0, 0, 1], 0))],
         bootstrap: vec![],
         allow_private: true,
-        guard: cfg!(target_os = "linux").then(|| guard.clone()),
+        guard: Some(guard.clone()),
         ..DhtConfig::default()
     }));
     let mut config = PipelineConfig {
@@ -195,17 +203,14 @@ async fn without_a_guard_there_is_no_vpn_status() {
     pipeline.shutdown().await.unwrap();
 }
 
-/// A start whose sockets can't be pinned (here: a probe that says up for
-/// an interface that doesn't exist) holds the crawl down as `bind_failed`
-/// through every later check, rather than flapping it up between retries.
-#[cfg(target_os = "linux")]
+/// The interface goes down after the pipeline started but before the
+/// control takes over: the pool and the DHT are paused explicitly, since
+/// the control's state already reads paused and no later change would.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_pin_that_fails_holds_the_crawl_down_across_checks() {
-    let guard = Guard::with_probe(
-        Interface::parse("lsnone0").unwrap(),
-        |_| Ok(Link::default()),
-    );
-    assert!(guard.state().is_up(), "the probe says up");
+async fn an_interface_that_went_before_the_control_started_is_held() {
+    let (guard, up) = switched();
+    up.store(true, Ordering::SeqCst);
+    guard.poll();
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("t.db");
     let dht = Arc::new(DhtSource::new(DhtConfig {
@@ -226,6 +231,9 @@ async fn a_pin_that_fails_holds_the_crawl_down_across_checks() {
     )
     .await
     .unwrap();
+    assert!(!dht.is_paused(), "up at the pipeline's start");
+    up.store(false, Ordering::SeqCst);
+    guard.poll();
     let store = Arc::new(Mutex::new(
         Store::open(&db, StoreConfig::default()).unwrap(),
     ));
@@ -238,15 +246,11 @@ async fn a_pin_that_fails_holds_the_crawl_down_across_checks() {
     )
     .await
     .unwrap();
-    until("the hold", || {
-        control.status().vpn.unwrap().down == Some("bind_failed")
-    })
-    .await;
-    for _ in 0..5 {
-        guard.poll();
-        assert_eq!(control.status().vpn.unwrap().down, Some("bind_failed"));
-        assert!(control.status().paused && !running(&dht));
-    }
-    assert_eq!(guard.trips(), 1, "one trip, no flapping");
+    let st = control.status();
+    assert!(
+        st.paused && st.vpn.unwrap().down == Some("missing"),
+        "{st:?}"
+    );
+    assert!(dht.is_paused(), "paused explicitly, not left running");
     pipeline.shutdown().await.unwrap();
 }

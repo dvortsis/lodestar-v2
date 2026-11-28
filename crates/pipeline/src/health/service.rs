@@ -176,6 +176,22 @@ pub(crate) struct Setup {
     pub setup_done: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
+/// X-vpn-bind: whether a tracker can be asked with the crawl limited to an
+/// interface. No name is looked up (the system resolver would ask outside
+/// it), so only a tracker named by address can be; over HTTP on Windows,
+/// an IPv4 one only ([`http::through_reaches`]).
+pub(crate) fn through_interface(url: &TrackerUrl) -> bool {
+    if url.scheme() == lodestar_tracker_scrape::Scheme::Udp {
+        url.host()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok()
+    } else {
+        url.scrape_url().is_some_and(|u| http::through_reaches(&u))
+    }
+}
+
 /// Starts the scheduler and one task per tracker. The returned task ends
 /// at shutdown, handing back the reader.
 pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
@@ -194,6 +210,19 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
         Some(guard) => http::client_through(guard.interface(), s.cfg.deny.as_ref()),
         None => http::client(s.cfg.udp.bind.map(|a| a.ip()), s.cfg.deny.as_ref()),
     };
+    // Windows binds the HTTP client to the interface's address as it was
+    // now: once the link changes (a new address), its scrapes are skipped
+    // rather than sent from an address that may not be the interface's.
+    let http_generation = s
+        .cfg
+        .udp
+        .guard
+        .as_ref()
+        .filter(|_| cfg!(windows))
+        .and_then(|g| match g.state() {
+            lodestar_network_policy::iface::State::Up { generation } => Some(generation),
+            lodestar_network_policy::iface::State::Down(_) => None,
+        });
     let client = match client {
         Ok(c) => Some(c),
         Err(e) => {
@@ -206,6 +235,8 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
     };
     let mut jobs = Vec::new();
     let mut statuses = Vec::new();
+    // X-vpn-bind: trackers left out because they'd need a lookup.
+    let mut off_interface = 0usize;
     for (id, url) in &s.trackers {
         let status = Arc::new(Mutex::new(TrackerStatus {
             id: *id,
@@ -216,22 +247,11 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             last_ok_at: None,
         }));
         let udp = url.scheme() == lodestar_tracker_scrape::Scheme::Udp;
-        // X-vpn-bind: with an interface set no name is looked up (the
-        // system resolver would ask outside it), so a tracker named by
-        // host is never asked; one named by address is (over HTTP on
-        // Windows, an IPv4 one only: `http::through_reaches`).
-        let reachable = if udp {
-            url.host()
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .is_ok()
-        } else {
-            url.scrape_url().is_some_and(|u| http::through_reaches(&u))
-        };
-        let skip_named = s.cfg.udp.guard.is_some() && !reachable;
+        if s.cfg.udp.guard.is_some() && !through_interface(url) {
+            off_interface += 1;
+            continue;
+        }
         let tracker = match &client {
-            _ if skip_named => None,
             Some(c) => Tracker::new(url, s.cfg.udp.clone(), s.cfg.http.clone(), c),
             None if udp => Some(Tracker::Udp(UdpTracker::new(
                 url.host(),
@@ -270,6 +290,7 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             status: status.clone(),
             gate: gate.clone(),
             guard: s.cfg.udp.guard.clone(),
+            built_under: if udp { None } else { http_generation },
         };
         // The longest one request can take: over UDP a connect and a
         // scrape, each with its retries. Capped at half a round, so a
@@ -292,6 +313,12 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             max_wait_ms: max_wait.as_millis() as u64,
         });
         statuses.push(status);
+    }
+    if off_interface > 0 {
+        lodestar_log::log_event!(
+            crate::log_events::VPN_TRACKERS_SKIPPED,
+            count = off_interface
+        );
     }
     drop(done_tx);
     let handle = HealthHandle {
@@ -924,6 +951,23 @@ fn load(s: &mut Store, id: i64) -> Option<Loaded> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// X-vpn-bind: with an interface set only trackers named by address
+    /// are asked; over HTTP on Windows, IPv4 ones only.
+    #[test]
+    fn only_trackers_named_by_address_go_through_the_interface() {
+        let asks = |u: &str| through_interface(&TrackerUrl::parse(u).unwrap());
+        assert!(asks("udp://203.0.113.9:6969"));
+        assert!(asks("udp://[2001:db8::9]:6969"));
+        assert!(!asks("udp://tracker.example:6969"), "a name: no lookup");
+        assert!(asks("http://203.0.113.9/announce"));
+        assert!(!asks("http://tracker.example/announce"));
+        assert_eq!(asks("http://[2001:db8::9]/announce"), !cfg!(windows));
+        assert!(
+            !asks("http://203.0.113.9/no-scrape"),
+            "no scrape convention"
+        );
+    }
 
     fn round(n: usize, deadline: Instant) -> Round {
         Round {

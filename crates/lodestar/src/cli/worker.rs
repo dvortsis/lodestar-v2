@@ -580,21 +580,7 @@ fn run_with(
                     "the coordinator's address is missing: {JOIN_AGAIN}"
                 ))
             })?;
-        // X-vpn-bind: a remote worker can't limit its crawl to one
-        // interface yet (X-vpn-bind-worker), so it refuses to start rather
-        // than crawl by the normal route with the setting ignored.
-        if config
-            .dht
-            .interface
-            .as_deref()
-            .is_some_and(|i| !i.is_empty())
-        {
-            return Err(Failure::Failed(
-                "dht.interface isn't supported by `lodestar worker` yet: remove it from this \
-                 worker's config.toml, or run the worker where its whole network is the VPN"
-                    .into(),
-            ));
-        }
+        refuse_crawl_interface(&config)?;
         report(&format!("{CONNECTING}{addr}"));
         let settings = Settings::default();
         // The worker's fetch budget (WK-10b): dicts up to `MAX_METADATA`,
@@ -766,6 +752,25 @@ fn block_on(f: impl Future<Output = Outcome>) -> Outcome {
     out
 }
 
+/// X-vpn-bind: a remote worker can't limit its crawl to one interface yet
+/// (X-vpn-bind-worker), so with `dht.interface` set it refuses to start
+/// rather than crawl by the normal route with the setting ignored.
+fn refuse_crawl_interface(config: &Config) -> Result<(), Failure> {
+    if config
+        .dht
+        .interface
+        .as_deref()
+        .is_some_and(|i| !i.is_empty())
+    {
+        return Err(Failure::Failed(
+            "dht.interface isn't supported by `lodestar worker` yet: remove it from this \
+             worker's config.toml, or run the worker where its whole network is the VPN"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
@@ -773,6 +778,19 @@ mod tests {
     use crate::cli::{Cli, Command};
 
     use super::*;
+
+    #[test]
+    fn a_worker_refuses_to_start_with_a_crawl_interface() {
+        let mut config = Config::default();
+        assert!(refuse_crawl_interface(&config).is_ok());
+        config.dht.interface = Some(String::new());
+        assert!(refuse_crawl_interface(&config).is_ok(), "empty: any route");
+        config.dht.interface = Some("wg0".into());
+        let Err(Failure::Failed(why)) = refuse_crawl_interface(&config) else {
+            panic!("a worker with dht.interface set started");
+        };
+        assert!(why.contains("dht.interface"), "{why}");
+    }
 
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("lodestar").chain(args.iter().copied()))

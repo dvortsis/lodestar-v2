@@ -803,30 +803,34 @@ pub fn lookups() -> u64 {
     LOOKUPS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// X-vpn-bind: the bootstrap entries that are already addresses, then
-/// [`super::BOOTSTRAP_LITERALS`]; names are skipped, never looked up.
-/// A skipped name is logged, unless it's a default router, which the
-/// built-in addresses stand for.
+/// Bootstrap names skipped by this process ([`literal_bootstrap`]) are
+/// logged at the first node's start only, not at every rebind.
+static SKIPPED_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// X-vpn-bind: the bootstrap entries that are already addresses; names are
+/// skipped, never looked up. With the default list (all names), the
+/// default routers' built-in addresses ([`super::BOOTSTRAP_LITERALS`])
+/// stand for it; a list the user set gets only its own addresses, and an
+/// empty one stays empty. The count of skipped names is logged once.
 pub(crate) fn literal_bootstrap(hosts: &[String]) -> Vec<SocketAddr> {
-    let mut out = Vec::new();
-    for host in hosts {
-        match host.parse::<SocketAddr>() {
-            Ok(addr) => out.push(addr),
-            Err(_) if super::DEFAULT_BOOTSTRAP.contains(&host.as_str()) => {}
-            Err(_) => {
-                let entry = format!("udp://{host}");
-                lodestar_log::log_event!(
-                    crate::log_events::BOOTSTRAP_NAME_SKIPPED,
-                    entry = lodestar_log::Url::new(&entry)
-                );
-            }
-        }
+    let default = hosts.len() == super::DEFAULT_BOOTSTRAP.len()
+        && hosts
+            .iter()
+            .zip(super::DEFAULT_BOOTSTRAP)
+            .all(|(h, d)| h == d);
+    if default {
+        return super::BOOTSTRAP_LITERALS
+            .iter()
+            .map(|a| a.parse().expect("a literal address"))
+            .collect();
     }
-    for addr in super::BOOTSTRAP_LITERALS {
-        let addr: SocketAddr = addr.parse().expect("a literal address");
-        if !out.contains(&addr) {
-            out.push(addr);
-        }
+    let out: Vec<SocketAddr> = hosts.iter().filter_map(|h| h.parse().ok()).collect();
+    let skipped = hosts.len() - out.len();
+    if skipped > 0 && !SKIPPED_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        lodestar_log::log_event!(
+            crate::log_events::BOOTSTRAP_NAMES_SKIPPED,
+            skipped = skipped
+        );
     }
     out
 }
@@ -836,28 +840,40 @@ mod literal_bootstrap_tests {
     use super::*;
 
     #[test]
-    fn names_are_skipped_and_the_router_addresses_follow() {
+    fn the_default_list_is_the_routers_addresses() {
+        let default: Vec<String> = super::super::DEFAULT_BOOTSTRAP
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let before = lookups();
+        let want: Vec<SocketAddr> = super::super::BOOTSTRAP_LITERALS
+            .iter()
+            .map(|a| a.parse().unwrap())
+            .collect();
+        assert_eq!(literal_bootstrap(&default), want);
+        assert_eq!(lookups(), before, "nothing looked up");
+    }
+
+    #[test]
+    fn a_users_list_keeps_only_its_addresses() {
         let hosts = [
             "192.0.2.7:6881",
             "router.bittorrent.com:6881",
             "tracker.example:6881",
             "[2001:db8::1]:6881",
-            "67.215.246.10:6881",
         ]
         .map(String::from);
         let before = lookups();
-        let got = literal_bootstrap(&hosts);
         let want: Vec<SocketAddr> = ["192.0.2.7:6881", "[2001:db8::1]:6881"]
             .iter()
-            .chain(super::super::BOOTSTRAP_LITERALS)
             .map(|a| a.parse().unwrap())
             .collect();
-        assert_eq!(got, want, "literals first, then each router once");
-        assert_eq!(lookups(), before, "nothing looked up");
+        assert_eq!(literal_bootstrap(&hosts), want, "no built-in routers added");
         assert!(
-            super::super::BOOTSTRAP_LITERALS.len() >= super::super::DEFAULT_BOOTSTRAP.len(),
-            "an address for each default router"
+            literal_bootstrap(&[]).is_empty(),
+            "an empty list stays empty"
         );
+        assert_eq!(lookups(), before, "nothing looked up");
     }
 }
 

@@ -180,6 +180,10 @@ pub(crate) struct ClientTask {
     /// X-vpn-bind: while the crawl's interface is down, jobs are skipped
     /// (no request, no failure counted against the tracker).
     pub guard: Option<Arc<lodestar_network_policy::iface::Guard>>,
+    /// The guard's generation this tracker's client was bound under
+    /// (Windows HTTP), if it's tied to one: jobs are skipped once the
+    /// guard is up under another.
+    pub built_under: Option<u64>,
 }
 
 impl ClientTask {
@@ -202,6 +206,20 @@ impl ClientTask {
             if done.send(d).await.is_err() {
                 return;
             }
+        }
+    }
+
+    /// Whether a job must be skipped for the crawl's interface (X-vpn-bind):
+    /// it's down, or this tracker's client was bound under an older link.
+    fn vpn_down(&self) -> bool {
+        use lodestar_network_policy::iface::State;
+        let Some(guard) = &self.guard else {
+            return false;
+        };
+        match (guard.state(), self.built_under) {
+            (State::Down(_), _) => true,
+            (State::Up { generation }, Some(built)) => generation != built,
+            (State::Up { .. }, None) => false,
         }
     }
 
@@ -229,8 +247,7 @@ impl ClientTask {
             .unwrap_or(usize::MAX)
             .saturating_mul(per_request)
             .min(job.hashes.len());
-        let down = self.guard.as_ref().is_some_and(|g| !g.state().is_up());
-        if take == 0 || down {
+        if take == 0 || self.vpn_down() {
             return (Vec::new(), Outcome::Skipped, 0);
         }
         let hashes = &job.hashes[..take];
@@ -288,6 +305,72 @@ impl ClientTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A UDP tracker task with `guard`, aimed at a port nothing answers.
+    fn task(
+        guard: Arc<lodestar_network_policy::iface::Guard>,
+        built_under: Option<u64>,
+    ) -> ClientTask {
+        let clock = Clock::new();
+        ClientTask {
+            id: 1,
+            tracker: Tracker::Udp(lodestar_tracker_scrape::UdpTracker::new(
+                "192.0.2.1",
+                9,
+                Default::default(),
+            )),
+            pacer: Pacer::new(Duration::from_secs(1), clock.now()),
+            clock,
+            max_wait: Duration::from_secs(60),
+            status: Arc::new(Mutex::new(TrackerStatus {
+                id: 1,
+                url: String::new(),
+                health: Health::Ok,
+                failures: 0,
+                rounds: [0; 6],
+                last_ok_at: None,
+            })),
+            gate: Arc::default(),
+            guard: Some(guard),
+            built_under,
+        }
+    }
+
+    fn job() -> Job {
+        Job {
+            round: 1,
+            hashes: Arc::from(vec![InfoHash([1; 20])]),
+            deadline_ms: u64::MAX,
+        }
+    }
+
+    /// X-vpn-bind: while the crawl's interface is down a job is skipped,
+    /// with no request and no failure against the tracker; so is one for a
+    /// client bound under an older link (Windows HTTP).
+    #[tokio::test]
+    async fn jobs_are_skipped_while_the_interface_is_down_or_moved_on() {
+        use lodestar_network_policy::iface::{Down, Guard, Interface, Link};
+        let up = Arc::new(AtomicBool::new(false));
+        let u = up.clone();
+        let guard = Guard::with_probe(Interface::parse("wg0").unwrap(), move |_| {
+            if u.load(Ordering::SeqCst) {
+                Ok(Link::default())
+            } else {
+                Err(Down::Missing)
+            }
+        });
+        let mut t = task(guard.clone(), None);
+        let (answers, outcome, asked) = t.scrape(&job()).await;
+        assert_eq!((answers.len(), outcome, asked), (0, Outcome::Skipped, 0));
+        assert_eq!(t.pacer.failures(), 0, "not a failure");
+        // Up under generation 1, but the client was bound under 0.
+        up.store(true, Ordering::SeqCst);
+        guard.poll();
+        let mut stale = task(guard.clone(), Some(0));
+        assert!(stale.vpn_down());
+        assert_eq!(stale.scrape(&job()).await.1, Outcome::Skipped);
+        assert!(!task(guard, Some(1)).vpn_down(), "bound under this one");
+    }
 
     #[test]
     fn requests_that_start_by_the_limit() {

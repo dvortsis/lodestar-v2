@@ -14,6 +14,10 @@ use lodestar_network_policy::iface::{Down, Guard, Interface, Link, State};
 use lodestar_tracker_scrape::testing::{http_tracker, udp_tracker};
 use lodestar_tracker_scrape::{Counts, Error, HttpConfig, Tracker, TrackerUrl, UdpConfig, http};
 
+/// The two tests that read the process-wide lookup counter run one at a
+/// time, so neither sees the other's lookups.
+static LOOKUP_COUNTER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 const LIVE: InfoHash = InfoHash([1; 20]);
 const SWARM: Counts = Counts {
     seeders: 3,
@@ -81,11 +85,13 @@ async fn a_probe_that_lies_still_cant_send_a_udp_scrape() {
     let mut t = udp(&fake.url(true), guard.clone());
     let e = t.scrape(&[LIVE]).await.unwrap_err();
     assert!(
-        matches!(&e, Error::Io(io) if io.raw_os_error() == Some(19)),
+        matches!(&e, Error::Io(io) if lodestar_network_policy::iface::pin_failure(io).and_then(std::io::Error::raw_os_error) == Some(19)),
         "{e:?}"
     );
     assert_eq!(fake.state.connects.load(Ordering::Relaxed), 0);
-    assert!(guard.state().is_up(), "the check said up, so up");
+    // ENODEV trips the guard at once; the (lying) check brings it back.
+    assert_eq!(guard.state(), State::Down(Down::Down));
+    assert!(guard.poll().is_up(), "the check said up, so up");
 }
 
 #[tokio::test]
@@ -115,6 +121,7 @@ async fn the_http_client_is_pinned_to_the_device() {
 /// address is (the tests above).
 #[tokio::test]
 async fn trackers_named_by_host_are_not_looked_up() {
+    let _one = LOOKUP_COUNTER.lock().await;
     let before = lodestar_tracker_scrape::lookups();
     let fake = udp_tracker().await;
     let guard = Guard::new(Interface::parse("lo").unwrap());
@@ -133,5 +140,28 @@ async fn trackers_named_by_host_are_not_looked_up() {
         lodestar_tracker_scrape::lookups(),
         before,
         "no name went to the system resolver"
+    );
+}
+
+/// The control: without an interface the same tracker's name is looked
+/// up (and the scrape works), so the counter above does count lookups.
+#[tokio::test]
+async fn without_an_interface_the_name_is_looked_up() {
+    let _one = LOOKUP_COUNTER.lock().await;
+    let fake = udp_tracker().await;
+    fake.state.set(LIVE, SWARM);
+    let url = TrackerUrl::parse(&format!("udp://localhost:{}", fake.addr.port())).unwrap();
+    let client = http::client(None, None).unwrap();
+    let cfg = UdpConfig {
+        timeout: Duration::from_secs(10),
+        retries: 0,
+        ..UdpConfig::default()
+    };
+    let mut t = Tracker::new(&url, cfg, HttpConfig::default(), &client).unwrap();
+    let before = lodestar_tracker_scrape::lookups();
+    assert_eq!(t.scrape(&[LIVE]).await.unwrap().counts, [Some(SWARM)]);
+    assert!(
+        lodestar_tracker_scrape::lookups() > before,
+        "the name went to the system resolver"
     );
 }

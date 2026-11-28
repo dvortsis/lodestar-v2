@@ -1031,6 +1031,15 @@ impl Control {
         {
             monitor.pool().set_paused(false).await;
         }
+        // An interface that went down since the pipeline started (X-vpn-bind):
+        // the pool and the DHT may still be running, and the state below
+        // already reads paused, so no later change would pause them.
+        if vpn.is_some() {
+            monitor.pool().set_paused(true).await;
+            if let Some(dht) = &dht {
+                dht.set_paused(true);
+            }
+        }
         // What a pinning plugin was built with: the start's credentials.
         // This relies on nothing writing a credential between the plugin's
         // build and here. That holds by construction: credentials are

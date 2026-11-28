@@ -131,6 +131,16 @@ lodestar_log::catalogue! {
         message: "Crawling resumed: the network interface is back",
         fields: {},
     }
+    /// X-vpn-bind: with the crawl limited to a network interface, trackers
+    /// named by host aren't scraped (looking the name up would ask outside
+    /// the interface). Logged once per start, with the count.
+    VPN_TRACKERS_SKIPPED {
+        id: "pipeline.vpn_trackers_skipped",
+        component: Pipeline,
+        level: Info,
+        message: "Trackers named by host skipped: no lookups outside the crawl's interface",
+        fields: { count: Size },
+    }
     /// X-vpn-bind: the DHT's sockets couldn't be pinned to the interface
     /// (on Linux before 5.7, pinning needs `CAP_NET_RAW`, which the
     /// privilege drop removes). The crawl stays paused and tries again

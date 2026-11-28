@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use lodestar_bencode::{OwnedValue, to_vec};
 use lodestar_metainfo::InfoHash;
-use lodestar_network_policy::iface::{Down, Guard, Interface, Link};
+use lodestar_network_policy::iface::{Down, Guard, Interface, Link, State};
 use lodestar_peer_wire::testing::{Accept, Behavior, FakePeer, Seed};
 use lodestar_peer_wire::{Error, FetchOptions, fetch};
 
@@ -82,9 +82,11 @@ async fn a_probe_that_lies_still_cant_leak() {
     assert!(guard.state().is_up(), "the probe lies");
     let r = fetch(addr, InfoHash([1; 20]), &opts(guard.clone())).await;
     assert!(
-        matches!(&r, Err(Error::Connect(e)) if e.raw_os_error() == Some(19)),
+        matches!(&r, Err(Error::Connect(e)) if lodestar_network_policy::iface::pin_failure(e).and_then(std::io::Error::raw_os_error) == Some(19)),
         "ENODEV, not a connection: {r:?}"
     );
     assert!(nothing_connected(&l));
-    assert!(guard.state().is_up(), "the check said up, so up");
+    // ENODEV trips the guard at once; the (lying) check brings it back.
+    assert_eq!(guard.state(), State::Down(Down::Down));
+    assert!(guard.poll().is_up(), "the check said up, so up");
 }

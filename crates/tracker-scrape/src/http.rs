@@ -96,9 +96,15 @@ fn through(
     iface: &lodestar_network_policy::iface::Interface,
     deny: Option<&crate::Deny>,
 ) -> Result<reqwest::ClientBuilder> {
+    // Certificates are checked as every routed client checks them
+    // (`lodestar_integrations::tls`), not by the OS verifier.
+    let route = lodestar_integrations::Route::Interface(iface.name().to_owned());
+    let tls = lodestar_integrations::tls::http_client_config(&route)
+        .map_err(|e| Error::Http(e.to_string()))?;
     Ok(builder(None, deny, None)?
         .interface(iface.name())
-        .dns_resolver(NoLookups))
+        .dns_resolver(NoLookups)
+        .tls_backend_preconfigured(tls))
 }
 
 #[cfg(windows)]
