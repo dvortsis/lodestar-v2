@@ -35,6 +35,14 @@
 		margin-block-start: var(--tb-rail-h, 0);
 	}
 }
+/* L3: on a wide screen the toolbar is a box about as wide as the rows' content (not the far edge of
+   the track, which is far from the text), and its controls end at that box's edge (space-between),
+   so they stay put whatever the count's length or language. */
+@media (width >= 128rem) {
+	.tb {
+		max-width: calc(var(--spacing) * 256);
+	}
+}
 /* Reserved while the count is out, so nothing moves when it arrives. */
 .tb-count {
 	margin: 0;

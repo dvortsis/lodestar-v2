@@ -590,13 +590,20 @@ for (const [width, shows] of [
 	});
 }
 
-// The worst cases for the count's length from 128rem: the longest approximate total
-// in zh and the longest exact total in en, each with a 7-digit hidden count and the full words.
+// The worst cases for the count's length from 128rem: exact totals stop at 200,000, so the longest
+// exact line is 199,999 and the longest approximate one is "≈ 123.5M" in en and "≈ 1234.6万" in zh,
+// each with a 7-digit hidden count and the full words.
 const WORST = [
 	{
 		lang: 'en',
-		total: { total: 12_345_678 },
-		text: '12,345,678 results · 9,999,999 hidden by filters · Show',
+		total: { total: 123_456_789, total_approx: true },
+		text: '≈ 123.5M results · 9,999,999 hidden by filters · Show',
+		label: 'Sort'
+	},
+	{
+		lang: 'en',
+		total: { total: 199_999 },
+		text: '199,999 results · 9,999,999 hidden by filters · Show',
 		label: 'Sort'
 	},
 	{
@@ -604,13 +611,19 @@ const WORST = [
 		total: { total: 12_345_678, total_approx: true },
 		text: '≈ 1234.6万 个结果 · 9,999,999 个已被过滤器隐藏 · 显示',
 		label: '排序'
+	},
+	{
+		lang: 'zh-CN',
+		total: { total: 199_999 },
+		text: '199,999 个结果 · 9,999,999 个已被过滤器隐藏 · 显示',
+		label: '排序'
 	}
 ] as const;
 for (const { lang, total, text, label } of WORST) {
 	for (const width of [2048, 2560]) {
-		test.describe(`the longest count in ${lang} at ${width} px`, () => {
+		test.describe(`the longest count in ${lang} (${text.slice(0, 8)}) at ${width} px`, () => {
 			test.use({ locale: lang });
-			test('is one row, ends with the rows, and moves nothing', async ({ page, go, mock }) => {
+			test('is one row, ends at the box, and moves nothing', async ({ page, go, mock }) => {
 				await page.setViewportSize({ width, height: 900 });
 				server(mock, () => body(hits(3), total));
 				let release!: () => void;
@@ -620,21 +633,27 @@ for (const { lang, total, text, label } of WORST) {
 				await expect(row(page, 1)).toBeVisible();
 				const toolbar = page.getByTestId('results-toolbar');
 				const before = await toolbar.boundingBox();
-				const first = await row(page, 1).boundingBox();
+				const first = (await row(page, 1).boundingBox())?.y;
 				const sort = await page.getByLabel(label).boundingBox();
-				// One row (the toolbar is as tall as a dense control), as wide as the rows, with the
-				// controls ending at their edge.
-				expect(before?.height).toBe(sort?.height);
-				expect(before?.x).toBe(first?.x);
-				expect(before?.width).toBe(first?.width);
 				release();
 				await expect(page.getByTestId('results-hidden-show')).toBeVisible();
 				await expect(count(page)).toHaveText(text, { useInnerText: true });
-				const after = await page.getByLabel(label).boundingBox();
-				expect(after).toEqual(sort);
-				expect(after!.x + after!.width).toBeLessThanOrEqual(first!.x + first!.width);
+				// One row: as tall as a dense control. The box is capped (L3, 1,024 px).
+				expect(before?.height).toBe(sort?.height);
+				expect(before!.width).toBeLessThanOrEqual(1024);
+				// The longest line and the controls leave at least 48 px of room in the box.
+				const room = await toolbar.evaluate((el) => {
+					const r = document.createRange();
+					r.selectNodeContents(el.querySelector('[data-testid="results-count"]')!);
+					const controls = el.querySelector('.tb-controls')!.getBoundingClientRect();
+					return (
+						el.getBoundingClientRect().width - r.getBoundingClientRect().width - controls.width
+					);
+				});
+				expect(room).toBeGreaterThanOrEqual(48 + 16);
+				expect(await page.getByLabel(label).boundingBox()).toEqual(sort);
 				expect((await toolbar.boundingBox())?.height).toBe(before?.height);
-				expect((await row(page, 1).boundingBox())?.y).toBe(first?.y);
+				expect((await row(page, 1).boundingBox())?.y).toBe(first);
 			});
 		});
 	}
