@@ -12,6 +12,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_pipeline_dht_started_n,
 		m.settings_logging_ev_pipeline_dht_started_h
 	],
+	'pipeline.vpn_pin_failed': [
+		m.settings_logging_ev_pipeline_vpn_pin_failed_n,
+		m.settings_logging_ev_pipeline_vpn_pin_failed_h
+	],
 	'dht.socket_buffers': [
 		m.settings_logging_ev_dht_socket_buffers_n,
 		m.settings_logging_ev_dht_socket_buffers_h
