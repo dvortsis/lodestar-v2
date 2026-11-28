@@ -180,10 +180,6 @@ pub(crate) struct ClientTask {
     /// X-vpn-bind: while the crawl's interface is down, jobs are skipped
     /// (no request, no failure counted against the tracker).
     pub guard: Option<Arc<lodestar_network_policy::iface::Guard>>,
-    /// The guard's generation this tracker's client was bound under
-    /// (Windows HTTP), if it's tied to one: jobs are skipped once the
-    /// guard is up under another.
-    pub built_under: Option<u64>,
 }
 
 impl ClientTask {
@@ -209,18 +205,10 @@ impl ClientTask {
         }
     }
 
-    /// Whether a job must be skipped for the crawl's interface (X-vpn-bind):
-    /// it's down, or this tracker's client was bound under an older link.
+    /// Whether a job must be skipped because the crawl's interface is
+    /// down (X-vpn-bind).
     fn vpn_down(&self) -> bool {
-        use lodestar_network_policy::iface::State;
-        let Some(guard) = &self.guard else {
-            return false;
-        };
-        match (guard.state(), self.built_under) {
-            (State::Down(_), _) => true,
-            (State::Up { generation }, Some(built)) => generation != built,
-            (State::Up { .. }, None) => false,
-        }
+        self.guard.as_ref().is_some_and(|g| !g.state().is_up())
     }
 
     fn publish(&self) {
@@ -307,10 +295,7 @@ mod tests {
     use super::*;
 
     /// A UDP tracker task with `guard`, aimed at a port nothing answers.
-    fn task(
-        guard: Arc<lodestar_network_policy::iface::Guard>,
-        built_under: Option<u64>,
-    ) -> ClientTask {
+    fn task(guard: Arc<lodestar_network_policy::iface::Guard>) -> ClientTask {
         let clock = Clock::new();
         ClientTask {
             id: 1,
@@ -332,7 +317,6 @@ mod tests {
             })),
             gate: Arc::default(),
             guard: Some(guard),
-            built_under,
         }
     }
 
@@ -345,10 +329,9 @@ mod tests {
     }
 
     /// X-vpn-bind: while the crawl's interface is down a job is skipped,
-    /// with no request and no failure against the tracker; so is one for a
-    /// client bound under an older link (Windows HTTP).
+    /// with no request and no failure against the tracker.
     #[tokio::test]
-    async fn jobs_are_skipped_while_the_interface_is_down_or_moved_on() {
+    async fn jobs_are_skipped_while_the_interface_is_down() {
         use lodestar_network_policy::iface::{Down, Guard, Interface, Link};
         let up = Arc::new(AtomicBool::new(false));
         let u = up.clone();
@@ -359,17 +342,13 @@ mod tests {
                 Err(Down::Missing)
             }
         });
-        let mut t = task(guard.clone(), None);
+        let mut t = task(guard.clone());
         let (answers, outcome, asked) = t.scrape(&job()).await;
         assert_eq!((answers.len(), outcome, asked), (0, Outcome::Skipped, 0));
         assert_eq!(t.pacer.failures(), 0, "not a failure");
-        // Up under generation 1, but the client was bound under 0.
         up.store(true, Ordering::SeqCst);
         guard.poll();
-        let mut stale = task(guard.clone(), Some(0));
-        assert!(stale.vpn_down());
-        assert_eq!(stale.scrape(&job()).await.1, Outcome::Skipped);
-        assert!(!task(guard, Some(1)).vpn_down(), "bound under this one");
+        assert!(!t.vpn_down(), "up again: jobs run");
     }
 
     #[test]

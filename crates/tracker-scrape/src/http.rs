@@ -74,13 +74,10 @@ pub fn client(local: Option<IpAddr>, deny: Option<&crate::Deny>) -> Result<reqwe
 
 /// [`client`], sending only through `iface` (X-vpn-bind), and looking
 /// no name up ([`NoLookups`]: a tracker named by host fails, one named by
-/// address works). Pinned to the device on Linux (`SO_BINDTODEVICE`).
-/// On Windows it's bound to the interface's IPv4 address, which the
-/// strong host model keeps on the interface; reqwest can't bind an IPv6
-/// socket alongside, so an IPv6 connection would be unbound. The client
-/// therefore follows no redirect to anything but an IPv4 literal there,
-/// and a tracker must pass [`through_reaches`] before it's asked. An
-/// interface that can't be used fails the build, so HTTP trackers stay off
+/// address works). Linux only: pinned to the device (`SO_BINDTODEVICE`).
+/// reqwest gives no hook to pin its sockets on Windows (binding an address
+/// alone leaves the weak-host send path open), so there, as elsewhere, the
+/// client isn't built and HTTP trackers stay off ([`through_reaches`])
 /// rather than going out by the normal route.
 pub fn client_through(
     iface: &lodestar_network_policy::iface::Interface,
@@ -107,51 +104,20 @@ fn through(
         .tls_backend_preconfigured(tls))
 }
 
-#[cfg(windows)]
-fn through(
-    iface: &lodestar_network_policy::iface::Interface,
-    deny: Option<&crate::Deny>,
-) -> Result<reqwest::ClientBuilder> {
-    let link = lodestar_network_policy::iface::check(iface)
-        .map_err(|d| Error::Http(format!("network interface {iface}: {}", d.code())))?;
-    let v4 = link.addrs.iter().copied().find(IpAddr::is_ipv4);
-    let v4 = v4.ok_or_else(|| Error::Http(format!("{iface} has no IPv4 address")))?;
-    let deny = deny.cloned();
-    Ok(builder(Some(v4), deny.as_ref(), None)?
-        .dns_resolver(NoLookups)
-        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            let to = literal_ip(attempt.url());
-            if attempt.previous().len() > MAX_REDIRECTS {
-                attempt.error("too many redirects")
-            } else if !to.is_some_and(|ip| ip.is_ipv4()) {
-                // An IPv6 socket here would be unbound: refused.
-                attempt.error("redirect off the crawl's interface")
-            } else if to.is_some_and(|ip| deny.as_ref().is_some_and(|d| d.denies(ip))) {
-                attempt.error("redirect to a blocklisted address")
-            } else {
-                attempt.follow()
-            }
-        })))
-}
-
-/// Whether a [`client_through`] client may ask `url`'s tracker: one named
-/// by address (no lookups), and on Windows by an IPv4 address only (see
-/// [`client_through`]).
-pub fn through_reaches(url: &Url) -> bool {
-    match literal_ip(url) {
-        Some(ip) => !cfg!(windows) || ip.is_ipv4(),
-        None => false,
-    }
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(target_os = "linux"))]
 fn through(
     iface: &lodestar_network_policy::iface::Interface,
     _: Option<&crate::Deny>,
 ) -> Result<reqwest::ClientBuilder> {
     Err(Error::Http(format!(
-        "crawling through {iface} isn't supported here"
+        "HTTP trackers can't be limited to {iface} here"
     )))
+}
+
+/// Whether a [`client_through`] client may ask `url`'s tracker: on Linux,
+/// one named by address (no lookups); elsewhere none.
+pub fn through_reaches(url: &Url) -> bool {
+    cfg!(target_os = "linux") && literal_ip(url).is_some()
 }
 
 /// [`client`]'s builder, with `roots` in place of the routed roots when
@@ -515,13 +481,12 @@ mod tests {
     #[test]
     fn a_pinned_client_asks_only_trackers_it_can_keep_on_the_interface() {
         let reaches = |u: &str| through_reaches(&Url::parse(u).unwrap());
-        assert!(reaches("http://203.0.113.9/scrape"));
+        assert_eq!(reaches("http://203.0.113.9/scrape"), cfg!(target_os = "linux"));
         assert!(
             !reaches("http://tracker.example/scrape"),
             "a name: no lookup"
         );
-        // Windows binds only the interface's IPv4 address.
-        assert_eq!(reaches("http://[2001:db8::66]/scrape"), !cfg!(windows));
+        assert_eq!(reaches("http://[2001:db8::66]/scrape"), cfg!(target_os = "linux"));
     }
 
     const A: InfoHash = InfoHash([0xaa; 20]);

@@ -178,8 +178,8 @@ pub(crate) struct Setup {
 
 /// X-vpn-bind: whether a tracker can be asked with the crawl limited to an
 /// interface. No name is looked up (the system resolver would ask outside
-/// it), so only a tracker named by address can be; over HTTP on Windows,
-/// an IPv4 one only ([`http::through_reaches`]).
+/// it), so only a tracker named by address can be; over HTTP, on Linux
+/// only ([`http::through_reaches`]).
 pub(crate) fn through_interface(url: &TrackerUrl) -> bool {
     if url.scheme() == lodestar_tracker_scrape::Scheme::Udp {
         url.host()
@@ -210,19 +210,7 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
         Some(guard) => http::client_through(guard.interface(), s.cfg.deny.as_ref()),
         None => http::client(s.cfg.udp.bind.map(|a| a.ip()), s.cfg.deny.as_ref()),
     };
-    // Windows binds the HTTP client to the interface's address as it was
-    // now: once the link changes (a new address), its scrapes are skipped
-    // rather than sent from an address that may not be the interface's.
-    let http_generation = s
-        .cfg
-        .udp
-        .guard
-        .as_ref()
-        .filter(|_| cfg!(windows))
-        .and_then(|g| match g.state() {
-            lodestar_network_policy::iface::State::Up { generation } => Some(generation),
-            lodestar_network_policy::iface::State::Down(_) => None,
-        });
+
     let client = match client {
         Ok(c) => Some(c),
         Err(e) => {
@@ -290,7 +278,6 @@ pub(crate) fn spawn(mut s: Setup) -> (HealthHandle, JoinHandle<Store>) {
             status: status.clone(),
             gate: gate.clone(),
             guard: s.cfg.udp.guard.clone(),
-            built_under: if udp { None } else { http_generation },
         };
         // The longest one request can take: over UDP a connect and a
         // scrape, each with its retries. Capped at half a round, so a
@@ -960,9 +947,10 @@ mod tests {
         assert!(asks("udp://203.0.113.9:6969"));
         assert!(asks("udp://[2001:db8::9]:6969"));
         assert!(!asks("udp://tracker.example:6969"), "a name: no lookup");
-        assert!(asks("http://203.0.113.9/announce"));
+        let linux = cfg!(target_os = "linux");
+        assert_eq!(asks("http://203.0.113.9/announce"), linux);
         assert!(!asks("http://tracker.example/announce"));
-        assert_eq!(asks("http://[2001:db8::9]/announce"), !cfg!(windows));
+        assert_eq!(asks("http://[2001:db8::9]/announce"), linux);
         assert!(
             !asks("http://203.0.113.9/no-scrape"),
             "no scrape convention"
