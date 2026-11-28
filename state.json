@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T06:39:04Z",
+  "updated_at": "2026-11-28T09:39:03Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-28T06:39:04Z",
+  "last_heartbeat": "2026-11-28T09:39:03Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -11116,15 +11116,15 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T09:16:10Z",
+    "updated": "2026-11-28T09:39:03Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-vpn-bind",
         "role": "build",
         "agent": "session_01MMjhnBk6q6p8uDAteN1GqD",
-        "doing": "#1167 round 1 push (A-F, Windows gated until X-vpn-bind-win)",
-        "since": "2026-11-28T09:16:10Z"
+        "doing": "#1167 round H (two fail-closed gaps, nits), one push",
+        "since": "2026-11-28T09:39:03Z"
       },
       {
         "slot": 2,
@@ -11132,16 +11132,16 @@
         "role": "build",
         "agent": "session_01MMjhnAdLGBQaRDghkS2MDK",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "step 0: locate the counts",
-        "since": "2026-11-28T08:18:32Z"
+        "doing": "hidden count moved to a follow-up request; re-bench",
+        "since": "2026-11-28T09:39:03Z"
       },
       {
         "slot": 3,
         "slice": "X-zero-rescue",
         "role": "build",
         "agent": "session_01MMjhnAXT3pCUkPv79nyKsi",
-        "doing": "#1171 CI and runner review",
-        "since": "2026-11-28T09:16:10Z"
+        "doing": "#1171 review round fixes, one push",
+        "since": "2026-11-28T09:39:03Z"
       },
       {
         "slot": 4,
@@ -11286,7 +11286,7 @@
       "effect": "AWS stop = 90% of the lower of $130.56 and $133.72 = $117.50 of new AWS spend from 2026-11-23T00:31Z (r15 rule; conservative: spend since 00:31Z already counts against it). Replaces the interim $100 stop."
     }
   ],
-  "heartbeat": "2026-11-28T06:39:04Z",
+  "heartbeat": "2026-11-28T09:39:03Z",
   "updated": "2026-11-24T23:10Z",
   "pause": {
     "state": "resumed",
