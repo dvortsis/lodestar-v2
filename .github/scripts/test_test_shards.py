@@ -113,6 +113,43 @@ class Plan(unittest.TestCase):
         with self.assertRaisesRegex(test_shards.ShardError, "privdrop"):
             test_shards.plan(m)
 
+    def test_a_test_behind_an_off_feature_is_left_out(self):
+        m = workspace()
+        bench = m["packages"][2]
+        bench["features"] = {"default": [], "dhat-heap": ["dep:dhat"]}
+        bench["targets"].append(target("mmap_retention", "test", **{"required-features": ["dhat-heap"]}))
+        p = test_shards.plan(m)
+        self.assertNotIn("mmap_retention", {n for s in test_shards.SHARDS for line in p[s] for n in names(line)})
+
+    def test_a_feature_the_workspace_may_turn_on_fails(self):
+        def with_feature(change):
+            m = workspace()
+            bench = m["packages"][2]
+            bench["features"] = {"default": [], "extra": [], "dhat-heap": []}
+            bench["targets"].append(target("mmap_retention", "test", **{"required-features": ["dhat-heap"]}))
+            change(m)
+            return m
+
+        def by_default(m):
+            m["packages"][2]["features"]["default"] = ["extra"]
+            m["packages"][2]["features"]["extra"] = ["dhat-heap"]
+
+        def by_a_dependency(m):
+            m["packages"][0]["dependencies"] = [{"name": "lodestar-bench", "features": ["dhat-heap"],
+                                                 "uses_default_features": True}]
+
+        def by_a_forward(m):
+            m["packages"][1]["features"] = {"default": ["lodestar-bench?/dhat-heap"]}
+
+        def by_a_shared_name(m):
+            t = m["packages"][2]["targets"][-1]
+            t["name"] = "beta"
+
+        for change in (by_default, by_a_dependency, by_a_forward, by_a_shared_name):
+            with self.subTest(change.__name__):
+                with self.assertRaises(test_shards.ShardError):
+                    test_shards.plan(with_feature(change))
+
     def test_cli_rejects_unknown_shards(self):
         self.assertEqual(test_shards.main(["test_shards.py", "nope"]), 2)
         self.assertEqual(test_shards.main(["test_shards.py"]), 2)
@@ -135,6 +172,11 @@ class Workflow(unittest.TestCase):
                      f"shard: [{', '.join(test_shards.SHARDS)}]",
                      "runs-on: ${{ matrix.os }}", "fail-fast: false"):
             self.assertTrue(line in body, line)
+
+    def test_the_bins_shard_builds_the_examples(self):
+        body = self.job("test")
+        self.assertTrue("if: ${{ !cancelled() && matrix.shard == 'bins' }}\n"
+                        "        run: cargo build --workspace --examples --profile test" in body)
 
     def test_ci_ok_needs_test_and_fails_on_a_failed_or_cancelled_shard(self):
         body = self.job("ci-ok")

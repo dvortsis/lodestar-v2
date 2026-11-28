@@ -220,7 +220,9 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then py=python; else py=python3; fi
           # Not a process substitution: a failing script must fail the step.
           out=$("$py" .github/scripts/test_shards.py "$SHARD")
-          mapfile -t plan <<< "$out"
+          # No mapfile: macOS may run bash 3.2.
+          plan=()
+          while IFS= read -r line; do plan+=("$line"); done <<< "$out"
           rc=0
           for filters in "${plan[@]}"; do
             # An empty line would run the whole workspace on this shard.
@@ -232,11 +234,21 @@ jobs:
             cargo test --workspace --no-fail-fast $filters 2>&1 | tee -a shard-test.log || rc=$?
           done
           # Per-shard counts, so the OS totals can be added up and compared.
-          sed 's/\x1b\[[0-9;]*m//g' shard-test.log | awk -v shard="$SHARD" -v os="$RUNNER_OS" '
+          # CARGO_TERM_COLOR=always colours the result lines; awk strips it
+          # (BSD sed on macOS has no \x1b).
+          awk -v shard="$SHARD" -v os="$RUNNER_OS" '
+            { gsub(/\033\[[0-9;]*m/, "") }
             /^test result: / { b++; p += $4; f += $6; i += $8 }
             END { printf "%s %s: %d passed, %d failed, %d ignored in %d test binaries\n", os, shard, p, f, i, b }' \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+            shard-test.log | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$rc"
+      # Plain `cargo test` also builds every example (it never runs them).
+      # `--profile test` builds exactly the units it does (checked: every unit
+      # fresh after a full `cargo test --workspace --no-run`). After the tests,
+      # so a broken example doesn't hide a failing test.
+      - name: examples build
+        if: ${{ !cancelled() && matrix.shard == 'bins' }}
+        run: cargo build --workspace --examples --profile test
       # Disk numbers for the next time this job runs short (X-ci-disk).
       - name: disk after test build
         if: always() && runner.os == 'Linux'

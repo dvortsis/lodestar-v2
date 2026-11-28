@@ -27,6 +27,12 @@ Examples are built, not run, by `cargo test`; the job builds them on the
 A target kind that plain `cargo test` would build and no shard covers (a
 bench or example with `test = true`, a test with `test = false` and so on)
 fails the script, so a new kind of target can't drop out of CI unnoticed.
+
+A test with `required-features` (lodestar-bench's mmap_retention) is one
+plain `cargo test` skips while those features are off, and `--test` would
+refuse, so no shard names it. The script fails if anything in the
+workspace could turn such a feature on, since then plain `cargo test`
+might run it.
 """
 
 from __future__ import annotations
@@ -113,10 +119,60 @@ def check(found: dict[str, list[tuple[str, dict]]]) -> None:
                 raise ShardError(f"{where}: no shard covers this kind")
 
 
+def feature_closure(features: dict[str, list[str]], start: list[str]) -> set[str]:
+    """The package's own features that `start` turns on."""
+    seen: set[str] = set()
+    todo = list(start)
+    while todo:
+        f = todo.pop()
+        if f in seen or f not in features:
+            continue
+        seen.add(f)
+        todo.extend(x for x in features[f] if "/" not in x and not x.startswith("dep:"))
+    return seen
+
+
+def maybe_enabled(metadata: dict, pkg_name: str, feature: str) -> bool:
+    """Could a plain `cargo test --workspace` turn `feature` of a member on?
+    Errs towards yes: default features, any member's dependency on it that
+    names the feature, or any member feature that forwards to it."""
+    members = set(metadata["workspace_members"])
+    pkgs = [p for p in metadata["packages"] if p["id"] in members]
+    own = next(p for p in pkgs if p["name"] == pkg_name)
+    feats = own.get("features") or {}
+    if feature in feature_closure(feats, ["default"]):
+        return True
+    for p in pkgs:
+        for d in p.get("dependencies") or []:
+            if d["name"] == pkg_name:
+                if feature in feature_closure(feats, list(d.get("features") or []) + (["default"] if d.get("uses_default_features", True) else [])):
+                    return True
+        for values in (p.get("features") or {}).values():
+            for v in values:
+                if v in (f"{pkg_name}/{feature}", f"{pkg_name}?/{feature}"):
+                    return True
+    return False
+
+
 def plan(metadata: dict) -> dict[str, list[list[str]]]:
     """Every shard's cargo invocations, each a list of target filters."""
     found = targets(metadata)
     check(found)
+    runnable, skipped = [], set()
+    for pkg, t in found.get("test", []):
+        required = t.get("required-features") or []
+        if not required:
+            runnable.append((pkg, t))
+            continue
+        for f in required:
+            if maybe_enabled(metadata, pkg, f):
+                raise ShardError(f"{pkg}: test {t['name']} needs feature {f}, which the workspace may turn on; "
+                                 "plain cargo test might run it, so test_shards.py can't place it")
+        skipped.add(t["name"])
+    clash = skipped & {t["name"] for _, t in runnable}
+    if clash:
+        raise ShardError(f"--test {', '.join(sorted(clash))} would also name a target plain cargo test skips")
+    found["test"] = runnable
     tests = sorted({t["name"] for _, t in found.get("test", [])})
     missing = [n for n in ROOT_STEP_TESTS if n not in tests]
     if missing:
