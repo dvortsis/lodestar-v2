@@ -81,7 +81,11 @@ test('illustrated state: insights, starting up', async ({ page, go, mock, densit
 	const none = overviewFixture();
 	mock.on(
 		'getInsightsOverview',
-		overviewFixture({ funnel_total: { ...none.funnel_total, final_cohorts: 0 } })
+		overviewFixture({
+			funnel_total: { ...none.funnel_total, final_cohorts: 0 },
+			kpi: { ...none.kpi, searchable: 0 },
+			exceptions: []
+		})
 	);
 	mock.on('getCrawler', crawlerFixture());
 	await liveEvents(page, crawlerEvent({ harvested: 1234, fetched: 56, stored: 7 }));

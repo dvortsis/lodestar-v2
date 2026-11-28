@@ -8470,9 +8470,10 @@ export interface components {
             size: number;
         };
         /**
-         * @description Why the DHT holds back its samples after a start (CR-0d): an unclean
-         *     restart, the restart proof switched off, or a restart record it can't
-         *     write.
+         * @description Why the DHT briefly holds back its samples after a start (CR-0w): the
+         *     start hold (at most 10 s while the restart lock and start work land) or
+         *     the crash-loop guard (`dirty`, at most a minute after a run that lived
+         *     under a minute). Otherwise `sampling_blocked` is null.
          */
         SamplingBlocked: {
             /**
@@ -8482,10 +8483,8 @@ export interface components {
             reason: string;
             /**
              * Format: int64
-             * @description Seconds until sampling may begin (`dht_sample_suppression_seconds`).
-             *     For `invalidate_failed`, and `locked` while the lock is busy, it's a
-             *     lower bound: sampling also waits until the restart record can be
-             *     written.
+             * @description Seconds until sampling may begin (`dht_sample_suppression_seconds`):
+             *     at most 10 for the start hold, at most 60 for the crash-loop guard.
              */
             remaining_s: number;
         };
@@ -10265,10 +10264,7 @@ export interface components {
          *       "index_lag_s": 2,
          *       "paused": false,
          *       "queue_depth": 15410,
-         *       "sampling_blocked": {
-         *         "reason": "first_start",
-         *         "remaining_s": 20940
-         *       },
+         *       "sampling_blocked": null,
          *       "searchable_torrents": 2410388,
          *       "stored_torrents": 2410391,
          *       "updated_at": 1792681200,

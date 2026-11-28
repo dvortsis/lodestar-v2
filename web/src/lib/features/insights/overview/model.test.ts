@@ -3,6 +3,7 @@ import {
 	conversionInto,
 	lossRows,
 	sortExceptions,
+	isFirstHour,
 	startupState,
 	type Exception,
 	type FunnelTotal
@@ -72,5 +73,21 @@ describe('funnel helpers', () => {
 	it('keeps an unknown share as null', () => {
 		expect(lossRows({ losses: { x: 1 }, loss_share: {} })[0]!.share).toBeNull();
 		expect(lossRows({ losses: {}, loss_share: {} })).toEqual([]);
+	});
+});
+
+describe('isFirstHour', () => {
+	const o = (searchable: number | null, exceptions: unknown[] = []) =>
+		({ kpi: { searchable }, exceptions }) as Parameters<typeof isFirstHour>[2];
+	it('replaces the charts only with nothing searchable and nothing needing attention', () => {
+		expect(isFirstHour('yes', false, o(0))).toBe(true);
+		expect(isFirstHour('yes', false, o(null))).toBe(true);
+	});
+	it('data, an exception, a pause or a finished cohort ends it', () => {
+		expect(isFirstHour('yes', false, o(20_000))).toBe(false);
+		expect(isFirstHour('yes', false, o(0, [{ kind: 'index_lag' }]))).toBe(false);
+		expect(isFirstHour('yes', true, o(0))).toBe(false);
+		expect(isFirstHour('no', false, o(0))).toBe(false);
+		expect(isFirstHour('check', false, o(0))).toBe(false);
 	});
 });

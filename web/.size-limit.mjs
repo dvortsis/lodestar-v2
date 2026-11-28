@@ -1314,7 +1314,8 @@ if (Object.keys(manifest).length && !toolbarLazy.some((f) => f.endsWith('.js')))
 	throw new Error('Results toolbar (lazy): no chunk found for the toolbar in the manifest');
 
 // The first-run wizard (S-wizard): its steps load when they open (`WizardPage` LOADERS).
-const wizardSteps = [/features\/wizard\/\w+Step\.svelte$/];
+// `LiveCounts` loads with the steps after "How it works" (WizardPage), so it is measured with them.
+const wizardSteps = [/features\/wizard\/(\w+Step|LiveCounts)\.svelte$/];
 // The blocklist step (S-blocklists) lives in its feature and has its own entry below, so the
 // wizard steps' limit is not raised for it.
 const blocklistStep = [/features\/blocklists\/WizardStep\.svelte$/];
@@ -1833,7 +1834,8 @@ export default [
 	// X-gs-followups-2 (runner §2.26): 43.78 → 43.76 KB, measured 43,752 B (−25 B): the Table keeps
 	// the row carried into it (no re-set on mount), less the reset to row 1 for a new query's rows.
 	// X-import-verified-no (runner §2.26): 43.76 → 44.09 KB, measured 44,089 B (+329 B): the Imported badge and its help.
-	entry('Search results (lazy)', resultsFirst, '44.09 KB'),
+	// UX-start (runner §2.26): 44.09 -> 44.224 KB, measured 44,195 B (one trim round, compacting pillState's branches, saved nothing): shell/status.ts, which this chunk carries, gained the "warming up" branch and the found/stored fields.
+	entry('Search results (lazy)', resultsFirst, '44.224 KB'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1999,10 +2001,11 @@ export default [
 	// the panels that mount after first paint included. uPlot, the print layout (loaded after mount) and
 	// the privacy banner have entries of their own. Measured on the merged tree, 65.03 kB (62.75 kB on
 	// main before X-insights-story, 65.01 kB after it).
+	// UX-start: 48.3 -> 48.512 KB, measured 48,507 B: the first-hour pipeline replaces the charts, plus its strings.
 	routeEntry(
 		'Insights overview (own JS + CSS)',
 		own('/insights', { onDemand: [/uplot/i, /insights\/print\/PrintReport/, /privacy\/door/] }),
-		'48.3 KB'
+		'48.512 KB'
 	),
 	entry(
 		'Insights stage charts (uPlot, on demand)',
@@ -2016,11 +2019,14 @@ export default [
 	// rule-pack step's flow, which load with their steps: 32.97 -> 48.74 KB, limit 53.6 KB.
 	// Measures differ: "Welcome route" is in the stream measure (X-size-own-modules), "Wizard steps"
 	// and "Blocklist wizard step" in the per-file one, so their figures don't add up.
-	routeEntry('Welcome route (own JS + CSS)', wizardFirst, '12.08 KB'),
+	// UX-start: 12.08 -> 12.18 KB, measured 12,165 B: the new how-it-works text, and the lazy load of the live counts.
+	routeEntry('Welcome route (own JS + CSS)', wizardFirst, '12.18 KB'),
 	// runner §2.26, UP-1: measured 53603 B, the watch labels.
 	// X-session-draft-keep (runner §2.26): 53.7 → 54.4 KB, measured 54.32: the wizard embeds
 	// SettingsForm, so it carries that code too, until X-settings-leave-guard-split.
-	entry('Wizard steps (on demand)', wizardLazy, '54.4 KB'),
+	// UX-start: 54.4 -> 55.488 KB, measured 55,446 B: the live counts (LiveCounts and the events client they
+	// read) load with the steps after "How it works".
+	entry('Wizard steps (on demand)', wizardLazy, '55.488 KB'),
 	// S-blocklists: the wizard's blocklist step, measured separately so the limit above stays.
 	entry('Blocklist wizard step (on demand)', blocklistStepLazy, '8.3 KB')
 	// Placeholders for later slices. Fill `path` from the manifest when the chunk exists:
