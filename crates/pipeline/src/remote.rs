@@ -56,7 +56,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock, Weak};
 
 use lodestar_cluster::proto::{HintItem, Outcome, Payload};
 use lodestar_cluster::{
@@ -369,6 +369,9 @@ pub struct RemoteIntake {
     admit: Mutex<Admit>,
     /// The server running now, for hints the built-in worker found.
     server: RwLock<Option<(Weak<ClusterServer>, bool)>>,
+    /// The coordinator's have-filter, once the pipeline sets it: no lease
+    /// is granted until it's filled (X-healthz-cold-start).
+    have: OnceLock<Weak<crate::Have>>,
     pub stats: Arc<RemoteStats>,
 }
 
@@ -446,8 +449,25 @@ impl RemoteIntake {
             refusals: p.refusals,
             admit: Mutex::new(Admit::default()),
             server: RwLock::new(None),
+            have: OnceLock::new(),
             stats: Arc::new(RemoteStats::default()),
         }
+    }
+
+    /// Grants no lease until `have` is filled (X-healthz-cold-start): a
+    /// worker without a filter of its own would claim and fetch keys that
+    /// are already stored. Set once, by the pipeline; unset, grants
+    /// aren't held.
+    pub fn wait_for_fill(&self, have: &Arc<crate::Have>) {
+        let _ = self.have.set(Arc::downgrade(have));
+    }
+
+    /// Whether the have-filter, if one is set, is still filling.
+    fn filling(&self) -> bool {
+        self.have
+            .get()
+            .and_then(Weak::upgrade)
+            .is_some_and(|h| !h.is_filled())
     }
 
     /// Writer-queue entries waiting now (the built-in worker's included).
@@ -1132,10 +1152,15 @@ impl RemoteSink {
 impl GrantAdmission for RemoteSink {
     /// No new lease while the writer is past its high-water mark or the
     /// intake's queue is full (§19.5): workers harvest less, and nothing
-    /// piles up. Keys already held aren't asked about, and late results
-    /// never come through a grant.
+    /// piles up. Nor while the have-filter fills at start, as the built-in
+    /// worker's intake waits for it (X-healthz-cold-start). Keys already
+    /// held aren't asked about, and late results never come through a
+    /// grant.
     fn admit(&self, _worker: WorkerId, wanted: usize) -> usize {
-        if self.intake.writer_fill() >= self.intake.high_water || self.queue.capacity() == 0 {
+        if self.intake.filling()
+            || self.intake.writer_fill() >= self.intake.high_water
+            || self.queue.capacity() == 0
+        {
             self.intake
                 .stats
                 .held_back
