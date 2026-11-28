@@ -49,6 +49,24 @@
 	font-variant-numeric: tabular-nums;
 	color: var(--color-muted-text);
 }
+/* "N hidden by filters · Show" where the toolbar has room; "N filtered · Show" where the longer
+   words would wrap the count or the controls when it arrives (measured: up to 56rem of toolbar).
+   The full words stay the button's description. */
+.tb-short {
+	display: none;
+}
+@container tb (width < 56rem) {
+	.tb-full {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+	.tb-short {
+		display: inline;
+	}
+}
 .tb-controls {
 	display: flex;
 	flex-wrap: wrap;

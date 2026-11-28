@@ -73,7 +73,13 @@ describe('ResultsToolbar', () => {
 		await waitFor(() => expect(screen.getByTestId('results-hidden-show')).toBeTruthy(), WAIT);
 		expect(asked()).toHaveLength(1);
 		expect(asked()[0]![1].body).toMatchObject({ ast: lantern.ast, hidden: false });
-		expect(count()?.replace(/\s+/g, ' ')).toBe('1,284 results · 1,200 hidden by filters · Show');
+		// Both forms are in the line; CSS shows one by the toolbar's width (the short one is aria-hidden).
+		const short = screen.getByTestId('results-count').querySelector('.tb-short')!;
+		expect(short.textContent).toBe('1,200 filtered');
+		expect(short.getAttribute('aria-hidden')).toBe('true');
+		expect(count()?.replace(short.textContent!, '').replace(/\s+/g, ' ')).toBe(
+			'1,284 results · 1,200 hidden by filters · Show'
+		);
 		const show = screen.getByRole('button', { name: 'Show' });
 		const described = document.getElementById(show.getAttribute('aria-describedby')!);
 		expect(described?.textContent).toBe('1,200 hidden by filters');

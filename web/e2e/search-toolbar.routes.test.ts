@@ -61,7 +61,9 @@ test('"N hidden · Show" counts what a filter rule hid, and Show adds them (P7)'
 	await expect(count(page)).toHaveText('3 results');
 	const box = await count(page).boundingBox();
 	release();
-	await expect(count(page)).toHaveText('3 results · 2 hidden by filters · Show');
+	await expect(count(page)).toHaveText('3 results · 2 hidden by filters · Show', {
+		useInnerText: true
+	});
 	// The line keeps its height: nothing under it moves.
 	expect((await count(page).boundingBox())?.height).toBe(box?.height);
 	const sent = mock.calls('searchHiddenCount').map((r) => r.postDataJSON());

@@ -175,8 +175,10 @@
 	<div class="tb" data-testid="results-toolbar">
 		<p class="tb-count" data-testid="results-count">
 			{count}{#if hidden > 0 && results.status === 'ready'}
-				&nbsp;· <span id="{id}-hidden" data-testid="results-hidden"
+				&nbsp;· <span id="{id}-hidden" class="tb-full" data-testid="results-hidden"
 					>{m.search_toolbar_hidden({ count: formatCount(hidden, locale) })}</span
+				><span class="tb-short" aria-hidden="true"
+					>{m.search_toolbar_hidden_short({ count: formatCount(hidden, locale) })}</span
 				>&nbsp;·
 				<button
 					type="button"

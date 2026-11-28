@@ -109,6 +109,7 @@
 	"search_toolbar_count_other": "{count} results",
 	"search_toolbar_count_about": "≈ {count} results",
 	"search_toolbar_hidden": "{count} hidden by filters",
+	"search_toolbar_hidden_short": "{count} filtered",
 	"search_toolbar_hidden_show": "Show",
 	"search_toolbar_sort": "Sort",
 	"search_toolbar_sort_relevance": "Relevance",
