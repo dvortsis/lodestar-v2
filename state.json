@@ -11116,7 +11116,7 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T06:39:04Z",
+    "updated": "2026-11-28T07:53:22Z",
     "items": [
       {
         "slot": 1,
@@ -11128,20 +11128,20 @@
       },
       {
         "slot": 2,
-        "slice": "UX-start",
+        "slice": "X-testvm-iam-volumes",
         "role": "build",
-        "agent": "session_01MMjhnCn4By6e7ABfiZeNct",
+        "agent": "pending",
         "session": "session_01MMjhnBoqaD4Hq3LZvCkGsd",
-        "doing": "PR #1152 unblocked; snapshot regen, then ready",
-        "since": "2026-11-27T20:57:42Z"
+        "doing": "launching",
+        "since": "2026-11-28T07:53:22Z"
       },
       {
         "slot": 3,
-        "slice": "X-watch-search-wait",
+        "slice": "X-zero-rescue",
         "role": "build",
-        "agent": "session_01MMjhnCF2snpRadmsyJojfV",
-        "doing": "step 0: find why search lags",
-        "since": "2026-11-28T06:04:41Z"
+        "agent": "pending",
+        "doing": "launching",
+        "since": "2026-11-28T07:53:22Z"
       },
       {
         "slot": 4,
