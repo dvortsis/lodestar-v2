@@ -56,6 +56,10 @@ export const NAMES: Record<string, [name: () => string, help: () => string]> = {
 		m.settings_logging_ev_pipeline_starting_n,
 		m.settings_logging_ev_pipeline_starting_h
 	],
+	'pipeline.torrents_counted': [
+		m.settings_logging_ev_pipeline_torrents_counted_n,
+		m.settings_logging_ev_pipeline_torrents_counted_h
+	],
 	'pipeline.source_egress_down': [
 		m.settings_logging_ev_pipeline_source_egress_down_n,
 		m.settings_logging_ev_pipeline_source_egress_down_h

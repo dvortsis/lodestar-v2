@@ -374,6 +374,36 @@ class FaultInjectionTests(Base):
         phases = self.report()["phases"]
         self.assertEqual(sum(p["health_failed_samples"] for p in phases.values()), 2)
 
+    # X-healthz-count-async: the server leaves lodestar_torrents out until its start-up count
+    # lands, and for the rest of a run whose count failed.
+    def test_an_absent_torrent_count_is_unknown_not_a_failed_sample(self):
+        def metrics(t):
+            text = metrics_text(t)
+            if t < 130:  # the count lands on the third sample
+                text = "\n".join(l for l in text.splitlines() if not l.startswith("lodestar_torrents ")) + "\n"
+            return 200, text.encode()
+        self.lodestar.metrics = metrics
+        c, rc = self.run_docker()
+        self.assertEqual(rc, 0)
+        rows = self.rows()
+        self.assertTrue(all(r["metrics_ok"] for r in rows))
+        early = [r for r in rows if r["elapsed_seconds"] < 130]
+        self.assertTrue(early and all(r["values"]["torrents"] is None for r in early))
+        self.assertTrue(all(isinstance(r["values"]["torrents"], float) for r in rows if r["elapsed_seconds"] >= 130))
+
+    def test_a_count_absent_all_run_never_stops_the_run(self):
+        def metrics(t):
+            text = metrics_text(t)
+            return 200, ("\n".join(l for l in text.splitlines() if not l.startswith("lodestar_torrents ")) + "\n").encode()
+        self.lodestar.metrics = metrics
+        c, rc = self.run_docker()
+        self.assertEqual(rc, 0)
+        self.assertNotEqual(self.result().get("reason"), "three_consecutive_metrics_failures")
+        rows = self.rows()
+        self.assertTrue(rows and all(r["metrics_ok"] and r["values"]["torrents"] is None for r in rows))
+        # The screen leaves an unknown count out rather than reading it as 0.
+        self.assertNotIn("stored", collect.screen_inputs(rows[0]["values"], ""))
+
     def test_three_health_failures_end_the_run(self):
         self.clock.at(60, lambda: setattr(self.lodestar, "health", 0))  # connection dropped
         c, rc = self.run_docker()

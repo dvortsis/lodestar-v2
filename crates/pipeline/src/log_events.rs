@@ -160,13 +160,24 @@ lodestar_log::catalogue! {
         message: "Unknown CS-1 origin; kept as imported",
         fields: { origin: Size },
     }
-    /// The pipeline starts with what's stored and queued.
+    /// The pipeline starts with what's queued. The torrents stored are
+    /// counted after the start (`pipeline.torrents_counted`).
     STARTING {
         id: "pipeline.starting",
         component: Pipeline,
         level: Info,
         message: "Pipeline starting",
-        fields: { stored: Size, queued: Size },
+        fields: { queued: Size },
+    }
+    /// The torrents stored at start are counted (X-healthz-count-async):
+    /// `stored` of them, in `ms` milliseconds. Seconds after the start on
+    /// a large store; `/stats`' `stored_torrents` is null until then.
+    TORRENTS_COUNTED {
+        id: "pipeline.torrents_counted",
+        component: Pipeline,
+        level: Info,
+        message: "Stored torrents counted",
+        fields: { stored: Size, ms: Size },
     }
     /// A stored filter rule was skipped: `what` (`rule`, `override`,
     /// `exception`, `always_allow`, `class_rule`, `pack_override`, or
@@ -427,14 +438,21 @@ lodestar_log::catalogue! {
         message: "Rebuilding the have-filter failed",
         fields: { error: Error },
     }
-    /// Filling the have-filter at start failed; it's tried again, and
-    /// nothing is crawled until it succeeds (X-healthz-cold-start).
+    /// A read of the store for the start-up count or the have-filter's
+    /// fill failed (X-healthz-cold-start, X-healthz-count-async), at
+    /// `stage`:
+    /// - `pin`: the count's snapshot couldn't be taken, so the start
+    ///   counted on its own connection instead (`attempts` 0);
+    /// - `count`: the count failed; `stored_torrents` stays unknown until
+    ///   the next start, and it isn't tried again (`attempts` 0);
+    /// - `scan`: the fill's scan failed; it's tried again after a wait
+    ///   that grows to a minute, and nothing is crawled until it succeeds.
     HAVE_FILL_FAILED {
         id: "pipeline.have_fill_failed",
         component: Pipeline,
         level: Error,
-        message: "Filling the have-filter failed; crawling waits until it succeeds",
-        fields: { error: Error, attempts: Size },
+        message: "A start-up read of the store failed",
+        fields: { stage: Label, error: Error, attempts: Size },
     }
     /// The fetch queue couldn't be saved.
     QUEUE_SAVE_FAILED {

@@ -164,7 +164,11 @@ pub struct StatsResponse {
     /// Documents in the search index; null when search is off.
     #[schema(required = true)]
     pub searchable_torrents: Option<u64>,
-    pub stored_torrents: u64,
+    /// Torrents stored; null while the start-up count runs (seconds
+    /// after a start on a large store), and for the rest of the run if
+    /// the store couldn't be counted then.
+    #[schema(required = true)]
+    pub stored_torrents: Option<u64>,
     /// Unix seconds these numbers were read.
     pub updated_at: i64,
     pub uptime_s: u64,

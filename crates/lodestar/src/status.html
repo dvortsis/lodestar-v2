@@ -177,7 +177,8 @@ async function refresh() {
     const why = s.crawler && s.crawler.paused ? (s.crawler.reason === "setup" ? "Crawler paused: waiting for setup." : "Crawler paused.") : "";
     $("crawler").textContent = why;
     $("crawler").hidden = !why;
-    $("torrents").textContent = fmt.format(s.torrents);
+    // null while the start-up count runs (X-healthz-count-async).
+    $("torrents").textContent = s.torrents == null ? "—" : fmt.format(s.torrents);
     $("rate").textContent = fmt.format(Math.round(s.writer.stored * 3600 / up));
     $("pending").textContent = fmt.format(s.fetch.pending);
     $("active").textContent = fmt.format(s.fetch.active);
