@@ -317,6 +317,7 @@ placement:
   - X-hit-resolution
   - X-hit-resolution-nits
   - X-detail-attributes
+  - X-detail-attributes-ui
   - X-hidden-count
   - X-detail-depth-compare
   - X-cards-raw-name
@@ -389,6 +390,8 @@ placement:
   - X-skip-results-flake
   - X-retry-typed-flake
   - X-live-banner-flake
+  - X-upload-screen-flake
+  - X-events-send-await
   - X-size-own-modules
   - X-size-own-modules-2
   - X-help
@@ -1964,11 +1967,6 @@ roadmap:
   - - tracku
     - m8
 owner_queue:
-- n: 2
-  type: action
-  action: Add web-ok and e2e-ok to the main ruleset's required checks, next to ci-ok (you said yes, §2.37)
-  unblocks: Safer merges
-  when: Any time
 - n: 3
   type: action
   action: Create the nightly signing key and its environment (deferred, §2.52)
@@ -1989,16 +1987,6 @@ owner_queue:
   action: Register Lodestar with winget and other package installers (§2.52)
   unblocks: Package-installer listings
   when: After 1.0
-- n: 8
-  type: action
-  action: Delete branch wip/CMP-0-catalogue (pre-split CMP-0 work; #548 merged; §2.52)
-  unblocks: Branch hygiene
-  when: Any time
-- n: 9
-  type: action
-  action: Replace the published v0.5.1 release text with the runner's draft (runner-state notes/v051-release-body.md; §2.52)
-  unblocks: A release page that matches docs/releases/v0.5.1.md
-  when: Any time
 - n: 11
   type: review
   action: 'Runner calls you may want to veto (§2.19): Torznab keys are shown once, when made or regenerated, and only after you enter your password (OUT-2); the installer pin check for SourceForge downloads (size, MD5, exact path, signature date near the GitHub tag; X-cmp13-installer-pins); the Legal Notice on main now says it applies to main''s development builds, not 0.5.2 (§2.57)'
@@ -2057,6 +2045,16 @@ owner_queue:
 - n: 43
   type: review
   action: 'Runner calls since r20 you may want to veto (§2.19; the "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r21.md and -r22.md): the leak test''s held retries and its never-sent-is-never-clean rule, the round-1 gateway check and three stricter round-1 rules, remote workers waiting for the have-filter fill, the 10M re-run after round 1''s day 2, the VPN setting being restart-required, remote workers outside the VPN setting until X-vpn-bind-worker, and CMP-G''s privileged test runs and advisory smoke check'
+  unblocks: Nothing; these go ahead unless you object
+  when: Any time
+- n: 44
+  type: action
+  action: 'Apply the reviewed test-VM policy: in AWS CloudFormation (us-east-1), update the stack lodestar-claude-testvm with infra/dev-vm/aws-claude-testvm.json from main, keeping every parameter (X-testvm-iam-volumes, #1169; §2.88 items 31 and 33)'
+  unblocks: Test volumes carry the test-VM tags, and the test user can delete its own leftover volumes
+  when: Any time
+- n: 45
+  type: review
+  action: 'Runner calls since r22 you may want to veto (§2.19; "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r23.md): skipping host-named trackers while a VPN interface is set, the VPN state on the open /metrics page, EADDRNOTAVAIL counted as VPN down on Windows only, Windows weak-host routing as a stated limit for the VPN guide, the test-VM volume launch also requiring Environment and LaunchedBy, and the zero-result chips offered unasked as §10.4 says'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
 
