@@ -2049,12 +2049,12 @@ owner_queue:
   when: Any time
 - n: 44
   type: action
-  action: 'Apply the reviewed test-VM policy: in AWS CloudFormation (us-east-1), update the stack lodestar-claude-testvm with infra/dev-vm/aws-claude-testvm.json from main, keeping every parameter (X-testvm-iam-volumes, #1169; §2.88 items 31 and 33)'
+  action: 'Apply the reviewed test-VM policy: in AWS CloudFormation (us-east-1), update the stack lodestar-claude-testvm with infra/dev-vm/aws-claude-testvm.json from main, keeping every parameter and ticking the IAM acknowledgement (X-testvm-iam-volumes, #1169; §2.88 items 31 and 33)'
   unblocks: Test volumes carry the test-VM tags, and the test user can delete its own leftover volumes
   when: Any time
 - n: 45
   type: review
-  action: 'Runner calls since r22 you may want to veto (§2.19; "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r23.md): skipping host-named trackers while a VPN interface is set, the VPN state on the open /metrics page, EADDRNOTAVAIL counted as VPN down on Windows only, Windows weak-host routing as a stated limit for the VPN guide, the test-VM volume launch also requiring Environment and LaunchedBy, and the zero-result chips offered unasked as §10.4 says'
+  action: 'Runner calls since r22 you may want to veto (§2.19; "Flags for the owner" in docs/decisions/2026-11-28-runner-records-r23.md): skipping host-named trackers while a VPN interface is set, the VPN state on the open /metrics page, EADDRNOTAVAIL counted as VPN down on Windows only, the test-VM volume launch also requiring Environment and LaunchedBy, the zero-result chips offered unasked as §10.4 says, and the VPN setting covering crawl traffic only (the torrent cache, source plugins and companions keep their own egress, with a warning in Settings)'
   unblocks: Nothing; these go ahead unless you object
   when: Any time
 

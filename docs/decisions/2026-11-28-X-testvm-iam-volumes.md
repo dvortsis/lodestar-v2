@@ -1,4 +1,4 @@
-# X-testvm-iam-volumes decisions
+# X-testvm-iam-volumes decisions (#1169)
 
 The owner's answers to owner-queue items 31 and 33 (`docs/owner-decisions.md` §2.88, 2026-11-28Z): the test-VM policy requires `Purpose=X-test-vm` on test volumes, and the test user may delete its own test volumes, scoped like its terminate permission. No owner decision is loosened. The owner applies the reviewed policy in AWS (a stack update of `lodestar-claude-testvm`); this PR makes no cloud calls.
 
