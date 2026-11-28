@@ -6,10 +6,12 @@
 import type { Request } from '@playwright/test';
 import { expectNoA11yViolations } from './a11y';
 import { body, expect, hits, row, rowOf, server } from './search-results.fixtures';
-import { liveEvents } from './support/events-server';
+import { crawlerEvent, liveEvents } from './support/events-server';
 import { test } from './support/test';
 
 type Mock = Parameters<typeof server>[0];
+/** The registration endpoint: the page holds the id once it has read this body. */
+const LIVE = '/api/v1/search/live';
 
 /** Search answers `total` hits; `/search/live` hands out `a1`, `a2`, ... or fails when `fail`. */
 function live(mock: Mock, state: { total: number; approx: boolean; fail?: boolean }) {
@@ -36,6 +38,9 @@ test('new matches show a banner; the list holds until Show reloads it and regist
 	await go('/search?q=lantern');
 	await expect(row(page, 1)).toBeVisible();
 	await expect.poll(() => mock.calls('registerSearchLive').length).toBe(1);
+	// The mock counts a call before it answers: wait until the page has read the id `a1`, or its
+	// event would arrive while the page still has no id, and be dropped.
+	await expect.poll(() => events.answered(LIVE), { timeout: 10_000 }).toBe(1);
 	const banner = page.getByTestId('results-live');
 	// An event for some other registration counts for nothing.
 	await events.send('search_live', { id: 'zzz', matched: 9, through: 5 });
@@ -52,13 +57,19 @@ test('new matches show a banner; the list holds until Show reloads it and regist
 	await expect.poll(() => mock.calls('searchPost').length).toBeGreaterThan(calls);
 	// Show registers again (the count starts from 0) and releases the old id.
 	await expect.poll(() => mock.calls('registerSearchLive').length).toBe(2);
+	await expect.poll(() => events.answered(LIVE), { timeout: 10_000 }).toBe(2);
 	await expect.poll(() => mock.calls('releaseSearchLive').length).toBeGreaterThan(0);
 	// The list owns its active row after Show: focus is on the first row, and j goes to the second.
 	await expect(rowOf(page, 1)).toBeFocused();
 	await page.keyboard.press('j');
 	await expect(rowOf(page, 2)).toBeFocused();
-	// The old id is dead: its late event does nothing; the new one counts.
+	// The old id is dead: its late event does nothing. A crawler snapshot sent after it is the sync
+	// point (events are handled in order): once the pill shows it, the `a1` event has been handled,
+	// and the banner must still be absent. Then the new id counts.
 	await events.send('search_live', { id: 'a1', matched: 7, through: 120 });
+	await events.send('crawler', crawlerEvent({ torrents: 1 }));
+	await expect(page.getByTestId('status-pill-count')).toHaveText('· 1 torrent');
+	await expect(banner).toHaveCount(0);
 	await events.send('search_live', { id: 'a2', matched: 1, through: 121 });
 	await expect(banner).toHaveText('1 new result');
 });

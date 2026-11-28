@@ -24,6 +24,10 @@ declare global {
 	interface Window {
 		__sse?: {
 			controllers: ReadableStreamDefaultController<Uint8Array>[];
+			/** Per connection (same order as `controllers`): its `?topics=` and whether it is open. */
+			streams: { topics: string[]; open: boolean }[];
+			/** Per pathname: how many JSON bodies the page has finished reading. */
+			answered: Record<string, number>;
 			requests: string[];
 			initial: unknown;
 			id: number;
@@ -99,12 +103,22 @@ export async function engageBare(page: Page) {
 }
 
 export interface EventsHandle {
-	/** Sends one frame on every open connection. */
+	/**
+	 * Sends one frame on every open connection, once one is open whose `?topics=` has `event` (any
+	 * open one for `resync`), with a 10 s deadline. A frame sent before then would be lost silently.
+	 * Await it: an unawaited send that times out loses its message, and two can arrive out of order.
+	 */
 	send(event: string, data: unknown): Promise<void>;
 	/** Ends every open connection (a clean close). */
 	drop(): Promise<void>;
 	/** URLs the current document asked for. */
 	requests(): Promise<string[]>;
+	/**
+	 * How many JSON bodies from `pathname` (e.g. `/api/v1/search/live`) the page has read, error
+	 * bodies included (a 429 counts too). Once it counts a response, the code that awaited that body
+	 * has already run.
+	 */
+	answered(pathname: string): Promise<number>;
 }
 
 export async function liveEvents(
@@ -114,6 +128,8 @@ export async function liveEvents(
 	await page.addInitScript((first) => {
 		const state: NonNullable<Window['__sse']> = (window.__sse = {
 			controllers: [],
+			streams: [],
+			answered: {},
 			requests: [],
 			initial: first,
 			id: 0
@@ -125,21 +141,43 @@ export async function liveEvents(
 		const real = window.fetch.bind(window);
 		window.fetch = (input, init) => {
 			const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-			if (!new URL(url, location.href).pathname.endsWith('/api/v1/events'))
-				return real(input, init);
+			const parsed = new URL(url, location.href);
+			if (!parsed.pathname.endsWith('/api/v1/events')) {
+				// Counts each JSON body once the page has read it. The count goes up inside the promise
+				// the caller awaits, so a later `page.evaluate` that sees it also sees what the caller
+				// did with the body (`answered`).
+				return real(input, init).then((res) => {
+					const json = res.json.bind(res);
+					res.json = () =>
+						json().then((v: unknown) => {
+							state.answered[parsed.pathname] = (state.answered[parsed.pathname] ?? 0) + 1;
+							return v;
+						});
+					return res;
+				});
+			}
 			state.requests.push(url);
+			const stream = {
+				topics: (parsed.searchParams.get('topics') ?? '').split(',').filter(Boolean),
+				open: true
+			};
 			const body = new ReadableStream<Uint8Array>({
 				start(controller) {
 					state.controllers.push(controller);
+					state.streams.push(stream);
 					controller.enqueue(enc.encode('retry: 1000\n\n'));
 					if (state.initial) controller.enqueue(enc.encode(frame('crawler', state.initial)));
 					init?.signal?.addEventListener('abort', () => {
+						stream.open = false;
 						try {
 							controller.close();
 						} catch {
 							/* already closed */
 						}
 					});
+				},
+				cancel() {
+					stream.open = false;
 				}
 			});
 			return Promise.resolve(
@@ -154,9 +192,21 @@ export async function liveEvents(
 			dispatchEvent(new Event('focusin'));
 		}, 100);
 	}, initial);
+	const listening = (event: string) =>
+		page.evaluate(
+			(e) =>
+				!!window.__sse?.streams.some((s) => s.open && (e === 'resync' || s.topics.includes(e))),
+			event
+		);
 	return {
-		send: (event, data) =>
-			page.evaluate(
+		send: async (event, data) => {
+			await expect
+				.poll(() => listening(event), {
+					message: `no open /events stream takes \`${event}\``,
+					timeout: 10_000
+				})
+				.toBe(true);
+			await page.evaluate(
 				([e, d]) => {
 					const enc = new TextEncoder();
 					const f = (window as unknown as { __frame: (e: string, d: unknown) => string }).__frame;
@@ -169,9 +219,11 @@ export async function liveEvents(
 					}
 				},
 				[event, data] as const
-			),
+			);
+		},
 		drop: () =>
 			page.evaluate(() => {
+				for (const s of window.__sse!.streams.splice(0)) s.open = false;
 				for (const c of window.__sse!.controllers.splice(0)) {
 					try {
 						c.close();
@@ -180,7 +232,8 @@ export async function liveEvents(
 					}
 				}
 			}),
-		requests: () => page.evaluate(() => window.__sse?.requests ?? [])
+		requests: () => page.evaluate(() => window.__sse?.requests ?? []),
+		answered: (pathname) => page.evaluate((p) => window.__sse?.answered[p] ?? 0, pathname)
 	};
 }
 
