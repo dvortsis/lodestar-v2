@@ -10,3 +10,13 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+socket2 = { version = "0.6.5", features = ["all"] }
+tokio = { version = "1.54.1", features = ["sync", "time", "rt", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["rt", "macros", "time", "sync"] }
+
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+if-addrs = "=0.15.0"

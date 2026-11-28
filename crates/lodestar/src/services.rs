@@ -136,6 +136,22 @@ impl Services {
             lodestar_log::log_event!(crate::logging::events::FETCH_METADATA_LIMIT_CLAMPED);
         }
         pipeline_config.pool.paused = crawl_settings.paused;
+        // X-vpn-bind: with an interface set, one guard watches it, and
+        // the DHT, the fetches and the scrapes all pin their sockets to it
+        // and hold while it's down. Without one, nothing changes.
+        let vpn = config
+            .dht
+            .crawl_interface()?
+            .map(lodestar_network_policy::iface::Guard::new);
+        if let Some(guard) = &vpn {
+            tokio::spawn(
+                guard
+                    .clone()
+                    .run(lodestar_network_policy::iface::CHECK_EVERY),
+            );
+            pipeline_config.fetch.guard = Some(guard.clone());
+            pipeline_config.vpn = Some(guard.clone());
+        }
         let key = seal_key(&config.data_dir.join("seal.key"))?;
         pipeline_config.sealer = Some(Arc::new(Sealer::new(&key)));
         // A fixture is served offline: no tracker is ever asked (its swarm
@@ -270,11 +286,19 @@ impl Services {
             let mut dht_config = config.dht_config();
             dht_config.deny = Some(lodestar_dht::node::Deny(denied.clone()));
             dht_config.paused = crawl_settings.paused;
+            dht_config.guard = vpn.clone();
             // CR-4 (`dht.utp`): fetches try uTP first over a socket that
             // shares the DHT's port; the DHT attaches its sockets when it
             // binds and hands it the uTP datagrams. Off leaves both alone.
             if config.dht.utp {
-                let port = lodestar_peer_wire::utp::SharedPort::new(Default::default());
+                // With an interface set the DHT's node may be made again
+                // on fresh sockets (X-vpn-bind), so its port can be
+                // re-attached; without one it's attached once, lock-free.
+                let port = if vpn.is_some() {
+                    lodestar_peer_wire::utp::SharedPort::reattachable(Default::default())
+                } else {
+                    lodestar_peer_wire::utp::SharedPort::new(Default::default())
+                };
                 pipeline_config.fetch.transport = lodestar_peer_wire::Transport::Utp;
                 pipeline_config.fetch.utp = Some(port.socket());
                 fetch_stats.attach_utp(port.socket());
@@ -309,6 +333,10 @@ impl Services {
         pipeline_config.health = health.map(|(cfg, trackers)| HealthSetup {
             config: lodestar_pipeline::health::HealthConfig {
                 deny: Some(lodestar_tracker_scrape::Deny(denied.clone())),
+                udp: lodestar_tracker_scrape::UdpConfig {
+                    guard: vpn.clone(),
+                    ..cfg.udp
+                },
                 ..cfg
             },
             trackers,

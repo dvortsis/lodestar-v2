@@ -38,7 +38,30 @@ use lodestar_sources::{Consent, Priority, ProxySpec, SocksDns, SourcePlugin, Sta
 use lodestar_store::{Event, SourceId, SourceSetting, SourceState, Store, WriteBatch};
 use tokio::time::Instant;
 
+use lodestar_network_policy::iface::{Down, State as VpnState};
+
 use crate::{DhtSource, Error, Monitor, SourceStatus, event, unix_now};
+
+/// Why the interface is down, `None` while it's up.
+fn vpn_down(state: VpnState) -> Option<Down> {
+    match state {
+        VpnState::Up { .. } => None,
+        VpnState::Down(why) => Some(why),
+    }
+}
+
+/// Applies each change of the guard's state until the control or the
+/// guard goes away.
+async fn follow_vpn(inner: Weak<Inner>, mut rx: tokio::sync::watch::Receiver<VpnState>) {
+    loop {
+        let down = vpn_down(*rx.borrow_and_update());
+        let Some(inner) = inner.upgrade() else { return };
+        Control { inner }.apply_vpn(down).await;
+        if rx.changed().await.is_err() {
+            return;
+        }
+    }
+}
 
 /// Where a source's priority saved in the app lives in the `settings`
 /// table: this, then the plugin's manifest id. The value is JSON text.
@@ -462,6 +485,9 @@ pub struct CrawlerStatus {
     pub waiting_for_setup: bool,
     /// Unix seconds of the last pause or resume (or the start).
     pub since: i64,
+    /// X-vpn-bind: the interface the crawl is limited to, and why it's
+    /// down if it is (`paused` is then `true` too). `None`: any route.
+    pub vpn: Option<VpnStatus>,
     /// `None` when the DHT is off or hasn't reported yet.
     pub dht: Option<DhtStatus>,
     /// Fetches running now.
@@ -470,6 +496,15 @@ pub struct CrawlerStatus {
     pub queued: u64,
     /// Peer lookups out.
     pub lookups: u64,
+}
+
+/// The crawl's network interface (X-vpn-bind); its name is
+/// [`Control::vpn_interface`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VpnStatus {
+    /// Why it's down ([`lodestar_network_policy::iface::Down::code`]);
+    /// `None` while it's up.
+    pub down: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -871,6 +906,8 @@ struct State {
     wanted: bool,
     /// The setup hold is on.
     held: bool,
+    /// The VPN hold (X-vpn-bind): why the crawl's interface is down.
+    vpn: Option<Down>,
     since: i64,
     /// The last intensity recorded, so a repeat writes no event.
     intensity: Intensity,
@@ -977,14 +1014,31 @@ impl Control {
             .filter(|rx| crate::setup_hold::held(Some(rx)))
             .cloned();
         let held = hold.is_some();
+        let vpn_guard = monitor.vpn().cloned();
+        let vpn = vpn_guard.as_ref().and_then(|g| vpn_down(g.state()));
         // Held, the DHT starts paused too, whenever its plugin starts.
         if let (true, Some(dht)) = (held, &dht) {
             dht.set_paused(true);
         }
         // Set up between the pipeline's start (which paused the pool for
         // the hold) and now: the pool takes the setting's value here.
-        if monitor.setup_done().is_some() && !held && !paused {
+        // Likewise for an interface that came up since (X-vpn-bind); one
+        // that's down keeps the pool paused.
+        if (monitor.setup_done().is_some() || vpn_guard.is_some())
+            && !held
+            && !paused
+            && vpn.is_none()
+        {
             monitor.pool().set_paused(false).await;
+        }
+        // An interface that went down since the pipeline started (X-vpn-bind):
+        // the pool and the DHT may still be running, and the state below
+        // already reads paused, so no later change would pause them.
+        if vpn.is_some() {
+            monitor.pool().set_paused(true).await;
+            if let Some(dht) = &dht {
+                dht.set_paused(true);
+            }
         }
         // What a pinning plugin was built with: the start's credentials.
         // This relies on nothing writing a credential between the plugin's
@@ -1020,9 +1074,10 @@ impl Control {
                 epoch_unix: unix_now(),
                 toggle: tokio::sync::Mutex::new(()),
                 state: Mutex::new(State {
-                    paused: paused || held,
+                    paused: paused || held || vpn.is_some(),
                     wanted: paused,
                     held,
+                    vpn,
                     since,
                     intensity,
                     priorities,
@@ -1034,6 +1089,13 @@ impl Control {
         };
         control.sample_now();
         tokio::spawn(sampler(Arc::downgrade(&control.inner)));
+        if let Some(guard) = vpn_guard {
+            if let Some(why) = vpn {
+                lodestar_log::log_event!(crate::log_events::VPN_DOWN, reason = why.code());
+            }
+            let inner = Arc::downgrade(&control.inner);
+            tokio::spawn(follow_vpn(inner, guard.subscribe()));
+        }
         if let Some(hold) = hold {
             let inner = Arc::downgrade(&control.inner);
             tokio::spawn(async move {
@@ -1049,12 +1111,32 @@ impl Control {
     /// Lifts the setup hold and applies the setting's pause (LEGAL-2).
     async fn release_setup_hold(&self) {
         let _one = self.inner.toggle.lock().await;
-        let wanted = {
+        let paused = {
             let mut st = self.state();
             st.held = false;
-            st.wanted
+            st.wanted || st.vpn.is_some()
         };
-        self.apply_effective(wanted).await;
+        self.apply_effective(paused).await;
+    }
+
+    /// The VPN hold (X-vpn-bind): paused while the interface is down
+    /// (`Some`), and back to what the setting and the setup hold say once
+    /// it's up.
+    async fn apply_vpn(&self, down: Option<Down>) {
+        let _one = self.inner.toggle.lock().await;
+        let (was, paused) = {
+            let mut st = self.state();
+            let was = std::mem::replace(&mut st.vpn, down);
+            (was, st.wanted || st.held || down.is_some())
+        };
+        match (was, down) {
+            (None, Some(why)) => {
+                lodestar_log::log_event!(crate::log_events::VPN_DOWN, reason = why.code());
+            }
+            (Some(_), None) => lodestar_log::log_event!(crate::log_events::VPN_UP),
+            _ => {}
+        }
+        self.apply_effective(paused).await;
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -1097,7 +1179,7 @@ impl Control {
         let paused = {
             let mut st = self.state();
             st.wanted = wanted;
-            wanted || st.held
+            wanted || st.held || st.vpn.is_some()
         };
         self.apply_effective(paused).await
     }
@@ -1186,17 +1268,30 @@ impl Control {
         Ok(())
     }
 
+    /// The interface the crawl is limited to (X-vpn-bind), as it was set
+    /// at this start; `None` for any route.
+    pub fn vpn_interface(&self) -> Option<String> {
+        self.inner
+            .monitor
+            .vpn()
+            .map(|g| g.interface().name().to_owned())
+    }
+
     pub fn status(&self) -> CrawlerStatus {
-        let (paused, since, waiting_for_setup) = {
+        let (paused, since, waiting_for_setup, vpn) = {
             let st = self.state();
-            (st.paused, st.since, st.held)
+            (st.paused, st.since, st.held, st.vpn)
         };
+        let vpn = self.inner.monitor.vpn().map(|_| VpnStatus {
+            down: vpn.map(Down::code),
+        });
         let p = self.inner.monitor.pool_stats();
         let get = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
         CrawlerStatus {
             paused,
             waiting_for_setup,
             since,
+            vpn,
             dht: self
                 .inner
                 .dht

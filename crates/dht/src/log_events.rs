@@ -17,6 +17,18 @@ lodestar_log::catalogue! {
         message: "DHT socket buffers",
         fields: { receive_requested: Size, send_requested: Size, receive: Size, send: Size, set_errors: Size, read_errors: Size },
     }
+    /// X-vpn-bind: with the crawl limited to a network interface, the
+    /// bootstrap entries that are names aren't looked up (the system
+    /// resolver would ask outside the interface), so they're skipped and
+    /// only the IP-literal entries are used. Logged once per start, with the
+    /// count.
+    BOOTSTRAP_NAMES_SKIPPED {
+        id: "dht.bootstrap_names_skipped",
+        component: Dht,
+        level: Info,
+        message: "DHT bootstrap names skipped: no lookups outside the crawl's interface",
+        fields: { skipped: Size },
+    }
     /// No configured bootstrap router could be queried or answered in a
     /// bootstrap round: `configured` names, `resolved` addresses, and of
     /// the last attempt's, `refused` by the outbound policy or the socket

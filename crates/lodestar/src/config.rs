@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lodestar_dht::node::{self as dht, HarvestConfig, Intensity};
+use lodestar_network_policy::iface::Interface;
 use lodestar_peer_wire::{Encryption, FetchOptions};
 use lodestar_pipeline::PipelineConfig;
 use lodestar_pipeline::health::HealthConfig;
@@ -250,6 +251,14 @@ pub struct Dht {
     /// by default (docs/decisions/2026-11-21-CR-SAMPLE-BACKOFF-ESCALATE.md);
     /// not in the Settings UI.
     pub sample_backoff_escalate: bool,
+    /// X-vpn-bind: crawl only through this network interface (`wg0`,
+    /// `tun0`; on Windows the adapter's name). Every DHT, peer and tracker
+    /// socket is pinned to it, and while it's missing or down the crawl
+    /// pauses ("VPN down") rather than use the normal route. Unset or
+    /// empty: any route, as before. Takes effect at the next start. Only
+    /// in `config.toml` for now; the Settings field comes with the UI
+    /// (X-vpn-bind-ui).
+    pub interface: Option<String>,
 }
 
 impl Default for Dht {
@@ -278,8 +287,52 @@ impl Default for Dht {
             route_backoff: false,
             sampler_cooldown_split: false,
             sample_backoff_escalate: false,
+            interface: None,
         }
     }
+}
+
+impl Dht {
+    /// `interface` checked ([`Interface::parse`]); `None` for any route.
+    pub fn crawl_interface(&self) -> Result<Option<Interface>, ConfigError> {
+        self.crawl_interface_on(cfg!(windows))
+    }
+
+    /// [`crawl_interface`](Self::crawl_interface) as it reads on Windows
+    /// (`windows`) or elsewhere, so both are tested everywhere.
+    fn crawl_interface_on(&self, windows: bool) -> Result<Option<Interface>, ConfigError> {
+        let iface = match self.interface.as_deref() {
+            None | Some("") => return Ok(None),
+            Some(_) if windows => return Err(windows_refused()),
+            Some(name) => {
+                Interface::parse(name).map_err(|e| ConfigError(format!("dht.interface: {e}")))?
+            }
+        };
+        // A specific `dht.bind` address may belong to another interface
+        // (Linux would then send through the VPN with that address), and
+        // Windows binds the interface's own address anyway.
+        if self.bind.iter().any(|a| !a.ip().is_unspecified()) {
+            return Err(ConfigError(
+                "dht.interface: dht.bind must use the unspecified address (0.0.0.0 or [::]) \
+                 with an interface; the interface's own address is used"
+                    .into(),
+            ));
+        }
+        Ok(Some(iface))
+    }
+}
+
+/// X-vpn-bind: a crawl interface is refused on Windows until
+/// X-vpn-bind-win. Binding the interface's address leaves the weak-host
+/// send path open, and closing it (`IP_UNICAST_IF`) needs `unsafe`, which
+/// the workspace forbids; the owner decides. Nothing may run with the
+/// setting there meanwhile (fail closed).
+fn windows_refused() -> ConfigError {
+    ConfigError(
+        "dht.interface isn't supported on Windows yet (pending X-vpn-bind-win): \
+         remove it from config.toml, or run Lodestar where its whole network is the VPN"
+            .into(),
+    )
 }
 
 /// The crawler switches' effective values (X-dht-switch-identity), one per
@@ -984,6 +1037,7 @@ impl Config {
         if let Some(v) = watch_dir {
             config.watch.folder = v;
         }
+        config.dht.crawl_interface()?;
         config.ranking.check()?;
         config.updates.check()?;
         config.cluster.check()?;
@@ -1255,6 +1309,89 @@ fn parse_hex20(s: &str) -> Option<[u8; 20]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// X-vpn-bind: on Windows a set `dht.interface` is refused at start,
+    /// naming the setting; unset is any route, as before.
+    #[test]
+    fn windows_refuses_a_crawl_interface_until_its_pin_lands() {
+        let dht = |interface: Option<&str>| Dht {
+            interface: interface.map(str::to_owned),
+            ..Dht::default()
+        };
+        let e = dht(Some("WireGuard Tunnel"))
+            .crawl_interface_on(true)
+            .unwrap_err();
+        assert!(e.to_string().contains("dht.interface") && e.to_string().contains("Windows"));
+        assert!(dht(None).crawl_interface_on(true).unwrap().is_none());
+        assert!(dht(Some("")).crawl_interface_on(true).unwrap().is_none());
+    }
+
+    /// The same refusal through the real entry point, on Windows itself.
+    #[cfg(windows)]
+    #[test]
+    fn this_windows_build_refuses_a_crawl_interface() {
+        let dht = Dht {
+            interface: Some("wg0".into()),
+            ..Dht::default()
+        };
+        assert!(dht.crawl_interface().is_err());
+        // And from config.toml: the load itself refuses it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[dht]\ninterface = \"wg0\"\n").unwrap();
+        let e = Config::load(Some(&path), no_env).unwrap_err();
+        assert!(e.to_string().contains("X-vpn-bind-win"), "{e}");
+    }
+
+    /// X-vpn-bind: `dht.interface` is checked at load (Linux's rules).
+    #[test]
+    fn the_crawl_interface_is_checked() {
+        let dht = |interface: Option<&str>, bind: &str| Dht {
+            interface: interface.map(str::to_owned),
+            bind: vec![bind.parse().unwrap()],
+            ..Dht::default()
+        };
+        // Unset or empty: any route.
+        assert!(
+            dht(None, "0.0.0.0:6881")
+                .crawl_interface_on(false)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            dht(Some(""), "0.0.0.0:6881")
+                .crawl_interface_on(false)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            dht(Some("wg0"), "0.0.0.0:6881")
+                .crawl_interface_on(false)
+                .unwrap()
+                .unwrap()
+                .name(),
+            "wg0"
+        );
+        // A name the platform's rule refuses: a newline is whitespace to
+        // Linux and a control character to Windows (whose friendly names
+        // may hold a `/`).
+        let bad = "wg\n0";
+        let e = dht(Some(bad), "0.0.0.0:6881")
+            .crawl_interface_on(false)
+            .unwrap_err();
+        assert!(e.to_string().starts_with("dht.interface:"), "{e}");
+        // A specific bind address could belong to another interface.
+        let e = dht(Some("wg0"), "192.168.1.5:6881")
+            .crawl_interface_on(false)
+            .unwrap_err();
+        assert!(e.to_string().contains("unspecified"), "{e}");
+        // Without an interface a specific bind is fine, as before.
+        assert!(
+            dht(None, "192.168.1.5:6881")
+                .crawl_interface_on(false)
+                .is_ok()
+        );
+    }
 
     fn no_env(_: &str) -> Option<String> {
         None

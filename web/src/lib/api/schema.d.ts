@@ -4511,6 +4511,28 @@ export interface components {
             torrents: number;
         };
         /**
+         * @description X-vpn-bind: the network interface the crawl is limited to
+         *     (`dht.interface` in `config.toml`, as this start applied it).
+         * @example {
+         *       "interface": "wg0",
+         *       "reason": "missing",
+         *       "state": "down"
+         *     }
+         */
+        CrawlerInterface: {
+            interface: string;
+            /**
+             * @description Why it's down: `missing`, `down`, `no_address`, `bind_failed` or
+             *     `unsupported`. Null while it's up.
+             */
+            reason: string | null;
+            /**
+             * @description X-vpn-bind: whether the crawl's interface can be used.
+             * @enum {string}
+             */
+            state: "up" | "down";
+        };
+        /**
          * @description `PATCH /crawler`: the global bar's intensity control. The same
          *     setting as `crawler.intensity` in `/settings/crawler`.
          * @example {
@@ -4539,6 +4561,7 @@ export interface components {
          *       },
          *       "intensity": "balanced",
          *       "intensity_env": null,
+         *       "interface": null,
          *       "paused": false,
          *       "since": 1792677600,
          *       "state": "running"
@@ -4557,6 +4580,7 @@ export interface components {
              *     can't be changed here; null when it can.
              */
             intensity_env: string | null;
+            interface: null | components["schemas"]["CrawlerInterface"];
             paused: boolean;
             /**
              * Format: int64
@@ -4565,7 +4589,7 @@ export interface components {
              */
             since: number;
             /** @enum {string} */
-            state: "running" | "paused";
+            state: "running" | "paused" | "vpn_down";
         };
         /** @description `POST /keys`. `Debug` redacts the password. */
         CreateKeyRequest: {

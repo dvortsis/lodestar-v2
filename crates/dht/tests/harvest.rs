@@ -43,6 +43,7 @@ fn config(bootstrap: Vec<String>) -> Config {
         sample_interval_scale: 1,
         sampler_cooldown_split: false,
         sample_backoff_escalate: false,
+        guard: None,
     }
 }
 

@@ -14173,6 +14173,40 @@
           "torrents": 48211
         }
       },
+      "CrawlerInterface": {
+        "type": "object",
+        "description": "X-vpn-bind: the network interface the crawl is limited to\n(`dht.interface` in `config.toml`, as this start applied it).",
+        "required": [
+          "interface",
+          "state",
+          "reason"
+        ],
+        "properties": {
+          "interface": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it's down: `missing`, `down`, `no_address`, `bind_failed` or\n`unsupported`. Null while it's up."
+          },
+          "state": {
+            "type": "string",
+            "description": "X-vpn-bind: whether the crawl's interface can be used.",
+            "enum": [
+              "up",
+              "down"
+            ]
+          }
+        },
+        "example": {
+          "interface": "wg0",
+          "reason": "missing",
+          "state": "down"
+        }
+      },
       "CrawlerPatch": {
         "type": "object",
         "description": "`PATCH /crawler`: the global bar's intensity control. The same\nsetting as `crawler.intensity` in `/settings/crawler`.",
@@ -14201,6 +14235,7 @@
         "required": [
           "dht",
           "fetch",
+          "interface",
           "intensity",
           "intensity_env",
           "paused",
@@ -14238,6 +14273,17 @@
             ],
             "description": "The environment variable that sets the intensity, which then\ncan't be changed here; null when it can."
           },
+          "interface": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CrawlerInterface",
+                "description": "X-vpn-bind: the interface the crawl is limited to. Null: any\nroute."
+              }
+            ]
+          },
           "paused": {
             "type": "boolean"
           },
@@ -14250,7 +14296,8 @@
             "type": "string",
             "enum": [
               "running",
-              "paused"
+              "paused",
+              "vpn_down"
             ]
           }
         },
@@ -14267,6 +14314,7 @@
           },
           "intensity": "balanced",
           "intensity_env": null,
+          "interface": null,
           "paused": false,
           "since": 1792677600,
           "state": "running"

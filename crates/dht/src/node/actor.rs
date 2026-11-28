@@ -636,7 +636,10 @@ pub(crate) async fn run(
     };
     let (recv, sockets): (Vec<RecvSocket>, Vec<SendSocket>) = sockets.into_iter().unzip();
     let local_addrs = recv.iter().filter_map(|s| s.local_addr().ok()).collect();
-    let bootstrap = resolve(&cfg.bootstrap).await;
+    let bootstrap = match &cfg.guard {
+        None => resolve(&cfg.bootstrap).await,
+        Some(_) => literal_bootstrap(&cfg.bootstrap),
+    };
     let mut actor = Actor::new(
         cfg,
         stats,
@@ -791,9 +794,93 @@ fn sharded_ids(
     }
 }
 
+/// Names looked up through the system resolver by this process's nodes,
+/// for tests that show a node limited to an interface looks up none.
+static LOOKUPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// See [`LOOKUPS`].
+pub fn lookups() -> u64 {
+    LOOKUPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Bootstrap names skipped by this process ([`literal_bootstrap`]) are
+/// logged at the first node's start only, not at every rebind.
+static SKIPPED_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// X-vpn-bind: the bootstrap entries that are already addresses; names are
+/// skipped, never looked up. With the default list (all names), the
+/// default routers' built-in addresses ([`super::BOOTSTRAP_LITERALS`])
+/// stand for it; a list the user set gets only its own addresses, and an
+/// empty one stays empty. The count of skipped names is logged once.
+pub(crate) fn literal_bootstrap(hosts: &[String]) -> Vec<SocketAddr> {
+    let default = hosts.len() == super::DEFAULT_BOOTSTRAP.len()
+        && hosts
+            .iter()
+            .zip(super::DEFAULT_BOOTSTRAP)
+            .all(|(h, d)| h == d);
+    if default {
+        return super::BOOTSTRAP_LITERALS
+            .iter()
+            .map(|a| a.parse().expect("a literal address"))
+            .collect();
+    }
+    let out: Vec<SocketAddr> = hosts.iter().filter_map(|h| h.parse().ok()).collect();
+    let skipped = hosts.len() - out.len();
+    if skipped > 0 && !SKIPPED_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        lodestar_log::log_event!(
+            crate::log_events::BOOTSTRAP_NAMES_SKIPPED,
+            skipped = skipped
+        );
+    }
+    out
+}
+
+#[cfg(test)]
+mod literal_bootstrap_tests {
+    use super::*;
+
+    #[test]
+    fn the_default_list_is_the_routers_addresses() {
+        let default: Vec<String> = super::super::DEFAULT_BOOTSTRAP
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let before = lookups();
+        let want: Vec<SocketAddr> = super::super::BOOTSTRAP_LITERALS
+            .iter()
+            .map(|a| a.parse().unwrap())
+            .collect();
+        assert_eq!(literal_bootstrap(&default), want);
+        assert_eq!(lookups(), before, "nothing looked up");
+    }
+
+    #[test]
+    fn a_users_list_keeps_only_its_addresses() {
+        let hosts = [
+            "192.0.2.7:6881",
+            "router.bittorrent.com:6881",
+            "tracker.example:6881",
+            "[2001:db8::1]:6881",
+        ]
+        .map(String::from);
+        let before = lookups();
+        let want: Vec<SocketAddr> = ["192.0.2.7:6881", "[2001:db8::1]:6881"]
+            .iter()
+            .map(|a| a.parse().unwrap())
+            .collect();
+        assert_eq!(literal_bootstrap(&hosts), want, "no built-in routers added");
+        assert!(
+            literal_bootstrap(&[]).is_empty(),
+            "an empty list stays empty"
+        );
+        assert_eq!(lookups(), before, "nothing looked up");
+    }
+}
+
 async fn resolve(hosts: &[String]) -> Vec<SocketAddr> {
     let mut out = Vec::new();
     for host in hosts {
+        LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let lookup = tokio::time::timeout(
             Duration::from_secs(5),
             tokio::net::lookup_host(host.as_str()),
@@ -1205,8 +1292,12 @@ impl Actor {
                 Sent::Yes
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Sent::Throttled,
-            Err(_) => {
+            Err(e) => {
                 Stats::inc(&self.stats.send_errors);
+                // X-vpn-bind: a pinned socket whose interface went away.
+                if let Some(guard) = &self.cfg.guard {
+                    guard.trip(&e);
+                }
                 Sent::Failed
             }
         }

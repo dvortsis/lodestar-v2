@@ -22,6 +22,32 @@ pub enum CrawlerIntensity {
 pub enum CrawlerState {
     Running,
     Paused,
+    /// X-vpn-bind: the network interface the crawl is limited to is
+    /// missing or down, so nothing is crawled (whatever `paused` says).
+    #[serde(rename = "vpn_down")]
+    VpnDown,
+}
+
+/// X-vpn-bind: whether the crawl's interface can be used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum InterfaceState {
+    Up,
+    Down,
+}
+
+/// X-vpn-bind: the network interface the crawl is limited to
+/// (`dht.interface` in `config.toml`, as this start applied it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({ "interface": "wg0", "reason": "missing", "state": "down" }))]
+pub struct CrawlerInterface {
+    pub interface: String,
+    #[schema(inline)]
+    pub state: InterfaceState,
+    /// Why it's down: `missing`, `down`, `no_address`, `bind_failed` or
+    /// `unsupported`. Null while it's up.
+    #[schema(required = true)]
+    pub reason: Option<String>,
 }
 
 /// The DHT node's state.
@@ -51,6 +77,7 @@ pub struct FetchStatus {
 #[schema(example = json!({
     "dht": { "bootstrapped": true, "outstanding": 212, "routing_nodes": 3104 },
     "fetch": { "in_flight": 388, "lookups": 120, "queued": 15022 },
+    "interface": null,
     "intensity": "balanced",
     "intensity_env": null,
     "paused": false,
@@ -62,6 +89,10 @@ pub struct CrawlerStatus {
     #[schema(required = true)]
     pub dht: Option<DhtStatus>,
     pub fetch: FetchStatus,
+    /// X-vpn-bind: the interface the crawl is limited to. Null: any
+    /// route.
+    #[schema(required = true)]
+    pub interface: Option<CrawlerInterface>,
     #[schema(inline)]
     pub intensity: CrawlerIntensity,
     /// The environment variable that sets the intensity, which then

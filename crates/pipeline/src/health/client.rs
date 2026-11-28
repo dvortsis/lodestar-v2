@@ -177,6 +177,9 @@ pub(crate) struct ClientTask {
     pub max_wait: Duration,
     pub status: Arc<Mutex<TrackerStatus>>,
     pub gate: Arc<Gate>,
+    /// X-vpn-bind: while the crawl's interface is down, jobs are skipped
+    /// (no request, no failure counted against the tracker).
+    pub guard: Option<Arc<lodestar_network_policy::iface::Guard>>,
 }
 
 impl ClientTask {
@@ -199,6 +202,25 @@ impl ClientTask {
             if done.send(d).await.is_err() {
                 return;
             }
+        }
+    }
+
+    /// Whether a job must be skipped because the crawl's interface is
+    /// down (X-vpn-bind).
+    fn vpn_down(&self) -> bool {
+        self.guard.as_ref().is_some_and(|g| !g.state().is_up())
+    }
+
+    /// Whether a job must be skipped because this HTTP tracker's address is
+    /// of a family the interface has no address of (X-vpn-bind): pinning
+    /// the device alone, the request would leave with another interface's
+    /// source address. UDP sockets check their family when pinned.
+    fn off_family(&self) -> bool {
+        match (&self.guard, &self.tracker) {
+            (Some(guard), Tracker::Http(t)) => {
+                t.literal_ip().is_some_and(|ip| !guard.has_family(ip))
+            }
+            _ => false,
         }
     }
 
@@ -226,7 +248,7 @@ impl ClientTask {
             .unwrap_or(usize::MAX)
             .saturating_mul(per_request)
             .min(job.hashes.len());
-        if take == 0 {
+        if take == 0 || self.vpn_down() || self.off_family() {
             return (Vec::new(), Outcome::Skipped, 0);
         }
         let hashes = &job.hashes[..take];
@@ -234,6 +256,16 @@ impl ClientTask {
         for chunk in hashes.chunks(per_request) {
             let ready = self.pacer.ready_at();
             tokio::time::sleep_until(self.clock.at(ready)).await;
+            // X-vpn-bind: again after the wait, which can be most of a
+            // round; the HTTP client is pinned to the device only, so a
+            // drop or a lost family meanwhile must stop the request here.
+            if self.vpn_down() || self.off_family() {
+                if answers.is_empty() {
+                    return (answers, Outcome::Skipped, 0);
+                }
+                let asked = answers.len();
+                return (answers, Outcome::Ok, asked);
+            }
             let now = self.clock.now();
             self.pacer.start(now);
             match self.tracker.scrape(chunk).await {
@@ -284,6 +316,155 @@ impl ClientTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A UDP tracker task with `guard`, aimed at a port nothing answers.
+    fn task(guard: Arc<lodestar_network_policy::iface::Guard>) -> ClientTask {
+        task_for(
+            guard,
+            Tracker::Udp(lodestar_tracker_scrape::UdpTracker::new(
+                "192.0.2.1",
+                9,
+                Default::default(),
+            )),
+        )
+    }
+
+    fn task_for(guard: Arc<lodestar_network_policy::iface::Guard>, tracker: Tracker) -> ClientTask {
+        let clock = Clock::new();
+        ClientTask {
+            id: 1,
+            tracker,
+            pacer: Pacer::new(Duration::from_secs(1), clock.now()),
+            clock,
+            max_wait: Duration::from_secs(60),
+            status: Arc::new(Mutex::new(TrackerStatus {
+                id: 1,
+                url: String::new(),
+                health: Health::Ok,
+                failures: 0,
+                rounds: [0; 6],
+                last_ok_at: None,
+            })),
+            gate: Arc::default(),
+            guard: Some(guard),
+        }
+    }
+
+    fn job() -> Job {
+        Job {
+            round: 1,
+            hashes: Arc::from(vec![InfoHash([1; 20])]),
+            deadline_ms: u64::MAX,
+        }
+    }
+
+    /// X-vpn-bind: while the crawl's interface is down a job is skipped,
+    /// with no request and no failure against the tracker.
+    #[tokio::test]
+    async fn jobs_are_skipped_while_the_interface_is_down() {
+        use lodestar_network_policy::iface::{Down, Guard, Interface, Link};
+        let up = Arc::new(AtomicBool::new(false));
+        let u = up.clone();
+        let guard = Guard::with_probe(Interface::parse("wg0").unwrap(), move |_| {
+            if u.load(Ordering::SeqCst) {
+                Ok(Link::default())
+            } else {
+                Err(Down::Missing)
+            }
+        });
+        let mut t = task(guard.clone());
+        let (answers, outcome, asked) = t.scrape(&job()).await;
+        assert_eq!((answers.len(), outcome, asked), (0, Outcome::Skipped, 0));
+        assert_eq!(t.pacer.failures(), 0, "not a failure");
+        up.store(true, Ordering::SeqCst);
+        guard.poll();
+        assert!(!t.vpn_down(), "up again: jobs run");
+    }
+
+    /// X-vpn-bind: an HTTP tracker whose address is of a family the
+    /// interface has no address of is skipped, with no request: pinned to
+    /// the device alone, it would leave with another interface's source.
+    #[tokio::test]
+    async fn an_http_tracker_of_a_family_the_interface_lacks_is_skipped() {
+        use lodestar_network_policy::iface::{Guard, Interface, Link};
+        let guard = Guard::with_probe(Interface::parse("wg0").unwrap(), |_| {
+            Ok(Link {
+                index: Some(1),
+                addrs: vec!["10.64.0.2".parse().unwrap()],
+            })
+        });
+        guard.poll();
+        let client = lodestar_tracker_scrape::http::client(None, None).unwrap();
+        let http = |u: &str| {
+            let url = lodestar_tracker_scrape::TrackerUrl::parse(u).unwrap();
+            Tracker::new(&url, Default::default(), Default::default(), &client).unwrap()
+        };
+        let mut t = task_for(guard.clone(), http("http://[2001:db8::66]:6969/announce"));
+        let (answers, outcome, asked) = t.scrape(&job()).await;
+        assert_eq!((answers.len(), outcome, asked), (0, Outcome::Skipped, 0));
+        assert_eq!(t.pacer.failures(), 0, "not a failure");
+        let v4 = task_for(guard, http("http://203.0.113.9:6969/announce"));
+        assert!(!v4.off_family(), "a family it has: asked");
+    }
+
+    /// X-vpn-bind: the guard is checked again before each request, not
+    /// only at the job's start: the wait for a tracker's next slot can be
+    /// most of a round, and the HTTP client is pinned to the device only.
+    /// Losing the tracker's family after the first request stops the rest.
+    #[tokio::test]
+    async fn an_http_job_stops_when_the_interface_loses_the_trackers_family() {
+        use lodestar_network_policy::iface::{Guard, Interface, Link};
+        let both = Link {
+            index: Some(1),
+            addrs: vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()],
+        };
+        let link = Arc::new(Mutex::new(both));
+        let l = link.clone();
+        let guard = Guard::with_probe(Interface::parse("wg0").unwrap(), move |_| {
+            Ok(l.lock().unwrap().clone())
+        });
+        guard.poll();
+        let fake = lodestar_tracker_scrape::testing::http_tracker().await;
+        let client = lodestar_tracker_scrape::http::client(None, None).unwrap();
+        let url = lodestar_tracker_scrape::TrackerUrl::parse(&fake.url(false)).unwrap();
+        let tracker = Tracker::new(&url, Default::default(), Default::default(), &client).unwrap();
+        let per_request = tracker.max_hashes();
+        let mut t = task_for(guard.clone(), tracker);
+        // Far enough apart that the change below lands between the two.
+        t.pacer = Pacer::new(Duration::from_secs(5), t.clock.now());
+        let hashes: Vec<InfoHash> = (0..per_request + 8)
+            .map(|i| InfoHash([i as u8; 20]))
+            .collect();
+        let job = Job {
+            round: 1,
+            hashes: Arc::from(hashes),
+            deadline_ms: u64::MAX,
+        };
+        let state = fake.state.clone();
+        let drop_v4 = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while state.scrapes.load(Ordering::SeqCst) == 0 {
+                assert!(tokio::time::Instant::now() < deadline, "no first request");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            *link.lock().unwrap() = Link {
+                index: Some(1),
+                addrs: vec!["::1".parse().unwrap()],
+            };
+            guard.poll();
+        });
+        let (answers, outcome, asked) = t.scrape(&job).await;
+        drop_v4.await.unwrap();
+        assert_eq!(
+            (answers.len(), outcome, asked),
+            (per_request, Outcome::Ok, per_request)
+        );
+        assert_eq!(
+            fake.state.scrapes.load(Ordering::SeqCst),
+            1,
+            "the second chunk wasn't requested"
+        );
+    }
 
     #[test]
     fn requests_that_start_by_the_limit() {
