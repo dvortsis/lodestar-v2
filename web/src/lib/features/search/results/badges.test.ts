@@ -5,26 +5,24 @@ import { hit } from './fixtures';
 const labels: BadgeLabels = {
 	type: (k) => k.toUpperCase(),
 	private: 'Private',
-	imported: 'Imported',
-	v2: 'v2',
-	hybrid: 'Hybrid'
+	imported: 'Imported'
 };
 const b = (key: string, keep = false): RowBadge => ({ key, kind: 'text', label: key, keep });
 const keys = (l: RowBadge[]) => l.map((x) => x.key);
 
 describe('badgesOf', () => {
-	it('lists the type, resolution, flags, then verification and safety', () => {
+	it("lists the type, resolution, flags, then verification and safety; v2 and hybrid are the drawer's (§10.4)", () => {
 		const out = badgesOf(
 			hit(1, {
 				content_type: 'movie',
 				resolution: '2160p',
-				flags: ['v2', 'private'],
+				flags: ['v2', 'hybrid', 'private'],
 				verified: false,
 				swarm_suspect: true
 			}),
 			labels
 		);
-		expect(keys(out)).toEqual(['type', 'res', 'private', 'v2', 'unverified', 'suspect']);
+		expect(keys(out)).toEqual(['type', 'res', 'private', 'unverified', 'suspect']);
 		expect(out.filter((x) => x.keep).map((x) => x.key)).toEqual(['unverified', 'suspect']);
 	});
 

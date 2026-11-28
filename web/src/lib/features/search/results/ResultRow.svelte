@@ -85,9 +85,7 @@
 			type: (key, adult) =>
 				(key === 'adult' && adult ? ADULT[adult] : undefined)?.() ?? TYPE[key]?.(),
 			private: m.search_results_flag_private(),
-			imported: m.search_results_flag_imported(),
-			v2: m.search_results_flag_v2(),
-			hybrid: m.search_results_flag_hybrid()
+			imported: m.search_results_flag_imported()
 		})
 	);
 	const collapsed = $derived(collapseBadges(all));

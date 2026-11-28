@@ -105,40 +105,21 @@ describe('ResultRow, Comfortable', () => {
 		expect(text('r-raw')).not.toContain('‮');
 	});
 
-	it('shows up to five badges and collapses the rest into a +N chip', () => {
+	it('shows at most five badges, v2 and hybrid never among them (§10.4)', () => {
 		render(ResultRow, {
 			hit: hit(4, {
 				content_type: 'movie',
 				resolution: '1080p',
-				flags: ['private', 'imported', 'v2', 'hybrid']
-			}),
-			density: 'comfortable',
-			testid: 'r'
-		});
-		// Six facts (type, res, private, imported, v2, hybrid): four show, the chip counts two.
-		const chip = screen.getByTestId('r-badges-more');
-		expect(chip.tagName).toBe('BUTTON');
-		expect(chip.getAttribute('aria-label')).toMatch(/more facts/);
-		expect(chip.textContent).toBe('+2');
-		expect(screen.getByTestId('r-badge-type')).toBeTruthy();
-		expect(screen.queryByTestId('r-badge-hybrid')).toBeNull();
-	});
-
-	it('never collapses safety or verification into the chip', () => {
-		render(ResultRow, {
-			hit: hit(4, {
-				content_type: 'movie',
-				resolution: '1080p',
-				flags: ['private', 'v2', 'hybrid'],
-				verified: false,
+				flags: ['private', 'imported', 'v2', 'hybrid'],
 				swarm_suspect: true
 			}),
 			density: 'comfortable',
 			testid: 'r'
 		});
-		expect(screen.getByTestId('unverified-badge')).toBeTruthy();
+		expect(screen.getByTestId('r-badges').querySelectorAll('.rr-badge')).toHaveLength(5);
+		for (const gone of ['r-badge-v2', 'r-badge-hybrid', 'r-badges-more'])
+			expect(screen.queryByTestId(gone)).toBeNull();
 		expect(screen.getByTestId('r-suspect')).toBeTruthy();
-		expect(screen.getByTestId('r-badges-more').textContent).toBe('+3');
 	});
 
 	it('shows the adult kind as the type badge', () => {

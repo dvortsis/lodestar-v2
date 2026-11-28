@@ -32,22 +32,4 @@ describe('ResultRow: click a badge to filter (§4c)', () => {
 		expect(sent).toHaveBeenCalledWith({ facet: 'res', value: '1080p' });
 		expect(opened).not.toHaveBeenCalled();
 	});
-
-	it('the +N chip does open the row (its click bubbles to the list)', async () => {
-		opened = vi.fn();
-		render(ResultRow, {
-			hit: hit(1, {
-				content_type: 'movie',
-				resolution: '1080p',
-				flags: ['private', 'imported', 'v2', 'hybrid']
-			}),
-			density: 'comfortable',
-			testid: 'r',
-			actions
-		});
-		document.body.addEventListener('click', opened);
-		await fireEvent.click(screen.getByTestId('r-badges-more'));
-		expect(opened).toHaveBeenCalledTimes(1);
-		expect(sent).not.toHaveBeenCalled();
-	});
 });

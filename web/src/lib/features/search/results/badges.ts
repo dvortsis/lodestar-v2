@@ -26,8 +26,6 @@ export interface BadgeLabels {
 	type: (key: string, adultKind: string | null) => string | undefined;
 	private: string;
 	imported: string;
-	v2: string;
-	hybrid: string;
 }
 
 export function badgesOf(hit: SearchHit, l: BadgeLabels): RowBadge[] {
@@ -66,17 +64,6 @@ export function badgesOf(hit: SearchHit, l: BadgeLabels): RowBadge[] {
 			keep: false,
 			filter: { facet: 'imported', value: 'yes' }
 		});
-	// Technical (U11): last of the choice badges, so the first into "+N"; the drawer holds both.
-	if (hit.flags.includes('v2'))
-		out.push({
-			key: 'v2',
-			kind: 'text',
-			label: l.v2,
-			keep: false,
-			filter: { facet: 'v2', value: 'yes' }
-		});
-	if (hit.flags.includes('hybrid'))
-		out.push({ key: 'hybrid', kind: 'text', label: l.hybrid, keep: false });
 	if (hit.verified === false)
 		out.push({ key: 'unverified', kind: 'unverified', label: '', keep: true });
 	if (hit.swarm_suspect) out.push({ key: 'suspect', kind: 'suspect', label: '', keep: true });

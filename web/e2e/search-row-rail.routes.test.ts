@@ -10,7 +10,7 @@ const withFacts = (n: number) =>
 		...h,
 		content_type: 'movie',
 		resolution: '1080p' as const,
-		flags: ['private', 'v2'],
+		flags: ['private'],
 		seeders: 512,
 		leechers: 48,
 		trackers_reporting: 50,
