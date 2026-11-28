@@ -1,4 +1,4 @@
-# X-leaktest-vpn-held-down decisions
+# X-leaktest-vpn-held-down decisions (#1157)
 
 The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud lane still saw `vpn_interface_held_down` once (2026-11-22). gluetun restored its interface many times, so most phase-B probes were skipped. 0 packets leaked, and a second run passed. Round 1 runs this test on every arm before and after every day, so a harness flake can cost a day. Calls not marked as the runner's are this PR's; the runner flags them to the owner (`docs/owner-decisions.md` §2.19). Every bullet of `2026-11-20-X-leaktest-wg0-flake.md` stands, "No pause between attempts" included: there's still no wait between attempts. The hold below is added alongside them.
 
