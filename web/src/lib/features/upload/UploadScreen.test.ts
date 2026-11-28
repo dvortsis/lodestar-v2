@@ -1,6 +1,6 @@
 // The upload part of Settings → Add torrent files: limits named before sending, one result per
 // file, Retry only where the server or the connection failed, and nothing sent after leaving.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, configure, fireEvent, render, screen } from '@testing-library/svelte';
 import Stub from '../settings/shell/testing/Stub.svelte';
 
@@ -28,6 +28,11 @@ const big = (name: string) => {
 	Object.defineProperty(f, 'size', { value: MAX_BYTES + 1 });
 	return f;
 };
+
+// Loud if the mock ever stops applying: the screen would load the real WatchFolder.
+beforeAll(async () => {
+	expect((await import('./WatchFolder.svelte')).default).toBe(Stub);
+});
 
 let fetch: ReturnType<typeof vi.fn>;
 beforeEach(() => {
