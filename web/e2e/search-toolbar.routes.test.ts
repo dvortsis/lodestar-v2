@@ -638,9 +638,9 @@ for (const { lang, total, text, label } of WORST) {
 				release();
 				await expect(page.getByTestId('results-hidden-show')).toBeVisible();
 				await expect(count(page)).toHaveText(text, { useInnerText: true });
-				// One row: as tall as a dense control. The box is capped (L3, 1,024 px).
+				// One row: as tall as a dense control. The box is capped (L3, 1,152 px).
 				expect(before?.height).toBe(sort?.height);
-				expect(before!.width).toBeLessThanOrEqual(1024);
+				expect(before!.width).toBeLessThanOrEqual(1152);
 				// The longest line and the controls leave at least 48 px of room in the box.
 				const room = await toolbar.evaluate((el) => {
 					const r = document.createRange();
@@ -652,8 +652,108 @@ for (const { lang, total, text, label } of WORST) {
 				});
 				expect(room).toBeGreaterThanOrEqual(48 + 16);
 				expect(await page.getByLabel(label).boundingBox()).toEqual(sort);
+				// The controls end at the box's right edge.
+				const edge = await toolbar.evaluate(
+					(el) =>
+						el.querySelector('.tb-controls')!.getBoundingClientRect().right -
+						el.getBoundingClientRect().right
+				);
+				expect(edge).toBe(0);
 				expect((await toolbar.boundingBox())?.height).toBe(before?.height);
 				expect((await row(page, 1).boundingBox())?.y).toBe(first);
+			});
+		});
+	}
+}
+
+// A grouped count ("N groups · N torrents") is a long line, so its hidden note shows only from 71rem
+// of toolbar (1,136 px) and not at all below it; the controls keep their labels. Nothing moves when
+// the note arrives, at any width, in either language.
+const GROUPED = [
+	{
+		lang: 'en',
+		label: 'Sort',
+		extra: {
+			total: 12_345_678,
+			total_approx: true,
+			collapsed: true,
+			groups: 12_345_678,
+			groups_approx: true
+		},
+		text: '≈ 12.3M groups · ≈ 12.3M torrents · 9,999,999 hidden by filters · Show'
+	},
+	{
+		lang: 'en',
+		label: 'Sort',
+		extra: { total: 199_999, collapsed: true, groups: 150_000 },
+		text: '150,000 groups · 199,999 torrents · 9,999,999 hidden by filters · Show'
+	},
+	{
+		lang: 'zh-CN',
+		label: '排序',
+		extra: {
+			total: 12_345_678,
+			total_approx: true,
+			collapsed: true,
+			groups: 12_345_678,
+			groups_approx: true
+		},
+		text: '≈ 1234.6万 个组 · ≈ 1234.6万 个种子 · 9,999,999 个已被过滤器隐藏 · 显示'
+	},
+	{
+		lang: 'zh-CN',
+		label: '排序',
+		extra: { total: 199_999, collapsed: true, groups: 150_000 },
+		text: '150,000 个组 · 199,999 个种子 · 9,999,999 个已被过滤器隐藏 · 显示'
+	}
+] as const;
+const FULL_FROM = 71 * 16; // 71rem of toolbar, in px
+for (const { lang, label, extra, text } of GROUPED) {
+	for (const [width, drawer] of [
+		[900, false],
+		[1024, false],
+		[1366, false],
+		[1600, false],
+		[2048, false],
+		[2560, false],
+		[2560, true]
+	] as const) {
+		test.describe(`a grouped count in ${lang} (${text.slice(0, 7)}) at ${width} px${drawer ? ' with the drawer open' : ''}`, () => {
+			test.use({ locale: lang });
+			test('shows its note only where the line fits, and moves nothing', async ({
+				page,
+				go,
+				mock
+			}) => {
+				await page.setViewportSize({ width, height: 900 });
+				server(mock, () => body(hits(3), extra as never));
+				let release!: () => void;
+				const held = new Promise<void>((r) => (release = r));
+				mock.on('searchHiddenCount', async () => (await held, { hidden_total: 9_999_999 }));
+				await go('/search?q=lantern');
+				await expect(row(page, 1)).toBeVisible();
+				if (drawer) {
+					await row(page, 2).click();
+					await expect(page.getByTestId('drawer')).toBeVisible();
+				}
+				const toolbar = page.getByTestId('results-toolbar');
+				// The toolbar settles once the drawer has made room (or not).
+				await expect.poll(async () => (await toolbar.boundingBox())?.height).toBe(32);
+				const before = await toolbar.boundingBox();
+				const first = (await row(page, 1).boundingBox())?.y;
+				const sort = await page.getByLabel(label).boundingBox();
+				release();
+				const show = page.getByTestId('results-hidden-show');
+				await expect(show).toHaveCount(1);
+				if (before!.width >= FULL_FROM) {
+					await expect(show).toBeVisible();
+					await expect(page.getByTestId('results-count')).toHaveText(text, { useInnerText: true });
+				} else {
+					await expect(show).toBeHidden();
+				}
+				expect(await page.getByLabel(label).boundingBox()).toEqual(sort);
+				expect((await toolbar.boundingBox())?.height).toBe(before?.height);
+				if (!drawer) expect((await row(page, 1).boundingBox())?.y).toBe(first);
 			});
 		});
 	}
