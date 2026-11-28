@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T19:29:15Z",
+  "updated_at": "2026-11-28T19:36:45Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -11163,22 +11163,22 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T19:12:09Z",
+    "updated": "2026-11-28T19:36:45Z",
     "items": [
       {
         "slot": 1,
-        "slice": "X-healthz-count-async",
+        "slice": "X-flake-trio",
         "role": "build",
-        "agent": "session_01MMjhn8NdgJe3D7wFtABUPJ",
-        "doing": "#1181 clean; Linux test red on known dht flake, one re-run after Windows finishes",
-        "since": "2026-11-28T14:32:02Z"
+        "agent": "session_01MMjhnCaYdt2afPjajfhKF6",
+        "doing": "step 0: root causes of the dht proof, log scrub_text and core_rejudge flakes",
+        "since": "2026-11-28T19:36:45Z"
       },
       {
         "slot": 2,
         "slice": "X-vpn-bind-ui",
         "role": "build",
         "agent": "session_01MMjhnC3xNhSWndkRCVWCzd",
-        "doing": "local build; also opened #1185 (reviewed MERGEABLE, CI running); pill waits for #1181",
+        "doing": "#1181 merged; bring main in, push, open PR (#1185 merged)",
         "since": "2026-11-28T15:46:29Z"
       },
       {
@@ -11202,7 +11202,7 @@
         "slice": "X-ci-test-shard",
         "role": "build",
         "agent": "session_01MMjhnCaX9NvW9ERGxQKgiX",
-        "doing": "step 0: measure the Rust test jobs",
+        "doing": "step 0 approved: 4 shards x OS, literal matrix; building",
         "since": "2026-11-28T18:01:42Z"
       },
       {
