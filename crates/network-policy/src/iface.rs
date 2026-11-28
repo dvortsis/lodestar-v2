@@ -544,6 +544,8 @@ mod tests {
         );
     }
 
+    // Windows' `Link` has addresses too; elsewhere the update is empty.
+    #[allow(clippy::needless_update)]
     fn link(index: u32) -> Link {
         Link {
             index: Some(index),
