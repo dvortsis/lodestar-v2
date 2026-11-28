@@ -415,7 +415,7 @@ samples of those counters every 10 s. All **main** (B14).
 | Field | Type | Nullable | Unit / meaning | Formatter | Time base |
 |---|---|---|---|---|---|
 | `stats.searchable_torrents` | integer | yes: null = search is off | Documents in the index (`lodestar_search_docs`) | `formatCompact` | Snapshot |
-| `stats.stored_torrents` | integer | no | Torrents stored (`lodestar_torrents`) | `formatCompact` | Snapshot |
+| `stats.stored_torrents` | integer | yes: null while the start-up count runs (seconds after a start on a large store; `pipeline.torrents_counted` when it lands), and for the rest of the run if the store couldn't be counted in the start's snapshot. Never a partial count. The `crawler` event's `torrents` and `/status`' `torrents` are the same value, null alike | Torrents stored (`lodestar_torrents`): the count at start plus what the writer has stored since | `formatCompact` | Snapshot |
 | `stats.harvested_per_hour` | number | yes: null in the first minute after start or a resume, and while paused (a gap, not a zero); after a resume the 5 min window starts at the resume | Keys the sources reported (`lodestar_intake_received_total`), per hour over the last 5 min | `formatRate` | Event time |
 | `stats.fetched_per_hour` | number | yes (as `harvested_per_hour`) | Info dicts fetched (the pool's `fetched`, as on the status page), per hour over the last 5 min | `formatRate` | Event time |
 | `stats.queue_depth` | integer | no | Keys queued or in flight in the fetch pool (`lodestar_fetch_pending`) | `formatCount` | Snapshot |
@@ -1084,3 +1084,11 @@ Only when `dht.interface` names an interface; absent otherwise. `docs/decisions/
 |---|---|---|
 | `crawl_interface_up` | gauge | 1 while the interface the crawl is limited to is usable, 0 while it's missing or down ("VPN down": the crawl is paused and no socket uses another route) |
 | `crawl_interface_trips_total` | counter | Times it went from usable to down, by a check or by a pinned socket's send failing as if it were gone |
+
+## Torrents stored (X-healthz-count-async, 2026-11-28)
+
+The start no longer counts the store. The fill thread counts it in a read snapshot taken before the writer started, then fills the have-filter. `docs/decisions/2026-11-28-X-healthz-count-async.md`.
+
+| Series | Type | Meaning |
+|---|---|---|
+| `torrents` | gauge | Torrents stored: the count at start plus what the writer has stored since, as `stats.stored_torrents`. **Absent** until the start-up count lands (seconds after a start on a large store), never 0 or a partial count, so a dashboard shows a gap, not a drop. Absent for the rest of the run if the store couldn't be counted in the start's snapshot (`pipeline.have_fill_failed` says why). |

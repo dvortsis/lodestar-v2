@@ -563,6 +563,8 @@
 	"settings_logging_ev_pipeline_cs_origin_unknown_h": "某条共享规则来自 Lodestar 不认识的来源。",
 	"settings_logging_ev_pipeline_starting_n": "流程正在启动",
 	"settings_logging_ev_pipeline_starting_h": "处理流程正在启动。",
+	"settings_logging_ev_pipeline_torrents_counted_n": "已统计存储的种子",
+	"settings_logging_ev_pipeline_torrents_counted_h": "已统计启动时存储的种子。在此之前，存储数量显示为未知。",
 	"settings_logging_ev_pipeline_filter_rule_skipped_n": "流程跳过筛选规则",
 	"settings_logging_ev_pipeline_filter_rule_skipped_h": "处理时无法使用某条筛选规则。",
 	"settings_logging_ev_pipeline_source_egress_down_n": "来源出口中断",

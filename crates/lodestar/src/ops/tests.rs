@@ -518,23 +518,25 @@ async fn stats_match_the_metrics() {
         assert_eq!(status, 200, "{stats}");
         let monitor = f.ops.monitor.clone();
         let metrics = crate::metrics::render(&monitor, f.dht.stats().as_ref(), &Default::default());
-        let metric = move |name: &str| -> u64 {
+        // Absent until the start-up count lands (X-healthz-count-async).
+        let found = move |name: &str| -> Option<u64> {
             metrics
                 .lines()
                 .find_map(|l| l.strip_prefix(&format!("lodestar_{name} ")))
-                .unwrap_or_else(|| panic!("no {name} in /metrics"))
-                .parse()
-                .unwrap()
+                .map(|v| v.parse().unwrap())
         };
-        if stats["stored_torrents"] == json!(metric("torrents"))
+        let torrents = found("torrents");
+        let metric = move |name: &str| -> u64 {
+            found(name).unwrap_or_else(|| panic!("no {name} in /metrics"))
+        };
+        if torrents.is_some_and(|n| stats["stored_torrents"] == json!(n))
             && stats["queue_depth"] == json!(metric("fetch_pending"))
         {
             break (stats, metric);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "after 15 s /stats said {stats} but /metrics said torrents {} fetch_pending {}",
-            metric("torrents"),
+            "after 15 s /stats said {stats} but /metrics said torrents {torrents:?} fetch_pending {}",
             metric("fetch_pending")
         );
         tokio::time::sleep(Duration::from_millis(50)).await;

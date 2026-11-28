@@ -4537,9 +4537,10 @@ export interface components {
             stored: number;
             /**
              * Format: int64
-             * @description Torrents in the store.
+             * @description Torrents in the store, as `/stats`'s `stored_torrents`: null while
+             *     the start-up count runs.
              */
-            torrents: number;
+            torrents: number | null;
         };
         /**
          * @description X-vpn-bind: the network interface the crawl is limited to
@@ -10363,8 +10364,13 @@ export interface components {
              * @description Documents in the search index; null when search is off.
              */
             searchable_torrents: number | null;
-            /** Format: int64 */
-            stored_torrents: number;
+            /**
+             * Format: int64
+             * @description Torrents stored; null while the start-up count runs (seconds
+             *     after a start on a large store), and for the rest of the run if
+             *     the store couldn't be counted then.
+             */
+            stored_torrents: number | null;
             /**
              * Format: int64
              * @description Unix seconds these numbers were read.

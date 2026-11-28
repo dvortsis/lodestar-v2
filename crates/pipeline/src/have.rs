@@ -24,12 +24,22 @@
 //! - [`is_full`](Have::is_full) answers "no", so the writer never swaps in
 //!   a rebuilt filter under a running fill (the fill writes into the one it
 //!   started with).
+//!
+//! **Sized late (X-healthz-count-async).** The start no longer counts the
+//! store, so a filter made [`unsized_filling`](Have::unsized_filling)
+//! starts as a one-word placeholder. While it's unsized, every insert is
+//! also kept in a pending list, under the list's lock. The fill builds a
+//! filter of its own, sized from the count, scans the store into it and
+//! hands it to [`size`](Have::size), which replays the pending inserts
+//! into it and swaps it in under the same lock. So an insert made during
+//! the fill is in the new filter whichever side of the swap it fell on.
+//! Once sized, `insert` reads one flag and never takes the lock.
 
 use std::fmt;
 use std::hash::Hasher;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use lodestar_cluster::have::{HaveHeader, HaveKey, chunks_for};
 use lodestar_metainfo::InfoHash;
@@ -46,8 +56,10 @@ pub trait HaveObserver: Send + Sync + 'static {
     fn inserted(&self, hash: &InfoHash);
 }
 
-/// Run on the fill's thread after its scan, before the filter is marked
-/// filled: a test holds the fill with it ([`PipelineConfig::fill_gate`](crate::PipelineConfig)).
+/// Run on the fill's thread at a fixed point, so a test can hold the fill
+/// there ([`PipelineConfig::fill_gate`](crate::PipelineConfig), after the
+/// scan and before the filter is marked filled; `count_gate`, before the
+/// count).
 #[derive(Clone)]
 pub struct FillGate(Arc<dyn Fn() + Send + Sync>);
 
@@ -79,6 +91,14 @@ pub struct Have {
     /// fill's inserts to whoever reads it `true`.
     filled: AtomicBool,
     filled_tx: tokio::sync::watch::Sender<bool>,
+    /// Whether the bloom has its final size. `false` only for an
+    /// [`unsized_filling`](Have::unsized_filling) filter until
+    /// [`size`](Have::size); its `Release` publishes the swap.
+    sized: AtomicBool,
+    /// Every hash inserted while unsized, for [`size`](Have::size) to
+    /// replay; `None` once sized. Its lock orders those inserts against
+    /// the swap.
+    pending: Mutex<Option<Vec<InfoHash>>>,
 }
 
 impl fmt::Debug for Have {
@@ -87,6 +107,7 @@ impl fmt::Debug for Have {
             .field("bloom", &self.current())
             .field("observed", &self.observer.get().is_some())
             .field("filled", &self.is_filled())
+            .field("sized", &self.is_sized())
             .finish()
     }
 }
@@ -105,13 +126,61 @@ impl Have {
         Have::with_state(capacity, false)
     }
 
+    /// A filling filter whose size isn't known yet: a placeholder until
+    /// the fill hands [`size`](Self::size) the real one. Reads as
+    /// [`filling`](Self::filling) does.
+    pub fn unsized_filling() -> Have {
+        let mut have = Have::with_state(1, false);
+        have.sized.store(false, Ordering::Relaxed);
+        *have.pending.get_mut().expect("pending lock") = Some(Vec::new());
+        have
+    }
+
     fn with_state(capacity: u64, filled: bool) -> Have {
         Have {
             bloom: RwLock::new(Arc::new(Bloom::new(capacity))),
             observer: OnceLock::new(),
             filled: AtomicBool::new(filled),
             filled_tx: tokio::sync::watch::Sender::new(filled),
+            sized: AtomicBool::new(true),
+            pending: Mutex::new(None),
         }
+    }
+
+    /// Whether the filter has its final size (always, unless made
+    /// [`unsized_filling`](Self::unsized_filling) and not yet
+    /// [`size`](Self::size)d).
+    pub fn is_sized(&self) -> bool {
+        self.sized.load(Ordering::Acquire)
+    }
+
+    /// Swaps in `bloom`, the fill's own filter, as this one's: every hash
+    /// inserted while unsized is replayed into it first, under the pending
+    /// lock, so none is lost to the swap. Once only, before
+    /// [`mark_filled`](Self::mark_filled); a second call is ignored.
+    pub fn size(&self, bloom: Bloom) {
+        let mut pending = self.pending.lock().expect("pending lock");
+        let Some(inserted) = pending.take() else {
+            debug_assert!(false, "a have-filter sized twice");
+            return;
+        };
+        for h in &inserted {
+            bloom.insert(h);
+        }
+        *self.bloom.write().expect("have lock") = Arc::new(bloom);
+        // After the swap, still under the lock: an insert that reads
+        // `true` finds the new filter.
+        self.sized.store(true, Ordering::Release);
+    }
+
+    /// How many inserts are waiting for [`size`](Self::size). For tests.
+    #[doc(hidden)]
+    pub fn pending(&self) -> usize {
+        self.pending
+            .lock()
+            .expect("pending lock")
+            .as_ref()
+            .map_or(0, Vec::len)
     }
 
     /// Whether the fill has finished: a "no" from the bloom is then true.
@@ -168,10 +237,28 @@ impl Have {
     }
 
     pub fn insert(&self, hash: &InfoHash) {
-        self.current().insert(hash);
+        // The steady state: one flag read, no lock.
+        if self.is_sized() {
+            self.current().insert(hash);
+        } else {
+            self.insert_unsized(hash);
+        }
         if let Some(o) = self.observer.get() {
             o.inserted(hash);
         }
+    }
+
+    /// An insert while the filter may still be unsized, under the pending
+    /// lock so [`size`](Self::size) can't swap between the two steps:
+    /// before the swap it's kept for the replay, after it (the list gone)
+    /// it goes straight into the new filter.
+    #[cold]
+    fn insert_unsized(&self, hash: &InfoHash) {
+        let mut pending = self.pending.lock().expect("pending lock");
+        if let Some(list) = pending.as_mut() {
+            list.push(*hash);
+        }
+        self.current().insert(hash);
     }
 
     /// Tells `observer` of every insert from now on. `false` if one is
@@ -208,6 +295,7 @@ impl Have {
     /// for a rebuild then).
     pub fn replace(&self, bloom: Bloom) {
         debug_assert!(self.is_filled(), "a have-filter replaced while filling");
+        debug_assert!(self.is_sized(), "a have-filter replaced unsized");
         *self.bloom.write().expect("have lock") = Arc::new(bloom);
     }
 }
@@ -541,6 +629,113 @@ mod tests {
             .unwrap();
         // A complete filter is filled at once.
         Have::new(10).filled().await;
+    }
+
+    #[test]
+    fn an_unsized_filter_reads_as_filling_and_keeps_its_inserts_for_the_swap() {
+        let have = Have::unsized_filling();
+        assert!(!have.is_sized() && !have.is_filled() && !have.is_full());
+        assert!(
+            have.contains(&hash(1)),
+            "filling: every hash reads as stored"
+        );
+        have.insert(&hash(1));
+        have.insert(&hash(2));
+        assert_eq!(have.pending(), 2);
+        // The fill's own filter, with what it scanned.
+        let bloom = Bloom::new(capacity_for(10));
+        bloom.insert(&hash(3));
+        have.size(bloom);
+        assert!(have.is_sized() && !have.is_filled());
+        assert_eq!(have.pending(), 0);
+        assert_eq!(have.capacity(), capacity_for(10));
+        // After the swap an insert goes straight into the new filter.
+        have.insert(&hash(4));
+        assert_eq!(have.pending(), 0);
+        have.mark_filled();
+        assert!((1..=4).all(|i| have.contains(&hash(i))));
+        assert!(!have.contains(&hash(1_000_000)));
+    }
+
+    /// Many threads insert while the fill swaps the filter in: every hash
+    /// inserted, before, during or after the swap, is in the filter that
+    /// ends up there. Several rounds, so the swap falls at different
+    /// points of the inserts.
+    #[test]
+    fn no_insert_is_lost_to_the_swap_under_concurrent_inserts() {
+        const THREADS: u64 = 8;
+        const EACH: u64 = 20_000;
+        for round in 0..6u64 {
+            let have = Arc::new(Have::unsized_filling());
+            let started = Arc::new(AtomicU64::new(0));
+            let (done_tx, done) = std::sync::mpsc::channel();
+            for t in 0..THREADS {
+                let (have, started, done_tx) = (have.clone(), started.clone(), done_tx.clone());
+                std::thread::spawn(move || {
+                    started.fetch_add(1, Ordering::SeqCst);
+                    for i in 0..EACH {
+                        have.insert(&hash((round * THREADS + t) * EACH + i));
+                    }
+                    done_tx.send(()).unwrap();
+                });
+            }
+            drop(done_tx);
+            // Swap once the inserters are running, at a point that moves
+            // with the round.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while started.load(Ordering::SeqCst) < THREADS {
+                assert!(std::time::Instant::now() < deadline, "inserters started");
+                std::thread::yield_now();
+            }
+            for _ in 0..round * 1_000 {
+                std::hint::spin_loop();
+            }
+            let bloom = Bloom::new(capacity_for(THREADS * EACH));
+            bloom.insert(&hash(1 << 50));
+            have.size(bloom);
+            for _ in 0..THREADS {
+                done.recv_timeout(std::time::Duration::from_secs(10))
+                    .expect("each inserter done within 10 s");
+            }
+            have.mark_filled();
+            assert!(have.is_sized());
+            assert_eq!(have.pending(), 0);
+            assert_eq!(have.capacity(), capacity_for(THREADS * EACH));
+            assert!(have.contains(&hash(1 << 50)), "the fill's own hash");
+            for t in 0..THREADS {
+                for i in 0..EACH {
+                    assert!(
+                        have.contains(&hash((round * THREADS + t) * EACH + i)),
+                        "round {round}: thread {t}'s insert {i} lost to the swap"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Once sized, `insert` never takes the pending lock: one held here
+    /// doesn't stop it.
+    #[test]
+    fn a_sized_filter_inserts_without_the_pending_lock() {
+        for have in [Have::new(100), {
+            let h = Have::unsized_filling();
+            h.size(Bloom::new(100));
+            h
+        }] {
+            let have = Arc::new(have);
+            let _held = have.pending.lock().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn({
+                let have = have.clone();
+                move || {
+                    have.insert(&hash(7));
+                    tx.send(()).unwrap();
+                }
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the insert didn't wait for the pending lock");
+            assert!(have.current().contains(&hash(7)));
+        }
     }
 
     proptest::proptest! {

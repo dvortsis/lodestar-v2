@@ -160,13 +160,24 @@ lodestar_log::catalogue! {
         message: "Unknown CS-1 origin; kept as imported",
         fields: { origin: Size },
     }
-    /// The pipeline starts with what's stored and queued.
+    /// The pipeline starts with what's queued. The torrents stored are
+    /// counted after the start (`pipeline.torrents_counted`).
     STARTING {
         id: "pipeline.starting",
         component: Pipeline,
         level: Info,
         message: "Pipeline starting",
-        fields: { stored: Size, queued: Size },
+        fields: { queued: Size },
+    }
+    /// The torrents stored at start are counted (X-healthz-count-async):
+    /// `stored` of them, in `ms` milliseconds. Seconds after the start on
+    /// a large store; `/stats`' `stored_torrents` is null until then.
+    TORRENTS_COUNTED {
+        id: "pipeline.torrents_counted",
+        component: Pipeline,
+        level: Info,
+        message: "Stored torrents counted",
+        fields: { stored: Size, ms: Size },
     }
     /// A stored filter rule was skipped: `what` (`rule`, `override`,
     /// `exception`, `always_allow`, `class_rule`, `pack_override`, or

@@ -563,6 +563,8 @@
 	"settings_logging_ev_pipeline_cs_origin_unknown_h": "A crowd-sourced rule came from an origin Lodestar doesn't know.",
 	"settings_logging_ev_pipeline_starting_n": "Pipeline starting",
 	"settings_logging_ev_pipeline_starting_h": "The processing pipeline is starting.",
+	"settings_logging_ev_pipeline_torrents_counted_n": "Stored torrents counted",
+	"settings_logging_ev_pipeline_torrents_counted_h": "The torrents stored at start were counted. Until then, the stored count shows as unknown.",
 	"settings_logging_ev_pipeline_filter_rule_skipped_n": "Pipeline skipped a filter rule",
 	"settings_logging_ev_pipeline_filter_rule_skipped_h": "A filter rule couldn't be used while processing.",
 	"settings_logging_ev_pipeline_source_egress_down_n": "Source egress down",

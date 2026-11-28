@@ -191,7 +191,7 @@ impl OpsApi for Ops {
                 queue_depth: 0,
                 sampling_blocked: None,
                 searchable_torrents: None,
-                stored_torrents: 0,
+                stored_torrents: Some(0),
                 updated_at: unix_now(),
                 uptime_s: 0,
             }

@@ -129,7 +129,16 @@ fn serves_status_and_stops_cleanly() {
         .and_then(|c| c.split(';').next())
         .expect("session cookie")
         .to_string();
-    let status = get_with(port, "/api/status", &cookie);
+    // The count lands on the fill thread after the start
+    // (X-healthz-count-async): null until then, 0 for this empty store.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        let status = get_with(port, "/api/status", &cookie);
+        if status.contains("\"torrents\":0") || std::time::Instant::now() > deadline {
+            break status;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
     let search = get_with(port, "/api/v1/search?q=anything", &cookie);
     assert!(
         search.starts_with("HTTP/1.0 200") && search.contains("\"total\":0"),
