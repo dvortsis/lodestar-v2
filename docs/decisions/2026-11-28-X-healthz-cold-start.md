@@ -13,6 +13,19 @@ A large store answered `/healthz` only after `prepare()` had scanned every store
 - **`PipelineConfig::fill_gate`** (hidden, tests only) runs on the fill thread before the scan, so a test can hold the fill. `Have::waiting` counts the tasks waiting for the fill, so a test can see the intake parked on it.
 
 ## Measured (`bench/examples/cold-start.rs`)
-MEASUREMENTS
+A synthetic store of 10M torrents (one in eight hybrid, so 11.25M swarm hashes) in a cloud container. "Cold" means the OS page cache was dropped before the run, as after a reboot; "warm" means the next run.
+
+| | Start (first `/healthz`) | Fill done (crawling starts) |
+|---|---|---|
+| Before, cold | 5,294 ms | the same: the start waited for it |
+| Before, warm | 4,189 ms | the same |
+| After, cold | 943 ms | 5,990 ms |
+| After, warm | 65 ms | 4,332 ms |
+
+At 2M: before 529–581 ms warm, after 128–153 ms warm (fill done at 708–802 ms).
+
+- **What's left of the cold start is `count(*)`,** which still runs in `prepare()` for `Monitor::torrents()` (`stats.stored_torrents`, the `lodestar_torrents` gauge). It takes about 1,000 ms cold and 60–80 ms warm here. The id bound takes 0 ms. The test VM took about 14 s before, 3–4× this container, so the cold count there is likely 3–4 s: above the ~2 s goal, though most of the 14 s is gone.
+- **Moving the count to the fill thread is deferred** (runner, 2026-11-28) to the follow-up slice X-healthz-count-async. Keeping the count exact means pinning the fill's read snapshot in `prepare()`, before the writer starts. The count would then be unknown until it lands, which changes a documented contract: `stats.stored_torrents` is "nullable: no" in `docs/metrics.md`, and the change would touch the OpenAPI type, the web schema, the UI's null handling and the gauge's reporting. That belongs in its own reviewed slice.
+- **Crawling starts slightly later than the old start finished,** because the fill now shares the machine with the rest of the start. It's still one scan, as before.
 
 For the 10M check on the test VM (the runner's, after merge): `cargo run --release -p lodestar-bench --example cold-start -- 10000000 <DIR>`, run twice on the same `DIR` (the first run builds the store). Read `start_ms` (time to the first `/healthz`) and `filled_ms` (until crawling starts) from the second run. The goal is a `start_ms` of about 2 s or less.
