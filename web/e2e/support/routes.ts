@@ -26,8 +26,9 @@ export interface RouteCase {
 	mock?: (mock: OpenApiMock) => void;
 	/**
 	 * Waits until the page's own content is there, for a route whose heading (or lack of one)
-	 * shows before it. The smoke test then also waits for every loading placeholder to go, so
-	 * axe and the snapshot see the settled page, not a still skeleton.
+	 * shows before it. `settle()` (support/settle.ts, used by the smoke and all-themes specs) then
+	 * also waits for every loading placeholder to go, so axe and the snapshot see the settled
+	 * page, not a still skeleton.
 	 */
 	ready?: (page: Page) => Promise<void>;
 }

@@ -4,6 +4,7 @@
 import { expectNoA11yViolations } from './a11y';
 import { snapshotName } from './support/policy';
 import { ROUTES } from './support/routes';
+import { settle } from './support/settle';
 import { expectPageSnapshot, freezeClock } from './snapshot';
 import { ALL_THEMES } from './support/themes';
 import { expect, test } from './support/test';
@@ -17,10 +18,9 @@ for (const theme of ALL_THEMES) {
 				route.mock?.(mock);
 				await go(route.path);
 				await expect(page.locator('html')).toHaveAttribute('data-theme', theme.id);
-				// As in smoke.test.ts: a route that settles asynchronously (welcome's auth check)
-				// is scanned and photographed only once its heading shows.
-				if (route.heading)
-					await expect(page.getByRole('heading', { name: route.heading })).toBeVisible();
+				// As in smoke.test.ts: scanned and photographed only once settled (its heading, its own
+				// ready condition and no loading placeholder left).
+				await settle(page, route);
 				await expectNoA11yViolations(page);
 				const name = snapshotName(route, { shots, density, themeId: theme.id });
 				if (name) await expectPageSnapshot(page, name);
