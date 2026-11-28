@@ -1092,3 +1092,4 @@ The start no longer counts the store. The fill thread counts it in a read snapsh
 | Series | Type | Meaning |
 |---|---|---|
 | `torrents` | gauge | Torrents stored: the count at start plus what the writer has stored since, as `stats.stored_torrents`. **Absent** until the start-up count lands (seconds after a start on a large store), never 0 or a partial count, so a dashboard shows a gap, not a drop. Absent for the rest of the run if the store couldn't be counted in the start's snapshot (`pipeline.have_fill_failed` says why). |
+| `have_capacity`, `have_bytes`, `have_entries` | gauge | While the have-filter fill runs they read its one-word placeholder (capacity 1, 8 bytes, the hashes the writer has inserted since the start), then jump to the real filter's once it's sized from the count, just before crawling starts. |

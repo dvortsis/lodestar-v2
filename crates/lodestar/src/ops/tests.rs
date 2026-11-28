@@ -113,6 +113,11 @@ fn free_udp_port() -> u16 {
 }
 
 async fn fixture() -> Fixture {
+    fixture_with(None).await
+}
+
+/// [`fixture`], its pipeline's start-up count held at `count_gate`.
+async fn fixture_with(count_gate: Option<lodestar_pipeline::FillGate>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let config = Config::load(None, |_| None).unwrap();
     let db = dir.path().join("t.db");
@@ -138,6 +143,7 @@ async fn fixture() -> Fixture {
                 ..PoolConfig::default()
             },
             flush_every: Duration::from_millis(100),
+            count_gate,
             ..PipelineConfig::default()
         },
         Store::open(&db, StoreConfig::default()).unwrap(),
@@ -490,6 +496,73 @@ async fn pause_resume_and_intensity_through_the_api() {
     .await;
     node_paused_becomes(&f.dht, true, "a settings pause reaches the node").await;
     assert!(f.ops.control.status().paused);
+    f.stop().await;
+}
+
+/// While the start-up count runs (held here), `/stats` says
+/// `stored_torrents` is null and `/metrics` has no `lodestar_torrents`,
+/// never a 0; once it lands, both read the same number
+/// (X-healthz-count-async).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_stored_count_is_null_and_its_gauge_absent_until_it_lands() {
+    let gate = Arc::new((Mutex::new((false, false)), std::sync::Condvar::new()));
+    let mut f = fixture_with(Some(lodestar_pipeline::FillGate::new({
+        let gate = gate.clone();
+        move || {
+            let (lock, cv) = &*gate;
+            let mut g = lock.lock().unwrap();
+            g.0 = true;
+            while !g.1 {
+                g = cv.wait(g).unwrap();
+            }
+        }
+    })))
+    .await;
+    // Opened when dropped too, so a failed assertion doesn't leave the
+    // fill thread, and the runtime's shutdown with it, waiting.
+    struct Release(Arc<(Mutex<(bool, bool)>, std::sync::Condvar)>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let (lock, cv) = &*self.0;
+            lock.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+            cv.notify_all();
+        }
+    }
+    let release = Release(gate.clone());
+    let cookie = f.session().await;
+    let c = cookie.as_str();
+    eventually(
+        "the fill held before its count",
+        || format!("{:?}", gate.0.lock().unwrap()),
+        || gate.0.lock().unwrap().0,
+    )
+    .await;
+    let metrics =
+        || crate::metrics::render(&f.ops.monitor, f.dht.stats().as_ref(), &Default::default());
+    let (status, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
+    assert_eq!(status, 200, "{stats}");
+    let held = (stats.clone(), metrics());
+    drop(release);
+    assert_eq!(held.0["stored_torrents"], Value::Null, "{}", held.0);
+    assert!(
+        !held.1.contains("lodestar_torrents"),
+        "the gauge is absent while counting"
+    );
+    eventually(
+        "the count to land",
+        || format!("{:?}", f.ops.monitor.torrents()),
+        || f.ops.monitor.torrents().is_some(),
+    )
+    .await;
+    let (_, stats) = f.send(req("GET", "/api/v1/stats", c, None)).await;
+    assert!(
+        stats["stored_torrents"].is_u64(),
+        "a number once counted: {stats}"
+    );
+    assert!(
+        metrics().contains("\nlodestar_torrents "),
+        "the gauge once counted"
+    );
     f.stop().await;
 }
 

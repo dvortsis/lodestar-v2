@@ -134,9 +134,13 @@ fn serves_status_and_stops_cleanly() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let status = loop {
         let status = get_with(port, "/api/status", &cookie);
-        if status.contains("\"torrents\":0") || std::time::Instant::now() > deadline {
+        if status.contains("\"torrents\":0") {
             break status;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "after 10 s /api/status still had no torrent count: {status}"
+        );
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
     let search = get_with(port, "/api/v1/search?q=anything", &cookie);

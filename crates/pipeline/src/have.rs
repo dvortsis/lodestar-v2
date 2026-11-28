@@ -664,35 +664,48 @@ mod tests {
     #[test]
     fn no_insert_is_lost_to_the_swap_under_concurrent_inserts() {
         const THREADS: u64 = 8;
-        const EACH: u64 = 20_000;
+        const EACH: u64 = 50_000;
+        let mut mid_insert = 0;
         for round in 0..6u64 {
             let have = Arc::new(Have::unsized_filling());
             let started = Arc::new(AtomicU64::new(0));
+            let finished = Arc::new(AtomicU64::new(0));
             let (done_tx, done) = std::sync::mpsc::channel();
             for t in 0..THREADS {
-                let (have, started, done_tx) = (have.clone(), started.clone(), done_tx.clone());
+                let (have, started, finished, done_tx) = (
+                    have.clone(),
+                    started.clone(),
+                    finished.clone(),
+                    done_tx.clone(),
+                );
                 std::thread::spawn(move || {
                     started.fetch_add(1, Ordering::SeqCst);
                     for i in 0..EACH {
                         have.insert(&hash((round * THREADS + t) * EACH + i));
                     }
+                    finished.fetch_add(1, Ordering::SeqCst);
                     done_tx.send(()).unwrap();
                 });
             }
             drop(done_tx);
-            // Swap once the inserters are running, at a point that moves
-            // with the round.
+            // Swap once the inserters are running and a share of the
+            // inserts is in, a share that moves with the round.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while started.load(Ordering::SeqCst) < THREADS {
-                assert!(std::time::Instant::now() < deadline, "inserters started");
+            let share = THREADS * EACH * (round + 1) / 10;
+            while started.load(Ordering::SeqCst) < THREADS || have.pending() < share as usize {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "inserters started and {share} inserts in"
+                );
                 std::thread::yield_now();
-            }
-            for _ in 0..round * 1_000 {
-                std::hint::spin_loop();
             }
             let bloom = Bloom::new(capacity_for(THREADS * EACH));
             bloom.insert(&hash(1 << 50));
             have.size(bloom);
+            // Read after the swap: inserters still running then raced it.
+            if finished.load(Ordering::SeqCst) < THREADS {
+                mid_insert += 1;
+            }
             for _ in 0..THREADS {
                 done.recv_timeout(std::time::Duration::from_secs(10))
                     .expect("each inserter done within 10 s");
@@ -711,6 +724,9 @@ mod tests {
                 }
             }
         }
+        // The swap fell while inserts were still running in some round,
+        // or this proved nothing about racing them.
+        assert!(mid_insert > 0, "no round swapped with inserters running");
     }
 
     /// Once sized, `insert` never takes the pending lock: one held here

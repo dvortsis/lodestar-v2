@@ -868,6 +868,7 @@ impl Pipeline {
                     pinned,
                     &counted,
                     || Store::open_reader(&open.0, open.1.clone()),
+                    count_logged,
                     &gates,
                     || *stop.borrow() || stop.has_changed().is_err(),
                     FILL_RETRY_FIRST,
@@ -1722,13 +1723,14 @@ struct FillGates {
 ///
 /// **The count** (X-healthz-count-async) is taken first, in `pinned`'s
 /// snapshot, which began before the writer started: published to
-/// `counted` as soon as it's in, since it's final then. A failed count is
-/// tried again in the same snapshot while its transaction holds. Once
-/// SQLite has ended it (an I/O or corruption error), no later snapshot
-/// can be squared with what the writer has stored since, so the count is
-/// left unset for the run and the filter is sized from
-/// [`Store::torrent_bound`] instead. `counted` already set (the count was
-/// taken in `prepare`) skips it.
+/// `counted` as soon as it's in, since it's final then. A failed count
+/// (or one whose snapshot SQLite has ended) isn't tried again: no later
+/// snapshot can be squared with what the writer has stored since, and
+/// retrying in the held one would hold the WAL and crawling behind it. So
+/// the count is left unset for the run, the snapshot is let go, and the
+/// filter is sized from [`Store::torrent_bound`] instead. `counted`
+/// already set (the count was taken in `prepare`) skips it. `count` is
+/// [`count_logged`]; tests fail it.
 ///
 /// **The fill** is one statement, so one read snapshot: `pinned`'s while
 /// it holds, else a reader from `open`. A hash committed after it began
@@ -1743,11 +1745,15 @@ struct FillGates {
 /// each time up to a minute, until `stopped` says the pipeline is stopping
 /// or the filter is gone; the filter is never marked filled until a scan
 /// has finished. Returns the tries made.
+// Each argument is a seam a unit test replaces (the store, the count, the
+// gates, the stop, the wait); bundling them would only hide that.
+#[allow(clippy::too_many_arguments)]
 fn fill_have(
     have: &std::sync::Weak<Have>,
     mut pinned: Option<Store>,
     counted: &std::sync::OnceLock<u64>,
     open: impl Fn() -> Result<Store, lodestar_store::Error>,
+    count: impl Fn(&Store) -> Result<u64, lodestar_store::Error>,
     gates: &FillGates,
     stopped: impl Fn() -> bool,
     first_wait: Duration,
@@ -1764,7 +1770,7 @@ fn fill_have(
             return attempts;
         }
         attempts += 1;
-        match fill_once(&filter, &mut pinned, counted, &open, gates) {
+        match fill_once(&filter, &mut pinned, counted, &open, &count, gates) {
             Ok(()) => {
                 if let Some(gate) = &gates.fill {
                     gate.wait();
@@ -1798,6 +1804,7 @@ fn fill_once(
     pinned: &mut Option<Store>,
     counted: &std::sync::OnceLock<u64>,
     open: &impl Fn() -> Result<Store, lodestar_store::Error>,
+    count: &impl Fn(&Store) -> Result<u64, lodestar_store::Error>,
     gates: &FillGates,
 ) -> Result<(), lodestar_store::Error> {
     if counted.get().is_none()
@@ -1806,17 +1813,30 @@ fn fill_once(
         if let Some(gate) = &gates.count {
             gate.wait();
         }
-        match count_logged(snapshot) {
+        // Only inside the snapshot pinned before the writer started: a
+        // count outside it (the transaction ended under it) could hold
+        // torrents the writer has counted too.
+        let result = if snapshot.connection().is_autocommit() {
+            Err(lodestar_store::Error::Corrupt("the start's snapshot ended"))
+        } else {
+            count(snapshot)
+        };
+        match result {
             Ok(n) => {
                 let _ = counted.set(n);
             }
             Err(e) => {
-                // Still in the snapshot: the next try counts in it again.
-                // Out of it: nothing can count exactly any more.
-                if snapshot.connection().is_autocommit() {
-                    *pinned = None;
-                }
-                return Err(e);
+                // Never tried again and never gating the fill: a count
+                // that keeps failing would hold the snapshot, and with it
+                // the WAL and crawling, for the run. The count stays
+                // unknown; the snapshot is let go and the scan goes on
+                // from a reader of its own, sized from the id bound.
+                lodestar_log::log_event!(
+                    log_events::HAVE_FILL_FAILED,
+                    error = log_events::store_error(&e),
+                    attempts = 0u64
+                );
+                *pinned = None;
             }
         }
     }
@@ -2162,6 +2182,7 @@ mod tests {
             Some(snapshot),
             &counted,
             reopen(&db),
+            count_logged,
             &FillGates::default(),
             || false,
             Duration::from_millis(1),
@@ -2208,6 +2229,7 @@ mod tests {
                 Some(snapshot),
                 &counted,
                 reopen(&db),
+                count_logged,
                 &FillGates::default(),
                 || stop,
                 Duration::from_millis(1),
@@ -2224,6 +2246,63 @@ mod tests {
         }
     }
 
+    /// A count that fails isn't tried again and doesn't hold the fill:
+    /// it stays unset, the snapshot is let go at once (a checkpoint
+    /// passes it), and the filter is filled in the same try, sized from
+    /// the id bound. The same when SQLite has ended the snapshot's
+    /// transaction: nothing is counted outside it.
+    #[test]
+    fn a_failed_count_stays_unset_and_never_holds_the_fill() {
+        for ended in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = one_torrent_store(dir.path());
+            let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+            let snapshot = pinned(&db);
+            if ended {
+                snapshot.connection().execute_batch("ROLLBACK").unwrap();
+            }
+            add_torrent(&mut writer, "after the pin");
+            let have = Arc::new(Have::unsized_filling());
+            let counted = std::sync::OnceLock::new();
+            let counts = std::sync::atomic::AtomicU64::new(0);
+            let attempts = fill_have(
+                &Arc::downgrade(&have),
+                Some(snapshot),
+                &counted,
+                reopen(&db),
+                |s: &Store| {
+                    counts.fetch_add(1, Ordering::SeqCst);
+                    if ended {
+                        // Out of the snapshot this would count the
+                        // writer's torrent too: it must not be asked.
+                        s.count()
+                    } else {
+                        Err(lodestar_store::Error::Corrupt("test: the count fails"))
+                    }
+                },
+                &FillGates::default(),
+                || false,
+                Duration::from_millis(1),
+            );
+            assert_eq!(attempts, 1, "ended {ended}: filled in the same try");
+            assert_eq!(
+                counts.load(Ordering::SeqCst),
+                u64::from(!ended),
+                "ended {ended}: counted once, or not at all out of the snapshot"
+            );
+            assert!(
+                counted.get().is_none(),
+                "ended {ended}: the count stays unknown"
+            );
+            assert!(have.is_filled() && have.is_sized());
+            let bound = writer.torrent_bound().unwrap();
+            assert!(have.capacity() >= have::capacity_for(1));
+            assert!(have.capacity() <= have::capacity_for(bound));
+            let (log, done) = checkpoint(&writer);
+            assert_eq!(done, log, "ended {ended}: the snapshot was let go");
+        }
+    }
+
     /// A count lost with its snapshot stays unset; the filter is sized
     /// from the id bound instead, and filled.
     #[test]
@@ -2237,6 +2316,7 @@ mod tests {
             None,
             &counted,
             reopen(&db),
+            count_logged,
             &FillGates::default(),
             || false,
             Duration::from_millis(1),
@@ -2270,6 +2350,7 @@ mod tests {
                     Store::open_reader(&db, StoreConfig::default())
                 }
             },
+            count_logged,
             &FillGates::default(),
             || false,
             Duration::from_millis(1),
@@ -2298,6 +2379,7 @@ mod tests {
                         let _ = tried_tx.send(());
                         Store::open_reader(&missing, StoreConfig::default())
                     },
+                    count_logged,
                     &FillGates::default(),
                     || *rx.borrow() || rx.has_changed().is_err(),
                     // A long wait: only the stop can end it in time.
