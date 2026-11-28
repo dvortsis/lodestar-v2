@@ -210,15 +210,12 @@ class DeclarationTests(SegmentBase):
         self.assertIn("fresh_store_at_start", self.judge(sim)["verdict_reasons"])
 
     # X-healthz-count-async: `lodestar_torrents` is absent until the server's start-up count
-    # lands. The collector then records the value as null and fails the sample; the scrape
-    # after the count reads the empty store.
+    # lands. The collector records the value as null (unknown) and keeps the sample; the
+    # scrape after the count reads the empty store.
     @staticmethod
     def count_pending(scrapes):
         def edit(row, lines):
-            i = row["sequence"]
-            row["values"]["torrents"] = None if i < scrapes else 0
-            if i < scrapes:
-                row["metrics_ok"] = False
+            row["values"]["torrents"] = None if row["sequence"] < scrapes else 0
         return (lambda e, i: i <= scrapes, edit)
 
     def test_fresh_store_read_at_the_first_scrape(self):

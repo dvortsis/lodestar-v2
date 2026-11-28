@@ -438,14 +438,21 @@ lodestar_log::catalogue! {
         message: "Rebuilding the have-filter failed",
         fields: { error: Error },
     }
-    /// Filling the have-filter at start failed; it's tried again, and
-    /// nothing is crawled until it succeeds (X-healthz-cold-start).
+    /// A read of the store for the start-up count or the have-filter's
+    /// fill failed (X-healthz-cold-start, X-healthz-count-async), at
+    /// `stage`:
+    /// - `pin`: the count's snapshot couldn't be taken, so the start
+    ///   counted on its own connection instead (`attempts` 0);
+    /// - `count`: the count failed; `stored_torrents` stays unknown until
+    ///   the next start, and it isn't tried again (`attempts` 0);
+    /// - `scan`: the fill's scan failed; it's tried again after a wait
+    ///   that grows to a minute, and nothing is crawled until it succeeds.
     HAVE_FILL_FAILED {
         id: "pipeline.have_fill_failed",
         component: Pipeline,
         level: Error,
-        message: "Filling the have-filter failed; crawling waits until it succeeds",
-        fields: { error: Error, attempts: Size },
+        message: "A start-up read of the store failed",
+        fields: { stage: Label, error: Error, attempts: Size },
     }
     /// The fetch queue couldn't be saved.
     QUEUE_SAVE_FAILED {

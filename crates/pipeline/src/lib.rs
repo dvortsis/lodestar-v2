@@ -1616,6 +1616,7 @@ fn prepare(
             Err(e) => {
                 lodestar_log::log_event!(
                     log_events::HAVE_FILL_FAILED,
+                    stage = "pin",
                     error = log_events::store_error(&e),
                     attempts = 0u64
                 );
@@ -1735,8 +1736,8 @@ struct FillGates {
 /// **The fill** is one statement, so one read snapshot: `pinned`'s while
 /// it holds, else a reader from `open`. A hash committed after it began
 /// is missing from it, but the writer inserts every hash it commits, so
-/// none is lost. An unsized filter is scanned into a filter of the fill's
-/// own and [`Have::size`]d with it; a sized one, in place. The snapshot
+/// none is lost. An unsized filter is first [`Have::size`]d with an empty
+/// filter of the count's size; the scan then fills it in place. The snapshot
 /// is let go (`pinned` dropped, ending its transaction) as soon as the
 /// scan ends, the scan fails, or the fill stops, so it never holds the WAL
 /// past the fill.
@@ -1770,16 +1771,27 @@ fn fill_have(
             return attempts;
         }
         attempts += 1;
-        match fill_once(&filter, &mut pinned, counted, &open, &count, gates) {
-            Ok(()) => {
+        match fill_once(
+            &filter,
+            &mut pinned,
+            counted,
+            &open,
+            &count,
+            gates,
+            &stopped,
+        ) {
+            Ok(true) => {
                 if let Some(gate) = &gates.fill {
                     gate.wait();
                 }
                 filter.mark_filled();
                 return attempts;
             }
+            // Stopped after the count: the snapshot is already let go.
+            Ok(false) => return attempts,
             Err(e) => lodestar_log::log_event!(
                 log_events::HAVE_FILL_FAILED,
+                stage = "scan",
                 error = log_events::store_error(&e),
                 attempts = attempts
             ),
@@ -1806,7 +1818,8 @@ fn fill_once(
     open: &impl Fn() -> Result<Store, lodestar_store::Error>,
     count: &impl Fn(&Store) -> Result<u64, lodestar_store::Error>,
     gates: &FillGates,
-) -> Result<(), lodestar_store::Error> {
+    stopped: &impl Fn() -> bool,
+) -> Result<bool, lodestar_store::Error> {
     if counted.get().is_none()
         && let Some(snapshot) = pinned.as_ref()
     {
@@ -1833,11 +1846,19 @@ fn fill_once(
                 // from a reader of its own, sized from the id bound.
                 lodestar_log::log_event!(
                     log_events::HAVE_FILL_FAILED,
+                    stage = "count",
                     error = log_events::store_error(&e),
                     attempts = 0u64
                 );
                 *pinned = None;
             }
+        }
+        // A stop during the count (seconds on a large store) doesn't go
+        // on into the scan with the WAL still pinned: the writer's
+        // stop-time checkpoint would wait out its busy timeout behind it.
+        if stopped() {
+            *pinned = None;
+            return Ok(false);
         }
     }
     // The pinned snapshot if it's still held, else a reader of its own.
@@ -1846,19 +1867,19 @@ fn fill_once(
         Some(r) => r,
         None => open()?,
     };
-    if filter.is_sized() {
-        return filter.fill(|insert| reader.for_each_swarm_hash(insert));
+    // Sized as soon as the size is known, before the scan, so the pending
+    // list holds only what the writer stored during the count; the scan
+    // then fills it in place, beside the writer's own inserts.
+    if !filter.is_sized() {
+        let capacity = match counted.get() {
+            Some(n) => have::capacity_for(*n),
+            // The count was lost with its snapshot: the scan-free bound.
+            None => have::capacity_for(reader.torrent_bound()?),
+        };
+        filter.size(have::Bloom::new(capacity));
     }
-    let capacity = match counted.get() {
-        Some(n) => have::capacity_for(*n),
-        // The count was lost with its snapshot: the scan-free bound.
-        None => have::capacity_for(reader.torrent_bound()?),
-    };
-    let bloom = have::Bloom::new(capacity);
-    reader.for_each_swarm_hash(|h| bloom.insert(&h))?;
-    drop(reader);
-    filter.size(bloom);
-    Ok(())
+    filter.fill(|insert| reader.for_each_swarm_hash(insert))?;
+    Ok(true)
 }
 
 struct Intake {
@@ -2301,6 +2322,53 @@ mod tests {
             let (log, done) = checkpoint(&writer);
             assert_eq!(done, log, "ended {ended}: the snapshot was let go");
         }
+    }
+
+    /// A stop that comes during the count ends the fill there: no scan
+    /// runs, and the snapshot is let go at once, so the writer's
+    /// stop-time checkpoint isn't held behind it.
+    #[test]
+    fn a_stop_during_the_count_lets_the_snapshot_go_without_a_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = one_torrent_store(dir.path());
+        let mut writer = Store::open(&db, StoreConfig::default()).unwrap();
+        let snapshot = pinned(&db);
+        add_torrent(&mut writer, "after the pin");
+        let have = Arc::new(Have::unsized_filling());
+        let counted = std::sync::OnceLock::new();
+        let stop = Arc::new(AtomicBool::new(false));
+        // The stop arrives while the count is held at its gate.
+        let gates = FillGates {
+            count: Some(FillGate::new({
+                let stop = stop.clone();
+                move || stop.store(true, Ordering::SeqCst)
+            })),
+            fill: None,
+        };
+        let opened = std::sync::atomic::AtomicU64::new(0);
+        let attempts = fill_have(
+            &Arc::downgrade(&have),
+            Some(snapshot),
+            &counted,
+            || {
+                opened.fetch_add(1, Ordering::SeqCst);
+                Store::open_reader(&db, StoreConfig::default())
+            },
+            count_logged,
+            &gates,
+            || stop.load(Ordering::SeqCst),
+            Duration::from_millis(1),
+        );
+        assert_eq!(attempts, 1);
+        assert_eq!(counted.get(), Some(&1), "the count itself finished");
+        assert_eq!(
+            opened.load(Ordering::SeqCst),
+            0,
+            "no reader opened for a scan"
+        );
+        assert!(!have.is_sized() && !have.is_filled(), "no scan ran");
+        let (log, done) = checkpoint(&writer);
+        assert_eq!(done, log, "the snapshot was let go");
     }
 
     /// A count lost with its snapshot stays unset; the filter is sized

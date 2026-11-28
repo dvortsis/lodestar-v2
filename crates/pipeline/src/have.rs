@@ -28,12 +28,12 @@
 //! **Sized late (X-healthz-count-async).** The start no longer counts the
 //! store, so a filter made [`unsized_filling`](Have::unsized_filling)
 //! starts as a one-word placeholder. While it's unsized, every insert is
-//! also kept in a pending list, under the list's lock. The fill builds a
-//! filter of its own, sized from the count, scans the store into it and
-//! hands it to [`size`](Have::size), which replays the pending inserts
-//! into it and swaps it in under the same lock. So an insert made during
-//! the fill is in the new filter whichever side of the swap it fell on.
-//! Once sized, `insert` reads one flag and never takes the lock.
+//! also kept in a pending list, under the list's lock. Once the count is
+//! in, the fill hands [`size`](Have::size) an empty filter of its size,
+//! which replays the pending inserts into it and swaps it in under the
+//! same lock, then scans the store into it in place. So an insert made
+//! during the count is in the new filter whichever side of the swap it
+//! fell on. Once sized, `insert` reads one flag and never takes the lock.
 
 use std::fmt;
 use std::hash::Hasher;
@@ -154,7 +154,7 @@ impl Have {
         self.sized.load(Ordering::Acquire)
     }
 
-    /// Swaps in `bloom`, the fill's own filter, as this one's: every hash
+    /// Swaps in `bloom`, the fill's filter of the final size, as this one's: every hash
     /// inserted while unsized is replayed into it first, under the pending
     /// lock, so none is lost to the swap. Once only, before
     /// [`mark_filled`](Self::mark_filled); a second call is ignored.
