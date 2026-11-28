@@ -856,6 +856,21 @@ Extracted the same way from the owner's messages and answers in the "M0 - M2 sta
       - NOTICE_VERSION goes up, so every admin sees the corrected notice once, as `docs/decisions/2026-11-11-X-event-log-notice.md` did for a new exception.
       - The change is built as the slice X-legal-safe-restart.
 
+88. **The runner's recommendations answer the owner's open questions, for a fast release** (owner, 2026-11-28 about 05:35Z, in the runner session, after the runner listed what was waiting on the owner): "For your questions for me, go with you recommendations, in order to get an excellent release out as quickly as possible with high throughput."
+    - **Answered as the runner recommended** (owner-queue numbers):
+      - **29, no:** `docs/reviews/dht-survey-evidence/original-scheduler.rs.txt` leaves the repository. It is outside code whose source isn't recorded, and the repository is AGPL. Its SHA-256 and the review's findings stay, and the verification script now takes the original attachment as input.
+      - **31, yes:** the test-VM IAM policy requires `Purpose=X-test-vm` on test-VM volumes.
+      - **33, yes:** the test-VM user may delete its own test volumes, scoped like its terminate permission (`Project=Lodestar`, `Environment=Test`, `Purpose=X-test-vm` and `LaunchedBy` its own `UserId`).
+      - **34, no:** a uTP metadata fetch keeps the 4 s first window. It's revisited only if live data show uTP paths at 15 % loss or worse are common.
+      - **39, yes:** `HANDOVER.md` is deleted from the `runner-state` branch.
+      - **40, yes:** `web/licenses/allow.json` may add CDLA-Permissive-2.0 (the licence of Mozilla's root list, `webpki-root-certs`), in the PR that first bundles it.
+      - **The Hyper-V VM on the owner's laptop,** offered through X-test-vm: yes, for finding problems only, never runs of record. Work stays inside the VM, never the laptop's Windows session, files or credentials, and the owner types the PIA login. The scope is in X-test-vm's inbox on `runner-state`.
+    - **Not changed:**
+      - Item 37 (TorBox's terms) stays optional, and nothing waits on it.
+      - The runner's calls listed for veto (items 11, 23, 25, 28, 41, 42 and the later records files' flags) stand unless the owner vetoes one.
+    - **IAM changes are still applied by the owner.** The slice X-testvm-iam-volumes edits `infra/dev-vm/aws-claude-testvm.json`, and the owner applies the reviewed policy in AWS.
+    - **Runner's reading:** "as quickly as possible with high throughput" restates §2.85's priority (performance first, then the quickest sure route to 1.0). It doesn't change the session limits (§2.85 D6: four build sessions, two test sessions).
+
 ## 3. Points still open (not decided by the owner)
 - **The libtorrent interop harness.** A commit adding it was rejected *(M0–M2, 10-20 23:41:23)*, possibly as an interruption rather than a refusal. It isn't built.
 - **First-load budget.** The approved plan said JS < 200 KB gzipped; the later UI plan (§10.1) uses ≤ 100 KB total first load (JS ≤ 45 KB). The stricter §10.1 figures apply until the owner says otherwise.

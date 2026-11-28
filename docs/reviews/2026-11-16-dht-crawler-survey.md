@@ -66,7 +66,7 @@ This is steady-state accounting, not an independence assumption or a promise tha
 
 For cooldowns, steady-state occupancy is approximately **new endpoint admissions/s × mean retained cooldown seconds**, plus queued/in-flight/hot retention. A 200k exact ledger holding six-hour restrictions supports only **9.26 new endpoints/s** continuously. Filling 200k in 35 min suggests roughly **95 endpoint admissions/s** while it fills; if all retained for six hours, that requires ~**2.06m records**, before headroom. The proposal's 4m default and 25/s sample cap change the capacity regime, but do not prove its heap/memory/SQLite behavior or metadata conversion. Endpoint admission rate and retention distribution must be measured separately from duplicate candidates.
 
-**Detailed assessment of the pasted scheduler.** Locations below are line numbers in the extracted Rust code block ([original module snapshot](dht-survey-evidence/original-scheduler.rs.txt)); attachment lines are those numbers +23. The attachment SHA-256 is `AFEB690C3765BF07E67A1485D96527CB2BF4BBDFEE60429EA0993F0CF7AC0E68`. [Attachment][Audit]
+**Detailed assessment of the pasted scheduler.** Locations below are line numbers in the extracted Rust code block (the module snapshot was removed on 2026-11-28 as outside code of unrecorded source, owner-decisions §2.88; its SHA-256 is in [verification.md](dht-survey-evidence/verification.md)); attachment lines are those numbers +23. The attachment SHA-256 is `AFEB690C3765BF07E67A1485D96527CB2BF4BBDFEE60429EA0993F0CF7AC0E68`. [Attachment][Audit]
 
 - **Blocker, verified compilation:** E0499 at module lines 1278, 1285, 1530: a mutable ledger-record borrow overlaps writes to other fields through the mutex guard. The original does not compile with Rust 1.99.1 and the locked harness dependencies. The previous audit did not catch these remaining blockers.
 - **Critical, verified restart counterexample:** lines 717–769, especially 758, and writer lines 1714–1739. After A gets a six-hour cooldown, advance monotonic time 10 s, jump wall time 24 h, commit B, restart one wall second later. `.max(current_wall_sec)` admits A early. The supplied RG6 only jumps after the last commit. Use a defined trusted timebase/uncertainty state; merely removing one `max` is not a complete restart-clock design, since forward jumps within the trusted 600 s window remain indistinguishable from downtime.
@@ -159,7 +159,7 @@ Reproduce with [verify-proposal.ps1](dht-survey-evidence/verify-proposal.ps1) an
 [PLAN]: ../plan/dht-crawler-implementation-plan-2026-10-25.md
 [CR0F]: ../soak/evidence/2026-10-30-cr0-final/cr0-final.md#L249-L259
 [COMP1]: ../decisions/2026-11-08-cr-ab-comp-1-accepted.md
-[Attachment]: dht-survey-evidence/original-scheduler.rs.txt
+[Attachment]: dht-survey-evidence/verification.md
 [Audit]: dht-survey-evidence/verification.md
 [ML11]: https://github.com/the8472/mldht/blob/902906f51a911f29c71fd7f0b65519aadaa9013d/src/the8472/mldht/indexing/TorrentDumper.java#L215-L228
 [ML12]: https://github.com/the8472/mldht/blob/902906f51a911f29c71fd7f0b65519aadaa9013d/src/the8472/bt/PullMetaDataConnection.java#L717-L737

@@ -18,7 +18,8 @@ if ($ProposalAttachment) {
     if (-not $match.Success) { throw 'No Rust code block.' }
     $original = $match.Groups[1].Value.Replace("`r`n", "`n")
 } else {
-    $original = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'original-scheduler.rs.txt') -Raw).Replace("`r`n", "`n")
+    # The extracted module left the repository on 2026-11-28 (owner-decisions 2.88): outside code of unrecorded source.
+    throw 'Pass -ProposalAttachment with the original attachment: the extracted module is no longer in the repository.'
 }
 $sha = [Security.Cryptography.SHA256]::Create()
 try {
