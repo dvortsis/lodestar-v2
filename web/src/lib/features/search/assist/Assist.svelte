@@ -191,6 +191,7 @@
 		if (!text()) show();
 	}
 	onDestroy(() => {
+		onsuggest?.(null);
 		el.removeEventListener('keydown', onkeydown, true);
 		el.removeEventListener('input', oninput);
 		el.removeEventListener('focus', onfocus);

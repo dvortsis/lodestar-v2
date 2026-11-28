@@ -198,6 +198,11 @@
 	let rescuing = $state(false);
 	let rescueSettled = $state(false);
 	let rescueFailed = $state(false);
+	// A new query starts the rescue over: the hint waits for it again.
+	$effect(() => {
+		void search.q;
+		rescueSettled = false;
+	});
 	let indexFailed = $state(false);
 	$effect(() => {
 		if (suggested && !Recover && !recoverFailed)
@@ -670,7 +675,7 @@
 						{/each}
 					</ul>
 					<Button onclick={() => void clearFilters()}>{m.search_results_none_clear()}</Button>
-				{:else if !results.notices.includes('adult_hidden') && !rescuing && (rescueSettled || rescueFailed)}
+				{:else if !results.notices.includes('adult_hidden') && !rescuing && (!search.q.trim() || rescueSettled || rescueFailed)}
 					<p>{m.search_results_none_words()}</p>
 				{/if}
 				{#if Rescue}<Rescue bind:suggesting={rescuing} bind:settled={rescueSettled} />{/if}

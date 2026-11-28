@@ -27,9 +27,11 @@ const print = (ast: Ast): string =>
 		.map((n) => (n.op === 'word' ? n.word : n.op === 'tag' ? `res:${n.any[0]}` : '?'))
 		.join(' ');
 
+let suggestKind = 'chip';
 let requests: URL[];
 let searchBodies: { ast: Ast }[];
 function server() {
+	suggestKind = 'chip';
 	requests = [];
 	searchBodies = [];
 	vi.stubGlobal(
@@ -41,7 +43,7 @@ function server() {
 				return json({
 					items: [
 						{
-							kind: 'chip',
+							kind: suggestKind,
 							text: 'res:2160p',
 							insert: 'res:2160p',
 							replace: { start: 0, end: 5 },
@@ -276,6 +278,20 @@ describe('the Builder', () => {
 	});
 });
 
+describe('autocomplete rows', () => {
+	it('show no kind label for a value, and keep it for the others', async () => {
+		suggestKind = 'value';
+		const first = await setup();
+		await type(first.editor, '2160p');
+		const value = await screen.findByRole('option', { name: /res:2160p/ }, LAZY);
+		expect(value.textContent).not.toContain('Value');
+		await fireEvent.keyDown(first.editor, { key: 'Escape' });
+		suggestKind = 'chip';
+		await type(first.editor, '2160p ');
+		await waitFor(() => expect(screen.getByRole('option').textContent).toContain('Filter'), LAZY);
+	});
+});
+
 describe('an unfinished token', () => {
 	const invalid = (el: HTMLElement) => el.getAttribute('aria-invalid') === 'true';
 	/** The error has reached the state and the suggestions are on screen. */
@@ -306,6 +322,30 @@ describe('an unfinished token', () => {
 		const { state, editor } = await setup();
 		await typed(state, editor);
 		await fireEvent.blur(editor);
+		await waitFor(() => expect(invalid(editor)).toBe(true), LAZY);
+	});
+
+	it('shows the error when the caret moves out of the token, by key or by pointer', async () => {
+		const { state, editor } = await setup();
+		await typed(state, editor);
+		/** The caret at character `n` of the bar's text, in whichever token's text node holds it. */
+		const caretAt = (n: number) => {
+			const walk = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+			let left = n;
+			for (let t = walk.nextNode(); t; t = walk.nextNode()) {
+				const len = t.textContent?.length ?? 0;
+				if (left <= len) return void document.getSelection()?.collapse(t, left);
+				left -= len;
+			}
+		};
+		caretAt(0); // "a" is not the bad token
+		await fireEvent.keyUp(editor, { key: 'Home' });
+		await waitFor(() => expect(invalid(editor)).toBe(true), LAZY);
+		caretAt(5); // back in it
+		await fireEvent.pointerUp(editor);
+		await waitFor(() => expect(invalid(editor)).toBe(false), LAZY);
+		caretAt(1);
+		await fireEvent.pointerUp(editor);
 		await waitFor(() => expect(invalid(editor)).toBe(true), LAZY);
 	});
 });

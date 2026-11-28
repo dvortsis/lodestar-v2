@@ -1845,8 +1845,8 @@ export default [
 	// the row carried into it (no re-set on mount), less the reset to row 1 for a new query's rows.
 	// X-import-verified-no (runner §2.26): 43.76 → 44.09 KB, measured 44,089 B (+329 B): the Imported badge and its help.
 	// UX-start (runner §2.26): 44.09 -> 44.224 KB, measured 44,195 B (one trim round, compacting pillState's branches, saved nothing): shell/status.ts, which this chunk carries, gained the "warming up" branch and the found/stored fields.
-	// X-zero-rescue (runner §2.26): 44,224 → 44,352 B, measured 44,349 B (+125 B), rounded up to 64 B: the panel's lazy mount of the rescue chunk and the hint it hides. The rescue itself is its own entry below.
-	entry('Search results (lazy)', resultsFirst, '44352 B'),
+	// X-zero-rescue (runner §2.26): 44,224 → 44,416 B, measured 44,377 B (+153 B), rounded up to 64 B: the panel's lazy mount of the rescue chunk and the hint it hides. The rescue itself is its own entry below.
+	entry('Search results (lazy)', resultsFirst, '44416 B'),
 	// X-shell-home (runner r14): measured 2.704 KB (the chunk, with the modules only it reaches), rounded up to 0.01 KB. The home loads on the results path too (the page's Promise.all), so every entry that loads after the results counts it as already loaded.
 	entry('Search home (lazy)', homeLazy, '2.71 KB'),
 	entry('Search results key commands (on demand)', resultsKeysLazy, '3.4 KB'),
@@ -1859,8 +1859,8 @@ export default [
 	// Alerts -1.58 KB, drawer -0.23 KB).
 	entry('Search index-state banners (on demand)', indexStateLazy, '4.1 KB'),
 	entry('Search Block settle (on demand)', settleLazy, '0.6 KB'),
-	// X-zero-rescue: measured 1,930 B (the chunk with the modules only it reaches), rounded up to 0.01 KB.
-	entry('Search zero-result rescue (on demand)', rescueLazy, '1.94 KB'),
+	// X-zero-rescue: measured 2,143 B (the chunk with the modules only it reaches), rounded up to 0.01 KB.
+	entry('Search zero-result rescue (on demand)', rescueLazy, '2.15 KB'),
 	// runner §2.26, SRC-17: the Source facet and Show unverified (16,800 B → 17,696 B, the measured 831 B over rounded up to 64 B).
 	// X-labels (runner §2.26): 17,635 → 18,825 B, the value names (codecs, HDR, languages, types),
 	// and Find matching the code as well as the label (review).

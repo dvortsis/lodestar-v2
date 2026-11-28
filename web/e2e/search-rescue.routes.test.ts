@@ -52,12 +52,12 @@ test('a filter typed as words offers "Did you mean", and one click searches it',
 	const none = page.getByTestId('results-none');
 	await expect(none).toBeVisible();
 	const offer = page.getByTestId('rescue-didyoumean');
-	await expect(offer).toHaveText('Did you mean seeders:>5?');
+	await expect(offer).toContainText('Did you mean seeders:>5?');
 	// It only offers: the zero-result words advice for text is not shown, and nothing was re-run.
 	await expect(none).not.toContainText('Try fewer');
 	expect(new URL(page.url()).searchParams.get('q')).toBe('seeders>5');
 	await expectNoA11yViolations(page, { include: ['#results'] });
-	await offer.click();
+	await page.getByTestId('rescue-didyoumean-apply').click();
 	await expect(row(page, 1)).toBeVisible();
 	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('seeders:>5');
 });
@@ -73,7 +73,7 @@ test('words that read as filters offer their chips on zero results, with Apply',
 	await expect(chips).toContainText('res:2160p');
 	await expectNoA11yViolations(page, { include: ['#results'] });
 	await expect(page.getByTestId('rescue-didyoumean')).toHaveCount(0);
-	await chips.getByRole('button', { name: 'Apply filters' }).click();
+	await chips.getByRole('button', { name: 'Apply' }).click();
 	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('nothing res:2160p');
 });
 
