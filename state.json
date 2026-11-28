@@ -1,6 +1,6 @@
 {
   "runner_session": "session_01EYhgh4JX3AmHzKXPjYCoUg",
-  "updated_at": "2026-11-28T14:41:41Z",
+  "updated_at": "2026-11-28T15:39:37Z",
   "launches": {
     "date": "2026-10-22",
     "count": 45
@@ -4117,7 +4117,7 @@
   },
   "blocked_on_owner": [],
   "launches_today": 34,
-  "last_heartbeat": "2026-11-28T12:38:54Z",
+  "last_heartbeat": "2026-11-28T15:39:37Z",
   "owner_questions": [],
   "last_owner_push": "2026-10-22T14:19Z F1b sign-off reminder (blocks W6, X-email)",
   "runner_prs_open": [
@@ -11133,14 +11133,14 @@
     }
   ],
   "slots": {
-    "updated": "2026-11-28T15:17:30Z",
+    "updated": "2026-11-28T15:39:37Z",
     "items": [
       {
         "slot": 1,
         "slice": "X-healthz-count-async",
         "role": "build",
         "agent": "session_01MMjhn8NdgJe3D7wFtABUPJ",
-        "doing": "step 0",
+        "doing": "building (healthz count async)",
         "since": "2026-11-28T14:32:02Z"
       },
       {
@@ -11148,7 +11148,7 @@
         "slice": "X-detail-attributes-ui",
         "role": "build",
         "agent": "session_01MMjhnBEdoHsYhf8pYPCb4E",
-        "doing": "step 0",
+        "doing": "#1178 review fixes (one push)",
         "since": "2026-11-28T14:32:02Z"
       },
       {
@@ -11156,7 +11156,7 @@
         "slice": "X-drawer-detach-flake",
         "role": "build",
         "agent": "session_01MMjhnCzeivPCptsGbrnBiE",
-        "doing": "step 0 (same session; #1174 merged)",
+        "doing": "#1177 re-run of e2e; next X-smoke-torrent-flake",
         "since": "2026-11-28T12:39:45Z"
       },
       {
@@ -11164,7 +11164,7 @@
         "slice": "X-hidden-count-wide-shift",
         "role": "build",
         "agent": "session_01MMjhnC5ux8vDCYL2oNoj1y",
-        "doing": "step 0: L3 toolbar layout",
+        "doing": "building: .tb-count floor from 128rem",
         "since": "2026-11-28T15:17:30Z"
       }
     ],
@@ -11302,7 +11302,7 @@
       "effect": "AWS stop = 90% of the lower of $130.56 and $133.72 = $117.50 of new AWS spend from 2026-11-23T00:31Z (r15 rule; conservative: spend since 00:31Z already counts against it). Replaces the interim $100 stop."
     }
   ],
-  "heartbeat": "2026-11-28T12:38:54Z",
+  "heartbeat": "2026-11-28T15:39:37Z",
   "updated": "2026-11-28T11:10:27Z",
   "pause": {
     "state": "resumed",
