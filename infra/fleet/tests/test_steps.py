@@ -1957,7 +1957,7 @@ class VMScripts(unittest.TestCase):
         """TERM in the middle of a held retry: the exit resumes gluetun."""
         rc, out = self.signal_at("held_probe", GLUETUN_RESTARTS=1, BLOCK_PAUSED=1, HELD_PHASE_WAIT=20,
                                  HELD_ATTEMPT_MIN=1)
-        self.assertNotEqual(rc, 0)
+        self.assertEqual(rc, 143)
         self.assertFalse((self.stub / "paused").exists())
         self.assertIn("docker unpause gluetun", self.log())
         self.assertFalse((self.stub / "recreated_paused").exists())  # the exit resumed it, not a recreate

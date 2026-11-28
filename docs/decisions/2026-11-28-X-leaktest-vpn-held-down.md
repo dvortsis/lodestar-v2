@@ -1,6 +1,6 @@
 # X-leaktest-vpn-held-down decisions
 
-The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud lane still saw `vpn_interface_held_down` once (2026-11-22). gluetun restored its interface many times, so most phase-B probes were skipped. 0 packets leaked, and a second run passed. Round 1 runs this test on every arm before and after every day, so a harness flake can cost a day. Calls not marked as the runner's are this PR's; the runner flags them to the owner (`docs/owner-decisions.md` §2.19). This keeps every bullet of `2026-11-20-X-leaktest-wg0-flake.md` except "No pause between attempts", which now holds for first attempts only.
+The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud lane still saw `vpn_interface_held_down` once (2026-11-22). gluetun restored its interface many times, so most phase-B probes were skipped. 0 packets leaked, and a second run passed. Round 1 runs this test on every arm before and after every day, so a harness flake can cost a day. Calls not marked as the runner's are this PR's; the runner flags them to the owner (`docs/owner-decisions.md` §2.19). Every bullet of `2026-11-20-X-leaktest-wg0-flake.md` stands, "No pause between attempts" included: there's still no wait between attempts. The hold below is added alongside them.
 
 ## The cause, from gluetun v3.41.3's source (the pinned image)
 - **With the endpoint blocked, gluetun restarts its VPN every few seconds, and each restart makes a new interface.**
@@ -11,12 +11,12 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
   - Nothing else in gluetun watches the link. There's no netlink subscription, so the health-check loop is the only thing that restores it.
 - **A phase-B attempt takes longer than that cycle, so a clean attempt almost never happens.**
   - A clean attempt needs one interface to stay down, with one ifindex, from the first interface check to the second ifindex read.
-  - That span is four to six probe containers plus the probe itself, and `curl -m 8` waits its full 8 s when the firewall drops its packets. That's well over 6 s on any VM.
+  - That span is five to seven probe containers plus the probe itself. `curl -m 8` waits its full 8 s when the firewall drops its packets, so its attempt is well over 6 s on any VM. A `dig +time=3` attempt is borderline: it fits only when containers start quickly.
   - Retrying until `HELD_PHASE_WAIT` (#988) only gave more chances to land between two restarts. Short probes on a fast VM sometimes did, which is why the failure became rarer but didn't go away.
 
 ## The fix
 - **A retry holds gluetun still** (runner, accepted for every probe that tests kernel state). From the retry's first interface check to its second ifindex read, `docker pause` freezes gluetun's processes. `docker unpause` resumes them before the verdict.
-  - The probes still run in gluetun's network namespace. Docker lets a container join the namespace of a paused one (`IsRunning` stays true). This was checked on a local daemon here (Docker 29), not against any real infrastructure.
+  - The probes still run in gluetun's network namespace. moby's `getNetworkedContainer` checks only `IsRunning` and `IsRestarting`, and a paused container still counts as running, so a container can join a paused one's namespace. A local daemon here (Docker 29, no real infrastructure) showed the same, and showed `exec` refused while paused.
   - A frozen gluetun can't run its restart, so the retry gets its clean attempt, whatever the restart loop's timing.
   - It's the smallest change that removes the cause. The other options were worse:
     - turning `HEALTH_RESTART_VPN` off would change the production stack;
@@ -41,7 +41,7 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
   - **A pause that returned an error but froze gluetun anyway:** it's resumed at once.
   - **A gluetun that won't resume** (checked through `docker inspect`) ends the phase. No further attempt runs, and the phase fails `vpn_interface_held_down`.
     - Docker refuses `docker exec` into a paused container, so the post-rule checks after the phase fail too.
-    - The recovery's recreate then replaces the frozen container.
+    - The recovery's recreate should then replace the frozen container. That's shown only with the stub, not against real Docker.
   - **A signal mid-retry:** the exit trap resumes gluetun. If that fails, it prints `fail gluetun_resumed`, beside `guards_released`.
 - **Time:** each probe now needs about two attempts: a live one that's discarded, then a held one. With six probes, phase B stays inside #988's budget, and a phase with no restarts is as before. A pause lasts one attempt, about 10–20 s.
 
@@ -49,6 +49,7 @@ The runner's brief (2026-11-28): after X-leaktest-wg0-flake (#988), the cloud la
 - **The same about the kill switch.** gluetun's firewall and its post-rules are kernel netfilter state, which stays in force while its processes are frozen. So a held retry still tests exactly what phase B is for: with the VPN interface down, only gluetun's firewall stands between the probes and `eth0`.
   - A gluetun with its firewall off still leaks on every attempt.
   - A gluetun without its post-rules still leaks the open flow, and the capture and the counter see it.
+- **Fewer meetings with a live gluetun.** Before, a probe met a live, restarting gluetun on every attempt, and a leak on any of them failed at once. Now each held probe meets it once, on its first attempt. That's acceptable because the capture and the counter run through the live stretches between holds, so gluetun's own traffic there is still judged.
 - **What a held attempt doesn't prove:** anything about gluetun's own processes during that attempt, meaning its DNS forwarder and its health checks. That's why `dns_blocked_ifdown`, the one probe aimed at them, is never held (runner). The other probes test kernel state: the firewall, the post-rules and the routes.
 - **The verdict rules are as before:**
   - a probe that gets out fails at once, on any attempt, held or live;
