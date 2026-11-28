@@ -197,7 +197,10 @@ test.describe('the drawer beside the results', () => {
 		await expect(host(page)).toHaveAttribute('data-mode', 'inline');
 		// The Technical details section loads when it scrolls near, and the shot's own resize doesn't wait
 		// for it: scroll it into view, wait for it, and put every scroller back before the shot.
-		await page.locator('[data-testid="detail-view"] > :last-child').scrollIntoViewIfNeeded();
+		// Scroll to Related's mount, the drawer's last section: it exists only once the torrent has
+		// loaded, and is never replaced. The view's last child can still be the loading placeholder,
+		// which the loaded detail replaces mid-scroll.
+		await page.getByTestId('detail-related-mount').scrollIntoViewIfNeeded();
 		await expect(page.locator('[data-section="technical"]')).toBeVisible({ timeout: 10_000 });
 		await page.evaluate(() => {
 			window.scrollTo(0, 0);
